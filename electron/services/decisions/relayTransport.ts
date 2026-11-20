@@ -1,6 +1,7 @@
 import { net, powerMonitor } from "electron";
 import type {
   DecisionsBridge,
+  DeliveryEngine,
   InjectResult,
   InjectionIntent,
   LocalStore,
@@ -129,8 +130,8 @@ export function retireable<T extends object>(target: T, isRetired: () => boolean
 /**
  * The sink a socket attempt's bridge runs with. Answers are typed by the
  * lifetime's delivery (`AnswerDelivery`, #16017), never by an attempt: every
- * pane reads as present but busy, so an attempt's engine, which also runs
- * stopped, defers without changing a question's status and types nothing.
+ * pane reads as present but busy, so an attempt's engine, which is also
+ * inert (`inertAttemptDelivery`), types nothing.
  */
 export const holdingTerminalSink: TerminalSink = {
   locate: async (origin: QuestionOrigin): Promise<LocateResult> => ({
@@ -141,6 +142,23 @@ export const holdingTerminalSink: TerminalSink = {
   inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "socket-attempt" }),
   hasMarker: async () => false,
 };
+
+/**
+ * Makes a socket attempt's delivery engine inert, as the lifetime's delivery
+ * types every answer (#16017). From 0.9.0 the bridge reopens delivery a stop
+ * closed, as it starts and on any pump that finds it closed, so the engine's
+ * `stopped` no longer holds: its drain does nothing instead, reading no rows
+ * and reporting no receipts. Its inbox waits for a closure notice being typed
+ * before it applies a reopen; the lifetime's engine is the one typing it, so
+ * the attempt asks that one.
+ */
+export function inertAttemptDelivery(
+  engine: DeliveryEngine,
+  closureWrite: (questionId: string) => Promise<void> | null
+): void {
+  engine.drain = async () => ({ delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 });
+  engine.closureWrite = closureWrite;
+}
 
 /**
  * The store as a socket attempt's bridge sees it once delivery runs for the

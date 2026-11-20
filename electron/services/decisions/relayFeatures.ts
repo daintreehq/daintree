@@ -50,14 +50,16 @@ export class DaintreeRelayClient extends RelayClient {
   override events(
     after: number,
     limit?: number,
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["events"]>[3]
   ): Promise<EventsPage> {
-    return super.events(after, limit, declared(features));
+    return super.events(after, limit, declared(features), opts);
   }
 
   override socketTicket(
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["socketTicket"]>[1]
   ): ReturnType<RelayClient["socketTicket"]> {
-    return super.socketTicket(declared(features));
+    return super.socketTicket(declared(features), opts);
   }
 }

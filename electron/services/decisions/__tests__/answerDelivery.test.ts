@@ -1961,7 +1961,10 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       const h = setup();
       await answered(h.store, Q1, 1, "approve");
       const [entry] = parseAnswers((await h.question(Q1))!.answers_json);
+      // An expiry's notice is typed only while its round's question stays expired (0.9.0's `closureInForce`).
       await h.store.updateQuestion(Q1, {
+        local_status: "expired",
+        question_revision: 0,
         answers_json: serializeAnswers([
           { ...entry, kind: "expired", action: "expire", revision: 0 },
         ]),

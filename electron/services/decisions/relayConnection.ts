@@ -33,6 +33,7 @@ import {
   ObservedSocket,
   RetiredAttemptError,
   chromiumWebSocket,
+  inertAttemptDelivery,
   holdingTerminalSink,
   isRelaySocketUrl,
   newBridgeLock,
@@ -604,7 +605,10 @@ export class RelayConnection {
       // Answers are typed by the lifetime's delivery. An attempt's own engine
       // would stop with its socket, and reconcile the lifetime's injections as
       // crashed ones each time an attempt starts.
-      bridge.delivery.stopped = true;
+      inertAttemptDelivery(
+        bridge.delivery,
+        (questionId) => this.delivery?.closureWrite(questionId) ?? null
+      );
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;

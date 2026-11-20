@@ -1247,7 +1247,17 @@ describe("RelayConnection", () => {
     // The same lock delivery holds, handed to agents' questions before either ran (#17101).
     expect(h.connection.getDelivery()!.lock).toBe(bridges[0].ctx.lock);
     expect((source as unknown as QuestionSource).lock).toBe(bridges[0].ctx.lock);
-    expect(bridges.every((bridge) => bridge.delivery.stopped)).toBe(true);
+    // Started, each attempt's own engine still types nothing: draining it reads no row (#17939).
+    const listed = vi.spyOn(h.store, "listQuestions");
+    for (const bridge of bridges) {
+      expect(await bridge.delivery.drain()).toEqual({
+        delivered: 0,
+        deferred: 0,
+        needsAttention: 0,
+        uncertain: 0,
+      });
+    }
+    expect(listed).not.toHaveBeenCalled();
     await h.connection.stop();
   });
 

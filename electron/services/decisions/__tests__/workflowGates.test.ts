@@ -117,8 +117,12 @@ interface Harness {
   ): Promise<void>;
   /** A proxy answer signed by this desktop, as the decision model's would be. */
   proxyAnswer(questionId: string, optionIds: string[]): Promise<void>;
-  /** The relay's unsigned expiry event. */
-  expire(questionId: string): Promise<void>;
+  /**
+   * The relay's unsigned expiry event for the question's current round, sent
+   * once its signed deadline has passed, with this desktop's clock past it
+   * too; `early` sends it before the deadline instead.
+   */
+  expire(questionId: string, opts?: { early?: boolean }): Promise<void>;
   /** Calls a tool on the library's MCP handler over real HTTP, as the pane's agent. */
   callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
@@ -225,12 +229,15 @@ async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> 
 
   const policy = createTrustedPolicy({ ...SAVED, ...options });
   const store = new MemoryLocalStore();
+  // Moved on by `expire`: 0.9.0 believes an expiry only once the signed deadline has passed here too.
+  let ahead = 0;
   const bridge = new DecisionsBridge({
     identity,
     keyStore,
     store,
     sink,
     policy,
+    now: () => Date.now() + ahead,
     resolver: {
       resolve: async (_origin, id) => (IMAGES[id] ? { bytes: IMAGES[id] } : null),
     },
@@ -243,7 +250,11 @@ async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> 
   const applyEvent = async (
     event_type: string,
     questionId: string,
-    data: Record<string, unknown>
+    data: Record<string, unknown>,
+    round: { question_revision: number | null; occurred_at: string } = {
+      question_revision: null,
+      occurred_at: new Date().toISOString(),
+    }
   ) => {
     seq += 1;
     await bridge.inbox.persist({
@@ -251,9 +262,9 @@ async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> 
       seq,
       event_id: `evt_${String(seq).padStart(8, "0")}`,
       event_type: event_type as never,
-      occurred_at: new Date().toISOString(),
+      occurred_at: round.occurred_at,
       question_id: questionId,
-      question_revision: null,
+      question_revision: round.question_revision,
       origin_device_id: null,
       data,
     });
@@ -369,16 +380,22 @@ async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> 
         "decision.proxy.committed",
         "proxy"
       ),
-    expire: async (questionId) => {
+    expire: async (questionId, opts = {}) => {
       const row = await store.getQuestion(questionId);
-      if (!row) throw new Error("no such question");
+      if (!row?.expires_at) throw new Error("no such question, or one with no deadline");
+      const deadline = Date.parse(row.expires_at);
+      const at = opts.early ? deadline - 60_000 : deadline + 1_000;
+      if (!opts.early) ahead = Math.max(ahead, at - Date.now());
       const data = {
-        expired_at: new Date().toISOString(),
+        expired_at: new Date(at).toISOString(),
         target_host_id: await hostRef(row.origin.host_id),
       };
-      // As the relay sends it: the inbox reads nothing of it, so hold the fixture to the schema instead.
+      // As the relay sends it, so hold the fixture to the schema too.
       expect(EventData.expired.safeParse(data).success).toBe(true);
-      await applyEvent("decision.expired", questionId, data);
+      await applyEvent("decision.expired", questionId, data, {
+        question_revision: row.question_revision,
+        occurred_at: new Date(at).toISOString(),
+      });
     },
     callTool: async (name, args) => {
       rpcId += 1;
@@ -818,6 +835,18 @@ describe("trusted workflow gates", () => {
       choice: null,
       reviewedDigestsMatch: false,
     });
+  });
+
+  it("keeps a question waiting when the relay calls it expired before its signed deadline", async () => {
+    const h = await harness();
+    const { questionId } = await ask(h, REVIEW_INPUT);
+    await h.expire(questionId, { early: true });
+    expect(await h.callTool("get_decision", { question_id: questionId })).toMatchObject({
+      status: "queued",
+      provenance: null,
+      choice: null,
+    });
+    expect(h.injected).toEqual([]);
   });
 
   it("authorises nothing once a question has expired, and says so to the agent", async () => {

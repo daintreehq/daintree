@@ -1009,6 +1009,11 @@ export class AnswerDelivery {
     this.request();
   }
 
+  /** The closure notice for `questionId` this delivery is typing now, if any; it settles once recorded. */
+  closureWrite(questionId: string): Promise<void> | null {
+    return this.engine.closureWrite(questionId);
+  }
+
   /** Tries delivery as soon as the attempt running now, if any, is done. */
   request(): void {
     if (this.stopped) return;
