@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { FactRun } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { pluralize } from "@/lib/pluralize";
@@ -89,7 +90,7 @@ function questionFact(latest: LatestDecisionQuestion): string | number {
  * ask, and when the last question came in. Every fact holds its place from
  * the first render, and the line never wraps, so the page doesn't move as
  * the facts arrive; in a narrow window its tail is clipped, and the whole
- * line is its title. A remote window's agents are the Host's, so it names none.
+ * line is its tooltip. A remote window's agents are the Host's, so it names none.
  */
 export function DecisionsStatusFacts({
   devices,
@@ -116,8 +117,10 @@ export function DecisionsStatusFacts({
     facts.push(question);
   }
   return (
-    <span className="block truncate" title={words.join(" · ")} data-testid="decisions-status-facts">
-      <FactRun facts={facts} />
-    </span>
+    <TruncatedTooltip content={words.join(" · ")}>
+      <span className="block truncate" data-testid="decisions-status-facts">
+        <FactRun facts={facts} />
+      </span>
+    </TruncatedTooltip>
   );
 }

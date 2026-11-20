@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 
@@ -6,6 +7,19 @@ const remote = vi.hoisted(() => ({ hostName: null as string | null }));
 vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
   useRemoteHostName: () => remote.hostName,
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="tooltip-content">{children}</div>
+  ),
+}));
+
+const truncation = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.value }),
 }));
 
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -106,6 +120,7 @@ async function renderFacts(
 describe("DecisionsStatusFacts (#18059)", () => {
   beforeEach(() => {
     remote.hostName = null;
+    truncation.value = false;
     listeners.clear();
     listQuestions.mockReset();
     listQuestions.mockResolvedValue({ revision: 1, questions: [] });
@@ -133,6 +148,7 @@ describe("DecisionsStatusFacts (#18059)", () => {
   });
 
   it("holds every fact's place before anything is read, then fills each in", async () => {
+    truncation.value = true;
     const list = deferred<DecisionQuestionList>();
     listQuestions.mockReturnValue(list.promise);
     const view = await renderFacts(devicesRead(null), policyRead(null));
@@ -149,8 +165,29 @@ describe("DecisionsStatusFacts (#18059)", () => {
 
     expect(facts()).toMatch(/^1 phone with notifications · 1 agent switched on · Last question /);
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(lastAsked);
-    // One line that clips in a narrow window, so its title carries all of it.
-    expect(screen.getByTestId("decisions-status-facts").title).toBe(facts());
+    // One line that clips in a narrow window, so its tooltip carries all of it.
+    expect(screen.getByTestId("tooltip-content").textContent).toBe(facts());
+  });
+
+  it("discloses the whole line in a styled tooltip only while it's clipped, never a native title", async () => {
+    const view = await renderFacts();
+    const line = () => screen.getByTestId("decisions-status-facts");
+    expect(line().hasAttribute("title")).toBe(false);
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+    expect(line().hasAttribute("tabindex")).toBe(false);
+
+    truncation.value = true;
+    view.rerender(
+      <DecisionsStatusFacts
+        devices={devicesRead([PHONE, { ...PHONE, deviceId: "dev_phone_2" }])}
+        policy={policyRead(["claude"])}
+      />
+    );
+    expect(line().hasAttribute("title")).toBe(false);
+    expect(screen.getByTestId("tooltip-content").textContent).toBe(
+      "2 phones with notifications · 1 agent switched on · No questions yet"
+    );
+    expect(line().tabIndex).toBe(0);
   });
 
   it("counts the phones and tablets the relay can notify, nothing else", async () => {
