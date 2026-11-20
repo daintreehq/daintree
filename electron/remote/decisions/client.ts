@@ -38,14 +38,18 @@ import {
 import {
   HostQuestionCancelResultSchema,
   HostQuestionContentResultSchema,
+  HostQuestionContentV2ResultSchema,
   HostQuestionImagePartResultSchema,
   HostQuestionAskSchema,
   HostQuestionItemSchema,
+  HostQuestionItemV3Schema,
   HostQuestionListSchema,
   HostQuestionListV2Schema,
+  HostQuestionListV3Schema,
   HostQuestionSummariesResultSchema,
   HostQuestionsChangedPayloadSchema,
   HostQuestionsChangedV2PayloadSchema,
+  HostQuestionsChangedV3PayloadSchema,
   MAX_HOST_IMAGE_PART_BYTES,
   type HostQuestionListPayload,
 } from "./questionSchemas.js";
@@ -341,6 +345,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
   private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered the list with rounds UNSUPPORTED: from before #17943. */
+  private readonly beforeRounds = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered content with rounds UNSUPPORTED: from before #17943. */
+  private readonly beforeContentRounds = new WeakSet<DecisionsHostSession>();
   /**
    * Reads of the list with its asks out, per session. A Host answers one with
    * its list as it stands then, after any v1 push it sent before the read
@@ -488,7 +496,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
             turn: ++this.readTurns,
           }
         : null;
-    return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read)).then(
+    return this.callQuestionRead(hostId, read).then(
       (answered): HostCallOutcome<DecisionsHostQuestionAnswer<R>> => {
         if (!answered.ok) return answered;
         if (!answersRead(read, answered.value)) return { ok: false, failure: "unexpected-answer" };
@@ -498,6 +506,37 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         return answered as HostCallOutcome<DecisionsHostQuestionAnswer<R>>;
       }
     );
+  }
+
+  /**
+   * A read over the Host's current link: content with its round (#17943)
+   * where the Host reads it, else as `QUESTIONS` reads it, as everything else is.
+   */
+  private async callQuestionRead(
+    hostId: string,
+    read: DecisionsHostQuestionRead
+  ): Promise<HostCallOutcome<unknown>> {
+    const session = this.deps.sessionFor(hostId);
+    if (read.read === "content" && session !== null && !this.beforeContentRounds.has(session)) {
+      // Only the method itself going unknown says the Host is older: a refused step of a
+      // method it knows reads as `needs-update` too, and must never cost later reads their round.
+      let unsupported = false;
+      const answered = await this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_CONTENT_V2,
+        { reference: read.reference },
+        HostQuestionContentV2ResultSchema,
+        () => {
+          unsupported = true;
+        }
+      );
+      if (!unsupported) return answered;
+      // A Host from before #17943 reads content only as `QUESTIONS` does. Asked again from the
+      // top, so a link that replaced this one meanwhile is asked for the round in its own right.
+      this.beforeContentRounds.add(session);
+      return this.callQuestionRead(hostId, read);
+    }
+    return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read));
   }
 
   lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null {
@@ -609,7 +648,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     method: string,
     payload: unknown,
-    schema: S
+    schema: S,
+    onUnsupported?: () => void
   ): Promise<HostCallOutcome<z.infer<S>>> {
     const session = this.deps.sessionFor(hostId);
     if (!session?.isOpen) return { ok: false, failure: "disconnected" };
@@ -618,6 +658,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     try {
       raw = await session.call(method, payload, { timeoutMs: HOST_QUESTION_TIMEOUT_MS });
     } catch (error) {
+      if (codeOf(error) === "UNSUPPORTED") onUnsupported?.();
       return failureOf(error);
     } finally {
       release();
@@ -635,15 +676,32 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.questionTurns.set(hostId, turn);
     let raw: unknown;
     let withAsks = !this.beforeAsks.has(session);
+    let withRounds = withAsks && !this.beforeRounds.has(session);
     try {
       if (withAsks) {
         this.readingAsks.set(session, (this.readingAsks.get(session) ?? 0) + 1);
         try {
-          raw = await session.call(
-            DecisionsLinkMethod.QUESTION_LIST_V2,
-            {},
-            { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
-          );
+          if (withRounds) {
+            try {
+              raw = await session.call(
+                DecisionsLinkMethod.QUESTION_LIST_V3,
+                {},
+                { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+              );
+            } catch (error) {
+              // A Host from before #17943 lists its questions without their rounds.
+              if (codeOf(error) !== "UNSUPPORTED") throw error;
+              this.beforeRounds.add(session);
+              withRounds = false;
+            }
+          }
+          if (!withRounds) {
+            raw = await session.call(
+              DecisionsLinkMethod.QUESTION_LIST_V2,
+              {},
+              { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+            );
+          }
         } catch (error) {
           // A Host from before #17895 lists its questions without what each asks.
           if (codeOf(error) !== "UNSUPPORTED") throw error;
@@ -675,11 +733,13 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     if (withAsks) {
       // Ordered by the Host's own count, not by turns: a push can arrive after a newer reply.
-      const parsed = HostQuestionListV2Schema.safeParse(raw);
+      const parsed = (withRounds ? HostQuestionListV3Schema : HostQuestionListV2Schema).safeParse(
+        raw
+      );
       if (!parsed.success) return;
       this.listsAsks.add(session);
       if (this.listCounts(hostId, session, parsed.data)) {
-        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
+        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks, withRounds);
       }
       return;
     }
@@ -697,7 +757,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     session: DecisionsHostSession,
     payload: HostQuestionListPayload,
-    rawAsks?: readonly unknown[]
+    rawAsks?: readonly unknown[],
+    rounds = false
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
     if (owner === null || payload.hostId === null || !this.takesList(hostId, session, payload)) {
@@ -705,8 +766,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     const questionHostId = payload.hostId;
     const questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[] = [];
+    // A v3 list's items carry their round (#17943); an older list's are read as they always were.
+    const itemSchema = rounds ? HostQuestionItemV3Schema : HostQuestionItemSchema;
     for (const raw of payload.questions) {
-      const item = HostQuestionItemSchema.safeParse(raw);
+      const item = itemSchema.safeParse(raw);
       if (item.success && item.data.reference.hostId === questionHostId) questions.push(item.data);
     }
     // Each ask read on its own, and kept only for a question the list kept.
@@ -808,9 +871,22 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       HostQuestionsChangedV2PayloadSchema,
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
+        // One sent before the Host knew this Shell reads rounds is older than what it listed
+        // since by the session's count; one after is the Host telling it without them.
         this.listsAsks.add(session);
         if (!this.listCounts(hostId, session, payload)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks);
+        return null;
+      }
+    );
+    const offQuestionsV3 = session.registerCallHandler(
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V3,
+      HostQuestionsChangedV3PayloadSchema,
+      (payload) => {
+        if (!this.takesList(hostId, session, payload)) return null;
+        this.listsAsks.add(session);
+        if (!this.listCounts(hostId, session, payload)) return null;
+        this.hearQuestions(hostId, session, payload, payload.asks, true);
         return null;
       }
     );
@@ -818,6 +894,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       offReport();
       offQuestions();
       offQuestionsV2();
+      offQuestionsV3();
       offClose();
       this.unwires.delete(unwire);
     };

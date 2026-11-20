@@ -97,10 +97,14 @@ export function progressText(
   question: DecisionQuestionContent,
   answerId: string
 ): string {
-  const inThread = question.thread.some(
-    (entry) => entry.type === "answer" && entry.entryId === answerId
-  );
-  if (inThread) {
+  const answers = question.thread.filter((entry) => entry.type === "answer");
+  const mine = answers.find((entry) => entry.entryId === answerId);
+  if (mine !== undefined) {
+    // Its own delivery first (#17943): a later correction's doesn't say what happened to this one.
+    if (mine.delivered === true) return "Answer sent and typed into the terminal";
+    if (mine !== answers.at(-1) && mine.delivered === false) {
+      return "Answer sent. A later answer came after it, and typing this one in wasn't confirmed.";
+    }
     switch (question.deliveryStatus) {
       case "terminal-delivered":
         return "Answer sent and typed into the terminal";

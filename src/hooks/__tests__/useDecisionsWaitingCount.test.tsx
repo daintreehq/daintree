@@ -170,3 +170,97 @@ describe("useDecisionsWaitingCount", () => {
     expect(seen.at(-1)).toBe(0);
   });
 });
+
+describe("useDecisionsWaitingCount, as deadlines pass (#17943)", () => {
+  const START = Date.parse("2026-11-20T14:00:00.000Z");
+  let wake: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+    wake = null;
+    Reflect.set(window, "electron", {
+      systemSleep: {
+        onWake: (listener: () => void) => {
+          wake = listener;
+          return () => {
+            wake = null;
+          };
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    Reflect.deleteProperty(window, "electron");
+  });
+
+  const timed = (index: number, expiresAt: string | null, standing: DecisionQuestionStanding) => ({
+    ...question(standing, index),
+    expiresAt,
+  });
+
+  it("drops an ask from the count as its deadline passes, though the list didn't move", () => {
+    render(<Probe active />);
+    const soon = new Date(START + 60_000).toISOString();
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          timed(0, soon, { kind: "waiting", reason: "open" }),
+          timed(1, null, { kind: "waiting", reason: "open" }),
+          // A reply asked for isn't bound by the question's deadline, even a later one.
+          timed(2, new Date(START + 5 * 60_000).toISOString(), {
+            kind: "waiting",
+            reason: "reply",
+          }),
+        ],
+      })
+    );
+    expect(seen.at(-1)).toBe(3);
+    const renders = seen.length;
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(seen.length).toBe(renders);
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(seen.at(-1)).toBe(2);
+    // Nothing left to wait for: the reply's deadline arms nothing.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("counts again when the machine wakes, though no timer fired while it slept", () => {
+    render(<Probe active />);
+    const deadline = new Date(START + 10 * 60_000).toISOString();
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [timed(0, deadline, { kind: "queued" })],
+      })
+    );
+    expect(seen.at(-1)).toBe(1);
+    vi.setSystemTime(START + 60 * 60_000);
+    act(() => {
+      wake?.();
+    });
+    expect(seen.at(-1)).toBe(0);
+  });
+
+  it("lets go of its timer and wake listener with its last reader", () => {
+    const { unmount } = render(<Probe active />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [timed(0, new Date(START + 60_000).toISOString(), { kind: "queued" })],
+      })
+    );
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(wake).toBeNull();
+  });
+});

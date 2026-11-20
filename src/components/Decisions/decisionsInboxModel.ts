@@ -9,6 +9,9 @@ import type {
   DecisionQuestionReference,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
+import { deadlineElapsed, expiresSoon } from "./decisionDeadline";
+
+export { EXPIRY_SOON_MS, expiresSoon } from "./decisionDeadline";
 
 /**
  * What the Decisions inbox (#17231) says about the questions this computer
@@ -17,7 +20,8 @@ import type {
  * the agent is doing.
  */
 
-export type InboxGroupId = "needs-you" | "delivering" | "attention" | "cleared" | "history";
+export type InboxGroupId =
+  "needs-you" | "awaiting" | "delivering" | "attention" | "cleared" | "history";
 
 export interface InboxGroup {
   id: InboxGroupId;
@@ -27,6 +31,7 @@ export interface InboxGroup {
 
 const GROUP_TITLES: Record<InboxGroupId, string> = {
   "needs-you": "Needs you",
+  awaiting: "Awaiting update",
   delivering: "Being delivered",
   attention: "Needs attention",
   cleared: "Cleared",
@@ -35,6 +40,7 @@ const GROUP_TITLES: Record<InboxGroupId, string> = {
 
 const GROUP_ORDER: readonly InboxGroupId[] = [
   "needs-you",
+  "awaiting",
   "delivering",
   "attention",
   "cleared",
@@ -63,14 +69,26 @@ export function groupOf(standing: DecisionQuestionStanding): InboxGroupId {
 /**
  * Where the inbox lists the question: by its standing, except that one the
  * person cleared from Needs you on this computer (#17895) waits under
- * Cleared, still answerable, until it asks something new.
+ * Cleared, still answerable, until it asks something new; and one whose
+ * deadline passed by this computer's clock at `nowMs` (#17943), which nothing
+ * has confirmed closed yet, waits under Awaiting update rather than on the
+ * person. Without a clock, as before.
  */
 export function inboxGroupOf(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox"> & { expiresAt?: string | null },
+  nowMs: number | null = null
 ): InboxGroupId {
   const group = groupOf(item.standing);
-  return group === "needs-you" && item.inbox?.cleared === true ? "cleared" : group;
+  if (group !== "needs-you") return group;
+  if (item.inbox?.cleared === true) return "cleared";
+  const elapsed =
+    nowMs !== null &&
+    deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs);
+  return elapsed ? "awaiting" : group;
 }
+
+/** What an ask whose deadline passed says until the store records how it closed (#17943). */
+export const ELAPSED_NOTE = "Deadline passed, awaiting an update";
 
 /**
  * The listed question's current ask, when `shown` lets the person have seen
@@ -124,6 +142,17 @@ export function askShownIn(
 export const CLEARED_NOTE = "Cleared on this computer";
 
 /**
+ * What Clear or Restore does, said before it's pressed (#17943): only this
+ * computer's inbox moves. Unlike Dismiss, nothing is declined or sent, and
+ * the question stays open for an answer, here or on a phone.
+ */
+export function clearText(cleared: boolean): string {
+  return cleared
+    ? "Takes it out of Cleared on this computer. Nothing is sent to the agent or your phones."
+    : "Moves it to Cleared on this computer only. Nothing is declined or sent, and while it's open it can still be answered here or on your phone.";
+}
+
+/**
  * What clearing or restoring says once it lands, for the ear; null when it
  * changed nothing, as when each question had asked something new meanwhile.
  */
@@ -163,7 +192,7 @@ export function inboxGroups(
 ): InboxGroup[] {
   const byGroup = new Map<InboxGroupId, DecisionQuestionListItem[]>();
   for (const item of questions) {
-    const id = inboxGroupOf(item);
+    const id = inboxGroupOf(item, nowMs);
     const items = byGroup.get(id);
     if (items === undefined) byGroup.set(id, [item]);
     else items.push(item);
@@ -194,8 +223,14 @@ export function referenceKey(reference: DecisionQuestionReference): string {
   );
 }
 
-/** The question's state, in the chip's words. One sentence, sentence case, no period. */
-export function standingText(standing: DecisionQuestionStanding): string {
+/** What a list item says of its round, when its machine said (#17943). */
+export type ItemRound = Partial<Pick<DecisionQuestionListItem, "replyMode" | "closedReason">>;
+
+/**
+ * The question's state, in the chip's words. One sentence, sentence case, no
+ * period. With its `round`, each way it closed without an answer reads apart.
+ */
+export function standingText(standing: DecisionQuestionStanding, round: ItemRound = {}): string {
   switch (standing.kind) {
     case "waiting":
       return standing.reason === "open"
@@ -204,7 +239,9 @@ export function standingText(standing: DecisionQuestionStanding): string {
     case "queued":
       return "Queued to send; you can answer it here";
     case "send-failed":
-      return "Couldn't be sent";
+      return round.closedReason === "never-published"
+        ? "Deadline passed before it reached the relay"
+        : "Couldn't be sent";
     case "to-type":
       // An answer or a person's follow-up: the list doesn't say which.
       return "Waiting to be typed in";
@@ -218,9 +255,12 @@ export function standingText(standing: DecisionQuestionStanding): string {
           // A handled answer was never typed in.
           return standing.handled ? "Answered, marked handled" : "Answered";
         case "withdrawn":
-          return "Cancelled";
+          return "Withdrawn";
         case "expired":
-          return "Expired unanswered";
+          // A blocking expiry reads as every expiry did; an advisory one is told apart.
+          return round.replyMode === "advisory"
+            ? "Expired unanswered, advice only"
+            : "Expired unanswered";
         case "declined":
           return "Declined";
       }
@@ -238,7 +278,7 @@ export function isAttention(standing: DecisionQuestionStanding): boolean {
  * there, and the same words four times down a list are noise. The full
  * sentence stays in the row's accessible name either way.
  */
-export function rowNote(standing: DecisionQuestionStanding): string | null {
+export function rowNote(standing: DecisionQuestionStanding, round: ItemRound = {}): string | null {
   switch (standing.kind) {
     case "waiting":
       return standing.reason === "open" ? null : standingText(standing);
@@ -252,34 +292,40 @@ export function rowNote(standing: DecisionQuestionStanding): string | null {
         : "Delivery stopped";
     case "settled":
       // The finished ring says answered; only an answer that went another way earns words.
-      return standing.outcome === "answered" && !standing.handled ? null : standingText(standing);
+      return standing.outcome === "answered" && !standing.handled
+        ? null
+        : standingText(standing, round);
     default:
-      return standingText(standing);
+      return standingText(standing, round);
   }
 }
 
-/** `rowNote`, for a row that may have been cleared (#17895): that is what sets it apart then. */
+/**
+ * `rowNote`, for a row that may have been cleared (#17895), or whose deadline
+ * passed by the clock at `nowMs` (#17943): that is what sets it apart then.
+ */
 export function inboxRowNote(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+  item: Pick<
+    DecisionQuestionListItem,
+    "standing" | "inbox" | "expiresAt" | "replyMode" | "closedReason"
+  >,
+  nowMs: number | null = null
 ): string | null {
-  return inboxGroupOf(item) === "cleared" ? CLEARED_NOTE : rowNote(item.standing);
+  const elapsed = nowMs !== null && deadlineElapsed(item, nowMs);
+  switch (inboxGroupOf(item, nowMs)) {
+    case "cleared":
+      return elapsed ? `${CLEARED_NOTE}; deadline passed` : CLEARED_NOTE;
+    case "awaiting":
+      return ELAPSED_NOTE;
+    default:
+      return rowNote(item.standing, item);
+  }
 }
 
-/** How close a deadline has to be before a waiting row names it. */
-export const EXPIRY_SOON_MS = 24 * 60 * 60 * 1000;
-
-/** Whether a question that still waits closes soon enough for its row to say so. */
-export function expiresSoon(
-  item: Pick<DecisionQuestionListItem, "expiresAt" | "standing">,
-  nowMs: number
-): boolean {
-  // An open or queued question's own deadline; a reply asked for after an answer isn't bound by it.
-  const asks =
-    item.standing.kind === "queued" ||
-    (item.standing.kind === "waiting" && item.standing.reason === "open");
-  if (!asks || item.expiresAt === null) return false;
-  const at = Date.parse(item.expiresAt);
-  return !Number.isNaN(at) && at > nowMs && at - nowMs <= EXPIRY_SOON_MS;
+/** A Remote Host's question while its Host isn't connected: as it last reported it (#17943). */
+export function staleNote(item: Pick<DecisionQuestionListItem, "remoteHost">): string | null {
+  const host = item.remoteHost;
+  return host !== undefined && !host.connected ? `${host.name} away, as last reported` : null;
 }
 
 /**
@@ -287,10 +333,37 @@ export function expiresSoon(
  * what was recorded, since the list can't say whether an answer or a
  * follow-up stopped, nor who sent it.
  */
-export function attentionText(standing: DecisionQuestionStanding): string {
-  return standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain"
+export function attentionText(
+  standing: DecisionQuestionStanding,
+  round: Pick<ItemRound, "closedReason"> = {}
+): string {
+  const uncertain =
+    standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
+  // Closed without an answer (#17943): what stopped is the notice saying so, unless a
+  // follow-up's delivery did, which the list can't tell apart, so both are named.
+  const closing = closingNotice(round.closedReason ?? null);
+  if (closing !== null) {
+    return uncertain
+      ? `The notice that ${closing}, or a follow-up, may or may not have been typed into the terminal. Check it there before anything is sent again.`
+      : `The notice that ${closing}, or a follow-up, was recorded, but typing it into the terminal stopped. Choose what happens to it.`;
+  }
+  return uncertain
     ? "An answer or follow-up may or may not have been typed into the terminal. Check it there before anything is sent again."
     : "An answer or follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it.";
+}
+
+/** What a closing notice tells the agent, as the attention callout names it. */
+function closingNotice(reason: ItemRound["closedReason"] | null): string | null {
+  switch (reason) {
+    case "expired":
+      return "the question expired unanswered";
+    case "declined":
+      return "you declined it";
+    case "never-published":
+      return "it never reached the relay";
+    default:
+      return null;
+  }
 }
 
 /** A question that is over: its row steps down a tone so the live ones lead. */

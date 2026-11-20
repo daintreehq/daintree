@@ -28,7 +28,6 @@ import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { pluralize } from "@/lib/pluralize";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -50,12 +49,16 @@ import type {
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
+import { asksByDeadline, deadlineMs, remainingText, replyByText } from "./decisionDeadline";
+import { useDecisionsClock } from "./useDecisionsClock";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
   askShownIn,
   attentionText,
+  clearText,
   connectionNotice,
   emptyText,
   expiresSoon,
@@ -67,6 +70,7 @@ import {
   markedText,
   referenceKey,
   resolveSelection,
+  staleNote,
   standingText,
   whereFacts,
   worktreeName,
@@ -367,12 +371,21 @@ function InboxRow({
   onSelect: () => void;
   nowMs: number | null;
 }) {
-  const note = inboxRowNote(item);
-  const cleared = inboxGroupOf(item) === "cleared";
+  const note = inboxRowNote(item, nowMs);
+  const cleared = inboxGroupOf(item, nowMs) === "cleared";
+  const deadline = deadlineMs(item.expiresAt);
+  // Within a day: when, in this computer's time, and how long is left (#17943).
   const expiry =
-    item.expiresAt !== null && nowMs !== null && expiresSoon(item, nowMs)
-      ? `Due ${formatRelativeTime(Date.parse(item.expiresAt), nowMs)}`
+    deadline !== null && nowMs !== null && expiresSoon(item, nowMs)
+      ? [
+          item.replyMode === "advisory" ? "Advisory" : null,
+          replyByText(deadline, nowMs),
+          remainingText(deadline, nowMs),
+        ]
+          .filter((part) => part !== null)
+          .join(" · ")
       : null;
+  const stale = staleNote(item);
   const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
   return (
@@ -440,15 +453,21 @@ function InboxRow({
           {/* A closed row's outcome is already read out with its where-line. */}
           {!(closed && note !== null) && (
             <span className="sr-only">
-              {standingText(item.standing)}
-              {cleared && ", cleared on this computer"}
+              {inboxGroupOf(item, nowMs) === "awaiting" ? note : standingText(item.standing, item)}
+              {cleared && `, ${note?.toLowerCase() ?? "cleared on this computer"}`}
               {expiry !== null && `, ${expiry.toLowerCase()}`}
             </span>
           )}
           <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
             <span className="min-w-0 flex-1 truncate">
               <span className="sr-only">{agent}, </span>
-              <FactRun facts={closed && note !== null ? [note, ...where] : where} />
+              <FactRun
+                facts={[
+                  ...(closed && note !== null ? [note] : []),
+                  ...(stale !== null ? [stale] : []),
+                  ...where,
+                ]}
+              />
             </span>
             {/* Not twice: a row whose line couldn't be read is already named by it. */}
             {line !== null && (
@@ -635,9 +654,12 @@ export function DecisionsInboxDialog() {
   const { read: listRead, retry, release: releaseList } = useQuestionList(active, request.seq);
   const { status, known: statusKnown } = useInboxStatus(active, request.seq);
   const notice = connectionNotice(status);
-  // Read against when this opening began: a deadline a day out doesn't need to tick while it's open.
-  const nowMs = request.openedAt ?? null;
   const questions = listRead.state === "listed" ? listRead.list.questions : null;
+  // Moved on only when a deadline's row would read differently, or the clock jumped (#17943).
+  const nowMs = useDecisionsClock(
+    (questions ?? []).flatMap((item) => (asksByDeadline(item.standing) ? [item.expiresAt] : [])),
+    active
+  );
   const groups = questions === null ? [] : inboxGroups(questions, nowMs);
   const ordered = groups.flatMap((group) => group.items);
   const { lines, release: releaseLines } = useQuestionLines(ordered, active);
@@ -708,8 +730,10 @@ export function DecisionsInboxDialog() {
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
   const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
+  // Kept with the footer: a press on Clear that the last deadline overtook keeps its place.
+  const awaiting = groups.find((group) => group.id === "awaiting")?.items ?? [];
   const nextUp =
-    selected !== null && inboxGroupOf(selected) !== "needs-you"
+    selected !== null && inboxGroupOf(selected, nowMs) !== "needs-you"
       ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
       : null;
   const announce = useAnnouncerStore((state) => state.announce);
@@ -728,7 +752,9 @@ export function DecisionsInboxDialog() {
       () => say(markedText(action, { result: "failed" }))
     );
   };
-  const selectedGroup = selected === null ? null : inboxGroupOf(selected);
+  const selectedGroup = selected === null ? null : inboxGroupOf(selected, nowMs);
+  const clearHintId = useId();
+  const clearHint = clearText(selectedGroup === "cleared");
   const showNext = () => {
     if (nextUp === null) return;
     const key = referenceKey(nextUp.reference);
@@ -946,7 +972,7 @@ export function DecisionsInboxDialog() {
               {/* Below the list rather than on its heading, so the dialog's first focus stays on the
                 question list. Kept while anything is cleared, so a press that empties Needs you
                 leaves the keyboard here rather than nowhere. */}
-              {(waiting.length > 0 || cleared.length > 0) && (
+              {(waiting.length > 0 || cleared.length > 0 || awaiting.length > 0) && (
                 <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
                   <Button
                     variant="ghost"
@@ -1009,25 +1035,40 @@ export function DecisionsInboxDialog() {
                         {/* One button that turns into its inverse, so the keyboard stays on it as the
                             question moves between groups. Needs only the list: it works whether or
                             not the question can be read or its terminal reached. */}
-                        {(selectedGroup === "needs-you" || selectedGroup === "cleared") && (
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-disabled={clearWaits || undefined}
-                            onClick={() => {
-                              if (clearWaits) return;
-                              markShown(selectedGroup === "cleared" ? "restore" : "clear", [
-                                selected,
-                              ]);
-                            }}
-                            className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                            data-testid="decisions-inbox-clear"
-                          >
-                            {selectedGroup === "cleared"
-                              ? "Restore to Needs you"
-                              : "Clear from Needs you"}
-                          </Button>
+                        {/* Kept, unavailable, once its deadline passes under it, so focus on it stays. */}
+                        {(selectedGroup === "needs-you" ||
+                          selectedGroup === "cleared" ||
+                          selectedGroup === "awaiting") && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-disabled={
+                                  clearWaits || selectedGroup === "awaiting" || undefined
+                                }
+                                aria-describedby={clearHintId}
+                                onClick={() => {
+                                  if (clearWaits || selectedGroup === "awaiting") return;
+                                  markShown(selectedGroup === "cleared" ? "restore" : "clear", [
+                                    selected,
+                                  ]);
+                                }}
+                                className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                                data-testid="decisions-inbox-clear"
+                              >
+                                {selectedGroup === "cleared"
+                                  ? "Restore to Needs you"
+                                  : "Clear from Needs you"}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{clearHint}</TooltipContent>
+                          </Tooltip>
                         )}
+                        {/* What Clear does, before it's pressed (#17943): it stays local and declines nothing. */}
+                        <span id={clearHintId} className="sr-only">
+                          {clearHint}
+                        </span>
                         {reader.cancellable &&
                           (dismissal.progress !== null ? (
                             dismissal.phase?.kind === "lost" && (
@@ -1106,7 +1147,7 @@ export function DecisionsInboxDialog() {
                         }
                         data-testid="decisions-inbox-attention"
                       >
-                        {attentionText(selected.standing)}
+                        {attentionText(selected.standing, selected)}
                       </Callout>
                     )}
                     <DecisionQuestionReadView

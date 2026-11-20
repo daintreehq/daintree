@@ -397,7 +397,8 @@ describe("DecisionQuestionDialog", () => {
     expect(body.textContent).toContain("Hold");
     // A person's answer is what every question needs, so only another requirement is said.
     expect(screen.queryByTestId("decision-question-requirement")).toBeNull();
-    expect(body.querySelector("time[datetime='2099-01-01T00:00:00.000Z']")).not.toBeNull();
+    // Answered: its deadline no longer applies, so only an open question names it (#17943).
+    expect(body.querySelector("time[datetime='2099-01-01T00:00:00.000Z']")).toBeNull();
 
     const entries = screen.getAllByTestId("decision-thread-entry");
     expect(entries).toHaveLength(2);

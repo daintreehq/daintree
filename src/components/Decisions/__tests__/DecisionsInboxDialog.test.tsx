@@ -482,6 +482,62 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
   });
 
+  it("moves an ask whose deadline passes to Awaiting update, keeping it shown and the keyboard where it was (#17943)", async () => {
+    const expiresAt = new Date(Date.now() + 500).toISOString();
+    const timed = item("question-2", 2, OPEN, {
+      askedAt: "2026-11-02T09:00:00.000Z",
+      expiresAt,
+      replyMode: "advisory",
+    });
+    listQuestions.mockResolvedValue({ revision: 1, questions: [LIST.questions[0]!, timed] });
+    const shown = CONTENT["question-2"]!;
+    CONTENT["question-2"] = { ...shown, expiresAt, replyMode: "advisory" };
+    try {
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      // Inside a day: when to reply by, in this computer's time, and the time left.
+      expect(rowNamed("q-2").textContent).toMatch(
+        /Advisory · Reply by .+ · Less than a minute left/
+      );
+      expect(screen.getByTestId("decisions-inbox-group-needs-you").textContent).toContain("q-2");
+      const focused = rowNamed("q-2");
+      focused.focus();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-awaiting").textContent).toContain("q-2")
+      );
+      expect(rowNamed("q-2").textContent).toMatch(/Deadline passed, awaiting an update/);
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      expect(document.activeElement?.getAttribute("data-inbox-key")).toBe(
+        focused.getAttribute("data-inbox-key")
+      );
+      expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
+        /Deadline passed/
+      );
+      // Nothing there to set aside: it no longer waits on the person. The button stays, unavailable,
+      // so a keyboard on it isn't dropped.
+      expect(screen.getByTestId("decisions-inbox-clear").getAttribute("aria-disabled")).toBe(
+        "true"
+      );
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      expect(markQuestions).not.toHaveBeenCalledWith(expect.objectContaining({ action: "clear" }));
+    } finally {
+      CONTENT["question-2"] = shown;
+    }
+  });
+
+  it("says Clear stays on this computer before it's pressed (#17943)", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    fireEvent.click(rowNamed("q-2"));
+    const clear = await screen.findByTestId("decisions-inbox-clear");
+    const hint = document.getElementById(clear.getAttribute("aria-describedby") ?? "");
+    expect(hint?.textContent).toMatch(/this computer only/);
+    expect(hint?.textContent).toMatch(/Nothing is declined or sent/);
+  });
+
   it("moves through native buttons with one tab stop, reading only the row chosen", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(3));

@@ -9,8 +9,10 @@ import type {
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
+  ELAPSED_NOTE,
   agentName,
   askShownIn,
+  clearText,
   connectionNotice,
   groupOf,
   inboxGroupOf,
@@ -22,6 +24,7 @@ import {
   referenceKey,
   resolveSelection,
   seeableAsk,
+  staleNote,
   standingText,
   worktreeName,
 } from "../decisionsInboxModel";
@@ -173,7 +176,7 @@ describe("decisionsInboxModel", () => {
       { kind: "settled", outcome: "expired" },
       { kind: "settled", outcome: "declined" },
     ];
-    const texts = standings.map(standingText);
+    const texts = standings.map((standing) => standingText(standing));
     expect(new Set(texts).size).toBe(standings.length);
     for (const text of texts) {
       expect(text.length).toBeGreaterThan(0);
@@ -385,5 +388,79 @@ describe("seen and cleared on this computer (#17895)", () => {
     expect(markedText("clear", { result: "failed" })).not.toBe(
       markedText("restore", { result: "failed" })
     );
+  });
+
+  describe("deadlines and how a question closed (#17943)", () => {
+    const NOW = Date.parse("2026-11-20T14:00:00.000Z");
+    const past = new Date(NOW - 1).toISOString();
+    const ahead = new Date(NOW + 60_000).toISOString();
+
+    it("moves an ask past its deadline by the clock to Awaiting update, never a reply asked for", () => {
+      const elapsed = item("q1", OPEN, { expiresAt: past });
+      const queued = item("q2", { kind: "queued" }, { expiresAt: past });
+      const reply = item("q3", { kind: "waiting", reason: "reply" }, { expiresAt: past });
+      const waiting = item("q4", OPEN, { expiresAt: ahead });
+      expect(inboxGroupOf(elapsed, NOW)).toBe("awaiting");
+      expect(inboxGroupOf(queued, NOW)).toBe("awaiting");
+      expect(inboxGroupOf(reply, NOW)).toBe("needs-you");
+      expect(inboxGroupOf(waiting, NOW)).toBe("needs-you");
+      // Without a clock, as it always was.
+      expect(inboxGroupOf(elapsed)).toBe("needs-you");
+
+      const groups = inboxGroups([elapsed, queued, reply, waiting], NOW);
+      expect(groups.map((group) => group.id)).toEqual(["needs-you", "awaiting"]);
+      expect(groups[1]!.title).toBe("Awaiting update");
+      expect(inboxRowNote(elapsed, NOW)).toBe(ELAPSED_NOTE);
+    });
+
+    it("keeps a cleared ask under Cleared past its deadline, and says it passed", () => {
+      const cleared = item("q1", OPEN, {
+        expiresAt: past,
+        inbox: { ask: null, seen: false, cleared: true },
+      });
+      expect(inboxGroupOf(cleared, NOW)).toBe("cleared");
+      expect(inboxRowNote(cleared, NOW)).toMatch(/Cleared on this computer.*deadline passed/);
+    });
+
+    it("tells each way a question closed without an answer apart", () => {
+      const settled = (outcome: "withdrawn" | "expired" | "declined") =>
+        ({ kind: "settled", outcome }) as const;
+      const texts = [
+        standingText(settled("declined")),
+        standingText(settled("withdrawn")),
+        standingText(settled("expired"), { replyMode: "blocking" }),
+        standingText(settled("expired"), { replyMode: "advisory" }),
+        standingText({ kind: "send-failed" }, { closedReason: "never-published" }),
+        standingText({ kind: "send-failed" }),
+      ];
+      expect(new Set(texts).size).toBe(texts.length);
+      // A legacy or older Host's expiry reads as every expiry did.
+      expect(standingText(settled("expired"))).toBe(
+        standingText(settled("expired"), { replyMode: "blocking" })
+      );
+      expect(inboxRowNote(item("q1", settled("expired"), { replyMode: "advisory" }))).toBe(
+        standingText(settled("expired"), { replyMode: "advisory" })
+      );
+    });
+
+    it("says a Remote Host's question is as last reported only while its Host is away", () => {
+      expect(staleNote(item("q1", OPEN))).toBeNull();
+      expect(
+        staleNote(
+          item("q1", OPEN, { remoteHost: { hostId: "h", name: "Studio", connected: true } })
+        )
+      ).toBeNull();
+      expect(
+        staleNote(
+          item("q1", OPEN, { remoteHost: { hostId: "h", name: "Studio", connected: false } })
+        )
+      ).toMatch(/Studio.*last reported/);
+    });
+
+    it("says Clear stays on this computer and declines nothing, and Restore sends nothing", () => {
+      expect(clearText(false)).toMatch(/this computer only/);
+      expect(clearText(false)).toMatch(/Nothing is declined or sent/);
+      expect(clearText(true)).toMatch(/Nothing is sent/);
+    });
   });
 });

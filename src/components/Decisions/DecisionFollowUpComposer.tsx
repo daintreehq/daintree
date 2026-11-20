@@ -29,6 +29,8 @@ import {
   takesFollowUp,
 } from "./decisionFollowUpModel";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
+import { contentDeadlineElapsed } from "./decisionDeadline";
+import { useDeadlineClock } from "./useDecisionsClock";
 
 /** A place focus is sent to when what held it goes; never tabbed to. */
 const FOCUS_TARGET =
@@ -37,24 +39,11 @@ const FOCUS_TARGET =
 /** While a follow-up is queued, how long after one read of its standing the next starts. */
 const QUEUED_READ_MS = 2_000;
 
-/** The longest a browser timer waits; a later expiry is checked again after this. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
-
 const CLOSED_TEXT = "This question no longer takes follow-ups.";
 
-/** The time, moved on when an open question's expiry passes, so it stops offering a follow-up then. */
-function useExpiryClock(expiresAt: string | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (expiresAt === null) return;
-    const at = Date.parse(expiresAt);
-    if (Number.isNaN(at) || now >= at) return;
-    const delay = Math.max(0, at - Date.now()) + 1;
-    const timer = setTimeout(() => setNow(Date.now()), Math.min(delay, MAX_TIMER_MS));
-    return () => clearTimeout(timer);
-  }, [expiresAt, now]);
-  return now;
-}
+/** Said while only this computer's clock has an open question's deadline passed (#17943). */
+const ELAPSED_TEXT =
+  "The deadline has passed, so this can't be sent. Your words stay here while Daintree waits to hear how the question closed.";
 
 export interface DecisionFollowUpComposerProps {
   question: DecisionQuestionContent;
@@ -81,8 +70,10 @@ export function DecisionFollowUpComposer({
   const record = useFollowUpRecord(key);
   const update = useDecisionsFollowUpStore((state) => state.update);
   const announce = useAnnouncerStore((state) => state.announce);
-  const now = useExpiryClock(question.status === "open" ? question.expiresAt : null);
+  const now = useDeadlineClock(question.status === "open" ? question.expiresAt : null);
   const available = takesFollowUp(question, now);
+  // Open by the store, past its deadline by the clock: nothing has said how it closed yet.
+  const elapsed = contentDeadlineElapsed(question, now) && question.status === "open";
   const inFlight = isFollowUpInFlight(record);
   const verdict = followUpVerdict(record.draft);
   const ready = available && verdict.canSend && !inFlight;
@@ -146,7 +137,13 @@ export function DecisionFollowUpComposer({
   const hold = record.hold !== null ? followUpHoldText(record.hold) : null;
   // Unsent words, or a person writing here, once it stopped taking them: say so rather than vanish.
   const closed =
-    !available && !inFlight && (engaged || record.draft.trim() !== "") ? CLOSED_TEXT : null;
+    !available && !inFlight && (engaged || record.draft.trim() !== "")
+      ? elapsed
+        ? ELAPSED_TEXT
+        : CLOSED_TEXT
+      : null;
+  // A draft past the deadline stays in its field, read-only, so focus and words stay put.
+  const keepField = available || (elapsed && closed !== null);
   const notice = attempt ?? hold ?? closed;
 
   // Each said once as it changes, never for what was already so when the view opened. Both
@@ -232,7 +229,7 @@ export function DecisionFollowUpComposer({
           </Callout>
         )}
       </div>
-      {available && (
+      {keepField && (
         <>
           <Field>
             <FieldLabel className="sr-only">{asked ? "Your reply" : "Your follow-up"}</FieldLabel>
@@ -244,7 +241,7 @@ export function DecisionFollowUpComposer({
               rows={2}
               value={record.draft}
               // Kept while it is on its way, so focus stays here and the words can't change under it.
-              readOnly={inFlight}
+              readOnly={inFlight || !available}
               aria-keyshortcuts={shortcut}
               onChange={(event) => {
                 const text = event.target.value;

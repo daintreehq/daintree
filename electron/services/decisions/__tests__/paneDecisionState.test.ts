@@ -205,8 +205,9 @@ describe("projectPaneDecisionStates", () => {
       }),
     ]);
 
+    // Nor an expiry (#17943): no phone ever showed it.
     expect(state?.waitingAnswers.map(({ alias, kind }) => ({ alias, kind }))).toEqual([
-      { alias: 1, kind: "expired" },
+      { alias: 1, kind: "never-published" },
     ]);
   });
 

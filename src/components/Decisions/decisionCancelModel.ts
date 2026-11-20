@@ -4,6 +4,7 @@ import type {
   DecisionQuestionCancelResult,
   DecisionQuestionLastRead,
   DecisionQuestionStatus,
+  DecisionReplyMode,
 } from "@shared/types/decisionsQuestion";
 import type { DismissAttempt } from "./decisionDeclineSend";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -28,6 +29,12 @@ export interface DecisionCancelTarget {
    * then. Absent or null for a question read just now.
    */
   lastReadAt?: number | null;
+  /**
+   * The mode of the round `revision` names (#17943), as read with it, so the
+   * confirmation says what declining means for it; absent or null when that
+   * read didn't say, and never taken from a read of another revision.
+   */
+  replyMode?: DecisionReplyMode | null;
 }
 
 /** A Remote Host's question dismissed from what was last read of it: there's no withdrawing it. */
@@ -79,11 +86,27 @@ export function dismissTitle(target: DecisionCancelTarget): string {
   return `Dismiss question ${target.label}?`;
 }
 
+/** Unlike Clear, a decline is sent: the agent and your phones are told. */
+const CLEAR_INSTEAD =
+  " Clearing it from Needs you in the inbox instead sets it aside on this computer only, and tells no one.";
+
+/**
+ * What declining means for a plan the agent stated (#17943): it never lets
+ * one go ahead. Said unless the round being signed is known to be one that
+ * waits for a reply, so a confirmation that couldn't read the mode (a row's
+ * Dismiss, a Host away) never leaves it out.
+ */
+function planConsequence(target?: DecisionCancelTarget | null): string {
+  return target?.replyMode === "blocking"
+    ? ""
+    : " Declining doesn't let the agent go ahead with any plan it stated for an unanswered question.";
+}
+
 export function dismissBody(target?: DecisionCancelTarget | null): string {
   if (target != null && isAway(target)) {
-    return "The Remote Host that asked it isn't connected, so it's dismissed as this computer last read it. If it hasn't changed since, it's declined for you, as Dismiss on your phone does: your phones show it declined on this computer, and once the Host is back, an agent still listening is told you chose not to answer. Nothing is decided or approved.";
+    return `The Remote Host that asked it isn't connected, so it's dismissed as this computer last read it. If it hasn't changed since, it's declined for you, as Dismiss on your phone does: your phones show it declined on this computer, and once the Host is back, an agent still listening is told you chose not to answer. Nothing is decided or approved.${planConsequence(target)}`;
   }
-  return "It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer, and it leaves Needs you.";
+  return `It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer, and it leaves Needs you.${planConsequence(target)}${CLEAR_INSTEAD}`;
 }
 
 export function cancelTitle(target: DecisionCancelTarget): string {

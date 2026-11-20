@@ -1,3 +1,5 @@
+import { replyByText } from "@/components/Decisions/decisionDeadline";
+import { ELAPSED_NOTE } from "@/components/Decisions/decisionsInboxModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import { pluralize } from "@/lib/pluralize";
 
@@ -12,6 +14,7 @@ export type DecisionItemKind =
   | "uncertain"
   | "answer"
   | "expired"
+  | "never-published"
   | "open"
   | "queued"
   | "dismissing"
@@ -73,6 +76,7 @@ const KIND_ORDER: Record<DecisionItemKind, number> = {
   uncertain: 1,
   answer: 2,
   expired: 3,
+  "never-published": 3,
   open: 4,
   queued: 5,
   dismissing: 6,
@@ -168,18 +172,22 @@ export function decisionItems(
   }
   for (const entry of state.waitingAnswers) {
     const expired = entry.kind === "expired";
+    const unsent = entry.kind === "never-published";
     const hostAway = entry.deliveryStatus === "pending-host";
+    const telling = hostAway
+      ? "telling the agent when this terminal's host is back"
+      : `telling the agent ${WAIT_PHRASES[wait]}`;
     items.push({
       questionId: entry.questionId,
       label: aliasLabel(entry.alias),
-      kind: expired ? "expired" : "answer",
-      status: expired
-        ? hostAway
-          ? "Expired unanswered, telling the agent when this terminal's host is back"
-          : `Expired unanswered, telling the agent ${WAIT_PHRASES[wait]}`
-        : hostAway
-          ? "Answer received, delivering when this terminal's host is back"
-          : `Answer received, typing it in ${WAIT_PHRASES[wait]}`,
+      kind: entry.kind,
+      status: unsent
+        ? `Deadline passed before it reached the relay, ${telling}`
+        : expired
+          ? `Expired unanswered, ${telling}`
+          : hostAway
+            ? "Answer received, delivering when this terminal's host is back"
+            : `Answer received, typing it in ${WAIT_PHRASES[wait]}`,
       reason: null,
       waitsFor: hostAway ? "host" : wait,
       askedAt: null,
@@ -238,7 +246,8 @@ export function cancelNote(items: readonly DecisionItem[]): string | null {
   const answered = items.some(
     (item) => (item.kind === "answer" || isAttention(item)) && !waiting.has(item.questionId)
   );
-  const expired = items.some((item) => item.kind === "expired");
+  // Past its deadline either way: one that never reached the relay is over too.
+  const expired = items.some((item) => item.kind === "expired" || item.kind === "never-published");
   if (answered && expired) return "Answered and expired questions can't be dismissed";
   if (answered) return "Answered questions can't be dismissed";
   if (expired) return "Expired questions can't be dismissed";
@@ -280,6 +289,8 @@ export function chipLabel(items: readonly DecisionItem[]): ChipLabel {
       return { text: `${item.label} delivering`, detail: null };
     case "expired":
       return { text: `${item.label} expired`, detail: null };
+    case "never-published":
+      return { text: `${item.label} never sent`, detail: null };
     case "queued":
       return { text: `${item.label} queued`, detail: null };
     case "dismissing":
@@ -321,6 +332,17 @@ export function answerNote(items: readonly DecisionItem[]): string | null {
   return items.some(isCancellable) ? "Open a question to answer it here" : null;
 }
 
+/**
+ * What an open or queued question's popover row adds about its deadline
+ * (#17943): when to reply by in this computer's time, or that it passed with
+ * nothing confirming how it closed yet. Null for one that never expires, and
+ * for every other row. Only the expanded popover says it: the chip stays compact.
+ */
+export function deadlineNote(item: DecisionItem, nowMs: number): string | null {
+  if ((item.kind !== "open" && item.kind !== "queued") || item.expiresAt === null) return null;
+  return item.expiresAt <= nowMs ? ELAPSED_NOTE : replyByText(item.expiresAt, nowMs);
+}
+
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */
 export function itemSentence(item: DecisionItem): string {
   switch (item.kind) {
@@ -334,6 +356,7 @@ export function itemSentence(item: DecisionItem): string {
       return `Question ${item.label} is being cancelled, waiting for the relay to confirm`;
     case "answer":
     case "expired":
+    case "never-published":
       return `${item.status} (${item.label})`;
     case "attention":
       return `Answer to ${item.label} needs attention`;
@@ -367,6 +390,11 @@ const SUMMARY_GROUPS: Array<{
     matches: (item) => item.kind === "expired",
     one: "expired unanswered",
     many: "expired unanswered",
+  },
+  {
+    matches: (item) => item.kind === "never-published",
+    one: "past its deadline before it reached the relay",
+    many: "past their deadlines before they reached the relay",
   },
   {
     matches: (item) => item.kind === "open",

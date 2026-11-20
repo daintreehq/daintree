@@ -1,7 +1,9 @@
 import type { DecisionsRequirement } from "@shared/types/decisions";
 import type {
+  DecisionClosureNotice,
   DecisionQuestionContent,
   DecisionQuestionStatus,
+  DecisionReplyMode,
   DecisionThreadAnswer,
   DecisionThreadEntry,
 } from "@shared/types/decisionsQuestion";
@@ -28,14 +30,80 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
 /**
  * What the view says of the question's status: a cancelled one the person
  * declined from their phone or tablet (#17234) says so, apart from one
- * withdrawn from the desktop.
+ * withdrawn; and, with its round (#17943), an advisory round's expiry apart
+ * from a blocking one's, and a question whose deadline passed before it ever
+ * reached the relay apart from one the relay refused.
  */
 export function questionStatusText(
-  question: Pick<DecisionQuestionContent, "status" | "closedReason">
+  question: Pick<DecisionQuestionContent, "status" | "closedReason" | "replyMode">
 ): string {
-  return question.closedReason === "declined"
-    ? "You declined to answer"
-    : STATUS_TEXT[question.status];
+  switch (question.closedReason) {
+    case "declined":
+      return "You declined to answer";
+    case "withdrawn":
+      return "Withdrawn";
+    case "never-published":
+      return "Deadline passed before it reached the relay";
+    case "expired":
+      return question.replyMode === "advisory"
+        ? "Expired unanswered, advice only"
+        : STATUS_TEXT.expired;
+    default:
+      return STATUS_TEXT[question.status];
+  }
+}
+
+/**
+ * The round's mode as the deadline line names it (#17943): whether the agent
+ * asked for advice or waits for a reply. Null where its machine didn't say.
+ */
+export function replyModeText(replyMode: DecisionReplyMode | undefined): string | null {
+  if (replyMode === undefined) return null;
+  return replyMode === "advisory" ? "Advisory" : "Reply required";
+}
+
+/** What heads the agent's plan: what it said it would do, while that can still come (#17943). */
+export function planHeading(status: DecisionQuestionStatus): string {
+  return status === "open" || status === "queued"
+    ? "If unanswered, the agent plans to"
+    : "The agent's plan if unanswered";
+}
+
+const NOTICE_NAME: Record<"declined" | "expired" | "never-published", string> = {
+  declined: "Your decline",
+  expired: "The expiry notice",
+  "never-published": "The notice that it was never sent",
+};
+
+const NOTICE_DELIVERY: Record<DecisionClosureNotice["delivery"], string> = {
+  pending: "is waiting to be typed into the terminal",
+  delivered: "was typed into the terminal",
+  uncertain: "may or may not have been typed into the terminal",
+  "needs-attention": "stopped before it was typed into the terminal",
+  stopped: "won't be typed into the terminal",
+};
+
+/**
+ * How far the notice that closed it without an answer got into the asking
+ * terminal (#17943), and, for an advisory round, what that notice says of the
+ * agent's plan. Only what was recorded: typed in is never that the agent
+ * read it or acted on it. Null with no such notice.
+ */
+export function closureNoticeText(
+  question: Pick<DecisionQuestionContent, "closedReason" | "closureNotice">
+): string | null {
+  const notice = question.closureNotice;
+  const reason = question.closedReason;
+  if (notice == null || reason === null || reason === "withdrawn") return null;
+  const delivery = `${NOTICE_NAME[reason]} ${NOTICE_DELIVERY[notice.delivery]}.`;
+  switch (notice.disposition) {
+    case "fallback-due":
+      return `${delivery} It tells the agent it may go ahead with its plan.`;
+    case "fallback-withheld":
+      return `${delivery} It doesn't clear the agent to go ahead with its plan.`;
+    default:
+      return delivery;
+  }
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {

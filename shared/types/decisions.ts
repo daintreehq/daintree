@@ -765,8 +765,12 @@ export interface PaneDecisionQuestion {
 export interface PaneDecisionWaiting {
   questionId: string;
   alias: number;
-  /** An answer (or correction), or only the notice that the question expired unanswered. */
-  kind: "answer" | "expired";
+  /**
+   * An answer (or correction), or only the notice that the question expired
+   * unanswered, or (#17943) that its deadline passed before it ever reached
+   * the relay, so no phone showed it.
+   */
+  kind: "answer" | "expired" | "never-published";
   deliveryStatus: Exclude<DecisionDeliveryStatus, "needs-attention" | "delivery-uncertain">;
 }
 

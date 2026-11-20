@@ -619,6 +619,30 @@ describe("following up a question from the view (#17238)", () => {
     );
   });
 
+  it("keeps the focused words in place, unsendable, as an open question's deadline passes (#17943)", async () => {
+    questions = {
+      q1: question("q1", { expiresAt: new Date(Date.now() + 500).toISOString() }),
+    };
+    await openOn("q1");
+    act(() => box().focus());
+    write("Hold off on this one.");
+    const field = box();
+
+    await waitFor(() => expect(notice()).toMatch(/deadline has passed/));
+    // Only the clock says it passed: the words, and focus, stay where they were.
+    expect(screen.getByTestId("decision-follow-up-text")).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("Hold off on this one.");
+    expect(field.readOnly).toBe(true);
+    expect(sendButton().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(sendButton());
+    expect(sendFollowUp).not.toHaveBeenCalled();
+
+    // Once the store says it expired, it says so as before.
+    await move(question("q1", { status: "expired" }));
+    await waitFor(() => expect(notice()).toBe("This question no longer takes follow-ups."));
+  });
+
   it("says why main refused it before anything was signed", async () => {
     sendFollowUp.mockResolvedValueOnce({ result: "refused", reason: "not-owner" });
     await openOn("q1");

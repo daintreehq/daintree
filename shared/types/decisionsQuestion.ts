@@ -139,6 +139,12 @@ export interface DecisionThreadAnswer {
   images: DecisionThreadImage[];
   sentAt: string;
   unreadable: boolean;
+  /**
+   * Whether typing this answer into the asking terminal was confirmed
+   * (#17943), apart from a later correction's delivery, which the question's
+   * own `deliveryStatus` follows. Absent from a Remote Host from before it.
+   */
+  delivered?: boolean;
 }
 
 /** The question expired unanswered. */
@@ -193,9 +199,35 @@ export type DecisionThreadEntry =
 
 /**
  * Why a closed question has no answer: `declined` by the person from their
- * phone or tablet, `withdrawn` (cancelled from the desktop), or `expired`.
+ * phone or tablet, `withdrawn` (cancelled from the desktop), `expired`, or
+ * `never-published`: its deadline passed before it ever reached the relay, so
+ * no phone showed it and no answer to it was recorded (#17943).
  */
-export type DecisionQuestionClosedReason = "declined" | "withdrawn" | "expired";
+export type DecisionQuestionClosedReason = "declined" | "withdrawn" | "expired" | "never-published";
+
+/**
+ * The current round's reply mode (Decisions protocol section 21), as the
+ * library's `get_decision` reads it: `advisory` while the question is in the
+ * round its agent asked for advice in, so an unanswered deadline lets the plan
+ * it stated go ahead; `blocking` otherwise, a reopened question included: it
+ * waits for a reply, and its expiry authorises nothing.
+ */
+export type DecisionReplyMode = "advisory" | "blocking";
+
+/**
+ * The notice that closed a question without an answer (its expiry, the
+ * person's decline, or that it was never published), on its way into the
+ * asking terminal (#17943). `delivery`: `pending` until it is typed in,
+ * `delivered` once typing it in was confirmed (never that the agent acted on
+ * it), `uncertain` when it may or may not have been typed, `needs-attention`
+ * when typing it stopped and a person has to decide, `stopped` when it will
+ * never be typed. `disposition`, for an advisory round's notice only: whether
+ * it lets the agent go ahead with its stated plan; null otherwise.
+ */
+export interface DecisionClosureNotice {
+  delivery: "pending" | "delivered" | "uncertain" | "needs-attention" | "stopped";
+  disposition: "fallback-due" | "fallback-withheld" | null;
+}
 
 /** A question with its content opened, in memory, for the desktop to show. Never stored. */
 export interface DecisionQuestionContent {
@@ -219,11 +251,31 @@ export interface DecisionQuestionContent {
   allowText: boolean;
   requirement: DecisionsRequirement;
   askedAt: string;
-  /** ISO 8601 as recorded; null when the question never expires. */
+  /**
+   * The current round's deadline, ISO 8601 as recorded: the effective one,
+   * after policy and any reopen. Null when the question never expires.
+   */
   expiresAt: string | null;
   status: DecisionQuestionStatus;
-  /** Why a `cancelled` or `expired` question has no answer; null otherwise. */
+  /**
+   * Why a `cancelled`, `expired` or never-published question has no answer;
+   * null otherwise. A Remote Host from before #17943 never says never-published.
+   */
   closedReason: DecisionQuestionClosedReason | null;
+  /** The current round's mode (#17943); absent from a Remote Host from before it. */
+  replyMode?: DecisionReplyMode;
+  /**
+   * The plan the agent stated for an advisory round, from its content as
+   * verified against the round (#17943): null for a blocking round, and absent
+   * from a Remote Host from before it. Never an action taken.
+   */
+  plannedFallback?: string | null;
+  /**
+   * The notice that closed it without an answer, on its way into the asking
+   * terminal (#17943); null when there is none (open, answered, withdrawn), and
+   * absent from a Remote Host from before it.
+   */
+  closureNotice?: DecisionClosureNotice | null;
   deliveryStatus: DecisionDeliveryStatus;
   attachments: DecisionQuestionAttachment[];
   /** Answers, expiry, a decline and follow-ups, in the order the relay recorded them. */
@@ -375,8 +427,21 @@ export interface DecisionQuestionListItem {
   worktreeRoot: string;
   requirement: DecisionsRequirement;
   askedAt: string;
-  /** ISO 8601 as recorded; null when the question never expires. */
+  /**
+   * The current round's deadline, ISO 8601 as recorded: the effective one,
+   * after policy and any reopen. Null when the question never expires.
+   */
   expiresAt: string | null;
+  /** The current round's mode (#17943); absent from a Remote Host from before it. */
+  replyMode?: DecisionReplyMode;
+  /**
+   * Why it closed without an answer (#17943), also while delivery needs a
+   * person; null while it isn't closed that way, and absent from a Remote
+   * Host from before it.
+   */
+  closedReason?: DecisionQuestionClosedReason | null;
+  /** As `DecisionQuestionContent.closureNotice` (#17943). */
+  closureNotice?: DecisionClosureNotice | null;
   /**
    * When it was settled: the answer that settled it, or its expiry. Null
    * while it isn't settled, and for a withdrawal, which records no time.

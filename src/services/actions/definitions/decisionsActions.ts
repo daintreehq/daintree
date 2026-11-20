@@ -85,8 +85,10 @@ export function registerDecisionsActions(actions: ActionRegistry): void {
       const list = await decisionsClient.listQuestions();
       // Every question still in Needs you, opened at the oldest the person hasn't seen yet (#17895):
       // one they've seen and left is still theirs to answer, one they cleared isn't stepped to.
-      const waiting = list.questions.filter((item) => inboxGroupOf(item) === "needs-you");
-      const next = waiting.find(isWaitingOnPerson) ?? waiting[0];
+      // One whose deadline passed by this computer's clock can't be answered any more (#17943).
+      const now = Date.now();
+      const waiting = list.questions.filter((item) => inboxGroupOf(item, now) === "needs-you");
+      const next = waiting.find((item) => isWaitingOnPerson(item, now)) ?? waiting[0];
       // Switched off while the list was read: nothing it held is still asked.
       if (next === undefined || !runnable()) return;
       useDecisionsQuestionViewStore.getState().openReference(
