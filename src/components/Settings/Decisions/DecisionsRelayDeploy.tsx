@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { SettingsGroup, SettingsRow, SettingsRowActions } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "@/components/Settings/SettingsGroup";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
