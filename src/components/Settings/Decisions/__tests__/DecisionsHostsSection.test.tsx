@@ -308,7 +308,12 @@ describe("Remote Hosts", () => {
         host({
           ...enrolled,
           runtime: {
-            runtime: { state: "running", deviceId: "dev_x", connection: "connected" },
+            runtime: {
+              state: "running",
+              deviceId: "dev_x",
+              connection: "connected",
+              questionPolicy: { advisoryQuestions: true, defaultQuestionExpiryMs: 7 * DAY_MS },
+            },
             at: 1,
             live: true,
           },
@@ -316,9 +321,9 @@ describe("Remote Hosts", () => {
       ])
     );
     const view = await renderGroup({ revision: 1 });
-    expect(document.querySelector("#decisions-host-studio")?.textContent).toContain(
-      "It reports Decisions connected to the relay."
-    );
+    const healthy = document.querySelector("#decisions-host-studio")?.textContent ?? "";
+    expect(healthy).toContain("Enrolled. It reports Decisions connected to the relay.");
+    expect(healthy).not.toMatch(/advice|deadline/);
 
     listHosts.mockResolvedValueOnce(
       listed([
@@ -381,16 +386,17 @@ describe("Remote Host copy", () => {
       at: 1,
       live: true,
     };
-    expect(hostEnrollmentText({ ...enrolled, runtime: connected }, true)).toMatch(
-      /It reports Decisions connected to the relay\. It says its agents can ask for advice/
+    // Healthy: what is true, in a few words (#18066).
+    expect(hostEnrollmentText({ ...enrolled, runtime: connected }, true)).toBe(
+      "Enrolled. It reports Decisions connected to the relay."
     );
     expect(
       hostEnrollmentText(
         { ...enrolled, connected: false, runtime: { ...connected, live: false } },
         true
       )
-    ).toMatch(
-      /Not connected\. Before its connection closed, it reported Decisions connected to the relay\. It said its agents can ask for advice/
+    ).toBe(
+      "Enrolled. Not connected. Before its connection closed, it reported Decisions connected to the relay."
     );
     expect(
       hostEnrollmentText(
@@ -432,7 +438,7 @@ describe("Remote Host copy", () => {
     ).toBe(hostEnrollmentText(enrolled, true));
   });
 
-  it("says how a running Host asks its agents' questions, and that one from before it can't take advice (#17942)", () => {
+  it("says how a running Host asks its agents' questions only where it differs from every current Host's, and that one from before it can't take advice (#17942, #18066)", () => {
     const enrolled = host({ enrollment: { state: "enrolled", deviceId: "dev_x" } });
     const running = (questionPolicy?: {
       advisoryQuestions: boolean;
@@ -455,14 +461,85 @@ describe("Remote Host copy", () => {
         true
       );
 
-    const advisory = running({ advisoryQuestions: true, defaultQuestionExpiryMs: 3 * DAY_MS });
-    expect(advisory).toContain("its agents can ask for advice");
-    expect(advisory).toContain("even while this computer sleeps");
-    // The Host's own default, never this computer's.
-    expect(advisory).toMatch(/without a deadline waits 3 days\.$/);
+    // Advice on and a Host's own default: nothing to add.
+    expect(running({ advisoryQuestions: true, defaultQuestionExpiryMs: 7 * DAY_MS })).toBe(
+      "Enrolled. It reports Decisions connected to the relay."
+    );
+    // Another default is said, as the Host's own, never this computer's.
+    const otherWait = running({ advisoryQuestions: true, defaultQuestionExpiryMs: 3 * DAY_MS });
+    expect(otherWait).toMatch(/ It says a question asked there without a deadline waits 3 days\.$/);
+    expect(otherWait).not.toContain("advice");
+    const noAdvice = running({ advisoryQuestions: false, defaultQuestionExpiryMs: 7 * DAY_MS });
+    expect(noAdvice).toMatch(/ It says its agents can't ask for advice now\.$/);
+    expect(noAdvice).not.toContain("deadline");
     const blocking = running({ advisoryQuestions: false, defaultQuestionExpiryMs: null });
     expect(blocking).toContain("its agents can't ask for advice now");
     expect(blocking).toMatch(/without a deadline waits until it's answered or withdrawn\.$/);
+    // A Host still connecting hasn't settled advice, so its "no" adds nothing.
+    const connecting = hostEnrollmentText(
+      {
+        ...enrolled,
+        runtime: {
+          runtime: {
+            state: "running",
+            deviceId: "dev_x",
+            connection: "reconnecting",
+            questionPolicy: { advisoryQuestions: false, defaultQuestionExpiryMs: 7 * DAY_MS },
+          },
+          at: 1,
+          live: true,
+        },
+      },
+      true
+    );
+    expect(connecting).toBe("Enrolled. It reports Decisions reconnecting to the relay.");
+    const reconnectingOtherWait = hostEnrollmentText(
+      {
+        ...enrolled,
+        runtime: {
+          runtime: {
+            state: "running",
+            deviceId: "dev_x",
+            connection: "reconnecting",
+            questionPolicy: { advisoryQuestions: false, defaultQuestionExpiryMs: 3 * DAY_MS },
+          },
+          at: 1,
+          live: true,
+        },
+      },
+      true
+    );
+    expect(reconnectingOtherWait).toBe(
+      "Enrolled. It reports Decisions reconnecting to the relay. It says a question asked there without a deadline waits 3 days."
+    );
+    // A report from before the link closed keeps its exceptions, as what it said.
+    const cached = (questionPolicy: {
+      advisoryQuestions: boolean;
+      defaultQuestionExpiryMs: number | null;
+    }) =>
+      hostEnrollmentText(
+        {
+          ...enrolled,
+          connected: false,
+          runtime: {
+            runtime: {
+              state: "running",
+              deviceId: "dev_x",
+              connection: "connected",
+              questionPolicy,
+            },
+            at: 1,
+            live: false,
+          },
+        },
+        true
+      );
+    expect(cached({ advisoryQuestions: false, defaultQuestionExpiryMs: 7 * DAY_MS })).toBe(
+      "Enrolled. Not connected. Before its connection closed, it reported Decisions connected to the relay. It said its agents can't ask for advice now."
+    );
+    expect(cached({ advisoryQuestions: true, defaultQuestionExpiryMs: 3 * DAY_MS })).toMatch(
+      / It said a question asked there without a deadline waits 3 days\.$/
+    );
     // A running Host that reports no policy runs a Daintree from before it.
     expect(running()).toMatch(/too old for its agents to ask for advice; update it there/);
     // Only a running Host says how it asks.
@@ -577,7 +654,7 @@ describe("each Remote Host once (#16222)", () => {
     });
 
     const row = document.querySelector("#decisions-host-lab")?.textContent ?? "";
-    expect(row).toContain("Enrolled as its own device");
+    expect(row).toContain("Enrolled.");
     expect(row).toContain("Not seen since it was enrolled");
     expect(enrollButtons()).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Revoke lab" }));

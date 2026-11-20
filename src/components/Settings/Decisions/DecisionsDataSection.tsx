@@ -138,7 +138,7 @@ export function DecisionsDataSection({
         <SettingsRow
           id="decisions-voice"
           label="Dictating answers"
-          description="It's a setting in the phone app, off until you turn it on there, and it isn't end-to-end encrypted: a speech provider hears what you say and a correction provider reads the transcript with the question. The answer you send is still encrypted."
+          description="Set in the phone app. It isn't end-to-end encrypted: a speech provider hears what you say and a correction provider reads the transcript with the question. The answer you send is still encrypted."
         />
         <SettingsRow
           id="decisions-data-export"

@@ -41,9 +41,8 @@ export function DecisionsEncryptionSection({
           label="Shared key"
           description={
             <>
-              Questions and answers are sealed with one key, which each paired phone or tablet and
-              each enrolled Remote Host holds. Rotating seals a new one to each of them; what one
-              already holds stays readable on it.
+              Each paired device and enrolled Remote Host holds the key that encrypts questions and
+              answers. Rotating replaces it; what a device already has stays readable there.
               {keyActions.notice && (
                 <span
                   className="mt-1 block text-text-primary"

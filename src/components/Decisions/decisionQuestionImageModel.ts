@@ -47,7 +47,7 @@ export function imageName(attachment: DecisionQuestionAttachment, index: number)
 }
 
 const FAILURE_TEXT: Record<QuestionImageFailure, string> = {
-  "key-unavailable": "This computer doesn't hold the key this image was sealed with.",
+  "key-unavailable": "This computer doesn't hold the key this image was encrypted with.",
   "fetch-failed": "The relay didn't serve this image. It may be past its retention.",
   "size-mismatch": "This image isn't the size the question declares, so it isn't shown.",
   "decrypt-failed": "This image didn't open with the question's key, so it isn't shown.",

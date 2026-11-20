@@ -115,7 +115,7 @@ const REASONS: Record<string, string> = {
   text_not_allowed: "The answer doesn't fit what the question allows.",
   too_many_choices: "The answer doesn't fit what the question allows.",
   unknown_option: "The answer doesn't fit what the question allows.",
-  proxy_forbidden: "The question needs a person's answer, not a proxy's.",
+  proxy_forbidden: "The question needs a person's answer, not the decision model's.",
   inject_ambiguous: "Typing it in was interrupted, so it isn't typed again on its own.",
   inject_threw: "Typing it in was interrupted, so it isn't typed again on its own.",
   crash_unreconciled: "Daintree stopped while typing it in, so it isn't typed again on its own.",

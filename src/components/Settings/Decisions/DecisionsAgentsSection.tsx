@@ -196,7 +196,7 @@ function AgentSwitchRow({
  * answer into. With no relay connection, launches get nothing, so the section
  * says the switches apply once one is connected (#16203). Not shown in a
  * remote window: its agents are the host's, launched there under the host's
- * own Decisions.
+ * own Decisions, and the page's note says so (#18066).
  */
 export function DecisionsAgentsSection({
   status,
@@ -231,8 +231,8 @@ export function DecisionsAgentsSection({
       id={AGENTS_SECTION_ID}
       description={
         launchesGetAsk
-          ? "Agents you switch on can ask you with ask_human. Each is off until you switch it on, and a change applies from its next launch."
-          : "Agents you switch on can ask you with ask_human once a relay is connected. Each is off until you switch it on, and a change applies from its next launch."
+          ? "Agents you switch on can ask you with ask_human from their next launch"
+          : "Agents you switch on can ask you with ask_human from their next launch, once a relay is connected"
       }
     >
       {!launchesGetAsk && (

@@ -26,7 +26,7 @@ const NO_IDENTITY: Record<DecisionsKitIdentityProblem, RelayObservation> = {
     severity: "error",
     label: "This computer's keys don't match the relay set up here",
     detail:
-      "The keys sealed here aren't a working owner identity for this relay. Disconnect, then restore the identity from a recovery kit.",
+      "The keys stored here aren't a working owner identity for this relay. Disconnect, then restore the identity from a recovery kit.",
   },
 };
 

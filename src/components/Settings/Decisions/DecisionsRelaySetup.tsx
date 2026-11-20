@@ -350,8 +350,8 @@ export function DecisionsRelaySetup({
           label="Weaker key storage accepted"
           description={
             deployed
-              ? "Claim the relay again. The keys will be sealed with a fixed key rather than a keyring."
-              : "Enter the secret again. The keys will be sealed with a fixed key rather than a keyring."
+              ? "Claim the relay again. The keys will be encrypted with a fixed key rather than one from a keyring."
+              : "Enter the secret again. The keys will be encrypted with a fixed key rather than one from a keyring."
           }
         />
       )}

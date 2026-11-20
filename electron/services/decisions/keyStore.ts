@@ -111,7 +111,7 @@ const OUTCOME: Record<Operation, string> = {
 };
 
 const WEAK_REASON =
-  "No keyring is available, so Decisions keys could only be sealed with a fixed key, which doesn't protect them from anyone who can read the file";
+  "No keyring is available, so Decisions keys could only be encrypted with a fixed key, which doesn't protect them from anyone who can read the file";
 
 const LEFT_AS_IS = "so it was left as it is";
 

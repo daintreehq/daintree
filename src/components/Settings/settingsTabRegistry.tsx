@@ -2330,7 +2330,7 @@ export const SETTINGS_REGISTRY = [
         id: "decisions-rotate-keys",
         section: "Encryption",
         title: "Rotate keys",
-        description: "Replaces this computer's Decisions keys without revoking any phone or Host",
+        description: "Replaces the shared encryption key without revoking any phone or Host",
         keywords: ["encryption", "keys", "rotate", "rotation", "key", "e2ee", "secret", "security"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
@@ -2367,7 +2367,7 @@ export const SETTINGS_REGISTRY = [
         section: "Questions",
         title: "Default question expiry",
         description:
-          "How long a question waits for your answer when its agent sets no expiry, never included, and what an expired one authorises",
+          "How long a question on this computer waits when its agent sets no time, never included, and what an expired one authorises",
         keywords: [
           "expiry",
           "expire",

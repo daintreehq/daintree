@@ -24,7 +24,7 @@ export function describeExportResult(result: DecisionsExportResult): RelayObserv
         severity: "error",
         label: "No Decisions keys to open the history with",
         detail:
-          "The stored history is sealed under this computer's keys for its relay, and it holds none. Nothing was exported.",
+          "The stored history is encrypted with this computer's keys for its relay, and it holds none. Nothing was exported.",
       };
     case "key-storage":
       return {

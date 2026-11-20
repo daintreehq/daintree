@@ -155,6 +155,9 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(await screen.findByText(/'Pixel 9' is revoked/)).toBeTruthy();
     expect(screen.queryByText("Pixel 9")).toBeNull();
     expect(document.activeElement).toBe(rotate);
+    const keyRow = document.getElementById("decisions-encryption")?.textContent ?? "";
+    expect(keyRow).toContain("encrypts questions and answers");
+    expect(keyRow).not.toMatch(/seal/i);
   });
 
   it("keeps the dialog open with what was observed when the relay's answer was lost", async () => {
