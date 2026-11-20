@@ -609,7 +609,7 @@ describe("readQuestionContent", () => {
     expect(await detail(approval)).toBeNull();
     expect(questionDetail(blocking, null)).toBeNull();
     // Content that opens but isn't the protocol's shape is refused like the view refuses it.
-    expect(questionDetail(blocking, { question: "Ship it?", kind: "choice" })).toBeNull();
+    expect(questionDetail(blocking, { question: ["Ship it?"], kind: "choice" })).toBeNull();
   });
 
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {
