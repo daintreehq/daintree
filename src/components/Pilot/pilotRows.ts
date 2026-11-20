@@ -5,6 +5,7 @@ import {
   bandForRun,
   canopyPlacingRun,
   isAgentReportedNeed,
+  isDecisionsNeed,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
@@ -96,10 +97,11 @@ export interface PilotAgentRow {
    */
   canopyEvidence: CanopyEvidenceParts | null;
   /**
-   * The attribution for a row the agent's own needs-you marker placed, in the
-   * same slot: what moved it is the agent's claim, not a reading, and the row
-   * says whose. Fixed words, since the fleet row carries the report and never
-   * the agent's summary. Null for every other row.
+   * The attribution for a row the agent's own needs-you marker or Daintree
+   * Decisions placed, in the same slot: what moved it is the agent's claim or
+   * what Decisions recorded, not a reading, and the row says which. Fixed
+   * words, since the fleet row carries the report and counts, never the
+   * agent's summary or the question. Null for every other row.
    */
   agentReport: string | null;
   /**
@@ -464,7 +466,13 @@ function ageOf(
     };
   }
 
-  return { age, ageLabel: null, agePhrase: AGE_VERB[band](age), secondaryPhrase: null };
+  // Decisions places an agent at work in needs-you too, and its clock is the
+  // working stint, so the row says so rather than calling it a wait.
+  const verb =
+    band === "needs-you" && (run.agentState === "working" || run.agentState === "directing")
+      ? AGE_VERB.running
+      : AGE_VERB[band];
+  return { age, ageLabel: null, agePhrase: verb(age), secondaryPhrase: null };
 }
 
 /**
@@ -483,9 +491,17 @@ function canopyEvidenceFor(
 
 /** What a row the agent's needs-you marker placed says of it. */
 export const AGENT_REPORT_EVIDENCE = "Says it needs you";
+/** What a row an open Decisions question placed says of it. */
+export const DECISIONS_QUESTION_EVIDENCE = "Question open in Decisions";
+/** What a row an answer whose delivery stopped placed says of it. */
+export const DECISIONS_ANSWER_EVIDENCE = "Answer needs attention";
 
 function agentReportFor(run: FleetRunRow, band: FleetBand): string | null {
-  return band === "needs-you" && isAgentReportedNeed(run) ? AGENT_REPORT_EVIDENCE : null;
+  if (band !== "needs-you") return null;
+  if (isAgentReportedNeed(run)) return AGENT_REPORT_EVIDENCE;
+  if (!isDecisionsNeed(run)) return null;
+  // A stopped answer is the more pressing of the two: it was given, and goes nowhere until decided.
+  return (run.answerAttention ?? 0) > 0 ? DECISIONS_ANSWER_EVIDENCE : DECISIONS_QUESTION_EVIDENCE;
 }
 
 /**

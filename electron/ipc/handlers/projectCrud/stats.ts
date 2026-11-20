@@ -13,6 +13,7 @@ import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { canopyRefinementFor } from "../../../services/canopy/canopyRefinementSource.js";
+import { decisionAttentionFor } from "../../../services/runAnswerAttentionSource.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { isValidScratchId } from "../../../services/scratchStorePaths.js";
@@ -280,7 +281,8 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
       runAttentionServiceInstance?.getAll(),
       canopyRefinementFor,
-      runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
+      runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined,
+      decisionAttentionFor
     );
 
     const result: BulkProjectStats = {};

@@ -24,7 +24,7 @@ import { readUserPresence } from "../userPresence.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
-import { setAnswerAttention } from "../runAnswerAttentionSource.js";
+import { setDecisionAttention } from "../runAnswerAttentionSource.js";
 import {
   getDecisionQuestionList,
   onDecisionQuestionsChanged,
@@ -1090,7 +1090,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
       const sources = mcpRouteSources(() => next);
       const next: DecisionsService = new DecisionsService({
         publishPaneState,
-        publishAnswerAttention: setAnswerAttention,
+        publishAnswerAttention: setDecisionAttention,
         publishQuestions,
         publishHostQuestions,
         notifyQuestions,

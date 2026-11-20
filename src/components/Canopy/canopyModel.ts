@@ -183,17 +183,38 @@ export function answerAttentionLabel(count: number): string {
 }
 
 /**
- * An answer waiting on the user's decision puts the run in the needs-you tier
- * whatever its screen says — it is Daintree's own observation and needs no
- * reading — unless the user put the run aside, archived it or answered it here.
+ * Questions this run asked through Daintree Decisions that are open in Needs
+ * you and not cleared there on this computer; 0 when there are none, and
+ * always while Decisions is off.
  */
-function answerAttentionHolds(item: CanopyItem): boolean {
-  return (
-    itemAnswerAttention(item) > 0 &&
-    !itemPutAside(item) &&
-    !itemHandled(item) &&
-    !itemArchived(item)
-  );
+export function itemQuestionAttention(item: CanopyItem): number {
+  return item.row.run.questionAttention ?? 0;
+}
+
+/** How a row names a count of open Decisions questions. */
+export function questionAttentionLabel(count: number): string {
+  return count === 1
+    ? "Question open in Decisions"
+    : `${pluralize(count, "question")} open in Decisions`;
+}
+
+/**
+ * Decisions holds something for the user on this run: a question they haven't
+ * answered or cleared, or an answer whose delivery stopped. Read whatever the
+ * user did in this panel, since neither replying here nor archiving answers it.
+ */
+export function itemDecisionsAttention(item: CanopyItem): boolean {
+  return itemAnswerAttention(item) > 0 || itemQuestionAttention(item) > 0;
+}
+
+/**
+ * What Decisions holds puts the run in the needs-you tier whatever its screen
+ * says — it is Daintree's own record and needs no reading — unless the user
+ * put the run aside. A reply typed here or an archive answers nothing in
+ * Decisions, so it holds past both, and the stored archive waits for it to clear.
+ */
+export function decisionsAttentionHolds(item: CanopyItem): boolean {
+  return itemDecisionsAttention(item) && !itemPutAside(item);
 }
 
 /**
@@ -285,15 +306,16 @@ function readPriority(item: CanopyItem): number {
  * gone unlooked-at, since checking on progress is as much the job as answering.
  */
 export function itemPriority(item: CanopyItem, nowMs: number): number {
+  const decisions = decisionsAttentionHolds(item);
   // Answered from the panel: out of the queue until it has something new, card
   // or no card — before its first read, Daintree's observation alone would
-  // otherwise rank it as the prompt the user just answered.
-  if (itemHandled(item)) return 0;
+  // otherwise rank it as the prompt the user just answered. A reply typed here
+  // answers nothing in Decisions.
+  if (itemHandled(item) && !decisions) return 0;
   const read = readPriority(item);
   if (itemPutAside(item)) return Math.min(read, PUT_ASIDE_PRIORITY);
   if (itemAwaitsPermission(item)) return Math.max(read, PERMISSION_FLOOR);
-  const floor =
-    answerAttentionHolds(item) || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : 0;
+  const floor = decisions || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : 0;
   if (!itemIsBusy(item)) return Math.max(read, floor);
   return Math.max(read, checkInPriority(item, nowMs), floor);
 }
@@ -304,9 +326,10 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
  * unseen, which is Daintree's own observation and needs no reading.
  */
 export function shownPriority(item: CanopyItem, nowMs: number): number | null {
+  const decisions = decisionsAttentionHolds(item);
   // Answered: out of the queue at 0 until it says something new, whatever
-  // Daintree sees it doing meanwhile.
-  if (itemHandled(item)) return 0;
+  // Daintree sees it doing meanwhile, unless Decisions still holds something.
+  if (itemHandled(item) && !decisions) return 0;
   const card = item.card;
   // A reading stands until the next replaces it while the run stays the kind
   // it was read as; once Daintree sees it change kind, the number goes.
@@ -314,8 +337,7 @@ export function shownPriority(item: CanopyItem, nowMs: number): number | null {
   if (itemPutAside(item)) return read === null ? null : Math.min(read, PUT_ASIDE_PRIORITY);
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
-  const floor =
-    answerAttentionHolds(item) || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : null;
+  const floor = decisions || itemAgentNeedHolds(item) ? CANOPY_NEEDS_YOU_PRIORITY : null;
   if (!itemIsBusy(item) || itemHandled(item)) {
     return floor === null ? read : Math.max(read ?? 0, floor);
   }
@@ -541,6 +563,9 @@ export function itemLooksDone(item: CanopyItem): boolean {
   // The agent itself said it needs the user, so the work isn't done whatever
   // the screen reads like.
   if (isAgentReportedNeed(item.row.run)) return false;
+  // Nor while Decisions holds a question or an answer for it, whatever the user
+  // did with the run: a terminal whose question is unanswered is not done.
+  if (itemDecisionsAttention(item)) return false;
   // Stopped is not done: an interrupted turn, or one that left tests failing.
   if (card.progress !== null && card.progress < 100) return false;
   if (card.tests === "failing") return false;
@@ -550,6 +575,15 @@ export function itemLooksDone(item: CanopyItem): boolean {
 
 export function itemArchived(item: CanopyItem): boolean {
   return item.disposition?.kind === "archived";
+}
+
+/**
+ * Listed under Archived: archived, and Decisions holds nothing for it. A run
+ * archived before a question opened or came back stays archived, and is listed
+ * with the rest until the question is answered or cleared.
+ */
+export function itemInArchive(item: CanopyItem): boolean {
+  return itemArchived(item) && !decisionsAttentionHolds(item);
 }
 
 /** When the user replied from the panel, while that reply still stands. */
@@ -563,14 +597,15 @@ export function repliedAt(item: CanopyItem): number | null {
  * read the screen — Daintree's own state says the agent is waiting.
  */
 export function itemNeedsAttention(item: CanopyItem): boolean {
-  if (itemHandled(item) || itemArchived(item) || itemPutAside(item)) return false;
+  if (itemPutAside(item)) return false;
+  // Decisions holds a question open for the user, or an answer that stopped on
+  // its way in: a person decides, whatever the screen says or the panel did.
+  if (decisionsAttentionHolds(item)) return true;
+  if (itemHandled(item) || itemArchived(item)) return false;
   if (itemAwaitsPermission(item)) return true;
   // Daintree's own stall observation: working, and no output for ten minutes.
   // Whether it is stuck or just slow, it is worth a look.
   if (itemStalled(item)) return true;
-  // Decisions saw an answer for it stop on its way in: a person decides what
-  // happens to it, whatever the screen says.
-  if (answerAttentionHolds(item)) return true;
   // The agent printed that it needs the user: its own word, not a reading.
   if (itemAgentNeedHolds(item)) return true;
   // Every layer answers on one scale, the score's own bands: 55 and up is
@@ -602,7 +637,7 @@ export interface CanopyInbox {
 export function splitInbox(items: readonly CanopyItem[]): CanopyInbox {
   const inbox: CanopyItem[] = [];
   const archived: CanopyItem[] = [];
-  for (const item of items) (itemArchived(item) ? archived : inbox).push(item);
+  for (const item of items) (itemInArchive(item) ? archived : inbox).push(item);
   return { inbox, archived };
 }
 

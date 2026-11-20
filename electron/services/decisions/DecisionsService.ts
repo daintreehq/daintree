@@ -67,7 +67,17 @@ import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions, questionAsks } from "./questionList.js";
 import type { AdvisoryHost } from "./questionRound.js";
 import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
-import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
+import {
+  readQuestionMarks,
+  unclearedQuestionsByTerminal,
+  type QuestionMarks,
+} from "./questionMarks.js";
+import {
+  asksByDeadline,
+  deadlineMs,
+  nextAskDeadline,
+} from "../../../shared/utils/decisionDeadline.js";
+
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import type { AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
@@ -88,6 +98,9 @@ import {
 } from "./storageRecovery.js";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
+
+/** How long a count of questions bound by deadlines goes before reading the clock again. */
+const DEADLINE_RECHECK_MS = 60_000;
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -364,6 +377,8 @@ export class DecisionsService {
   private readonly questionsWaiters = new Set<() => void>();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
+  /** Counts the fleet's open questions again when the next one's deadline passes. */
+  private questionDeadline: ReturnType<typeof setTimeout> | null = null;
   /** The desktop notifications for the store being fed, while it is an owner's. */
   private notifications: QuestionNotifications | null = null;
   private offCommit: (() => void) | null = null;
@@ -584,7 +599,12 @@ export class DecisionsService {
     this.applyModel();
     this.reconcileConnection();
     // The list names questions by this machine's host id: a forgotten or new one lists again now.
-    if (hostChanged) void this.feed?.refresh();
+    if (hostChanged) {
+      // What the old id counted raises no run meanwhile, however long the read takes.
+      this.disarmQuestionDeadline();
+      this.panes.setQuestions(new Map());
+      void this.feed?.refresh();
+    }
   }
 
   /**
@@ -829,10 +849,14 @@ export class DecisionsService {
    * pane's state becomes what they show, and the panes that changed are
    * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
    */
-  observeQuestions(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
+  observeQuestions(
+    rows: readonly QuestionRow[],
+    handled: HandledAnswers = new Map(),
+    questions: ReadonlyMap<string, number> = new Map()
+  ): void {
     if (this.disposed || this.state === "off") return;
     // The panes read every row, so a handled one still decides which project its pane is in.
-    this.panes.replace(rows, handled);
+    this.panes.replace(rows, handled, questions);
     this.connection?.observeQuestions?.(withoutHandled(rows, handled));
   }
 
@@ -846,8 +870,10 @@ export class DecisionsService {
     rows: readonly QuestionRow[],
     handled: HandledAnswers,
     marks: QuestionMarks
-  ): void {
-    if (this.disposed || this.state === "off") return;
+  ): ReadonlyMap<string, number> {
+    // Every read applied replaces what the last one counted, its deadline wait included.
+    this.disarmQuestionDeadline();
+    if (this.disposed || this.state === "off") return new Map();
     const hostId = this.settings?.hostId ?? null;
     const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
     const waiting = new Set(
@@ -858,6 +884,47 @@ export class DecisionsService {
     const asks = questionAsks(rows, waiting);
     if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
+    // What raises each run on the fleet: a Host's lifetime has no marks, so none is cleared there.
+    return hostId === null ? new Map() : this.countQuestions(questions, hostId, asks, marks);
+  }
+
+  /**
+   * Each terminal's open, uncleared questions now, counted again while any
+   * still asks by a deadline: no row changes when one passes, so nothing else
+   * would. The clock is read again at least every minute, since a timer runs
+   * late after sleep and the wall clock can be set back past a deadline.
+   */
+  private countQuestions(
+    questions: readonly DecisionQuestionListItem[],
+    hostId: string,
+    asks: ReadonlyMap<string, string | null>,
+    marks: QuestionMarks
+  ): ReadonlyMap<string, number> {
+    this.disarmQuestionDeadline();
+    const now = Date.now();
+    const bound = questions.some(
+      (item) => asksByDeadline(item.standing) && deadlineMs(item.expiresAt) !== null
+    );
+    const feed = this.feed;
+    if (bound) {
+      const next = nextAskDeadline(questions, now);
+      this.questionDeadline = setTimeout(
+        () => {
+          this.questionDeadline = null;
+          if (this.disposed || this.state === "off" || this.feed !== feed) return;
+          if ((this.settings?.hostId ?? null) !== hostId) return;
+          this.panes.setQuestions(this.countQuestions(questions, hostId, asks, marks));
+        },
+        next === null ? DEADLINE_RECHECK_MS : Math.min(next - now, DEADLINE_RECHECK_MS)
+      );
+      this.questionDeadline.unref?.();
+    }
+    return unclearedQuestionsByTerminal(questions, hostId, asks, marks, now);
+  }
+
+  private disarmQuestionDeadline(): void {
+    if (this.questionDeadline !== null) clearTimeout(this.questionDeadline);
+    this.questionDeadline = null;
   }
 
   /**
@@ -995,7 +1062,9 @@ export class DecisionsService {
         opened = await this.openStore(() => this.disposed);
       } catch (error) {
         this.storeFailed = true;
-        // With no store there is nothing to list until the next start opens one.
+        // With no store there is nothing to list until the next start opens one,
+        // and no pane or run keeps what the closed store showed.
+        this.panes.clear(true);
         this.unlistQuestions();
         logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
           reason,
@@ -1139,7 +1208,9 @@ export class DecisionsService {
           } catch (err) {
             // The next start tries again; the deletion stands either way.
             this.storeFailed = true;
-            // With no store there is nothing to list until the next start opens one.
+            // With no store there is nothing to list until the next start opens one,
+            // and no pane or run keeps what the closed store showed.
+            this.panes.clear(true);
             this.unlistQuestions();
             console.warn("[Decisions] The store didn't reopen after deleting data:", err);
           }
@@ -1539,6 +1610,7 @@ export class DecisionsService {
   private feedFrom(store: DaintreeLocalStore | null): Promise<void> {
     this.feed?.stop();
     this.feed = null;
+    this.disarmQuestionDeadline();
     this.offCommit?.();
     this.offCommit = null;
     this.notifications?.stop();
@@ -1558,8 +1630,8 @@ export class DecisionsService {
         return store.listQuestions();
       },
       (rows) => {
-        this.listQuestions(rows, handled, marks);
-        this.observeQuestions(rows, handled);
+        const questions = this.listQuestions(rows, handled, marks);
+        this.observeQuestions(rows, handled, questions);
       }
     );
     this.feed = feed;

@@ -26,6 +26,7 @@ import type {
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
+import type { RunDecisionAttention } from "../../runAnswerAttentionSource.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
@@ -643,7 +644,7 @@ describe("DecisionsService question list (#17229)", () => {
     const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
     const paneProjects: string[] = [];
-    const attention: Array<Map<string, number>> = [];
+    const attention: Array<Map<string, RunDecisionAttention>> = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
@@ -785,7 +786,8 @@ describe("DecisionsService question list (#17229)", () => {
     await service.start(on(HOST));
     expect(lists.at(-1)?.[1]?.standing).toMatchObject({ kind: "needs-attention" });
     expect(panes.at(-1)?.needsAttention.map((item) => item.alias)).toEqual([2]);
-    expect([...attention.at(-1)!]).toEqual([["pane-a", 1]]);
+    // Its open question raises the pane beside the answer (#18050).
+    expect([...attention.at(-1)!]).toEqual([["pane-a", { answers: 1, questions: 1 }]]);
 
     // Then it expired unanswered, and its notice stopped too.
     await commit([
@@ -816,7 +818,8 @@ describe("DecisionsService question list (#17229)", () => {
       needsAttention: [],
       openQuestions: [expect.objectContaining({ alias: 1 })],
     });
-    expect(attention.at(-1)?.size).toBe(0);
+    // No answer needs a person; the question still open raises the pane alone.
+    expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]));
     await service.stop();
   });
 
@@ -921,6 +924,115 @@ describe("DecisionsService question list (#17229)", () => {
     expect([...first.marks.values()]).toEqual([
       { hostId: "host_1", questionId: qid(1), ask: "note-1", seen: false, cleared: true },
     ]);
+    await service.stop();
+  });
+
+  it("raises each run's questions in Needs you on the fleet, and lowers one cleared at its ask with no row change", async () => {
+    const { service, attention, setRows, setMarks, fireCommit } = listed();
+    setRows([
+      row(1),
+      row(2),
+      row(3, {
+        origin: { project_id: "project-b", pane_id: "pane-b" },
+        messages_json: messages({
+          message_id: "note-3",
+          side: "agent",
+          event_seq: 4,
+          delivery: null,
+        }),
+      }),
+      row(4, { local_status: "expired" }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(
+        new Map([
+          ["pane-a", { answers: 0, questions: 2 }],
+          ["pane-b", { answers: 0, questions: 1 }],
+        ])
+      )
+    );
+
+    // A mark is a meta write, which commits: the feed reads it again though no row moved.
+    // Cleared at the agent's latest message, the ask the question shows now.
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(3) }),
+            { hostId: "host_1", questionId: qid(3), ask: "note-3", seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    fireCommit();
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 2 }]]))
+    );
+
+    await service.stop();
+    expect(attention.at(-1)?.size).toBe(0);
+  });
+
+  it("stops raising a run once its question's deadline passes by the clock, with no row change", async () => {
+    const { service, attention, setRows } = listed();
+    const soon = new Date(Date.now() + 300).toISOString();
+    const later = new Date(Date.now() + 600).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    setRows([
+      row(1, { expires_at: soon }),
+      row(2, { expires_at: past, origin: { pane_id: "pane-b" } }),
+      row(3, { origin: { pane_id: "pane-c" } }),
+      row(4, { expires_at: later, origin: { pane_id: "pane-d" } }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(
+        new Map([
+          ["pane-a", { answers: 0, questions: 1 }],
+          ["pane-c", { answers: 0, questions: 1 }],
+          ["pane-d", { answers: 0, questions: 1 }],
+        ])
+      )
+    );
+    // Each deadline in turn, the second counted on the wait the first armed.
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-c", { answers: 0, questions: 1 }]]))
+    );
+    await service.stop();
+  });
+
+  it("raises no run for what an old host id counted while the read for a new one is held", async () => {
+    const { service, attention, setRows, hold } = listed();
+    setRows([row(1, { expires_at: new Date(Date.now() + 60_000).toISOString() })]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
+    const release = hold();
+    service.updateSettings(on({ hostId: "host_2" }));
+    expect(attention.at(-1)?.size).toBe(0);
+    release();
+    await service.stop();
+  });
+
+  it("raises a Remote Host lifetime's own questions on its fleet, which has no marks to clear them", async () => {
+    const { service, attention, setRows, setMarks } = listed();
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(1) }),
+            { hostId: "host_1", questionId: qid(1), ask: null, seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    setRows([row(1)]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
     await service.stop();
   });
 
@@ -2310,6 +2422,7 @@ describe("DecisionsService deleting local data", () => {
     const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-unlist-"));
     try {
       const published: Array<{ count: number; listing: boolean }> = [];
+      const attention: Array<Map<string, RunDecisionAttention>> = [];
       let opens = 0;
       const service = new DecisionsService({
         keyFilePath: () => join(dir, "keys.bin"),
@@ -2329,16 +2442,20 @@ describe("DecisionsService deleting local data", () => {
         forgetIdentity: () => on(RELAY),
         publishQuestions: (questions, listing) =>
           published.push({ count: questions.length, listing }),
+        publishAnswerAttention: (counts) => attention.push(new Map(counts)),
         connect: () => ({ start: () => {}, stop: () => {} }),
       });
       await service.start(on(RELAY));
       await vi.waitFor(() => expect(published.at(-1)).toEqual({ count: 1, listing: true }));
+      await vi.waitFor(() => expect(attention.at(-1)?.size).toBe(1));
 
       await service.eraseLocalData();
 
       expect(opens).toBe(2);
       // Not listing at all, so no Remote Host's questions stay listed with no store here.
       expect(published.at(-1)).toEqual({ count: 0, listing: false });
+      // Nor does any run stay raised by what the closed store showed.
+      expect(attention.at(-1)?.size).toBe(0);
       await service.stop();
     } finally {
       rmSync(dir, { recursive: true, force: true });

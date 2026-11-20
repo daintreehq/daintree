@@ -3,6 +3,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import {
   CANOPY_NEEDS_YOU_PRIORITY,
   type CanopyCard,
+  type CanopyDisposition,
   type CanopyReadMark,
   type CanopySeen,
 } from "@shared/types/ipc/canopy";
@@ -14,6 +15,8 @@ import {
   itemAgentNeedHolds,
   itemAnswerAttention,
   itemContextWarning,
+  itemInArchive,
+  itemQuestionAttention,
   itemFacts,
   itemLooksDone,
   itemNeedsAttention,
@@ -1089,6 +1092,120 @@ describe("answers needing attention", () => {
       [card("a", { category: "question", priority: 90 })]
     );
     expect(itemPriority(item!, NOW)).toBe(90);
+  });
+});
+
+describe("questions open in Decisions", () => {
+  const finished = {
+    agentState: "completed",
+    since: NOW - 60_000,
+    handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+  } as const;
+  const HOLDS = [{ questionAttention: 1 }, { answerAttention: 1 }] as const;
+  const looksDone = (runId: string) => card(runId, { category: "finished", observedAt: NOW });
+  const withDispositions = (
+    runs: FleetRunRow[],
+    cards: CanopyCard[],
+    kinds: Record<string, CanopyDisposition["kind"]>
+  ) =>
+    buildCanopyInbox(
+      buildPilotGroups(runs, ctx),
+      new Map(cards.map((c) => [c.runId, c])),
+      undefined,
+      new Map(
+        Object.entries(kinds).map(([runId, kind]) => [
+          runId,
+          { runId, spawnedAt: NOW - 3_600_000, kind, at: NOW - 10_000 },
+        ])
+      ),
+      new Map(),
+      NOW
+    );
+
+  it("ranks a cleanly finished turn with an open question in needs-you, and never as done", () => {
+    const items = inbox(
+      [run("done", finished), run("asked", { ...finished, questionAttention: 1 })],
+      [looksDone("done"), looksDone("asked")]
+    );
+    const byId = (id: string) => items.find((item) => item.runId === id)!;
+    expect(items.map((item) => item.runId)).toEqual(["asked", "done"]);
+    expect(itemQuestionAttention(byId("asked"))).toBe(1);
+    expect(itemNeedsAttention(byId("asked"))).toBe(true);
+    expect(itemPriority(byId("asked"), NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+    expect(itemLooksDone(byId("done"))).toBe(true);
+    expect(itemLooksDone(byId("asked"))).toBe(false);
+  });
+
+  it("never suggests trashing a run Decisions holds something for, whatever the panel did with it", () => {
+    for (const hold of HOLDS) {
+      const items = withDispositions(
+        [
+          run("parked", { ...finished, ...hold, park: { parkedAt: NOW - 1_000, note: "" } }),
+          run("archived", { ...finished, ...hold }),
+          run("replied", { ...finished, ...hold }),
+        ],
+        [looksDone("parked"), looksDone("archived"), looksDone("replied")],
+        { archived: "archived", replied: "replied" }
+      );
+      for (const item of items) expect(itemLooksDone(item), item.runId).toBe(false);
+    }
+  });
+
+  it("holds past a reply typed here or an archive, which answer nothing in Decisions", () => {
+    for (const hold of HOLDS) {
+      const items = withDispositions(
+        [
+          run("archived", { ...finished, ...hold }),
+          run("replied", { ...finished, ...hold }),
+          run("plain-archived", finished),
+          run("plain-replied", finished),
+        ],
+        [],
+        {
+          archived: "archived",
+          replied: "replied",
+          "plain-archived": "archived",
+          "plain-replied": "replied",
+        }
+      );
+      const byId = (id: string) => items.find((item) => item.runId === id)!;
+      for (const id of ["archived", "replied"]) {
+        expect(itemNeedsAttention(byId(id)), id).toBe(true);
+        expect(itemPriority(byId(id), NOW), id).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+        expect(shownPriority(byId(id), NOW), id).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
+      }
+      expect(itemPriority(byId("plain-replied"), NOW)).toBe(0);
+      // Listed with the rest while it holds; its archive stands for when it clears.
+      expect(itemInArchive(byId("archived"))).toBe(false);
+      expect(itemInArchive(byId("plain-archived"))).toBe(true);
+      const { inbox: listed, archived } = splitInbox(items);
+      expect(listed.map((item) => item.runId).sort()).toEqual([
+        "archived",
+        "plain-replied",
+        "replied",
+      ]);
+      expect(archived.map((item) => item.runId)).toEqual(["plain-archived"]);
+    }
+  });
+
+  it("keeps a parked or snoozed run put aside, and in the archive when archived too", () => {
+    const items = withDispositions(
+      [
+        run("parked", {
+          ...finished,
+          questionAttention: 1,
+          park: { parkedAt: NOW - 1_000, note: "" },
+        }),
+        run("snoozed", { ...finished, questionAttention: 1, snooze: { snoozedAt: NOW } }),
+      ],
+      [],
+      { parked: "archived" }
+    );
+    for (const item of items) {
+      expect(itemNeedsAttention(item), item.runId).toBe(false);
+      expect(itemPriority(item, NOW)).toBeLessThanOrEqual(PUT_ASIDE_PRIORITY);
+    }
+    expect(itemInArchive(items.find((item) => item.runId === "parked")!)).toBe(true);
   });
 });
 

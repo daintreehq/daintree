@@ -34,7 +34,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { itemInArchive, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { canopyScreenGapWords, searchPasteText } from "./canopySearch";
 import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
@@ -1075,7 +1075,7 @@ function CanopyInbox({
   // below the bar, so they are never that row.
   const leaveArchivedUp = () => {
     const above = projection.navigation.filter(
-      (entry) => entry.role === "assistant" || !itemArchived(entry.item)
+      (entry) => entry.role === "assistant" || !itemInArchive(entry.item)
     );
     if (assistantsBarLast(above.length)) return;
     focusEntryOrSearch(above[above.length - 1]);
