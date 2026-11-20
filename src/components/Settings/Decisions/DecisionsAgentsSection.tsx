@@ -41,6 +41,29 @@ export function decisionsAgentSupport(
   return { supported, unsupported };
 }
 
+function supportOf(
+  availability: CliAvailability,
+  _registry: unknown,
+  _pluginAgents: unknown
+): DecisionsAgentSupport {
+  return decisionsAgentSupport(getAgentIds(), availability);
+}
+
+/**
+ * The installed agents a launch can or can't hand `ask_human`, kept current.
+ * Both agent registries feed `getAgentIds`, which the compiler can't see, so
+ * their snapshots go in as inputs and a change to either reads the list again.
+ */
+export function useDecisionsAgentSupport(): DecisionsAgentSupport {
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const registry = useUserAgentRegistryStore((state) => state.registry);
+  const pluginAgents = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
+  return supportOf(availability, registry, pluginAgents);
+}
+
 /**
  * Whether a launch now is handed `ask_human`. The route opens once the relay
  * identity has loaded, before the first attempt goes out, and stays open
@@ -153,17 +176,13 @@ export function DecisionsAgentsSection({
   status: DecisionsStatus;
   policy: UseDecisionsPolicyResult;
 }) {
-  const availability = useCliAvailabilityStore((state) => state.availability);
+  const { supported, unsupported } = useDecisionsAgentSupport();
   const hasRealData = useCliAvailabilityStore((state) => state.hasRealData);
   const loadError = useCliAvailabilityStore((state) => state.error);
   const refresh = useCliAvailabilityStore((state) => state.refresh);
-  // Both registries feed `getAgentIds`; read here so a change re-renders the list.
-  useUserAgentRegistryStore((state) => state.registry);
-  useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
   const remoteHostName = useRemoteHostName();
   if (remoteHostName !== null) return null;
 
-  const { supported, unsupported } = decisionsAgentSupport(getAgentIds(), availability);
   const none = supported.length === 0 && unsupported.length === 0;
   const failed = !hasRealData && loadError !== null;
   const launchesGetAsk = decisionsLaunchesGetAsk(status);

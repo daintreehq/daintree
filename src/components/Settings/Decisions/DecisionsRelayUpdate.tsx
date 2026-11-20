@@ -48,6 +48,7 @@ const KEEPS =
 export function DecisionsRelayUpdate({
   origin,
   compatibility,
+  versionDue = false,
   running,
   outcome,
   disabled,
@@ -56,6 +57,11 @@ export function DecisionsRelayUpdate({
   origin: string;
   /** From the last check of this relay; without it, the update wouldn't know this Daintree's range. */
   compatibility: DecisionsRelayCompatibility | null;
+  /**
+   * A check that reads the version is on its way, so the update waits for it
+   * without a line saying it needs one, which would only drop out again.
+   */
+  versionDue?: boolean;
   /** An update started from this window is still running, of this relay or another. */
   running: boolean;
   /** What the check after the latest update saw, once it has. */
@@ -71,7 +77,9 @@ export function DecisionsRelayUpdate({
   const disabledReason = running
     ? "An update is running in its terminal"
     : compatibility === null
-      ? "Needs a check that reads the relay's version first"
+      ? versionDue
+        ? undefined
+        : "Needs a check that reads the relay's version first"
       : placement.ready
         ? undefined
         : placement.reason;
@@ -113,7 +121,13 @@ export function DecisionsRelayUpdate({
               ? `Runs the published decisions update in a terminal you watch. It shows the relay's version, the release that works with this Daintree and what changes, then asks before deploying it. ${KEEPS}`
               : `Looks for a newer release that works with this Daintree, in a terminal you watch. It shows what would change and asks before deploying it. ${KEEPS}`
         }
-        disabled={disabled || starting || disabledReason !== undefined || !placement.ready}
+        disabled={
+          disabled ||
+          starting ||
+          compatibility === null ||
+          disabledReason !== undefined ||
+          !placement.ready
+        }
         disabledReason={disabledReason}
         control={({ descriptionId, disabled: rowDisabled }) => (
           <Button

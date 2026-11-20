@@ -111,6 +111,10 @@ describe("describeSetupStep", () => {
     expect(detail("claim", { result: "not-connected", problem: "other-relay" })).toMatch(
       /another relay/
     );
+    // The relay checked is the one set up here, so its claim is never someone else's (#18059).
+    const relay = detail("relay", OBSERVATIONS.relay[0]!);
+    expect(relay).toMatch(/the relay this computer is set up with/);
+    expect(relay).not.toMatch(/already has an owner/);
     expect(detail("socket", { result: "replaced" })).toMatch(/Another connection/);
     expect(detail("socket", { result: "not-connected", problem: "storage" })).toMatch(/database/);
     expect(detail("push", { result: "no-phone" })).toMatch(/No phone is paired/);

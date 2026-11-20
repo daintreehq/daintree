@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Input } from "@/components/ui/input";
@@ -146,6 +146,7 @@ export function DecisionsConnectionSection({
   onClose,
   onFinishSetup,
   onPairPhone,
+  facts,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
@@ -161,6 +162,8 @@ export function DecisionsConnectionSection({
   onFinishSetup?: () => void;
   /** Takes the person on to pairing a phone, once a deployed relay is claimed here. */
   onPairPhone?: () => void;
+  /** What was observed about the rest of Decisions, shown under the status while connected. */
+  facts?: ReactNode;
 }) {
   const { label, detail, severity } = describeConnection(status);
   // A revoked relay, or one that can't be used, says so on its own row: no kit or check changes that.
@@ -205,7 +208,7 @@ export function DecisionsConnectionSection({
     identity.reset();
     recheckedFor.current = null;
   });
-  const checkSaved = useEffectEvent((origin: string) => relay.run(origin));
+  const checkSaved = useEffectEvent((origin: string) => relay.run(origin, "background"));
   useEffect(() => {
     forget();
   }, [savedOrigin]);
@@ -269,10 +272,26 @@ export function DecisionsConnectionSection({
   const updateRechecked = update?.state === "ended" && recheckedUpdateId === update.id;
   // A setup reruns the check, and what it saw then is newer than the last one
   // shown, unless an update has ended since and been checked after.
-  const check = updateRechecked ? relay.check : (identity.recheck ?? relay.check);
-  const observation = check ? describeRelayCheck(check) : null;
+  const fromSetup = !updateRechecked && identity.recheck !== null;
+  const check = fromSetup ? identity.recheck : relay.check;
+  // The check Settings makes by itself on opening adds a row only for what's
+  // wrong, so the page doesn't move under the person; Check shows it all.
+  const shownInFull = fromSetup || relay.source === "requested";
+  const setUpHere = check !== null && "origin" in check && check.origin === savedOrigin;
+  const described = check ? describeRelayCheck(check, setUpHere) : null;
+  const observation =
+    described && (shownInFull || described.severity === "warning" || described.severity === "error")
+      ? described
+      : null;
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
-  const versions = compatibility ? describeCompatibility(compatibility, updateRoute) : null;
+  const versions =
+    compatibility && (shownInFull || compatibility.diverges)
+      ? describeCompatibility(compatibility, updateRoute)
+      : null;
+  // A version is on its way, so Update relay waits without saying it needs a check.
+  const versionDue =
+    compatibility === null &&
+    (relay.checking || (connected && relay.check === null && relay.error === null));
   const updateOutcome =
     update?.state === "ended" &&
     updateRechecked &&
@@ -295,20 +314,21 @@ export function DecisionsConnectionSection({
     identity.error && identity.error.action !== "disconnect"
       ? `${identity.error.action === "claim" ? "Couldn't claim the relay" : "Couldn't restore the identity"}. ${identity.error.message}`
       : null;
-  const announcement = relay.checking
-    ? "Checking the relay…"
-    : identity.pending === "claim" || deployClaiming
-      ? "Claiming the relay…"
-      : identity.pending === "restore"
-        ? "Restoring the identity…"
-        : outcome
-          ? `${outcome.label}. ${outcome.detail}`
-          : (outcomeError ??
-            (updateOutcome
-              ? `${updateOutcome.label}. ${updateOutcome.detail}`
-              : observation
-                ? `${observation.label}. ${observation.detail}`
-                : (rowError ?? "")));
+  const announcement =
+    relay.checkingSource === "requested"
+      ? "Checking the relay…"
+      : identity.pending === "claim" || deployClaiming
+        ? "Claiming the relay…"
+        : identity.pending === "restore"
+          ? "Restoring the identity…"
+          : outcome
+            ? `${outcome.label}. ${outcome.detail}`
+            : (outcomeError ??
+              (updateOutcome
+                ? `${updateOutcome.label}. ${updateOutcome.detail}`
+                : observation
+                  ? `${observation.label}. ${observation.detail}`
+                  : (rowError ?? "")));
   const setupCheck = savedOrigin === null && relay.checkedUrl !== null ? check : null;
   // The relay set up here, whatever state it's in, or else one a check found
   // answering as a relay (claimed by someone else, or never claimed) (#16202).
@@ -410,7 +430,8 @@ export function DecisionsConnectionSection({
               <SeverityMark severity={severity} label={label} className="h-3.5 w-3.5" decorative />
             ) : undefined
           }
-          description={detail}
+          // Outside the status's live region: a count arriving isn't news to announce.
+          description={detail ?? (connected ? facts : undefined)}
         />
         {deployClaimedHere && (
           <DecisionsRelayDeployOutcome
@@ -487,12 +508,12 @@ export function DecisionsConnectionSection({
               <Button
                 variant="outline"
                 size="sm"
-                loading={relay.checking}
+                loading={relay.checkingSource === "requested"}
                 disabled={disabled}
                 aria-describedby={descriptionId}
                 onClick={() => relay.run(savedOrigin)}
               >
-                {check || relay.error ? "Check again" : "Check"}
+                {observation || versions || rowError ? "Check again" : "Check"}
               </Button>
             )}
           />
@@ -533,6 +554,7 @@ export function DecisionsConnectionSection({
           <DecisionsRelayUpdate
             origin={savedOrigin}
             compatibility={compatibility}
+            versionDue={versionDue}
             running={updateRunning}
             outcome={updateOutcome}
             disabled={busy || relay.checking || removing}

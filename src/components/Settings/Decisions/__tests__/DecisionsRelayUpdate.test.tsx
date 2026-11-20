@@ -264,6 +264,37 @@ describe("Decisions relay update", () => {
     expect(updateButton().disabled).toBe(false);
   });
 
+  it("waits for the check made on opening without a line that would drop out again (#18059)", async () => {
+    let answer!: (check: DecisionsRelayCheck) => void;
+    checkRelay.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await renderSection();
+
+    expect(updateButton().disabled).toBe(true);
+    expect(screen.queryByText("Needs a check that reads the relay's version first")).toBeNull();
+
+    await act(async () => {
+      answer(claimedAt("0.2.0"));
+    });
+
+    expect(updateButton().disabled).toBe(false);
+    // The versions match and the relay answered as itself: nothing to add for that.
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(document.getElementById("decisions-relay-versions")).toBeNull();
+  });
+
+  it("says it needs a check once the one made on opening couldn't read a version", async () => {
+    checkRelay.mockResolvedValue({
+      result: "unreachable",
+      origin: ORIGIN,
+      endpoint: "health",
+      reason: "timeout",
+    });
+    await renderSection();
+
+    expect(updateButton().disabled).toBe(true);
+    expect(screen.getByText("Needs a check that reads the relay's version first")).toBeTruthy();
+  });
+
   it("needs a project open to show the update's pane", async () => {
     view.project = false;
     checkRelay.mockResolvedValue(claimedAt("0.1.0"));
