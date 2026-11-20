@@ -31,14 +31,16 @@ function isAgentState(state: string): state is AgentState {
   return Object.hasOwn(STATE_LABELS, state);
 }
 
+function isWaitingReason(reason: string | null): reason is WaitingReason {
+  return reason !== null && Object.hasOwn(WAITING_FOR, reason);
+}
+
 /** What the pane's machine observed of its agent, in its own words: never more than it saw. */
 function observedStateText(pane: Pick<DecisionQuestionPane, "agentState" | "waitingReason">) {
   if (!isAgentState(pane.agentState)) return "Agent state not observed";
   const reason =
-    pane.agentState === "waiting" &&
-    pane.waitingReason !== null &&
-    Object.hasOwn(WAITING_FOR, pane.waitingReason)
-      ? ` ${WAITING_FOR[pane.waitingReason as WaitingReason]}`
+    pane.agentState === "waiting" && isWaitingReason(pane.waitingReason)
+      ? ` ${WAITING_FOR[pane.waitingReason]}`
       : "";
   return `Agent ${STATE_LABELS[pane.agentState]}${reason}`;
 }
