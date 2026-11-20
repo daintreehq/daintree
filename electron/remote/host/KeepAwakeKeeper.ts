@@ -144,8 +144,8 @@ export class KeepAwakeKeeper {
    * Holds this URL in place of any other, once it is checked to reach this
    * listener: at once while the host sees work, otherwise on the first request
    * it sends. Refused, the URL it held stays; replaced by one not checked yet,
-   * a URL that reached it is taken back if the new one is dropped. Taken one
-   * at a time, in order.
+   * a URL that reached it is taken back if the new one is dropped, or if the
+   * new one turns out to expire first. Taken one at a time, in order.
    */
   arm(request: KeepAwakeArmRequest): Promise<KeepAwakeStatus> {
     const taken = this.arms.then(() => this.armNow(request));
@@ -194,17 +194,26 @@ export class KeepAwakeKeeper {
     if (this.disposed) throw shuttingDown();
     if (this.listener !== listener) refuse(PORT_CLOSED);
     if (outcome?.kind === "lost") refuse(outcome.problem);
+    // Behind a pass's request, or idle and never sent, it may have run out meanwhile.
+    if (request.expiresAt <= this.now()) refuse("That link has already expired.");
     const reached = outcome?.kind === "reached";
-    // Not checked yet: the last URL that reached it stays behind it, however many came between.
-    const working = this.held?.verified ? this.held : this.fallback;
-    this.replace(candidate);
-    if (!reached && working && working.expiresAt > this.now()) this.fallback = working;
-    if (reached) {
-      candidate.verified = true;
-      candidate.reachedAt = this.now();
+    const last = this.held?.verified ? this.held : this.fallback;
+    const working = last && last.expiresAt > this.now() ? last : null;
+    if (reached && working && working.expiresAt > candidate.expiresAt) {
+      // It reaches this listener, but the URL that already did outlasts it: that one stays.
+      if (working !== this.held) this.replace(working);
       this.lastSentAt = this.mono();
-    } else if (outcome?.kind === "retry") {
-      this.noteRetry();
+    } else {
+      this.replace(candidate);
+      // Not checked yet: the last URL that reached it stays behind it, however many came between.
+      if (!reached && working) this.fallback = working;
+      if (reached) {
+        candidate.verified = true;
+        candidate.reachedAt = this.now();
+        this.lastSentAt = this.mono();
+      } else if (outcome?.kind === "retry") {
+        this.noteRetry();
+      }
     }
     this.timer ??= setInterval(() => void this.tick(), this.deps.tickMs ?? TICK_MS);
     this.timer.unref?.();
@@ -343,6 +352,13 @@ export class KeepAwakeKeeper {
       this.noteRetry();
       return;
     }
+    const fallback = this.fallback;
+    if (fallback && fallback.expiresAt > held.expiresAt && fallback.expiresAt > this.now()) {
+      // It reaches this listener, but the URL it replaced outlasts it: that one is taken back.
+      this.replace(fallback);
+      this.lastSentAt = startedAt;
+      return;
+    }
     this.failures = 0;
     this.retryAt = Number.NEGATIVE_INFINITY;
     held.verified = true;
@@ -371,15 +387,19 @@ export class KeepAwakeKeeper {
       status = response.status;
       await response.body?.cancel().catch(() => {});
     } catch {
+      const arrived = listener.take(nonce);
+      // Run out while its answer was awaited, it can hold nothing up from now on.
+      if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
       // Arrived, its answer slow or lost on the way back: it went through the edge all the same.
-      return listener.take(nonce) ? { kind: "reached" } : { kind: "retry" };
+      return arrived ? { kind: "reached" } : { kind: "retry" };
     }
     const arrived = listener.take(nonce);
+    if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
     if (status >= 200 && status < 300) {
       return arrived ? { kind: "reached" } : { kind: "lost", problem: NOT_ARRIVED };
     }
     if (status === 401 || status === 403 || status === 410) {
-      return { kind: "lost", problem: this.now() >= held.expiresAt ? EXPIRED : REFUSED };
+      return { kind: "lost", problem: REFUSED };
     }
     if (status === 404) return { kind: "lost", problem: NOT_ARRIVED };
     // A 502 is the edge not reaching the port, perhaps for a moment; anything else may pass too.

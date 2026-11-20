@@ -230,7 +230,7 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await env.keeper.open();
     await env.arm();
     env.setBusy(false);
-    const replaced = await env.arm(URL_B, env.now() + DAY);
+    const replaced = await env.arm(URL_B, env.now() + 8 * DAY);
     // What reached it was the old URL, not this one.
     expect(replaced.reachedAt).toBeNull();
     env.setBusy(true);
