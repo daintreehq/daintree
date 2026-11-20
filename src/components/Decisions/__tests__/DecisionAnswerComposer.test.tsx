@@ -142,6 +142,18 @@ function status() {
   return screen.getByTestId("decision-answer-status").textContent ?? "";
 }
 
+/**
+ * The deadline line runs on its own clock, so it can still read the time left
+ * for a moment after the composer's notice has appeared: wait for it rather
+ * than read it beside the notice.
+ */
+async function passedDeadline() {
+  await waitFor(() =>
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/Deadline passed/)
+  );
+  return screen.getByTestId("decision-question-deadline").textContent ?? "";
+}
+
 beforeEach(() => {
   decisionsOn = true;
   paneListeners = [];
@@ -854,9 +866,7 @@ describe("a timed question in the view (#17943)", () => {
     expect(document.activeElement).toBe(text);
     expect(text.value).toBe("Use the fixture");
     expect(text.readOnly).toBe(true);
-    const deadline = screen.getByTestId("decision-question-deadline").textContent ?? "";
-    expect(deadline).toMatch(/Deadline passed/);
-    expect(deadline).toMatch(/Awaiting an update/);
+    expect(await passedDeadline()).toMatch(/Awaiting an update/);
     // Said once as it changes, never again while nothing does: past one more read of the question.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, SETTLE_AFTER_CROSSING_MS));
@@ -873,7 +883,7 @@ describe("a timed question in the view (#17943)", () => {
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
-    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/Deadline passed/);
+    await passedDeadline();
 
     // Reconnected: the phone's answer committed before the deadline, so it never expired.
     await move(
