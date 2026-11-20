@@ -4406,6 +4406,19 @@ describe("DecisionsInboxDialog", () => {
       expect(said).toEqual(["1 question cleared on this computer"]);
     });
 
+    it("still says a clear landed once an answer from here takes its place before the list moved", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      expect(said).toEqual([]);
+      await answerShown();
+      expect(said).toEqual(["1 question cleared on this computer"]);
+    });
+
     it("stays on a clear that changed nothing, as when the question asked something new", async () => {
       markQuestions.mockImplementation(async ({ action, questions }) =>
         action === "clear"

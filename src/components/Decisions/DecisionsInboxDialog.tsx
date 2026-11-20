@@ -1464,6 +1464,10 @@ export function DecisionsInboxDialog() {
     action: InboxAction,
     over: Partial<Pick<InboxActed, "prior" | "fate" | "held">> = {}
   ): number => {
+    // A clear that was taken and still waits for the list says so before this takes its place.
+    if (acted?.action === "clear" && acted.fate === "taken" && CLEARED_ONE !== null) {
+      announce(CLEARED_ONE);
+    }
     actedCount.current += 1;
     const id = actedCount.current;
     setActed({
