@@ -860,9 +860,9 @@ export const CLEAR_GONE_HINT =
 /**
  * What the shown question's warning says while delivery needs a person: what
  * stopped and why, in the words the stall's notification uses, then what to
- * do. Hedged only where the list can't say what stopped. A Remote Host keeps
- * its own stopped deliveries, and nothing on this computer resolves them, so
- * its question names that Host instead of inviting a choice.
+ * do. Hedged only where the list can't say what stopped. A Remote Host's
+ * question invites no choice here: whether its Host offers one is known only
+ * once the Host is read, and what that read found is said beside this, once.
  */
 export function attentionText(
   item: Pick<DecisionQuestionListItem, "standing" | "remoteHost"> & ItemRound
@@ -903,15 +903,7 @@ export function attentionText(
   }
   const plural = parts !== null && heldName(parts).plural;
   if (uncertain) sentences.push("Check the terminal before anything is sent again.");
-  if (host !== null) {
-    sentences.push(
-      plural
-        ? `${host} keeps them, so they can't be resolved from this computer.`
-        : `${host} keeps it, so it can't be resolved from this computer.`
-    );
-  } else if (!uncertain) {
-    sentences.push(`Choose what happens to ${plural ? "them" : "it"}.`);
-  }
+  else if (host === null) sentences.push(`Choose what happens to ${plural ? "them" : "it"}.`);
   return sentences.filter((sentence) => sentence !== null).join(" ");
 }
 

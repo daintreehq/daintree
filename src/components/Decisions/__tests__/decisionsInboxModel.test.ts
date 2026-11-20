@@ -1477,7 +1477,7 @@ describe("what stopped, said once (#18026)", () => {
     );
   });
 
-  it("names the Remote Host that keeps it instead of inviting a choice, and where its words would say this computer", () => {
+  it("names the Remote Host where its words would say this computer, and leaves whether it can be resolved here to the Host's read (#18118)", () => {
     expect(
       attentionText(
         stalled(
@@ -1486,14 +1486,10 @@ describe("what stopped, said once (#18026)", () => {
           { remoteHost: ATLAS }
         )
       )
-    ).toBe(
-      "The answer wasn't typed in. The answer couldn't be decrypted on Atlas. Atlas keeps it, so it can't be resolved from this computer."
-    );
+    ).toBe("The answer wasn't typed in. The answer couldn't be decrypted on Atlas.");
     const text = attentionText(expired(UNCERTAIN, "uncertain", ["m1"], { remoteHost: ATLAS }));
-    expect(text).toMatch(
-      /Check the terminal before anything is sent again\. Atlas keeps them, so they can't be resolved from this computer\.$/
-    );
-    expect(text).not.toMatch(/Choose/);
+    expect(text).toMatch(/Check the terminal before anything is sent again\.$/);
+    expect(text).not.toMatch(/Choose|resolve/);
   });
 
   it("claims the notice only when the warning states the notice's own delivery", () => {
