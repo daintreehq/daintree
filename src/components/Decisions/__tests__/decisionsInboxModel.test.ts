@@ -15,6 +15,7 @@ import {
   agentName,
   askShownIn,
   clearText,
+  closedTime,
   connectionNotice,
   groupOf,
   inboxGroupOf,
@@ -484,6 +485,21 @@ describe("seen and cleared on this computer (#17895)", () => {
       expect(clearText(false)).toMatch(/this computer only/);
       expect(clearText(false)).toMatch(/Nothing is declined or sent/);
       expect(clearText(true)).toMatch(/Nothing is sent/);
+    });
+  });
+});
+
+describe("closedTime (#18025)", () => {
+  it("is when the question closed, else when it was asked", () => {
+    const asked = "2026-11-02T08:00:00.000Z";
+    expect(closedTime({ askedAt: asked, settledAt: "2026-11-02T11:00:00.000Z" })).toEqual({
+      at: "2026-11-02T11:00:00.000Z",
+      kind: "closed",
+    });
+    expect(closedTime({ askedAt: asked, settledAt: null })).toEqual({ at: asked, kind: "asked" });
+    expect(closedTime({ askedAt: asked, settledAt: "not a date" })).toEqual({
+      at: asked,
+      kind: "asked",
     });
   });
 });

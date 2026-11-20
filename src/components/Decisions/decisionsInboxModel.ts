@@ -181,10 +181,22 @@ function epoch(iso: string | null): number {
   return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 }
 
-/** When a closed question last moved: when it settled, else when it was asked. */
+/**
+ * The time History sorts by and its rows show (#18025): when the question
+ * closed, else when it was asked, as withdrawn or never-sent ones have no
+ * close time.
+ */
+export function closedTime(item: Pick<DecisionQuestionListItem, "settledAt" | "askedAt">): {
+  at: string;
+  kind: "closed" | "asked";
+} {
+  return epoch(item.settledAt) === Number.NEGATIVE_INFINITY || item.settledAt === null
+    ? { at: item.askedAt, kind: "asked" }
+    : { at: item.settledAt, kind: "closed" };
+}
+
 function closedAt(item: DecisionQuestionListItem): number {
-  const settled = epoch(item.settledAt);
-  return settled === Number.NEGATIVE_INFINITY ? epoch(item.askedAt) : settled;
+  return epoch(closedTime(item).at);
 }
 
 /**

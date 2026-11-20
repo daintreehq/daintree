@@ -390,11 +390,16 @@ describe("DecisionsInboxDialog", () => {
     expect(other.textContent).toContain("Beta");
     expect(other.textContent).toContain(getEffectiveAgentConfig("codex")!.name);
     expect(other.textContent).not.toContain(getEffectiveAgentConfig("claude")!.name);
-    // Each row's age is its own question's.
+    // Each row's age is its own question's: History's is when it closed, the rest's when it was asked.
     const ages = ["q-1", "q-2", "q-3"].map(
       (alias) => rowNamed(alias).querySelector("time")?.getAttribute("datetime") ?? null
     );
-    expect(ages).toEqual(LIST.questions.map((entry) => new Date(entry.askedAt).toISOString()));
+    expect(ages).toEqual(
+      LIST.questions.map((entry) => new Date(entry.settledAt ?? entry.askedAt).toISOString())
+    );
+    // The close time is named for the ear; the others stay "asked".
+    expect(rowNamed("q-1").textContent).toContain("Closed ");
+    expect(rowNamed("q-2").textContent).toContain("Asked ");
     // One read of the lines, by reference, for every row.
     expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
     expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
