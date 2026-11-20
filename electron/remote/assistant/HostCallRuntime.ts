@@ -1278,6 +1278,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * view runs nothing more of it, asked or not. The host is the connection's.
    */
   cancelledRelayedCall(hostId: HostId, call: { callId: string; helpSessionId: string }): boolean {
+    const out = this.callsInFlight.get(call.callId);
+    if (
+      out?.cancelled === true &&
+      out.hostId === hostId &&
+      out.helpSessionId === call.helpSessionId
+    ) {
+      return true;
+    }
     // Kept past the call's answer: a dispatch the host sent before it stopped may still come.
     return this.cancelledCalls.has(`${hostId}\u0000${call.helpSessionId}\u0000${call.callId}`);
   }
@@ -2013,6 +2021,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               cancel
             );
       } catch (error) {
+        // A first send that never went out ran nothing: no later dispatch under the id is its.
+        if (!resend && codeOf(error) === "CANCELLED") this.cancelledCalls.delete(callKey);
         if (!(error instanceof RelayCancelUnconfirmedError) || error.answer === undefined) {
           return this.sendFailure(error, host, callId, resend, noted);
         }

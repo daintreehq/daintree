@@ -378,6 +378,29 @@ describe("HostCallRuntime host.call (#13493)", () => {
         ).toBe(false);
       });
 
+      it("forgets a first send's cancel when the send never went out", async () => {
+        const controller = new AbortController();
+        // Cancelled while an older host refused the first method: the cancel went, the call never did.
+        relayCall.mockImplementationOnce(
+          async (
+            _hostId: string,
+            _payload: unknown,
+            _timeoutMs: number,
+            cancel?: { signal: AbortSignal; onCancel?: () => void }
+          ) => {
+            controller.abort();
+            cancel?.onCancel?.();
+            throw new AppError({ code: "CANCELLED", message: "not sent" });
+          }
+        );
+
+        await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "a" })).toBe(
+          false
+        );
+      });
+
       it("says nothing ran when the host stopped it before its tool, keeping the callId", async () => {
         relayCall.mockResolvedValueOnce({ status: "cancelled", dispatch: "before" });
         await expect(runtime.call("a", CALL, { tier: "core" })).resolves.toMatchObject({
