@@ -56,33 +56,42 @@ export function observedOwnerKeys(stored: StoredIdentity | null): ObservedOwnerK
   };
 }
 
-/** Two observations of owner keys name the same identity holding the same epochs. */
-export function sameOwnerKeys(a: ObservedOwnerKeys | null, b: ObservedOwnerKeys | null): boolean {
-  if (a === null || b === null) return a === b;
+/** Two observations of owner keys name the same identity holding the same keys. */
+export function sameOwnerKeys(
+  a: ObservedOwnerKeys | null | undefined,
+  b: ObservedOwnerKeys | null | undefined
+): boolean {
+  if (!a || !b) return (a ?? null) === (b ?? null);
   return (
     observes(a, b) &&
-    a.coverage.currentEpoch === b.coverage.currentEpoch &&
     a.coverage.epochs.length === b.coverage.epochs.length &&
-    a.coverage.epochs.every((epoch, i) => epoch === b.coverage.epochs[i])
+    coverageHolds(a.coverage, b.coverage)
   );
 }
 
 /**
- * A kit verification as it stands against the owner keys last seen (#18063):
- * marked out of date once they hold an epoch the kit lacks or another current
- * epoch. A verification recorded before kits' epochs were held every epoch
- * the keys held then, and keys only ever gain epochs, so keys still on their
- * one epoch are what it covered; anything more can't be told from here.
+ * A kit verification as it stands against the owner keys last seen (#18063),
+ * `before` being what the same key store saw just before them: marked out of
+ * date once they hold a key the kit lacks or another current epoch. A
+ * verification recorded before kits' epochs were held every key the keys
+ * held then, and keys only ever gain epochs, so keys still on their one
+ * epoch are what it covered, and keys seen to change since this run first
+ * read them have moved past it; anything else can't be told from here.
  * Returns `record` itself when nothing changes.
  */
 export function reconciledKit(
   record: DecisionsRecoveryKitRecord | null,
-  observed: ObservedOwnerKeys | null
+  observed: ObservedOwnerKeys | null,
+  before: ObservedOwnerKeys | null = null
 ): DecisionsRecoveryKitRecord | null {
   if (record === null || record.outOfDate || !observes(observed, record)) return record;
   const held = observed.coverage;
   if (!record.coverage) {
-    const firstOnly = held.epochs.length === 1 && held.epochs[0] === held.currentEpoch;
+    // Only an earlier build records a verification without epochs, so this run's reads all came after it.
+    if (observes(before, record) && !coverageHolds(before.coverage, held)) {
+      return { ...record, outOfDate: true };
+    }
+    const firstOnly = held.epochs.length === 1 && held.epochs[0]!.epoch === held.currentEpoch;
     return firstOnly ? { ...record, coverage: held } : record;
   }
   return coverageHolds(record.coverage, held) ? record : { ...record, outOfDate: true };

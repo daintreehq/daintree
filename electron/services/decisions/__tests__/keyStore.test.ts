@@ -17,6 +17,24 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/unused" },
 }));
 
+// Atomic writes pass through; `fault` fails the next one before its rename, or after it.
+const writeFaults = vi.hoisted(() => ({ fault: null as null | "before-rename" | "after-rename" }));
+vi.mock("../../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFile: async (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
+    ) => {
+      const fault = writeFaults.fault;
+      writeFaults.fault = null;
+      if (fault === "before-rename") throw new Error("rename failed");
+      await actual.resilientAtomicWriteFile(...args);
+      if (fault === "after-rename") throw new Error("directory sync failed");
+    },
+  };
+});
+
 import {
   _resetSecretStorageSessionForTests,
   keychainSessionFailure,
@@ -213,6 +231,30 @@ describe("SealedKeyStore", () => {
     expect(heard).toEqual([]);
   });
 
+  it("tells its observer of keys a failed write left in place, and of none it didn't (#18063)", async () => {
+    keyed("v10");
+    const heard: Array<StoredIdentity | null> = [];
+    const observed = new SealedKeyStore(file, (stored) => heard.push(stored));
+    const first = identity();
+    await observed.save(first);
+    heard.length = 0;
+
+    const staged = identity({ epochs: [...first.epochs, { epoch: 3, raw: "EPOCH-THREE" }] });
+    writeFaults.fault = "before-rename";
+    await expect(observed.save(staged)).rejects.toThrow("rename failed");
+    expect(heard).toEqual([]);
+
+    writeFaults.fault = "after-rename";
+    await expect(observed.save(staged)).rejects.toThrow("directory sync failed");
+    expect(heard).toEqual([staged]);
+    await expect(new SealedKeyStore(file).load()).resolves.toEqual(staged);
+
+    // A conditional removal that leaves the keys says nothing either.
+    heard.length = 0;
+    await expect(observed.clearIf(() => false)).resolves.toBe(false);
+    expect(heard).toEqual([]);
+  });
+
   it("never fails a read or write for an observer that throws", async () => {
     keyed("v10");
     const store = new SealedKeyStore(file, () => {
@@ -222,7 +264,8 @@ describe("SealedKeyStore", () => {
 
     await expect(store.save(identity())).resolves.toBeUndefined();
     await expect(store.load()).resolves.toEqual(identity());
-    expect(warn).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it("runs every store's steps on one file in turn, so one's read never lands inside another's write", async () => {

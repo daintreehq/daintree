@@ -49,7 +49,7 @@ import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js"
 import { DecisionsPhoneImages, erasePhoneImages, phoneImageRootsFile } from "./phoneImages.js";
 import { KeyRotations } from "./keyRotation.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
-import { observedOwnerKeys, sameOwnerKeys, type ObservedOwnerKeys } from "./recoveryKit.js";
+import { observedOwnerKeys, type ObservedOwnerKeys } from "./recoveryKit.js";
 import {
   eraseLocalDecisionsData,
   finishInterruptedErase,
@@ -248,11 +248,14 @@ export interface DecisionsServiceOptions {
    */
   onDevicesChanged?: () => void;
   /**
-   * The lifetime's key store read or wrote the keys, or found none
-   * (#18063): `getOwnerKeys` says what they hold now. Called in the key
-   * store's own turn, before the read or write that found them returns.
+   * A lifetime's key store read or wrote the keys, or found none (#18063):
+   * the owner identity's relay, ids and epochs they hold (null for none, or
+   * not an owner's), and what the same store saw just before (null when it
+   * saw nothing yet, or has been let go of). Called for every read and write,
+   * in the key store's own turn, before it returns; a store let go of still
+   * reports the writes it finishes, so none is missed.
    */
-  onOwnerKeys?: () => void;
+  onOwnerKeys?: (keys: ObservedOwnerKeys | null, before: ObservedOwnerKeys | null) => void;
   /** Makes the relay connection for a lifetime with a relay set up. */
   connect?: DecisionsConnectionFactory;
   /** The stored rows, for deleting them: the app database's unless a test says otherwise. */
@@ -328,9 +331,12 @@ export class DecisionsService {
   private readonly listeners = new Set<DecisionsStatusListener>();
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
-  /** What `keyStore` last read or wrote, kept with the store it came from. */
+  /** What `keyStore` last read or wrote, kept with the store it came from, and dropped with it. */
   private ownerKeys: { from: SealedKeyStore; keys: ObservedOwnerKeys | null } | null = null;
-  private readonly onOwnerKeys: () => void;
+  private readonly onOwnerKeys: (
+    keys: ObservedOwnerKeys | null,
+    before: ObservedOwnerKeys | null
+  ) => void;
   private rotations: KeyRotations | null = null;
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
@@ -569,13 +575,12 @@ export class DecisionsService {
     if (this.erasing) throw new Error("Decisions is deleting its data, so its keys can't be used");
     if (!this.keyStore) {
       const made: SealedKeyStore = new SealedKeyStore(this.keyFilePath(), (stored) => {
-        // A store let go of may still finish what was asked of it.
-        if (this.keyStore !== made) return;
         const keys = observedOwnerKeys(stored);
-        const before = this.ownerKeys?.from === made ? this.ownerKeys.keys : undefined;
-        this.ownerKeys = { from: made, keys };
-        // Keys are read for every connection and answer; only a change is news.
-        if (before === undefined || !sameOwnerKeys(before, keys)) this.onOwnerKeys();
+        const live = this.keyStore === made;
+        const before = live && this.ownerKeys?.from === made ? this.ownerKeys.keys : null;
+        // A store let go of may still finish a write: reported, but no longer what this lifetime holds.
+        if (live) this.ownerKeys = { from: made, keys };
+        this.onOwnerKeys(keys, before);
       });
       this.keyStore = made;
     }
@@ -1126,6 +1131,8 @@ export class DecisionsService {
         const keyStore = this.keyStore;
         const rotations = this.rotations;
         this.keyStore = null;
+        // The observation holds the store, whose last read holds the keys.
+        this.ownerKeys = null;
         this.rotations = null;
         this.erasing = true;
         try {
@@ -1259,6 +1266,8 @@ export class DecisionsService {
     const keyStore = this.keyStore;
     const rotations = this.rotations;
     this.keyStore = null;
+    // The observation holds the store, whose last read holds the keys.
+    this.ownerKeys = null;
     this.rotations = null;
     this.settings = null;
     this.policy = null;

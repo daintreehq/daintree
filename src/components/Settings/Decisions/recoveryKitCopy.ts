@@ -86,12 +86,20 @@ export function describeExportResult(result: DecisionsKitExportResult): RelayObs
 export function describeVerifyResult(result: DecisionsKitVerifyResult): RelayObservation {
   switch (result.result) {
     case "verified":
-      return {
-        severity: "success",
-        label: "Kit checked",
-        detail:
-          "It opens with its passphrase and holds this computer's identity with every key. Keep it somewhere other than this computer.",
-      };
+      // A rotation that saved keys while the kit was being checked leaves it out of date at once (#18063).
+      return result.status.recoveryKitCoverage === "out-of-date"
+        ? {
+            severity: "warning",
+            label: "Kit checked, but the keys changed",
+            detail:
+              "It held this computer's keys when it was checked, but a key rotation changed them meanwhile. Once the rotation has finished, save a new kit and verify it.",
+          }
+        : {
+            severity: "success",
+            label: "Kit checked",
+            detail:
+              "It opens with its passphrase and holds this computer's identity with every key. Keep it somewhere other than this computer.",
+          };
     case "kit-refused":
       return refusal(result.reason);
     case "no-identity":
@@ -136,13 +144,13 @@ export function describeKitStanding(
     case "out-of-date":
       return {
         label: "Recovery kit out of date",
-        detail: `${verified} This computer's keys have rotated since, so that kit can't read what the relay encrypts with the new key. Save a new kit below and verify it.`,
+        detail: `${verified} This computer's keys changed after that, so the kit can't read what the relay encrypts with the new key. Once any key rotation has finished, save a new kit below and verify it.`,
         mark: "Out of date",
       };
     default:
       return {
         label: "Recovery kit last verified",
-        detail: `${verified} It hasn't been compared with the keys this computer holds now. Verify your saved kit again to check it still holds them.`,
+        detail: `${verified} Daintree can't confirm it covers the keys this computer holds now. Verify your saved kit again to check.`,
       };
   }
 }

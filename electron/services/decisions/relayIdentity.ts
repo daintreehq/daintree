@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   claimRelay,
   importIdentity,
@@ -575,26 +576,43 @@ export function kitCovers(kit: StoredIdentity, held: StoredIdentity): boolean {
   return true;
 }
 
+/** An epoch key's SHA-256, of the bytes `kitCovers` compares; of the text when it doesn't decode. */
+function epochDigest(raw: string): string {
+  let bytes: Uint8Array;
+  try {
+    bytes = base64UrlToBytes(raw);
+  } catch {
+    bytes = Buffer.from(`undecodable:${raw}`, "utf8");
+  }
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 /**
- * The epochs a stored identity holds, by number (#18063). Of keys a kit was
- * checked against, it is what the kit was proven to hold byte for byte: an
- * epoch only the kit held may hold a key these keys never will.
+ * The epochs a stored identity holds, each by number and key digest
+ * (#18063). Of keys a kit was checked against, it is what the kit was proven
+ * to hold byte for byte: an epoch only the kit held may hold a key these
+ * keys never will.
  */
 export function kitCoverage(stored: StoredIdentity): DecisionsKitCoverage {
-  const epochs = [...new Set(stored.epochs.map((entry) => entry.epoch))].sort((a, b) => a - b);
+  const byEpoch = new Map<number, string>();
+  for (const { epoch, raw } of stored.epochs) byEpoch.set(epoch, epochDigest(raw));
+  const epochs = [...byEpoch]
+    .sort(([a], [b]) => a - b)
+    .map(([epoch, sha256]) => ({ epoch, sha256 }));
   return { currentEpoch: stored.currentEpoch, epochs };
 }
 
 /**
- * A kit proven to hold `kit`'s epochs still covers keys holding `held`'s:
- * the same current epoch, and no epoch outside it. Keys here only gain
- * epochs, each with a key made for it, so one the kit wasn't proven to hold
- * is one it lacks.
+ * A kit proven to hold `kit`'s epochs still covers keys holding `held`'s, as
+ * `kitCovers` would judge them: the same current epoch, and every key held
+ * one the kit holds.
  */
 export function coverageHolds(kit: DecisionsKitCoverage, held: DecisionsKitCoverage): boolean {
   return (
     kit.currentEpoch === held.currentEpoch &&
-    held.epochs.every((epoch) => kit.epochs.includes(epoch))
+    held.epochs.every(({ epoch, sha256 }) =>
+      kit.epochs.some((entry) => entry.epoch === epoch && entry.sha256 === sha256)
+    )
   );
 }
 

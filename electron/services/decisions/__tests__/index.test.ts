@@ -599,6 +599,7 @@ import {
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
+import { kitCoverage } from "../relayIdentity.js";
 
 /** A question in Needs you as the owner lists it before the person has marked it (#17895). */
 const UNMARKED = { ask: null, seen: false, cleared: false };
@@ -3196,7 +3197,10 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
-      const proven = { currentEpoch: 3, epochs: [1, 2, 3] };
+      const proven = {
+        currentEpoch: 3,
+        epochs: [1, 2, 3].map((epoch) => ({ epoch, sha256: String(epoch).repeat(64) })),
+      };
       setupRuns.restore.mockResolvedValue({ identity: CLAIMED, verifiedKit: proven });
 
       const result = await restoreIdentity({
@@ -4428,7 +4432,6 @@ describe("Decisions entry", () => {
       deviceId: RELAY.deviceId,
     };
     const KIT_TEXT = '{"v":1,"kdf":"PBKDF2-SHA256"}\n';
-    const AT_ONE = { currentEpoch: 1, epochs: [1] };
     let outDir = "";
 
     /** Owner keys for the recorded relay at `currentEpoch`, holding `epochs`. */
@@ -4446,6 +4449,8 @@ describe("Decisions entry", () => {
         currentEpoch,
       };
     }
+
+    const AT_ONE = kitCoverage(ownerKeys(1, [1]));
 
     /** What the lifetime's key store tells its observer once it has read or written `stored`. */
     function keysRead(stored: StoredIdentity | null): void {
@@ -4686,7 +4691,10 @@ describe("Decisions entry", () => {
       expect(peekDecisionsService()!.getSettings()?.recoveryKit).toEqual(record);
       // Every window's Settings learns setup is finished, not just the one that asked.
       await vi.waitFor(() =>
-        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          recoveryKitVerifiedAt: record.verifiedAt,
+          recoveryKitCoverage: "current",
+        })
       );
       expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
     });
@@ -4752,6 +4760,7 @@ describe("Decisions entry", () => {
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "current" });
 
       keysRead(ownerKeys(2, [1, 2]));
+      expect(saved.value).toMatchObject({ recoveryKit: { coverage: AT_ONE, outOfDate: true } });
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
     });
 
@@ -4766,6 +4775,30 @@ describe("Decisions entry", () => {
       });
       expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
       expect(saved.value).not.toHaveProperty("recoveryKit.coverage");
+
+      // Seen to change since this run first read them: they've moved past that verification.
+      keysRead(ownerKeys(3, [1, 2, 3]));
+      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, outOfDate: true } });
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
+    });
+
+    it("records an out-of-date kit again on the next read when recording it failed", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE } });
+      keysRead(ownerKeys(1, [1]));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("No space left on device");
+      });
+
+      keysRead(ownerKeys(1, [1, 2]));
+      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
+      // Still said, from the keys this run saw.
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
+
+      keysRead(ownerKeys(1, [1, 2]));
+      expect(saved.value).toMatchObject({ recoveryKit: { outOfDate: true } });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("recovery kit's standing"));
+      warn.mockRestore();
     });
 
     it("keeps an earlier verification when a later kit is refused", async () => {

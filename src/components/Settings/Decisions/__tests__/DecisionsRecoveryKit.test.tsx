@@ -139,13 +139,36 @@ describe("DecisionsRecoveryKit", () => {
   });
 
   it("calls a verification it can't compare with the keys here only last verified", () => {
-    renderKit({
-      status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT, recoveryKitCoverage: "unknown" },
-    });
-    const row = document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "";
-    expect(row).toContain("Recovery kit last verified");
-    expect(screen.queryByText("Recovery kit verified")).toBeNull();
-    expect(screen.queryByText("Recovery kit out of date")).toBeNull();
+    for (const recoveryKitCoverage of ["unknown", undefined] as const) {
+      renderKit({
+        status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT, recoveryKitCoverage },
+      });
+      const row = document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "";
+      expect(row, String(recoveryKitCoverage)).toContain("Recovery kit last verified");
+      expect(row).toContain(new Date(VERIFIED_AT).getFullYear().toString());
+      expect(row).toContain("Verify your saved kit again");
+      expect(screen.queryByText("Recovery kit verified")).toBeNull();
+      expect(screen.queryByText("Recovery kit out of date")).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("says a kit checked while a rotation changed the keys is already out of date", async () => {
+    const status: DecisionsStatus = {
+      ...UNFINISHED,
+      recoveryKitVerifiedAt: VERIFIED_AT,
+      recoveryKitCoverage: "out-of-date",
+    };
+    verifyRecoveryKit.mockResolvedValue({ result: "verified", status });
+    renderKit();
+
+    fireEvent.change(verifyField(), { target: { value: PASSPHRASE } });
+    await chooseKit('{"v":1}');
+    await submit(verifyField());
+
+    const outcome = document.querySelector("#decisions-recovery-kit-outcome")?.textContent ?? "";
+    expect(outcome).toContain("Kit checked, but the keys changed");
+    expect(outcome).not.toContain("with every key");
   });
 
   it("saves only with a passphrase of at least 12 characters, clearing it as the save starts", async () => {

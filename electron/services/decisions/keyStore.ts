@@ -414,9 +414,15 @@ export class SealedKeyStore implements KeyStore {
       const allowWeak = existing ? existing.protection === "basic" : this.weakConfirmed;
       const envelope = await seal(next, allowWeak);
       await ensureOwnerOnlyDir(dirname(this.filePath));
-      await resilientAtomicWriteFile(this.filePath, JSON.stringify(envelope), "utf-8", {
-        mode: OWNER_RW_FILE_MODE,
-      });
+      const text = JSON.stringify(envelope);
+      try {
+        await resilientAtomicWriteFile(this.filePath, text, "utf-8", { mode: OWNER_RW_FILE_MODE });
+      } catch (error) {
+        // A sync that failed after the rename still left these keys in place;
+        // sealing is randomised, so only this write reads back the same.
+        if (await this.holds(text)) this.heard(next);
+        throw error;
+      }
       this.heard(next);
     });
   }
@@ -461,6 +467,14 @@ export class SealedKeyStore implements KeyStore {
   async close(): Promise<void> {
     this.closed = true;
     await this.queue;
+  }
+
+  private async holds(text: string): Promise<boolean> {
+    try {
+      return (await readFile(this.filePath, "utf8")) === text;
+    } catch {
+      return false;
+    }
   }
 
   /** What an observer does with the keys never fails the read or write that found them. */

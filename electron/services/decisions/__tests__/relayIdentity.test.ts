@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import {
   LIMITS,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  base64UrlToBytes,
   bytesToBase64Url,
   parseAuthHeader,
 } from "@daintreehq/decisions-protocol";
@@ -192,11 +194,16 @@ function kitFor(identity: unknown, passphrase = PASSPHRASE): Promise<string> {
   ).then((file) => JSON.stringify(file));
 }
 
-/** The epoch numbers an identity holds, as a verified kit's are recorded. */
+/** The epochs an identity holds, as a verified kit's are recorded: by number and key digest. */
 function epochsOf(identity: StoredIdentity) {
   return {
     currentEpoch: identity.currentEpoch,
-    epochs: identity.epochs.map((entry) => entry.epoch).sort((a, b) => a - b),
+    epochs: identity.epochs
+      .map(({ epoch, raw }) => ({
+        epoch,
+        sha256: createHash("sha256").update(base64UrlToBytes(raw)).digest("hex"),
+      }))
+      .sort((a, b) => a.epoch - b.epoch),
   };
 }
 

@@ -227,6 +227,8 @@ import {
   makeRecoveryKit,
   reconciledKit,
   recordedIdentity,
+  sameOwnerKeys,
+  type ObservedOwnerKeys,
   type RecordedIdentity,
 } from "./recoveryKit.js";
 
@@ -797,22 +799,30 @@ function recordRevocation(relay: RelayBinding): void {
  * The owner's keys were read or written (#18063): a verified kit they've
  * moved past is recorded as out of date, so it stays so after a restart, and
  * Settings hears of it. Runs in the key store's turn, so a verification
- * recorded since is the one compared. The running lifetime reads no
+ * recorded since is the one compared, and for every read, so a recording
+ * that failed is made again by the next. The running lifetime reads no
  * `recoveryKit`, so it isn't told: that would reconnect one held back.
  */
-function ownerKeysSeen(from: DecisionsService): void {
-  if (shutDown || service !== from || from.getRole() !== "owner") return;
+function ownerKeysSeen(
+  from: DecisionsService,
+  keys: ObservedOwnerKeys | null,
+  before: ObservedOwnerKeys | null
+): void {
+  if (service !== from || from.getRole() !== "owner") return;
   const current = readDecisionsSettings(store);
-  const record = reconciledKit(current.recoveryKit, from.getOwnerKeys());
+  const record = reconciledKit(current.recoveryKit, keys, before);
+  let recorded = false;
   if (record !== current.recoveryKit) {
     try {
       writeDecisionsSettings(store, { ...current, recoveryKit: record });
+      recorded = true;
     } catch {
       // The status compares the keys it last saw all the same, and the next read records it.
       console.warn("[Decisions] The recovery kit's standing couldn't be recorded in settings");
     }
   }
-  publishStatus();
+  // Keys are read for every connection and answer; only a change is news.
+  if (recorded || !sameOwnerKeys(before, keys)) publishStatus();
 }
 
 /**
@@ -1110,7 +1120,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         presence: presenceDeps,
         agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
-        onOwnerKeys: () => ownerKeysSeen(next),
+        onOwnerKeys: (keys, before) => ownerKeysSeen(next, keys, before),
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         onQuestionPolicyChanged: publishHostRuntime,

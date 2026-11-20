@@ -12,7 +12,8 @@ describe("revoke and rotate copy (#16010)", () => {
     const revoked = describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel");
     const rotated = describeRotateResult({ result: "rotated", keyEpoch: 2 });
     for (const { message } of [revoked, rotated]) {
-      expect(message).toMatch(/recovery kit saved before now doesn't hold it/);
+      expect(message).toMatch(/recovery kit saved earlier doesn't cover the new key/);
+      expect(message).toMatch(/save a new one under Data, below, and verify it/);
     }
     // No new key is in force for these yet, or at all.
     for (const { message } of [

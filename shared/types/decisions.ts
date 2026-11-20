@@ -153,11 +153,21 @@ export const DECISIONS_MODEL_ADAPTERS = ["claude", "codex", "gemini"] as const;
 
 export type DecisionsModelAdapter = (typeof DECISIONS_MODEL_ADAPTERS)[number];
 
-/** The key epochs a recovery kit was proven to hold, by number (#18063). Never a key. */
+/**
+ * The key epochs a recovery kit was proven to hold (#18063), each by its
+ * number and the SHA-256 of its key, so a key staged again under the same
+ * number tells apart. Never a key.
+ */
 export interface DecisionsKitCoverage {
   currentEpoch: number;
-  /** Ascending, without repeats, and including `currentEpoch`. */
-  epochs: number[];
+  /** Ascending by epoch, without repeats, and including `currentEpoch`. */
+  epochs: DecisionsKitEpoch[];
+}
+
+export interface DecisionsKitEpoch {
+  epoch: number;
+  /** Lowercase hex SHA-256 of the epoch's key. */
+  sha256: string;
 }
 
 /** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */
@@ -173,7 +183,7 @@ export interface DecisionsRecoveryKitRecord {
    */
   coverage?: DecisionsKitCoverage;
   /**
-   * This computer's keys were seen holding an epoch the kit lacks, or at
+   * This computer's keys were seen holding a key the kit lacks, or at
    * another current epoch: a key rotation or revocation moved past the kit.
    */
   outOfDate?: true;

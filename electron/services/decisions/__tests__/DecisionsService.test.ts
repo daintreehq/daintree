@@ -276,7 +276,7 @@ describe("DecisionsService", () => {
     await expect(second.load()).rejects.toMatchObject({ kind: "closed" });
   });
 
-  it("keeps what its key store last read of an owner's keys, telling of each change (#18063)", async () => {
+  it("keeps what its key store last read of an owner's keys, telling of every read (#18063)", async () => {
     const onOwnerKeys = vi.fn();
     const service = new DecisionsService({
       openStore: async () => fakeStore(),
@@ -307,30 +307,44 @@ describe("DecisionsService", () => {
     const first = service.getKeyStore();
     expect(service.getOwnerKeys()).toBeNull();
 
+    const epochsOf = (keys: { coverage: { epochs: Array<{ epoch: number }> } } | null) =>
+      keys?.coverage.epochs.map(({ epoch }) => epoch) ?? null;
+
     heard(first, owner(1, [1]));
     heard(first, owner(1, [1]));
-    expect(onOwnerKeys).toHaveBeenCalledTimes(1);
-    expect(service.getOwnerKeys()).toEqual({
+    expect(service.getOwnerKeys()).toMatchObject({
       relayOrigin: "https://relay.example.com",
       installationId: "inst_12345678",
       deviceId: "dev_12345678",
-      coverage: { currentEpoch: 1, epochs: [1] },
+      coverage: { currentEpoch: 1 },
     });
     heard(first, owner(1, [1, 2]));
-    expect(onOwnerKeys).toHaveBeenCalledTimes(2);
-    expect(service.getOwnerKeys()?.coverage).toEqual({ currentEpoch: 1, epochs: [1, 2] });
+    expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2]);
+    // Every read is told, with what the store saw just before it.
+    expect(
+      onOwnerKeys.mock.calls.map(([keys, before]) => [epochsOf(keys), epochsOf(before)])
+    ).toEqual([
+      [[1], null],
+      [[1], [1]],
+      [[1, 2], [1]],
+    ]);
     heard(first, null);
     expect(service.getOwnerKeys()).toBeNull();
-    expect(onOwnerKeys).toHaveBeenCalledTimes(3);
 
-    // What a store let go of still finishes belongs to no lifetime.
+    // A store let go of still tells of the writes it finishes, but they aren't this lifetime's.
     await service.stop();
+    onOwnerKeys.mockClear();
     heard(first, owner(3, [1, 2, 3]));
-    expect(onOwnerKeys).toHaveBeenCalledTimes(3);
+    expect(onOwnerKeys.mock.calls.map(([keys, before]) => [epochsOf(keys), before])).toEqual([
+      [[1, 2, 3], null],
+    ]);
     await service.start(on());
-    service.getKeyStore();
-    expect(service.getOwnerKeys()).toBeNull();
+    const second = service.getKeyStore();
+    heard(second, owner(3, [1, 2, 3]));
+    heard(first, owner(4, [1, 2, 3, 4]));
+    expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2, 3]);
     await service.dispose();
+    expect(service.getOwnerKeys()).toBeNull();
   });
 
   it("waits for the key store to close before a stop settles", async () => {

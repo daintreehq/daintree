@@ -2,6 +2,7 @@ import {
   DECISIONS_MODEL_ADAPTERS,
   DECISIONS_SETUP_CHECK_STEPS,
   type DecisionsKitCoverage,
+  type DecisionsKitEpoch,
   type DecisionsModelAdapter,
   type DecisionsRecoveryKitRecord,
   type DecisionsSettings,
@@ -91,18 +92,23 @@ function isEpoch(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-/** A kit's epochs that read whole: ascending, without repeats, holding the current one. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/** A kit's epochs that read whole: each a number and key digest, ascending, holding the current one. */
 function kitCoverage(value: unknown): DecisionsKitCoverage | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const { currentEpoch, epochs } = value as Partial<Record<keyof DecisionsKitCoverage, unknown>>;
-  if (!isEpoch(currentEpoch) || !Array.isArray(epochs) || !epochs.every(isEpoch)) return null;
-  if (
-    !epochs.includes(currentEpoch) ||
-    epochs.some((epoch, i) => i > 0 && epoch <= epochs[i - 1])
-  ) {
-    return null;
+  if (!isEpoch(currentEpoch) || !Array.isArray(epochs)) return null;
+  const read: DecisionsKitEpoch[] = [];
+  // A dense copy, so a hole reads as damage rather than being skipped.
+  for (const entry of Array.from(epochs as unknown[])) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const { epoch, sha256 } = entry as Partial<Record<keyof DecisionsKitEpoch, unknown>>;
+    if (!isEpoch(epoch) || typeof sha256 !== "string" || !SHA256_HEX.test(sha256)) return null;
+    if (read.length > 0 && epoch <= read[read.length - 1]!.epoch) return null;
+    read.push({ epoch, sha256 });
   }
-  return { currentEpoch, epochs: [...epochs] };
+  return read.some((entry) => entry.epoch === currentEpoch) ? { currentEpoch, epochs: read } : null;
 }
 
 /**

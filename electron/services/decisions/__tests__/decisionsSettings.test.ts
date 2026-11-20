@@ -54,6 +54,11 @@ const verified: DecisionsSettings = {
   },
 };
 
+/** An epoch as a verified kit's coverage records it, with a stand-in key digest. */
+function epoch(number: number) {
+  return { epoch: number, sha256: number.toString(16).padStart(64, "0") };
+}
+
 function memoryStore(initial?: unknown) {
   let value = initial;
   const writes: unknown[] = [];
@@ -460,30 +465,41 @@ describe("sanitizeDecisionsSettings", () => {
   });
 
   it("keeps the epochs a verified kit held and that it went out of date (#18063)", () => {
-    const recoveryKit = {
-      ...verified.recoveryKit!,
-      coverage: { currentEpoch: 2, epochs: [1, 2] },
-      outOfDate: true as const,
-    };
-    expect(sanitizeDecisionsSettings({ ...verified, recoveryKit }).recoveryKit).toEqual(
-      recoveryKit
-    );
+    const coverage = { currentEpoch: 2, epochs: [epoch(1), epoch(2)] };
+    for (const recoveryKit of [
+      { ...verified.recoveryKit!, coverage },
+      { ...verified.recoveryKit!, coverage, outOfDate: true as const },
+      { ...verified.recoveryKit!, outOfDate: true as const },
+    ]) {
+      expect(sanitizeDecisionsSettings({ ...verified, recoveryKit }).recoveryKit).toEqual(
+        recoveryKit
+      );
+    }
     // One recorded before kits' epochs were is still a verification, only without them.
     expect(sanitizeDecisionsSettings(verified).recoveryKit).toEqual(verified.recoveryKit);
   });
 
   it("drops damaged epochs, or an out-of-date mark that isn't one, keeping the verification", () => {
     const recoveryKit = verified.recoveryKit!;
+    // A hole must read as damage, not be skipped.
+    const sparse: unknown[] = new Array(3);
+    sparse[0] = epoch(1);
+    sparse[2] = epoch(2);
     for (const coverage of [
       "1,2",
-      [1, 2],
-      { currentEpoch: 3, epochs: [1, 2] },
-      { currentEpoch: 2, epochs: [2, 1] },
-      { currentEpoch: 2, epochs: [1, 2, 2] },
-      { currentEpoch: 2, epochs: [1, 2.5, 2] },
-      { currentEpoch: -1, epochs: [-1] },
+      [epoch(1), epoch(2)],
+      { currentEpoch: 3, epochs: [epoch(1), epoch(2)] },
+      { currentEpoch: 2, epochs: [epoch(2), epoch(1)] },
+      { currentEpoch: 2, epochs: [epoch(1), epoch(2), epoch(2)] },
+      { currentEpoch: 2, epochs: [epoch(1), { epoch: 2.5, sha256: epoch(2).sha256 }, epoch(2)] },
+      { currentEpoch: 2, epochs: sparse },
+      { currentEpoch: 2, epochs: [1, 2] },
+      { currentEpoch: 2, epochs: [epoch(1), { epoch: 2, sha256: "ABC" }] },
+      { currentEpoch: 2, epochs: [epoch(1), { epoch: 2 }] },
+      { currentEpoch: 2 ** 53, epochs: [{ epoch: 2 ** 53, sha256: epoch(2).sha256 }] },
+      { currentEpoch: -1, epochs: [{ epoch: -1, sha256: epoch(1).sha256 }] },
       { currentEpoch: 2, epochs: "1,2" },
-      { epochs: [1, 2] },
+      { epochs: [epoch(1), epoch(2)] },
     ]) {
       const settings = sanitizeDecisionsSettings({
         ...verified,
@@ -491,6 +507,18 @@ describe("sanitizeDecisionsSettings", () => {
       });
       expect(settings.recoveryKit, JSON.stringify(coverage)).toEqual(recoveryKit);
     }
+    // Epoch zero is an epoch; damaged epochs leave a valid out-of-date mark standing.
+    const zero = { currentEpoch: 0, epochs: [epoch(0)] };
+    expect(
+      sanitizeDecisionsSettings({ ...verified, recoveryKit: { ...recoveryKit, coverage: zero } })
+        .recoveryKit
+    ).toEqual({ ...recoveryKit, coverage: zero });
+    expect(
+      sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, coverage: "damaged", outOfDate: true },
+      }).recoveryKit
+    ).toEqual({ ...recoveryKit, outOfDate: true });
     for (const outOfDate of ["true", 1, false, {}]) {
       const settings = sanitizeDecisionsSettings({
         ...verified,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DECISIONS_SETUP_CHECK_STEPS,
   type DecisionsSetupCheckObservations,
+  type DecisionsStatus,
   type DecisionsSetupCheckStep,
 } from "@shared/types/decisions";
 import { SETUP_STEP_LABEL, describeSetupStep, unfinishedReason } from "../setupCheckCopy";
@@ -185,14 +186,19 @@ describe("unfinishedReason", () => {
     ).toBeNull();
   });
 
-  it("leaves setup finished when the verified kit goes out of date (#18063)", () => {
+  it("judges setup the same when the verified kit goes out of date (#18063)", () => {
+    const stale: DecisionsStatus = {
+      state: "connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      recoveryKitCoverage: "out-of-date",
+    };
     expect(
-      unfinishedReason({
-        relayOrigin: ORIGIN,
-        recoveryKitVerifiedAt: 1,
-        recoveryKitCoverage: "out-of-date",
-        setupCheck: { checkedAt: 2, failedStep: null },
-      } as Parameters<typeof unfinishedReason>[0])
+      unfinishedReason({ ...stale, setupCheck: { checkedAt: 2, failedStep: null } })
     ).toBeNull();
+    expect(unfinishedReason(stale)).toBe("check");
+    expect(
+      unfinishedReason({ ...stale, setupCheck: { checkedAt: 2, failedStep: "socket" } })
+    ).toEqual({ failedStep: "socket" });
   });
 });

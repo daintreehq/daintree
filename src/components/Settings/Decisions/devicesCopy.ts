@@ -99,11 +99,11 @@ export function formatCountdown(msLeft: number): string {
 }
 
 /**
- * A new key is in force (#18063): a kit saved before holds only the old
- * ones, so it can't read what the relay encrypts from now on.
+ * A new key is in force (#18063): a kit saved before doesn't cover it, so it
+ * can't read what the relay encrypts from now on.
  */
 const NEW_KIT_NEEDED =
-  "A recovery kit saved before now doesn't hold it: save a new one under Data, below, and verify it.";
+  "A recovery kit saved earlier doesn't cover the new key: save a new one under Data, below, and verify it.";
 
 /** A reason as a sentence: some arrive without their closing period. */
 function asSentence(text: string): string {
