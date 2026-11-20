@@ -118,7 +118,13 @@ describe("questions over without an answer (#18021)", () => {
 
   it("never asks a person about an expiry's or a never-published notice, however it stopped", () => {
     for (const stall of STALLS) {
-      over(row(1, { ...stall, local_status: "expired", answers_json: serializeAnswers([entry(EXPIRY)]) }));
+      over(
+        row(1, {
+          ...stall,
+          local_status: "expired",
+          answers_json: serializeAnswers([entry(EXPIRY)]),
+        })
+      );
       over(
         row(2, {
           ...stall,
@@ -214,9 +220,9 @@ describe("questions over without an answer (#18021)", () => {
     });
     expect(answerNeedsAttention(typed, new Map())).toBe(true);
     // A deadline that closed no round of the question's settles nothing.
-    expect(answerNeedsAttention(row(5, { ...expired, local_status: "publish-failed" }), new Map())).toBe(
-      true
-    );
+    expect(
+      answerNeedsAttention(row(5, { ...expired, local_status: "publish-failed" }), new Map())
+    ).toBe(true);
   });
 
   it("keeps the notice with the person's follow-up it holds back, held or waiting, so they go back together", () => {

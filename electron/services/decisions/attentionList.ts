@@ -149,10 +149,11 @@ export function closedUnanswered(row: QuestionRow): boolean {
   if (row.local_status !== "expired" && row.local_status !== "publish-failed") return false;
   if (row.error_code !== null && ANSWER_CODES.has(row.error_code)) return false;
   const entries = parseAnswers(row.answers_json);
-  const notice = entries.find((entry) => roundNotice(entry, row) && !entry.delivered);
-  if (notice === undefined) return false;
+  if (!entries.some((entry) => roundNotice(entry, row) && !entry.delivered)) return false;
   // As the delivery engine's own test: a notice of a round since replaced is never typed.
-  const live = pendingEntries(row).filter((entry) => !isClosure(entry) || closureInForce(entry, row));
+  const live = pendingEntries(row).filter(
+    (entry) => !isClosure(entry) || closureInForce(entry, row)
+  );
   if (live.some((entry) => !roundNotice(entry, row))) return false;
   if (
     row.delivery_status === "delivery-uncertain" &&
