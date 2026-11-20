@@ -574,6 +574,7 @@ describe("AgentStateService", () => {
       const { service, terminal } = starting();
       service.updateAgentState(terminal, { type: "busy" });
       settleAtInputRow(service, terminal, "question");
+      expect(terminal.waitingReason).toBe("question");
       expect(terminal.promptUnseen).toBeUndefined();
     });
 
@@ -629,11 +630,79 @@ describe("AgentStateService", () => {
         trigger: "timeout",
         waitingReason: "prompt",
         promptDrawnAt: Date.now() + 1_000,
+        inputRowEmpty: true,
       });
 
       expect(terminal.waitingReason).toBe("prompt");
       expect(terminal.promptUnseen).toBeUndefined();
       expect(gateAtEvent.at(-1)).toEqual({ kind: "ready" });
+    });
+
+    it("never moves the settle over a draft for an input row that wasn't empty", () => {
+      const { service, terminal } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      service.updateAgentState(terminal, { type: "prompt" }, "title", 0.98);
+      const titleAt = terminal.lastStateChange;
+      terminal.lastTypedInputAt = titleAt! + 10;
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "timeout",
+        waitingReason: "prompt",
+        promptDrawnAt: titleAt! + 20,
+      });
+
+      expect(terminal.promptUnseen).toBe(true);
+      expect(terminal.lastStateChange).toBe(titleAt);
+      expect(evaluateWakeGate(terminal, DECISION_GATE).kind).not.toBe("ready");
+    });
+
+    it("takes a first sight read just before a title report landed, with nothing typed since", () => {
+      const { service, terminal, gateAtEvent } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      const readAt = Date.now() - 50;
+      // The title report gets in between the screen read and its delivery.
+      service.updateAgentState(terminal, { type: "prompt" }, "title", 0.98);
+      const titleAt = terminal.lastStateChange!;
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "timeout",
+        waitingReason: "prompt",
+        promptDrawnAt: readAt,
+        inputRowEmpty: true,
+      });
+
+      expect(terminal.promptUnseen).toBeUndefined();
+      expect(terminal.lastStateChange).toBe(titleAt + 1);
+      expect(gateAtEvent.at(-1)).toEqual({ kind: "ready" });
+    });
+
+    it("refuses that first sight once anything was typed after it was read", () => {
+      const { service, terminal } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      const readAt = Date.now() - 50;
+      terminal.lastTypedInputAt = readAt + 10;
+      service.updateAgentState(terminal, { type: "prompt" }, "title", 0.98);
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "timeout",
+        waitingReason: "prompt",
+        promptDrawnAt: readAt,
+        inputRowEmpty: true,
+      });
+
+      expect(terminal.promptUnseen).toBe(true);
+    });
+
+    it("refuses a first sight read before a later settle that disagreed with it", () => {
+      const { service, terminal } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      const readAt = Date.now() - 50;
+      // A selector drawn after the read settled as an approval.
+      service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, "approval");
+
+      expect(service.updateWaitingReason(terminal, "prompt", readAt, readAt)).toBe(false);
+      expect(terminal.waitingReason).toBe("approval");
+      expect(terminal.promptUnseen).toBe(true);
     });
 
     it("leaves a run already seen at its prompt alone on a same-state settle", () => {
@@ -644,9 +713,11 @@ describe("AgentStateService", () => {
       const settledAt = terminal.lastStateChange;
       service.handleActivityState(terminal, "idle", {
         trigger: "timeout",
-        waitingReason: "prompt",
+        waitingReason: "question",
         promptDrawnAt: Date.now() + 5_000,
+        inputRowEmpty: true,
       });
+      expect(terminal.waitingReason).toBe("prompt");
       expect(terminal.lastStateChange).toBe(settledAt);
     });
 
@@ -683,9 +754,11 @@ describe("AgentStateService", () => {
     it("awaits the prompt again for a run that respawns in the same PTY", () => {
       const service = new AgentStateService();
       const terminal = createTerminal({ agentState: "exited" });
+      const before = Date.now();
       service.updateAgentState(terminal, { type: "respawn" });
       expect(terminal.promptUnseen).toBe(true);
-      expect(terminal.promptUnseenAt).toBeGreaterThan(0);
+      expect(terminal.promptUnseenAt).toBeGreaterThanOrEqual(before);
+      expect(terminal.promptUnseenAt).toBeLessThanOrEqual(Date.now());
     });
   });
 

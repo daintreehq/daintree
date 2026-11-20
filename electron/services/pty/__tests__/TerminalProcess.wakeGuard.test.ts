@@ -1542,10 +1542,9 @@ describe("TerminalProcess guarded lines before a run is seen at its prompt (#180
     vi.spyOn(analysisOf(terminal), "hasMonitor").mockReturnValue(true);
     vi.spyOn(analysisOf(terminal), "reconfigureMonitor").mockImplementation(() => {});
 
-    // The worker reads Claude settled at its input row and posts it...
+    // The worker reads Claude settled at its input row and posts it in the
+    // same millisecond as Codex takes over the same PTY, under the same spawnedAt.
     const readForClaude = Date.now();
-    await vi.advanceTimersByTimeAsync(50);
-    // ...while Codex takes over the same PTY, under the same spawnedAt.
     terminal.handleAgentDetection(
       { detectionState: "agent", detected: true, agentType: "codex" },
       terminal.getInfo().spawnedAt
@@ -1611,9 +1610,26 @@ describe("TerminalProcess guarded lines before a run is seen at its prompt (#180
     });
   });
 
+  it("marks a /restart padded with spaces as a new run, as its Enter is written", async () => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    let enterAt: number | undefined;
+    ptyWriteMock.mockImplementation((data) => {
+      if (data === "\r") enterAt = Date.now();
+    });
+
+    terminal.submit("  /restart ", "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(enterAt).toBeDefined();
+    expect(info(terminal).promptUnseen).toBe(true);
+    expect(info(terminal).promptUnseenAt).toBe(enterAt);
+  });
+
   it.each([
     ["sent to another agent", "codex", "/restart"],
     ["carrying more than the command", "claude", "/restart now"],
+    ["inside a longer line", "claude", "please /restart"],
   ])("leaves the run seen at its prompt for a /restart %s", async (_label, agentId, text) => {
     const terminal = createObserved();
     settleAtPrompt(terminal, Date.now() - 5_000);

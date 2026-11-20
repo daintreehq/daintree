@@ -37,9 +37,9 @@ describe("readInputRow (#18018)", () => {
       "empty",
     ],
     [
-      "Claude Code's input row holding a suggestion, under a status line that opens with a glyph",
+      "Claude Code's input row holding a suggestion, under its status line",
       "claude",
-      [RULE, "❯ run the tests", RULE, "❯ ~/project main"],
+      [RULE, "❯ run the tests", RULE, "  ~/project · main · opus"],
       "drawn",
     ],
     [
@@ -56,13 +56,13 @@ describe("readInputRow (#18018)", () => {
         "│ >   Type your message or @path/to/file   │",
         "╰──────────────────────────────────────────╯",
       ],
-      "drawn",
+      "empty",
     ],
     [
-      "OpenCode's input row and its hint",
+      "OpenCode's input row opening on its own hint",
       "opencode",
       ['┃  Ask anything... "Fix a TODO in the codebase"', "┃", "  enter send"],
-      "drawn",
+      "empty",
     ],
     [
       "Kimi Code's boxed input row, matched with its edge",
@@ -71,7 +71,38 @@ describe("readInputRow (#18018)", () => {
       "empty",
     ],
     ["Cursor Agent's bare arrow", "cursor", ["  Cursor Agent", "", "→ "], "empty"],
-    ["an agent with no declared prompt, drawing anything", "grok", ["READY", "❯"], "drawn"],
+    [
+      "Cursor Agent's follow-up placeholder as the last row",
+      "cursor",
+      ["Welcome to Cursor Agent", "→ Add a follow-up", ""],
+      "empty",
+    ],
+    [
+      "Open Interpreter's inherited placeholder",
+      "interpreter",
+      ["", "› Ask Codex to do anything", "", "  ? for shortcuts"],
+      "empty",
+    ],
+    [
+      "Codex's placeholder drawn in colour",
+      "codex",
+      ["", "\x1b[2m› Ask Codex to do anything\x1b[0m", "", "  ⏎ send"],
+      "empty",
+    ],
+    [
+      "Codex's draft under its footer hint",
+      "codex",
+      ["› fix the tests", "", "  100% context left"],
+      "drawn",
+    ],
+    [
+      "a draft running on under an empty first line",
+      "codex",
+      ["", "›", "  keep this draft", "", "  100% context left"],
+      "drawn",
+    ],
+    ["an agent with no declared prompt, at a bare glyph", "grok", ["READY", "❯"], "empty"],
+    ["an agent with no declared prompt, its glyph alone", "grok", ["❯"], "empty"],
   ])("reads %s", (_label, agentId, screen, expected) => {
     expect(read(agentId, screen)).toBe(expected);
   });
@@ -106,7 +137,20 @@ describe("readInputRow (#18018)", () => {
         " Enter to confirm · Esc to exit",
       ],
     ],
+    [
+      "a frame the last agent left, with the line that started this run under it",
+      "claude",
+      [RULE, "❯ ", RULE, "❯ claude", ""],
+    ],
+    [
+      "a wrapped shell line carrying the agent's own hint",
+      "codex",
+      ['❯ codex "explain context left', 'in the status bar"', ""],
+    ],
     ["a blank screen, for an agent with no declared prompt", "grok", ["", ""]],
+    ["its shell line under a plain prompt", "grok", ["~/repo $ grok", ""]],
+    ["its shell line under a glyph", "grok", ["$ grok", ""]],
+    ["its startup text", "grok", ["Starting up…"]],
   ])("finds no input row on %s", (_label, agentId, screen) => {
     expect(read(agentId, screen)).toBeNull();
   });

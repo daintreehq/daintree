@@ -10,7 +10,10 @@ const monitors: ActivityMonitor[] = [];
 
 /** A freshly launched agent's monitor, from its boot, over whatever `show` puts on screen. */
 function launch(agentId: string, initial: string[]) {
-  const onStateChange = vi.fn();
+  const emittedAt: number[] = [];
+  const onStateChange = vi.fn(() => {
+    emittedAt.push(Date.now());
+  });
   let visible = initial;
   const monitor = new ActivityMonitor(
     "t-launch",
@@ -28,6 +31,8 @@ function launch(agentId: string, initial: string[]) {
   return {
     monitor,
     idleSettles,
+    /** When the last report was sent, by the fake clock. */
+    lastEmittedAt: () => emittedAt.at(-1),
     show: (lines: string[]) => {
       visible = lines;
     },
@@ -79,7 +84,7 @@ describe("ActivityMonitor prompt evidence on a settle (#18018)", () => {
     expect(pane.monitor.getState()).toBe("idle");
     const settles = pane.idleSettles();
     expect(settles).toHaveLength(2);
-    expect(settles[1]).toMatchObject({ waitingReason: "prompt" });
+    expect(settles[1]).toMatchObject({ waitingReason: "prompt", inputRowEmpty: true });
     expect(settles[1]!.promptDrawnAt).toBe(settles[1]!.rereadAt);
     expect(settles[1]!.promptDrawnAt).toBeGreaterThan(settles[0]!.rereadAt ?? 10_000);
 
@@ -93,9 +98,26 @@ describe("ActivityMonitor prompt evidence on a settle (#18018)", () => {
     vi.advanceTimersByTime(25_000);
 
     const [settle] = pane.idleSettles();
-    expect(settle).toMatchObject({ waitingReason: "prompt" });
-    expect(settle!.promptDrawnAt).toBeGreaterThan(10_000);
-    expect(settle!.promptDrawnAt).toBeLessThanOrEqual(Date.now());
+    expect(settle).toMatchObject({ waitingReason: "prompt", inputRowEmpty: true });
+    expect(settle!.promptDrawnAt).toBe(pane.lastEmittedAt());
+  });
+
+  it("sends a settle on a draft as drawn, never as an empty row", () => {
+    const pane = launch("claude", [RULE, "❯ fix the tests", RULE, "  ? for shortcuts"]);
+    vi.advanceTimersByTime(25_000);
+
+    const [settle] = pane.idleSettles();
+    expect(settle!.promptDrawnAt).toBe(pane.lastEmittedAt());
+    expect(settle!.inputRowEmpty).toBeUndefined();
+  });
+
+  it("sends no first sight for a draft redrawn without going busy", () => {
+    const pane = launch("claude", ["❯ claude --resume 0b1c", ""]);
+    vi.advanceTimersByTime(25_000);
+
+    pane.redraw([RULE, "❯ my draft", RULE, "  ? for shortcuts"]);
+
+    expect(pane.idleSettles()).toHaveLength(1);
   });
 
   it("sends another agent's first sight after it takes over, though the reason is the same", () => {
@@ -108,7 +130,17 @@ describe("ActivityMonitor prompt evidence on a settle (#18018)", () => {
 
     const settles = pane.idleSettles();
     expect(settles).toHaveLength(2);
-    expect(settles[1]).toMatchObject({ waitingReason: "prompt" });
-    expect(settles[1]!.promptDrawnAt).toBeDefined();
+    expect(settles[1]).toMatchObject({ waitingReason: "prompt", inputRowEmpty: true });
+    expect(settles[1]!.promptDrawnAt).toBe(settles[1]!.rereadAt);
+  });
+
+  it("never reads the last agent's frame as the new one's, with its shell line under it", () => {
+    const pane = launch("claude", CLAUDE_PROMPT);
+    vi.advanceTimersByTime(25_000);
+
+    pane.monitor.reconfigure("codex");
+    pane.redraw([...CLAUDE_PROMPT, "❯ codex", ""]);
+
+    expect(pane.idleSettles()).toHaveLength(1);
   });
 });

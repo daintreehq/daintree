@@ -533,9 +533,11 @@ export class AgentStateService {
    * an `approval`, sent with a dialog in that row's place (#16209), at which
    * no send is admitted. Refused unless the
    * agent is waiting, the reason differs, and nothing has settled it since.
-   * The one same-reason update is a run's first sight of its own input row
-   * (#18018), read at `promptDrawnAt`: the settle before it gave its reason
-   * off a screen the CLI hadn't drawn yet.
+   * The one same-reason update is a run's first sight of its own empty input
+   * row (#18018), read at `promptDrawnAt`: the settle before it gave its
+   * reason off a screen the CLI hadn't drawn yet. One read before a later
+   * settle that agreed with it, or carried no reason, landed is still that
+   * sight, unless anything was typed since it was read.
    */
   updateWaitingReason(
     terminal: TerminalInfo,
@@ -544,11 +546,17 @@ export class AgentStateService {
     promptDrawnAt?: number
   ): boolean {
     if (terminal.agentState !== "waiting") return false;
-    if (terminal.waitingReason === waitingReason && !seesPromptFirst(terminal, promptDrawnAt)) {
-      return false;
-    }
+    const firstSight = seesPromptFirst(terminal, waitingReason, promptDrawnAt);
+    if (terminal.waitingReason === waitingReason && !firstSight) return false;
     if (terminal.lastStateChange !== undefined && observedAt <= terminal.lastStateChange) {
-      return false;
+      const agreed =
+        terminal.waitingReason === undefined || terminal.waitingReason === waitingReason;
+      const typedSince =
+        terminal.lastTypedInputAt !== undefined &&
+        promptDrawnAt !== undefined &&
+        terminal.lastTypedInputAt >= promptDrawnAt;
+      if (!firstSight || !agreed || typedSince) return false;
+      observedAt = terminal.lastStateChange + 1;
     }
 
     const confidence = this.normalizeConfidence(0.9);
@@ -768,6 +776,7 @@ export class AgentStateService {
       temperature?: AgentActivityObservationResult;
       rereadAt?: number;
       promptDrawnAt?: number;
+      inputRowEmpty?: true;
     }
   ): void {
     // The ActivityMonitor emits a synthetic `idle` observation with
@@ -880,13 +889,15 @@ export class AgentStateService {
     }
 
     // A record already waiting drops the settle as a no-op (a title report can
-    // get there first), so a run's first sight of its own input row goes the
-    // reason-update way instead, or it would wait for a settle that may never
-    // come (#18018).
+    // get there first), so a run's first sight of its own empty input row goes
+    // the reason-update way instead, or it would wait for a settle that may
+    // never come (#18018). Only an empty one: the update moves the settle the
+    // send gate measures typing from.
     if (
       !changed &&
       activity === "idle" &&
       metadata?.waitingReason !== undefined &&
+      metadata.inputRowEmpty === true &&
       promptDrawnAt !== undefined &&
       terminal.promptUnseen === true
     ) {

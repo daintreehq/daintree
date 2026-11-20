@@ -217,6 +217,11 @@ export interface ActivityStateMetadata {
    * of its prompt from a settle on a screen its CLI hasn't drawn yet.
    */
   promptDrawnAt?: number;
+  /**
+   * That input row held nothing typed, or only its placeholder: a reading
+   * the send gate may measure typing from, as from a settle at the prompt.
+   */
+  inputRowEmpty?: true;
 }
 
 /** More rows than any pane has: a viewport read asks for this many and gets them all. */
@@ -1071,12 +1076,13 @@ export class ActivityMonitor {
     lines: string[],
     isPromptDetected: boolean,
     now: number
-  ): { waitingReason: WaitingReason; promptDrawnAt?: number } {
+  ): { waitingReason: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } {
     const { reason, promptDrawn } = this.readWaitingScreen(lines, isPromptDetected);
     this.idlePromptDrawn = promptDrawn !== null;
-    return promptDrawn !== null
-      ? { waitingReason: reason, promptDrawnAt: now }
-      : { waitingReason: reason };
+    if (promptDrawn === null) return { waitingReason: reason };
+    return promptDrawn === "empty"
+      ? { waitingReason: reason, promptDrawnAt: now, inputRowEmpty: true }
+      : { waitingReason: reason, promptDrawnAt: now };
   }
 
   // The agent's empty input row bounds the error window when it is in view,
@@ -1113,7 +1119,9 @@ export class ActivityMonitor {
     let drawnComposer = false;
     let promptDrawn: "empty" | "drawn" | null = null;
     if ((reason === "prompt" || reason === "question") && composerRow !== undefined) {
-      promptDrawn = "empty";
+      // Read again by the agent's own shape: a frame with the line that
+      // started the run drawn under it is the last agent's (#18018).
+      promptDrawn = readInputRow(read, inputRowShapeFor(this.agentId));
     } else if (
       (reason === "prompt" || reason === "question") &&
       this.getVisibleLines !== undefined
@@ -1193,11 +1201,12 @@ export class ActivityMonitor {
     }
     this.idleWaitingReason = reason;
     this.idlePromptDrawn = promptDrawn !== null;
+    // A re-read moves the gate's settle to `now`, so only an empty row is sent as one.
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "pattern",
       waitingReason: reason,
       rereadAt: now,
-      ...(promptDrawn !== null ? { promptDrawnAt: now } : {}),
+      ...(promptDrawn === "empty" ? { promptDrawnAt: now, inputRowEmpty: true as const } : {}),
     });
   }
 
@@ -2135,7 +2144,8 @@ export class ActivityMonitor {
     this.state = "idle";
     this.idleSince = now;
     this.patternBuf.clear();
-    let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number } = {};
+    let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } =
+      {};
     this.idlePromptDrawn = false;
     if (this.getVisibleLines) {
       const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);

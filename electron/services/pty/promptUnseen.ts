@@ -1,3 +1,4 @@
+import type { WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalInfo } from "./types.js";
 
 /**
@@ -20,22 +21,22 @@ export function restartsRunInPlace(agentId: string | undefined, body: string): b
 }
 
 /**
- * Whether this reading is the run's first sight of its prompt: the record
- * waits at its prompt or a question, and the settle's screen showed the
- * agent's own input row (`promptDrawnAt`, when that screen was read) after the
- * run began (#18018). A CLI that has drawn nothing yet, or a shell line with a
- * prompt glyph, settles as a prompt too, and a reading made for the previous
- * run can arrive after the swap.
+ * Whether a reading at `waitingReason` is the run's first sight of its
+ * prompt: a prompt or question read off a screen that showed the agent's own
+ * input row (`promptDrawnAt`, when that screen was read) after the run began
+ * (#18018). A CLI that has drawn nothing yet, or a shell line with a prompt
+ * glyph, settles as a prompt too, and a reading made for the previous run can
+ * arrive after the swap.
  */
 export function seesPromptFirst(
   terminal: TerminalInfo,
+  waitingReason: WaitingReason | undefined,
   promptDrawnAt: number | undefined
 ): boolean {
   return (
     terminal.promptUnseen === true &&
     promptDrawnAt !== undefined &&
-    terminal.agentState === "waiting" &&
-    (terminal.waitingReason === "prompt" || terminal.waitingReason === "question") &&
+    (waitingReason === "prompt" || waitingReason === "question") &&
     (terminal.promptUnseenAt === undefined || promptDrawnAt > terminal.promptUnseenAt)
   );
 }
@@ -47,7 +48,8 @@ export function seesPromptFirst(
  * both.
  */
 export function notePromptSeen(terminal: TerminalInfo, promptDrawnAt: number | undefined): void {
-  if (!seesPromptFirst(terminal, promptDrawnAt)) return;
+  if (terminal.agentState !== "waiting") return;
+  if (!seesPromptFirst(terminal, terminal.waitingReason, promptDrawnAt)) return;
   delete terminal.promptUnseen;
   delete terminal.promptUnseenAt;
 }
