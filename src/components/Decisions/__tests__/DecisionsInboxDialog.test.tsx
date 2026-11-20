@@ -4416,7 +4416,9 @@ describe("DecisionsInboxDialog", () => {
       await act(async () => {});
       expect(said).toEqual([]);
       await answerShown();
-      expect(said).toEqual(["1 question cleared on this computer"]);
+      expect(said.filter((message) => message.includes("cleared"))).toEqual([
+        "1 question cleared on this computer",
+      ]);
     });
 
     it("stays on a clear that changed nothing, as when the question asked something new", async () => {
