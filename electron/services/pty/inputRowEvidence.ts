@@ -12,22 +12,31 @@ export interface InputRowShape {
   placeholderPatterns: readonly RegExp[];
   /** The agent declares its prompt; otherwise only the bare glyphs any prompt opens with are known. */
   declared: boolean;
+  /** A shell prompt with the agent's own command typed after it: the line that started the run. */
+  launchLine: RegExp | null;
 }
 
-const UNDECLARED_SHAPE: InputRowShape = {
-  promptPatterns: DEFAULT_PROMPT_PATTERNS,
-  hintPatterns: [],
-  placeholderPatterns: [],
-  declared: false,
-};
+function launchLineFor(command: string | undefined): RegExp | null {
+  if (command === undefined || command.trim() === "") return null;
+  const escaped = command.trim().replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`[$%#❯›>]\\s+(?:.*[\\s/=])?${escaped}(?:\\s|$)`);
+}
 
 /** The agent's input row as its registry entry declares it. */
 export function inputRowShapeFor(agentId: string | undefined): InputRowShape {
-  if (agentId === undefined) return UNDECLARED_SHAPE;
-  const config = getEffectiveAgentConfig(agentId);
+  const config = agentId === undefined ? undefined : getEffectiveAgentConfig(agentId);
   const detection = config?.detection;
+  const launchLine = launchLineFor(config?.command);
   const promptPatterns = buildPromptPatterns(detection, agentId);
-  if (promptPatterns === undefined) return UNDECLARED_SHAPE;
+  if (promptPatterns === undefined) {
+    return {
+      promptPatterns: DEFAULT_PROMPT_PATTERNS,
+      hintPatterns: [],
+      placeholderPatterns: [],
+      declared: false,
+      launchLine,
+    };
+  }
   return {
     promptPatterns,
     hintPatterns: compilePatterns(detection?.promptHintPatterns ?? [], agentId, "prompt hint"),
@@ -37,13 +46,12 @@ export function inputRowShapeFor(agentId: string | undefined): InputRowShape {
       "input placeholder"
     ),
     declared: true,
+    launchLine,
   };
 }
 
 const LEFT_BOX_EDGE = /^\s*[│┃]/;
 const RIGHT_BOX_EDGE = /[│┃]\s*$/;
-/** A shell prompt's glyph with a command typed after it, wherever on the row the prompt ends. */
-const SHELL_LINE = /(?:^|\s)[$%#❯›>]\s+\S/;
 
 interface PromptRow {
   /** The row from where its prompt starts. */
@@ -92,10 +100,11 @@ function isBlankRow(row: string | undefined): boolean {
  * between the agent's rules, or with the agent's own hint on its boxed row or
  * in the chrome under it; null when nothing on screen is the agent's. A CLI
  * that has drawn nothing yet leaves a blank screen, or the shell line that
- * started it under everything else, so neither is evidence, and nothing above
- * that line is read: a bare shell prompt in the history, or a frame the last
- * agent left. An agent that declares no prompt is taken at anything else it
- * draws, as a prompt it can't be read for.
+ * started it (its own command after a prompt glyph) under everything else, so
+ * neither is evidence, and nothing above that line is read: a bare shell
+ * prompt in the history, or a frame the last agent left. Without a frame,
+ * only the lowest prompt-like row is read. An agent that declares no prompt
+ * is taken at anything else it draws, as a prompt it can't be read for.
  */
 export function readInputRow(
   lines: readonly string[],
@@ -129,17 +138,16 @@ export function readInputRow(
   }
 
   for (let row = end - 1; row >= 0; row--) {
-    if (framed !== null && row === bottom - 1) return framed;
     const text = clean[row]!;
-    const prompt = promptRow(text, shape.promptPatterns);
-    if (prompt === undefined) {
-      if (SHELL_LINE.test(text.replace(LEFT_BOX_EDGE, ""))) return null;
+    if (shape.launchLine?.test(text)) return null;
+    // Under its frame lies its own footer, a status line among it.
+    if (framed !== null) {
+      if (row === bottom - 1) return framed;
       continue;
     }
-    if (holdsNothing(prompt)) {
-      const below = clean[row + 1];
-      return isBlankRow(below) || COMPOSER_FRAME_ROW.test(below!) ? "empty" : "drawn";
-    }
+    const prompt = promptRow(text, shape.promptPatterns);
+    if (prompt === undefined) continue;
+    if (holdsNothing(prompt)) return isBlankRow(clean[row + 1]) ? "empty" : "drawn";
     if (!shape.declared) return null;
     // Its own hint on its boxed row, or in its chrome past a blank row under
     // it: a launch line that wraps runs straight on.

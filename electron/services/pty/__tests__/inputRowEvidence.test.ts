@@ -43,6 +43,24 @@ describe("readInputRow (#18018)", () => {
       "drawn",
     ],
     [
+      "Claude Code's empty input row under a status line that opens with a glyph",
+      "claude",
+      [RULE, "❯ ", RULE, "❯ ~/project main"],
+      "empty",
+    ],
+    [
+      "Antigravity's framed input row over a footer its prompt patterns match",
+      "antigravity",
+      [RULE, ">", RULE, "? for shortcuts                       Gemini 3.7 Flash · high"],
+      "empty",
+    ],
+    [
+      "Codex's placeholder over a footer naming a directory with a # in it",
+      "codex",
+      ["", "› Ask Codex to do anything", "", "  ~/Projects/Research # Notes · main"],
+      "empty",
+    ],
+    [
       "Codex's placeholder in its band",
       "codex",
       ["", "› Ask Codex to do anything", "", "  ⏎ send   ⌃J newline"],
@@ -163,6 +181,11 @@ describe("readInputRow (#18018)", () => {
       ['❯ codex "explain the', 'context left thing"', ""],
     ],
     ["a bare glyph in the history above a shell line", "claude", ["❯", "~/repo $ claude", ""]],
+    [
+      "a frame the last agent left, with this run's Bash launch line under it",
+      "codex",
+      [RULE, "❯ ", RULE, "  ? for shortcuts", "user@host:~/repo$ codex", ""],
+    ],
   ])("finds no input row on %s", (_label, agentId, screen) => {
     expect(read(agentId, screen)).toBeNull();
   });
@@ -175,6 +198,11 @@ describe("readInputRow (#18018)", () => {
       ["› context left is wrong", "", "  ⏎ send"],
     ],
     ["a Gemini draft", "gemini", ["╭────╮", "│ > type your message here please │", "╰────╯"]],
+    [
+      "a Codex draft whose second line is a rule",
+      "codex",
+      ["›", "  ──────", "", "  ? for shortcuts"],
+    ],
   ])("never reads %s as an empty input row", (_label, agentId, screen) => {
     expect(read(agentId, screen)).not.toBe("empty");
   });
