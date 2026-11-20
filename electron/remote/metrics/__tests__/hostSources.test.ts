@@ -109,6 +109,7 @@ vi.mock("../../../services/projectAgentCounts.js", async (importOriginal) => {
 import { createHostSampleSources, observeAgents, openProjects } from "../hostSources.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
+import { setDecisionAttention } from "../../../services/runAnswerAttentionSource.js";
 import {
   publishHelpSessionService,
   resetHelpSessionRuntimeForTests,
@@ -144,6 +145,7 @@ beforeEach(() => {
   runs.handBacks = null;
   runs.attention = null;
   setCanopyRefinementSource(null);
+  setDecisionAttention(new Map());
   workspace.client = null;
   pty.client = {
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
@@ -217,6 +219,49 @@ describe("observeAgents", () => {
       waiting: 8,
       idle: 1,
       attention: { waiting: 2, blocked: 1, idle: 6 },
+    });
+  });
+
+  it("counts an agent asking through Decisions as asking, at work or stopped, and leaves its idle siblings settled", async () => {
+    const run = (id: string, over: object) => ({
+      id,
+      projectId: "p1",
+      kind: "terminal",
+      detectedAgentId: "claude",
+      spawnedAt: 1,
+      ...over,
+    });
+    pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: [
+        run("asking-at-work", { agentState: "working" }),
+        run("asking-directing", { agentState: "directing" }),
+        run("asked-and-stopped", { agentState: "completed" }),
+        run("parked-at-work", { agentState: "working" }),
+        run("idle", { agentState: "idle" }),
+        run("prompt", { agentState: "waiting", waitingReason: "prompt" }),
+      ],
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
+    runs.attention = {
+      getActiveSnoozes: () => new Map(),
+      getAll: () => new Map([["parked-at-work", {}]]),
+    };
+    setDecisionAttention(
+      new Map(
+        ["asking-at-work", "asking-directing", "asked-and-stopped", "parked-at-work"].map((id) => [
+          id,
+          { answers: 0, questions: 1 },
+        ])
+      )
+    );
+
+    await expect(observeAgents()).resolves.toEqual({
+      working: 2,
+      waiting: 1,
+      idle: 2,
+      attention: { waiting: 3, blocked: 0, idle: 2 },
     });
   });
 

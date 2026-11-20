@@ -14,6 +14,7 @@ import {
   type CountableTerminal,
 } from "../projectAgentCounts.js";
 import type {
+  FleetRunRow,
   RunCanopyRefinement,
   RunHandBackRecord,
   RunWaitRecord,
@@ -22,6 +23,7 @@ import {
   bandForRun,
   FLEET_BANDS,
   isAgentReportedNeed,
+  isDecisionsNeed,
   type FleetBand,
 } from "../../../shared/utils/fleetBands.js";
 import type { HandbackReport } from "../../../shared/types/handback.js";
@@ -1266,6 +1268,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     canopy?: RunCanopyRefinement;
     shelf: Shelf;
     report?: HandbackReport;
+    decisions?: Pick<FleetRunRow, "answerAttention" | "questionAttention">;
   }
 
   const states: Array<Pick<CountableTerminal, "agentState" | "waitingReason">> = [
@@ -1302,6 +1305,12 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
   const shelves: Shelf[] = ["none", "parked", "snoozed"];
   // The marker the agent last printed: none, done, or needs-you (#16190).
   const reports: Array<HandbackReport | undefined> = [undefined, "done", "needs-you"];
+  // What Decisions holds for the run: nothing, an open question, or a stopped answer.
+  const decisionsHolds: Array<Fixture["decisions"]> = [
+    undefined,
+    { questionAttention: 1 },
+    { answerAttention: 2 },
+  ];
 
   const fixtures: Fixture[] = [];
   for (const state of states)
@@ -1310,21 +1319,23 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
         for (const canopy of readings)
           for (const shelf of shelves)
             for (const report of reports)
-              fixtures.push({
-                terminal: agent({
-                  id: `t${fixtures.length}`,
-                  detectedAgentId: "claude",
-                  spawnedAt: 1,
-                  lastStateChange: 1_000,
-                  ...state,
-                  ...(report !== undefined ? { lastHandback: { report } } : {}),
-                }),
-                handBack,
-                wait,
-                canopy,
-                shelf,
-                report,
-              });
+              for (const decisions of decisionsHolds)
+                fixtures.push({
+                  terminal: agent({
+                    id: `t${fixtures.length}`,
+                    detectedAgentId: "claude",
+                    spawnedAt: 1,
+                    lastStateChange: 1_000,
+                    ...state,
+                    ...(report !== undefined ? { lastHandback: { report } } : {}),
+                  }),
+                  handBack,
+                  wait,
+                  canopy,
+                  shelf,
+                  report,
+                  decisions,
+                });
 
   /** The row the fleet builds for the same run, as `FleetSnapshotService` decorates it. */
   const bandOf = (fixture: Fixture): FleetBand => {
@@ -1341,6 +1352,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
       canopy: fixture.canopy,
       park: fixture.shelf === "parked" ? { parkedAt: 1 } : undefined,
       snooze: fixture.shelf === "snoozed" ? { snoozedAt: 1 } : undefined,
+      ...fixture.decisions,
     });
   };
 
@@ -1356,7 +1368,8 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
       (id) => byId.get(id)?.handBack,
       new Map(subset.filter((f) => f.shelf === "parked").map((f) => [f.terminal.id!, {}])),
       (id) => byId.get(id)?.canopy,
-      (id) => byId.get(id)?.wait
+      (id) => byId.get(id)?.wait,
+      (id) => byId.get(id)?.decisions
     ).get("p1")!;
   };
 
@@ -1406,6 +1419,31 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     }
     expect(counted).toEqual([]);
     expect(reportedRuns).toBeGreaterThan(0);
+  });
+
+  it("never counts a run Decisions holds something for as a hand-back, and still counts one at work", () => {
+    const wrong: string[] = [];
+    let heldRuns = 0;
+    for (const fixture of fixtures) {
+      const { agentState, waitingReason } = fixture.terminal;
+      const reported = isAgentReportedNeed({
+        agentState,
+        waitingReason,
+        handbackReport: fixture.report === "needs-you" ? "needs-you" : undefined,
+      });
+      if (reported || !isDecisionsNeed({ agentState, waitingReason, ...fixture.decisions }))
+        continue;
+      heldRuns += 1;
+      const counts = countOf([fixture]);
+      const atWork = agentState === "working" ? 1 : 0;
+      if (counts.completed !== 0 || counts.active !== atWork) wrong.push(JSON.stringify(fixture));
+      // A wait at work is dated from nothing: its state clock is the work's.
+      if (agentState === "working" && counts.oldestWaitingSince !== null) {
+        wrong.push(`dated ${JSON.stringify(fixture)}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+    expect(heldRuns).toBeGreaterThan(0);
   });
 
   it("sums a project of every kind of run to the fleet's band tallies", () => {

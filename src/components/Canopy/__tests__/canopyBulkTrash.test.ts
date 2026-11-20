@@ -8,8 +8,13 @@ import { bulkTrashHold, hasReplyDraft } from "../canopyBulkTrash";
 import { hostRefusal, refusedOutcomes } from "../canopyHostSource";
 import type { CanopyItem } from "../canopyModel";
 
-function item(runId: string, agentState?: AgentState, workspaceId = "p1"): CanopyItem {
-  return { runId, workspaceId, row: { run: { agentState } } } as unknown as CanopyItem;
+function item(
+  runId: string,
+  agentState?: AgentState,
+  workspaceId = "p1",
+  counts: { answerAttention?: number; questionAttention?: number } = {}
+): CanopyItem {
+  return { runId, workspaceId, row: { run: { agentState, ...counts } } } as unknown as CanopyItem;
 }
 
 describe("bulkTrashHold", () => {
@@ -20,6 +25,22 @@ describe("bulkTrashHold", () => {
     expect(bulkTrashHold(item("a", "idle"), "empty", true)).toBe("reply");
     // Working is said first: it is what the person would weigh first.
     expect(bulkTrashHold(item("a", "working"), "typed", true)).toBe("working");
+  });
+
+  it("holds back a run Decisions holds an answer or a question for, after working", () => {
+    expect(
+      bulkTrashHold(item("a", "completed", "p1", { questionAttention: 1 }), "empty", false)
+    ).toBe("question");
+    expect(
+      bulkTrashHold(
+        item("a", "waiting", "p1", { answerAttention: 1, questionAttention: 1 }),
+        "typed",
+        true
+      )
+    ).toBe("answer");
+    expect(
+      bulkTrashHold(item("a", "working", "p1", { questionAttention: 1 }), "empty", false)
+    ).toBe("working");
   });
 
   it("never holds back for the agent's own suggestion, or for an input nobody could read", () => {

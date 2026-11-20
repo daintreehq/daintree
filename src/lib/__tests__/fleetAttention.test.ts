@@ -5,16 +5,19 @@ import {
   bandForRun,
   bandLabel,
   bandTimestamp,
+  canopyPlacingRun,
   compareWithinBand,
   DEMAND_BANDS,
   emptyBandCounts,
   FLEET_BANDS,
+  FINISHED_FILTER_BANDS,
   fleetBandForRun,
   fleetBandRunKey,
   fleetUnseenAskForRun,
   fleetUnseenAsks,
   isAttentionBand,
   isAgentReportedNeed,
+  isDecisionsNeed,
   isDemandBand,
   NEEDS_YOU_BANDS,
   runUnseenAsk,
@@ -1015,10 +1018,117 @@ describe("agent-reported needs", () => {
 });
 
 describe("Decisions attention", () => {
+  const snapshot = (runs: FleetRunRow[]): FleetSnapshot => ({
+    runs,
+    changedAt: NOW,
+    degraded: false,
+    lastSuccessfulAt: NOW,
+  });
+  const unseen = { stoppedAt: NOW - 60_000 };
   const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+  const asked = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
+  const notAsking = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: NOW,
+    seen: true,
+  } as const;
+  const HOLDS = [{ questionAttention: 1 }, { answerAttention: 2 }] as const;
+  const LIVE = [
+    { agentState: "completed" },
+    { agentState: "idle" },
+    { agentState: "waiting" },
+    { agentState: "waiting", waitingReason: "prompt" },
+    { agentState: "waiting", waitingReason: "question" },
+    { agentState: "waiting", waitingReason: "approval" },
+    { agentState: "working" },
+    { agentState: "working", quietSince: NOW - 600_000 },
+    { agentState: "directing" },
+  ] as const;
 
-  it("puts a finished run whose Decisions answer stopped on its way in under needs-you", () => {
-    const finished = run({ agentState: "completed", handBack: seen, answerAttention: 1 });
-    expect(bandForRun(finished)).toBe("needs-you");
+  it("puts a live run holding an open question or a stopped answer in needs-you", () => {
+    for (const hold of HOLDS) {
+      for (const state of LIVE) {
+        for (const handBack of [undefined, unseen, seen]) {
+          const row = run({ ...state, ...hold, handBack });
+          const key = JSON.stringify({ hold, state, handBack });
+          expect(bandForRun(row), key).toBe("needs-you");
+          expect(isDecisionsNeed(row), key).toBe(true);
+          // Nothing on its screen asks, so the pane edge has no ask to mark.
+          expect(runUnseenAsk(row), key).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  it("calls a finished turn finished only once Decisions holds nothing for it", () => {
+    const finished = run({ agentState: "completed", handBack: seen });
+    expect(bandForRun(finished)).toBe("done");
+    expect(bandForRun({ ...finished, questionAttention: 1 })).toBe("needs-you");
+    expect(bandForRun({ ...finished, answerAttention: 1 })).toBe("needs-you");
+    expect(bandForRun({ ...finished, questionAttention: 0, answerAttention: 0 })).toBe("done");
+  });
+
+  it("outranks Canopy's reading, which no longer claims the placement", () => {
+    for (const canopy of [notAsking, { ...asked, seen: true }]) {
+      const row = run({ agentState: "waiting", waitingReason: "question", canopy });
+      const held = { ...row, questionAttention: 1 };
+      expect(bandForRun(held), canopy.kind).toBe("needs-you");
+      expect(canopyPlacingRun(held), canopy.kind).toBeUndefined();
+      expect(canopyPlacingRun(row), canopy.kind).toBeDefined();
+    }
+    // An unread ask Canopy read on the same stop is still Canopy's to mark.
+    const unreadAsk = run({ agentState: "waiting", canopy: asked, questionAttention: 1 });
+    expect(runUnseenAsk(unreadAsk)).toBe("canopy");
+  });
+
+  it("gives way to a park, a snooze, an error wait and the agent's own report", () => {
+    for (const hold of HOLDS) {
+      const stopped = run({ agentState: "completed", ...hold });
+      expect(bandForRun({ ...stopped, park: { parkedAt: NOW } })).toBe("parked");
+      expect(
+        bandForRun({ ...stopped, snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 } })
+      ).toBe("snoozed");
+      const failed = run({ agentState: "waiting", waitingReason: "error", ...hold });
+      expect(bandForRun(failed)).toBe("blocked");
+      expect(isDecisionsNeed(failed)).toBe(false);
+      const reported = run({
+        agentState: "waiting",
+        waitingReason: "prompt",
+        handbackReport: "needs-you",
+        ...hold,
+      });
+      expect(bandForRun(reported)).toBe("needs-you");
+      expect(runUnseenAsk(reported)).toBe("agent");
+    }
+  });
+
+  it("places nothing for an agent that is gone or never detected", () => {
+    for (const hold of HOLDS) {
+      expect(bandForRun(run({ agentState: "exited", ...hold }))).toBe("idle");
+      expect(bandForRun(run({ agentState: undefined, ...hold }))).toBe("idle");
+    }
+  });
+
+  it("names an agent still at work by its state, and a stopped one as waiting", () => {
+    const held = { questionAttention: 1 };
+    expect(bandLabel("needs-you", run({ agentState: "working", ...held }))).toBe("Working");
+    expect(bandLabel("needs-you", run({ agentState: "directing", ...held }))).toBe("Directing");
+    expect(bandLabel("needs-you", run({ agentState: "completed", ...held }))).toBe("Waiting");
+  });
+
+  it("counts toward Attention rather than Finished", () => {
+    const fleet = snapshot([
+      run({ runId: "asked", agentState: "completed", handBack: seen, questionAttention: 1 }),
+      run({ runId: "stopped", agentState: "waiting", handBack: unseen, answerAttention: 1 }),
+      run({ runId: "at-work", agentState: "working", questionAttention: 1 }),
+      run({ runId: "done", agentState: "completed", handBack: seen }),
+    ]);
+    expect(fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n")).toEqual([
+      "asked",
+      "at-work",
+      "stopped",
+    ]);
+    expect(fleetBandRunKey(fleet, FINISHED_FILTER_BANDS)).toBe("done");
   });
 });

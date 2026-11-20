@@ -26,6 +26,7 @@ import type {
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
+import type { RunDecisionAttention } from "../../runAnswerAttentionSource.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
@@ -643,7 +644,7 @@ describe("DecisionsService question list (#17229)", () => {
     const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
     const paneProjects: string[] = [];
-    const attention: Array<Map<string, number>> = [];
+    const attention: Array<Map<string, RunDecisionAttention>> = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
@@ -785,7 +786,8 @@ describe("DecisionsService question list (#17229)", () => {
     await service.start(on(HOST));
     expect(lists.at(-1)?.[1]?.standing).toMatchObject({ kind: "needs-attention" });
     expect(panes.at(-1)?.needsAttention.map((item) => item.alias)).toEqual([2]);
-    expect([...attention.at(-1)!]).toEqual([["pane-a", 1]]);
+    // Its open question raises the pane beside the answer (#18050).
+    expect([...attention.at(-1)!]).toEqual([["pane-a", { answers: 1, questions: 1 }]]);
 
     // Then it expired unanswered, and its notice stopped too.
     await commit([
@@ -816,7 +818,8 @@ describe("DecisionsService question list (#17229)", () => {
       needsAttention: [],
       openQuestions: [expect.objectContaining({ alias: 1 })],
     });
-    expect(attention.at(-1)?.size).toBe(0);
+    // No answer needs a person; the question still open raises the pane alone.
+    expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]));
     await service.stop();
   });
 
@@ -921,6 +924,64 @@ describe("DecisionsService question list (#17229)", () => {
     expect([...first.marks.values()]).toEqual([
       { hostId: "host_1", questionId: qid(1), ask: "note-1", seen: false, cleared: true },
     ]);
+    await service.stop();
+  });
+
+  it("raises each run's questions in Needs you on the fleet, and lowers one cleared at its ask with no row change", async () => {
+    const { service, attention, setRows, setMarks, fireCommit } = listed();
+    setRows([
+      row(1),
+      row(2),
+      row(3, { origin: { project_id: "project-b", pane_id: "pane-b" } }),
+      row(4, { local_status: "expired" }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(
+        new Map([
+          ["pane-a", { answers: 0, questions: 2 }],
+          ["pane-b", { answers: 0, questions: 1 }],
+        ])
+      )
+    );
+
+    // A mark is a meta write, which commits: the feed reads it again though no row moved.
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(3) }),
+            { hostId: "host_1", questionId: qid(3), ask: null, seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    fireCommit();
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 2 }]]))
+    );
+
+    await service.stop();
+    expect(attention.at(-1)?.size).toBe(0);
+  });
+
+  it("raises a Remote Host lifetime's own questions on its fleet, which has no marks to clear them", async () => {
+    const { service, attention, setRows, setMarks } = listed();
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(1) }),
+            { hostId: "host_1", questionId: qid(1), ask: null, seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    setRows([row(1)]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
     await service.stop();
   });
 

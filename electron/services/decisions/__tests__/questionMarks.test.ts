@@ -11,6 +11,7 @@ import {
   parseQuestionMarks,
   readQuestionMarks,
   serializeQuestionMarks,
+  unclearedQuestionsByTerminal,
   withInbox,
   type QuestionMark,
 } from "../questionMarks.js";
@@ -146,6 +147,72 @@ describe("withInbox", () => {
     const theirs = hostItem(1);
     const listed = withInbox([own, theirs], new Map(), marksOf(mark(theirs)));
     expect(listed.map((question) => question.inbox?.seen)).toEqual([false, true]);
+  });
+});
+
+describe("unclearedQuestionsByTerminal", () => {
+  const asksOf = (...list: Array<[DecisionQuestionListItem, string | null]>) =>
+    new Map(list.map(([of, ask]) => [of.reference.questionId, ask]));
+
+  it("counts each terminal's questions in Needs you, and nothing past them", () => {
+    const open = item(1);
+    const reply = item(2, { kind: "waiting", reason: "reply" }, { replyRequest: "m_reply" });
+    const queued = item(
+      3,
+      { kind: "queued" },
+      { reference: { ...item(1).reference, questionId: "q_question_3" } }
+    );
+    const elsewhere = [
+      item(4, { kind: "needs-attention", deliveryStatus: "needs-attention" }),
+      item(5, { kind: "to-type" }),
+      item(6, { kind: "send-failed" }),
+      item(7, { kind: "settled", outcome: "answered", handled: false }),
+    ];
+    const counts = unclearedQuestionsByTerminal(
+      [open, reply, queued, ...elsewhere],
+      OWN,
+      asksOf([open, null], [reply, "m_reply"], [queued, null]),
+      new Map()
+    );
+    expect(counts).toEqual(
+      new Map([
+        ["pane-1", 2],
+        ["pane-2", 1],
+      ])
+    );
+  });
+
+  it("drops a question cleared at the ask it shows now, as the inbox does", () => {
+    const open = item(1);
+    const asks = asksOf([open, "m_second"]);
+    const clearedNow = marksOf(mark(open, { ask: "m_second", cleared: true }));
+    expect(unclearedQuestionsByTerminal([open], OWN, asks, clearedNow).size).toBe(0);
+    // Its inbox reads it cleared too: the two can't disagree.
+    expect(
+      withInbox([open], new Map([[markKey(open.reference), "m_second"]]), clearedNow)[0]?.inbox
+        ?.cleared
+    ).toBe(true);
+
+    // Cleared at an earlier ask, the agent's newer ask raises it again.
+    const clearedBefore = marksOf(mark(open, { ask: "m_first", cleared: true }));
+    expect(unclearedQuestionsByTerminal([open], OWN, asks, clearedBefore)).toEqual(
+      new Map([["pane-1", 1]])
+    );
+
+    // Seen alone answers nothing.
+    const seenOnly = marksOf(mark(open, { ask: "m_second", seen: true }));
+    expect(unclearedQuestionsByTerminal([open], OWN, asks, seenOnly)).toEqual(
+      new Map([["pane-1", 1]])
+    );
+  });
+
+  it("reads a question with no recorded ask at its null ask, and a missing one at its reply request", () => {
+    const open = item(1);
+    const cleared = marksOf(mark(open, { ask: null, cleared: true }));
+    expect(unclearedQuestionsByTerminal([open], OWN, asksOf([open, null]), cleared).size).toBe(0);
+    const reply = item(2, { kind: "waiting", reason: "reply" }, { replyRequest: "m_reply" });
+    const clearedReply = marksOf(mark(reply, { ask: "m_reply", cleared: true }));
+    expect(unclearedQuestionsByTerminal([reply], OWN, new Map(), clearedReply).size).toBe(0);
   });
 });
 
