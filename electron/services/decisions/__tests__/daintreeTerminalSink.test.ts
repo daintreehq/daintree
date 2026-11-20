@@ -28,6 +28,8 @@ import {
   parseDecisionNotice,
   renderDecisionSection,
 } from "../answerNotice.js";
+import { LANE_WAKE_RECHECK_MS } from "../../mcp-server/terminalNotify.js";
+import { DECISION_CLOSURE_PENDING_MS } from "../decisionWake.js";
 import { DaintreeTerminalSink, type DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
 
 const HOST = "host-own-01";
@@ -140,11 +142,18 @@ function setup() {
   const queued: LaneWake[] = [];
   /** Panes a view's hybrid input holds a draft for (#16282). */
   const drafts = new Set<string>();
+  /** Questions a reopen waits on (#17941), and every set of questions the sink asked about. */
+  const reopened = new Set<string>();
+  const askedAbout: string[][] = [];
   const sink = new DaintreeTerminalSink({
     hostId: () => identity.hostId,
     principalFor: (paneId) => (paneId === PANE ? identity.principal : null),
     getPtyClient: () => client,
     hasComposerDraft: (paneId) => drafts.has(paneId),
+    closureSuperseded: (questionIds) => {
+      askedAbout.push([...questionIds]);
+      return questionIds.some((id) => reopened.has(id));
+    },
     queueWake: (pane, projectId, wake) => {
       queued.push(wake);
       scope.enqueueWake(pane, projectId, wake);
@@ -154,7 +163,18 @@ function setup() {
   client.generations.set(PANE, 7);
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
-  return { client, service, scope, sink, identity, patch, queued, drafts };
+  return {
+    client,
+    service,
+    scope,
+    sink,
+    identity,
+    patch,
+    queued,
+    drafts,
+    reopened,
+    askedAbout,
+  };
 }
 
 /** The library's notice for answers to Q1, each as its overrides change it. */
@@ -717,6 +737,198 @@ describe("DaintreeTerminalSink", () => {
       expect(typed).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
       expect(typed.match(/^\[END DAINTREE DECISION ANSWER\]$/gm)).toHaveLength(1);
       expect(typed).toContain("\n  source: human\n");
+    });
+  });
+
+  describe("inject, closures a reopen waits for (#17941)", () => {
+    const Q2 = "0190f0aa11112222333344445555cccc";
+    const DEADLINE = "2026-11-01T10:15:00.000Z";
+    const advisory = (disposition: "fallback-due" | "fallback-withheld" = "fallback-due") =>
+      notice({ kind: "expired", disposition, deadline: DEADLINE, revision: 0 });
+
+    it("types the advisory notice in Daintree's words, with its marker, and reports delivered only on the write", async () => {
+      const h = setup();
+      const text = advisory();
+      const result = track(h.sink.inject(TARGET, text, I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+      const typed = h.client.submitted[0].text;
+      expect(typed).toBe(renderDecisionSection(parseDecisionNotice(text)!));
+      expect(typed).toContain(
+        `status: advisory-unanswered\ndeadline: ${DEADLINE}\ndisposition: fallback-due\nauthorised: no\n`
+      );
+      expect(typed).toContain(markerFor(I1));
+      expect(result.settled).toBe(false);
+
+      await flushLine();
+      expect(result.value).toEqual({
+        outcome: "delivered",
+        proof: `pty_written:${h.client.submitted[0].token}`,
+      });
+      expect(h.askedAbout.at(-1)).toEqual([Q1]);
+    });
+
+    it.each([
+      ["a draft", (h: Harness) => h.drafts.add(PANE)],
+      [
+        "an approval prompt",
+        (h: Harness) => h.patch({ waitingReason: "approval", lastStateChange: Date.now() }),
+      ],
+      // A CLI that can't take a line mid-turn: the engine holds it.
+      [
+        "a turn its CLI can't take a line in",
+        (h: Harness) =>
+          h.patch({
+            agentState: "working",
+            lastStateChange: Date.now(),
+            detectedAgentId: "gemini",
+          }),
+      ],
+    ])("ends a closure held behind %s once its bound passes, untyped", async (_label, holdPane) => {
+      const h = setup();
+      holdPane(h);
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(DECISION_CLOSURE_PENDING_MS - 1_000);
+      expect(result.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
+      expect(result.value).toEqual({ outcome: "held", reason: "expired" });
+
+      // The pane frees up afterwards: nothing of that attempt is left to type.
+      h.drafts.clear();
+      h.client.terminals.set(PANE, atPrompt());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("types a closure whose pane frees up within its bound", async () => {
+      const h = setup();
+      h.drafts.add(PANE);
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(5_000);
+      h.drafts.clear();
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+      expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    });
+
+    it("leaves an answer queued behind a draft, as before", async () => {
+      const h = setup();
+      h.drafts.add(PANE);
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result.settled).toBe(false);
+      h.drafts.clear();
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("hands the chunk back as held for a reopen even when the run changed meanwhile", async () => {
+      const h = setup();
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.reopened.add(Q1);
+      h.client.generations.set(PANE, 8);
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+      expect(result.value).toEqual({ outcome: "held", reason: "superseded" });
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("hands back a whole batched chunk, another question's answer with it, for its closure's reopen", async () => {
+      const h = setup();
+      const text = notice(
+        { kind: "expired", disposition: "fallback-due", deadline: DEADLINE, revision: 0 },
+        { questionId: Q2, injectionId: I2 }
+      );
+      const result = track(h.sink.inject(TARGET, text, I1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.askedAbout.at(-1)).toEqual([Q1]);
+      h.reopened.add(Q1);
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+      expect(result.value).toEqual({ outcome: "held", reason: "superseded" });
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("queues nothing when a reopen came while the pane was read", async () => {
+      const h = setup();
+      const read = h.client.getTerminalAsync.bind(h.client);
+      h.client.getTerminalAsync = async (...args) => {
+        h.reopened.add(Q1);
+        return read(...args);
+      };
+      await expect(h.sink.inject(TARGET, advisory("fallback-withheld"), I1)).resolves.toEqual({
+        outcome: "held",
+        reason: "superseded",
+      });
+      expect(h.queued).toEqual([]);
+      await flushLine();
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("stays the engine's to rebuild when its pane closes after the reopen, never a gone run", async () => {
+      const h = setup();
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.reopened.add(Q1);
+      // Before the next sweep: the hold lets go of it with the pane already gone.
+      h.client.terminals.delete(PANE);
+      h.scope.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result.value).toEqual({ outcome: "held", reason: "superseded" });
+    });
+
+    it("never takes back a line already submitted: its write settles it", async () => {
+      const h = setup();
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      expect(h.client.submitted).toHaveLength(1);
+
+      h.reopened.add(Q1);
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("leaves a lost receipt ambiguous, reopen or not", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      const result = track(h.sink.inject(TARGET, advisory(), I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      h.reopened.add(Q1);
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(result.value).toEqual({ outcome: "ambiguous", reason: "unconfirmed" });
+    });
+
+    it.each([
+      ["an ordinary expiry", { kind: "expired" as const }],
+      ["a decline", { kind: "declined" as const }],
+    ])("hands back %s for a reopen too", async (_label, overrides) => {
+      const h = setup();
+      const result = track(h.sink.inject(TARGET, notice(overrides), I1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.reopened.add(Q1);
+      await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+      expect(result.value).toEqual({ outcome: "held", reason: "superseded" });
+    });
+
+    it.each([
+      ["an answer", { injectionId: I1 }],
+      [
+        "a never-published notice whose plan is due",
+        { kind: "unpublished" as const, fallbackDue: true },
+      ],
+    ])("types %s without asking about reopens", async (_label, overrides) => {
+      const h = setup();
+      h.reopened.add(Q1);
+      const result = track(h.sink.inject(TARGET, notice(overrides), I1));
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 50);
+      await flushLine();
+      expect(result.value).toMatchObject({ outcome: "delivered" });
+      expect(h.askedAbout).toEqual([]);
+      if ("fallbackDue" in overrides) {
+        expect(h.client.submitted[0].text).toMatch(/may carry out the plan you stated/);
+      }
     });
   });
 

@@ -121,7 +121,7 @@ describe("DaintreeRelayClient (#16229)", () => {
     for (const features of declared) expect([...features].sort()).toEqual([...asked].sort());
   });
 
-  it("cuts advisory deadlines, which a 0.9.0 bridge asks to declare once its host delivers advisory outcomes (#17941)", async () => {
+  it("declares advisory deadlines for a bridge whose host delivers advisory outcomes, and only for it (#17941)", async () => {
     const { sent, daintree } = await clients();
     const advisory = bridgeFeatures({
       followUps: true,
@@ -129,14 +129,18 @@ describe("DaintreeRelayClient (#16229)", () => {
       advisoryDeadlines: true,
     });
     expect(advisory).toContain("advisory-deadlines-v1");
+    // A Remote Host's bridge is never given advisoryDeadlines (#17942).
+    const host = bridgeFeatures({ followUps: true, snapshots: { onRefresh: () => {} } });
 
     await daintree.events(5, 10, advisory);
     await daintree.socketTicket(advisory);
+    await daintree.socketTicket(host);
 
     expect(sent[0]!.url.searchParams.get("features")!.split(",")).toEqual(
-      [...asked].sort((a, b) => a.localeCompare(b))
+      [...advisory].sort((a, b) => a.localeCompare(b))
     );
-    expect((sent[1]!.body as { features: string[] }).features).not.toContain(
+    expect((sent[1]!.body as { features: string[] }).features).toContain("advisory-deadlines-v1");
+    expect((sent[2]!.body as { features: string[] }).features).not.toContain(
       "advisory-deadlines-v1"
     );
   });
@@ -160,7 +164,6 @@ describe("DaintreeRelayClient (#16229)", () => {
     const later: ProtocolFeature[] = [
       "presence-v1",
       "agent-stopped-push-v1",
-      "advisory-deadlines-v1",
       "voice-notes-v1" as ProtocolFeature,
     ];
 

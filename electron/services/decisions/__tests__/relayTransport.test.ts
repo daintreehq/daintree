@@ -205,6 +205,51 @@ describe("inertAttemptDelivery", () => {
     expect(attempt.delivery.closureWrite("q1")).toBe(writing);
     expect(attempt.delivery.closureWrite("q2")).toBeNull();
   });
+
+  it("takes the lifetime's wait for the ledger as its own, and wakes the lifetime when its read lets it go (#17941)", async () => {
+    const store = new MemoryLocalStore();
+    const listed = vi.spyOn(store, "listQuestions");
+    const attempt = await attemptBridge(store);
+    const lifetime = {
+      replayHeld: false,
+      request: vi.fn(),
+      ledgerHolds: vi.fn(async () => true),
+    };
+    let current: typeof lifetime | null = lifetime;
+    inertAttemptDelivery(
+      attempt.delivery,
+      () => null,
+      () => current
+    );
+
+    expect(attempt.delivery.replayHeld).toBe(false);
+    await attempt.delivery.drain();
+    expect(lifetime.request).not.toHaveBeenCalled();
+
+    lifetime.replayHeld = true;
+    expect(attempt.delivery.replayHeld).toBe(true);
+    expect(await attempt.delivery.drain()).toEqual({
+      delivered: 0,
+      deferred: 0,
+      needsAttention: 0,
+      uncertain: 0,
+    });
+    expect(lifetime.request).toHaveBeenCalledTimes(1);
+    expect(listed).not.toHaveBeenCalled();
+
+    // Whether a notice waits, as get_decision reads it, is the lifetime's answer on its clock.
+    await expect(attempt.delivery.ledgerHolds("q1", { start: false })).resolves.toBe(true);
+    expect(lifetime.ledgerHolds).toHaveBeenCalledWith("q1", { start: false });
+
+    // An attempt that has ended wakes nothing, and answers for itself.
+    current = null;
+    expect(attempt.delivery.replayHeld).toBe(false);
+    await attempt.delivery.drain();
+    expect(lifetime.request).toHaveBeenCalledTimes(1);
+    // Its own engine has read nothing of the ledger, so it holds.
+    await expect(attempt.delivery.ledgerHolds("q1", { start: false })).resolves.toBe(true);
+    expect(lifetime.ledgerHolds).toHaveBeenCalledTimes(1);
+  });
 });
 
 /** Whether `promise` has settled once everything already queued has run. */

@@ -173,5 +173,10 @@ export type DecisionsAnswerOutcome =
         /** No answer was kept for it. */
         | "no-answer"
         /** The chosen pane closed, or isn't running an agent Daintree can type into. */
-        | "destination-gone";
+        | "destination-gone"
+        /**
+         * The question asked for advice and is still in that round (#17941): only
+         * the agent that asked it, or a resume of its session, takes its outcome.
+         */
+        | "asker-only";
     };

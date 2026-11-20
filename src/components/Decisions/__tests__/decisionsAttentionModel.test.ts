@@ -125,6 +125,13 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     expect(outcomeText(4, { result: "refused", reason: "uncertain" }, "follow-up")).toBe(
       "Follow-up to q-4 may already have been typed in, so it isn't typed again"
     );
+    // Only the agent that asked for advice takes what is typed for it (#17941).
+    expect(outcomeText(4, { result: "refused", reason: "asker-only" }, "follow-ups")).toBe(
+      "q-4 asked for advice, so only the agent that asked it can take its follow-ups"
+    );
+    expect(outcomeText(7, { result: "refused", reason: "asker-only" })).toBe(
+      "q-7 asked for advice, so only the agent that asked it can take its answer"
+    );
     // An answer alone reads as it always has.
     expect(outcomeText(4, delivered)).toBe("Answer to q-4 typed into “Claude”");
   });

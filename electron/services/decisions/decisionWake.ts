@@ -38,6 +38,23 @@ export interface DecisionWakeSources extends DecisionIdentitySources {
   now?: () => number;
 }
 
+/**
+ * The wake's own reason for ending untyped once a reopen of its question
+ * waits for this write (#17941): never a library `UnavailableReason`, so the
+ * sink tells it apart from any reading of the pane.
+ */
+export const DECISION_SUPERSEDED = "superseded";
+
+/**
+ * The longest a closure notice waits in the wake queue for its pane (#17941):
+ * past the line's coalescing, its spacing after another line and the settle
+ * grace, with room to spare. The queue can otherwise hold a line for minutes
+ * after the library admitted it, sometimes without a word; ended by the
+ * engine instead, it is admitted again on a later pass, against the question
+ * and the ledger as they stand then.
+ */
+export const DECISION_CLOSURE_PENDING_MS = 15_000;
+
 /** Why an answer can't be typed into the pane as it is now, or null when it can. */
 export type DecisionHold = WakeHoldReason | WakeBlockReason | "settling";
 
@@ -144,15 +161,22 @@ export function identityMismatch(
  * `decisionWakeId`), so a second attempt queued before the first goes out
  * joins it. Right before typing, with the record the attempt just read, it
  * checks the run is the one that asked and that the composer is empty
- * (`decisionHold`), which the engine's own gate doesn't know about.
+ * (`decisionHold`), which the engine's own gate doesn't know about. A
+ * section whose `superseded` says a reopen waits for it ends untyped first,
+ * whatever the pane: a line already on its way is never taken back. A
+ * `closure` section (an expiry, advisory or not, or a decline) waits for its
+ * pane only `DECISION_CLOSURE_PENDING_MS`, so it is never typed on an
+ * admission that has gone stale.
  */
 export function createDecisionWake(
   sources: DecisionWakeSources,
   target: TerminalTarget,
-  section: { id: string; text: string },
+  section: { id: string; text: string; superseded?: () => boolean; closure?: boolean },
   report: (outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence) => void
 ): LaneWake {
   const recheck = (info?: NotifyTerminalInfo): LaneWakeCheck => {
+    if (section.superseded?.() === true)
+      return { kind: "unavailable", reason: DECISION_SUPERSEDED };
     const mismatch = identityMismatch(sources, target, info);
     if (mismatch === "unreadable") return { kind: "held", reason: "unreadable" };
     if (mismatch !== null) return { kind: "unavailable", reason: mismatch };
@@ -168,6 +192,7 @@ export function createDecisionWake(
     id: section.id,
     kind: "decision",
     decision: { text: section.text },
+    ...(section.closure === true ? { maxPendingMs: DECISION_CLOSURE_PENDING_MS } : {}),
     recheck,
     // The library records its injection intent before it asks the sink to
     // type, so nothing is left to reserve here.

@@ -205,6 +205,13 @@ export class QuestionBridge extends DecisionsBridge {
     // bridge's lock: what this bridge commits between attempts takes its turn
     // with a live attempt's flush, never beside it.
     if (options.source.lock) this.ctx.lock = options.source.lock;
+    // Whether an advisory notice waits is the lifetime delivery's answer, on its clock (#17941).
+    const lifetimeHolds = options.source.ledgerHolds;
+    if (lifetimeHolds) {
+      const own = this.delivery.ledgerHolds.bind(this.delivery);
+      this.delivery.ledgerHolds = (questionId, opts) =>
+        lifetimeHolds(questionId, opts) ?? own(questionId, opts);
+    }
     // Synchronous for a bridge that never started; from here `pump` does nothing.
     void super.stop();
   }

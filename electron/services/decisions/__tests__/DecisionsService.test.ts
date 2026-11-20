@@ -28,7 +28,6 @@ import type {
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
-import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "../relayFeatures.js";
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
   AnswerDecisionQuestionPayload,
@@ -1126,7 +1125,8 @@ describe("DecisionsService relay connection", () => {
   it.each([
     ["delivers", true, true],
     ["doesn't deliver", false, false],
-    ["is left to say (#17941)", undefined, DAINTREE_DELIVERS_ADVISORY_OUTCOMES],
+    // Its sink types the advisory notice (#17941).
+    ["is left to say", undefined, true],
   ])(
     "lets an owner lifetime's agents ask for advice, signed only when Daintree %s its outcome, and keeps a Remote Host's blocking (#17940)",
     async (_label, outcomes, expected) => {

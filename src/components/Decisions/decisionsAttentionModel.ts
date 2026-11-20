@@ -237,6 +237,8 @@ export function outcomeText(
           return `No answer is kept for ${q}`;
         case "destination-gone":
           return `That terminal is no longer running an agent, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
+        case "asker-only":
+          return `${q} asked for advice, so only the agent that asked it can take its ${subject}`;
       }
   }
 }

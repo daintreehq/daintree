@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
   MemoryKeyStore,
+  PolicyRegistry,
   RelayClient,
   loadIdentity,
   markerFor,
@@ -16,6 +17,7 @@ import {
   serializeAnswers,
   serializeMessages,
   type AnswerEntry,
+  type DecisionsBridge,
   type MessageDelivery,
   type Identity,
   type InjectionIntent,
@@ -319,6 +321,16 @@ function setup(
     whileListing?: () => Promise<void>;
     /** Where phone images go (#16233). */
     phoneImages?: PhoneImageStore;
+    /**
+     * Advisory outcomes typed as their own notice (#17941), under the owner's
+     * policy, with what the connection's current attempt has read of the
+     * ledger: none between attempts.
+     */
+    advisory?: {
+      ledger: { attempt: boolean; state: "unapplied" | "reading" | null };
+      /** The trusted policy allows advice; true unless said. */
+      allowed?: boolean;
+    };
   } = {}
 ) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
@@ -422,6 +434,11 @@ function setup(
   };
   /** Panes a view's hybrid input holds a draft for (#16282). */
   const drafts = new Set<string>();
+  const advisory = options.advisory;
+  /** The connection's current attempt, as far as delivery reads its ledger. */
+  const attempt = {
+    ledgerUnsettled: async () => advisory?.ledger.state ?? null,
+  } as unknown as DecisionsBridge;
   const delivery = new AnswerDelivery({
     deps: {
       hostId: () => HOST,
@@ -468,6 +485,13 @@ function setup(
     keys,
     client: new RelayClient({ identity, fetch, maxRetries: 0 }),
     ...(options.phoneImages ? { phoneImages: options.phoneImages } : {}),
+    ...(advisory
+      ? {
+          advisoryDeadlines: true,
+          policy: new PolicyRegistry({ advisoryQuestions: advisory.allowed !== false }),
+          ledger: () => (advisory.ledger.attempt ? attempt : null),
+        }
+      : {}),
     onKeysUnusable: keysUnusable,
   });
   live.push(delivery);
@@ -1789,6 +1813,462 @@ async function declined(
     ...over,
   });
 }
+
+/** Follows a promise without awaiting it, so the fake clock can move while it settles. */
+function settledValue<T>(promise: Promise<T>): { done: boolean; value?: T } {
+  const seen: { done: boolean; value?: T } = { done: false };
+  void promise.then((value) => {
+    seen.value = value;
+    seen.done = true;
+  });
+  return seen;
+}
+
+/** The deadline an advisory question's round 0 closed at. */
+const DEADLINE = "2026-11-01T09:45:00.000Z";
+
+/**
+ * An advisory question whose round 0 expired unanswered, its notice received
+ * and not yet typed (#17941), as the 0.9.0 inbox records it.
+ */
+async function advisoryExpired(
+  store: DaintreeLocalStore,
+  id: string,
+  alias: number,
+  over: Partial<QuestionRow> = {},
+  disposition: "fallback-due" | "fallback-withheld" = "fallback-due"
+): Promise<void> {
+  const entry: AnswerEntry = {
+    entry_id: `expired-${id}`,
+    kind: "expired",
+    action: "expire",
+    revision: 0,
+    source: "system",
+    advisory_disposition: disposition,
+    correction: false,
+    created_at: DEADLINE,
+    event_seq: 9,
+    deliver: true,
+    delivered: false,
+    sealed: null,
+  };
+  await answered(store, id, alias, "approve", {
+    question_revision: 0,
+    local_status: "expired",
+    expires_at: DEADLINE,
+    content_sealed: JSON.stringify({ aad: { reply_mode: "advisory", revision: 0 } }),
+    answers_json: serializeAnswers([entry]),
+    ...over,
+  });
+}
+
+describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", () => {
+  const entryOf = async (h: ReturnType<typeof setup>, id = Q1) =>
+    parseAnswers((await h.question(id))!.answers_json)[0]!;
+  const settledAttempt = () => ({ ledger: { attempt: true, state: null } });
+
+  /** The pane takes a draft the moment `questionId`'s first intent is written: its wake is queued, then held. */
+  function draftOnIntent(h: ReturnType<typeof setup>, questionId: string): void {
+    const putIntent = h.store.putIntent.bind(h.store);
+    let first = true;
+    h.store.putIntent = async (intent) => {
+      await putIntent(intent);
+      if (first && intent.question_id === questionId) {
+        first = false;
+        h.drafts.add(PANE);
+      }
+    };
+  }
+
+  /** The closure write delivery's engine has admitted for `questionId`, read without asking as the inbox does. */
+  const admittedWrite = (h: ReturnType<typeof setup>, questionId: string) =>
+    (
+      h.delivery as unknown as { engine: { closureWrite(id: string): Promise<void> | null } }
+    ).engine.closureWrite(questionId);
+
+  /** As the 0.9.0 inbox applies a reopen of `questionId`, inside the lock its delivery shares. */
+  async function reopen(h: ReturnType<typeof setup>, questionId: string): Promise<void> {
+    await h.delivery.lock.run(async () => {
+      expect(h.delivery.closureWrite(questionId)).toBeNull();
+      await h.store.updateQuestion(questionId, {
+        question_revision: 1,
+        local_status: "open",
+        expires_at: "2026-11-01T12:00:00.000Z",
+      });
+    });
+  }
+
+  it("types the notice into the run that asked, in Daintree's words, once, and reports no answer", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 10_000);
+    const [typed] = h.client.submitted;
+    expect(typed.id).toBe(PANE);
+    expect(typed.text).toContain(
+      `source: system\nstatus: advisory-unanswered\ndeadline: ${DEADLINE}\ndisposition: fallback-due\nauthorised: no\nnote: `
+    );
+    expect(typed.text).toMatch(/may now carry out the plan you stated/);
+    await until(async () => (await entryOf(h)).delivered);
+    expect(typed.text).toContain(markerFor((await entryOf(h)).injection_id!));
+    expect(h.terminalReports()).toEqual([]);
+
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it("types the plan withheld under a policy that doesn't allow advice", async () => {
+    const h = setup({ advisory: { ...settledAttempt(), allowed: false } });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 10_000);
+    const [typed] = h.client.submitted;
+    expect(typed.text).toContain("disposition: fallback-withheld\nauthorised: no\n");
+    expect(typed.text).toMatch(/not authorised to carry it out/);
+    expect(typed.text).not.toMatch(/may now carry out/);
+    expect((await entryOf(h)).advisory_disposition).toBe("fallback-withheld");
+    await stopped(h.delivery);
+  });
+
+  it("types the ordinary expiry from a delivery that doesn't deliver advisory outcomes", async () => {
+    const h = setup();
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    expect(h.client.submitted[0].text).toContain("status: expired\nauthorised: no\n");
+    expect(h.client.submitted[0].text).not.toMatch(/carry out the plan/);
+    await stopped(h.delivery);
+  });
+
+  it("waits while the attempt holds an unapplied event of its question, past the library's longest wait, then types", async () => {
+    const advisory = { ledger: { attempt: true, state: "unapplied" as "unapplied" | null } };
+    const h = setup({ advisory });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await advance(3 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+
+    advisory.ledger.state = null;
+    h.delivery.request();
+    await until(() => h.client.submitted.length === 1, 10_000);
+    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    await stopped(h.delivery);
+  });
+
+  it("types between attempts only once the library's bounded wait for a read has passed", async () => {
+    const h = setup({ advisory: { ledger: { attempt: false, state: null } } });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await advance(60_000, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    await stopped(h.delivery);
+  });
+
+  it("drops a notice a reopen waits for before its line is due, never typing it, and leaves the reopened round alone", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    // Admitted, its line coalescing and not yet due.
+    await until(() => admittedWrite(h, Q1) !== null, 1_500);
+    const [admitted] = await h.store.openIntents();
+
+    // The inbox's verified reopen asks first, and waits for the write.
+    const writing = h.delivery.closureWrite(Q1);
+    expect(writing).not.toBeNull();
+    await until(
+      async () => (await h.store.getIntent(admitted.injection_id))?.state === "abandoned"
+    );
+    await writing;
+    await reopen(h, Q1);
+
+    h.signal("settled");
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    expect(await entryOf(h)).toMatchObject({ deliver: true, delivered: false });
+    expect((await h.question(Q1))?.local_status).toBe("open");
+    await stopped(h.delivery);
+  });
+
+  it("types another question's answer from the same chunk once the reopen applies, with a new injection", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1);
+    await answered(h.store, Q2, 2, "compact");
+
+    h.delivery.start();
+    await until(() => admittedWrite(h, Q1) !== null, 1_500);
+    const first = (await h.store.openIntents()).map((i) => i.injection_id);
+    expect(first).toHaveLength(2);
+    const writing = h.delivery.closureWrite(Q1);
+    expect(writing).not.toBeNull();
+    await until(async () =>
+      (await Promise.all(first.map((id) => h.store.getIntent(id)))).every(
+        (i) => i?.state === "abandoned"
+      )
+    );
+    await writing;
+    expect(h.client.submitted).toEqual([]);
+
+    // Only the reopen's own retry types what is left.
+    await reopen(h, Q1);
+    await until(() => h.client.submitted.length === 1, 10_000);
+    const [typed] = h.client.submitted;
+    expect(typedChoices(typed.text)).toEqual(["compact"]);
+    expect(typed.text).not.toContain("advisory-unanswered");
+    const row = (await h.question(Q2))!;
+    expect(first).not.toContain(row.last_injection_id);
+    await until(async () => (await h.question(Q2))?.delivery_status === "terminal-delivered");
+
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it("ends a notice held behind a draft once its bound passes, then admits it again, and types it once, when the composer empties", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1);
+    draftOnIntent(h, Q1);
+
+    h.delivery.start();
+    await until(async () => (await h.store.openIntents()).length === 1);
+    const [first] = await h.store.openIntents();
+    await until(async () => (await h.store.getIntent(first.injection_id))?.state === "abandoned");
+    expect(h.client.submitted).toEqual([]);
+    expect(await entryOf(h)).toMatchObject({ deliver: true, delivered: false });
+
+    h.drafts.clear();
+    h.signal("composer");
+    await until(() => h.client.submitted.length === 1, 10_000);
+    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    await until(async () => (await entryOf(h)).delivered);
+    expect((await entryOf(h)).injection_id).not.toBe(first.injection_id);
+
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it("calls a notice whose write the host never confirmed uncertain, keeps that attempt with it, and never types it again", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    h.client.holdWrites = true;
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 10_000);
+    await until(
+      async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain",
+      60_000
+    );
+    const entry = await entryOf(h);
+    expect(entry.delivered).toBe(false);
+    expect(entry.uncertain_injection_id).toBe((await h.question(Q1))?.last_injection_id);
+    expect(h.terminalReports()).toEqual([]);
+
+    h.signal("settled");
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it("types nothing into a pane whose launch generation changed before its line was due, and needs a person", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+
+    h.delivery.start();
+    await until(() => admittedWrite(h, Q1) !== null, 1_500);
+    h.client.generations.set(PANE, 8);
+    h.patch({ launchGeneration: 8 });
+    await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
+    expect(h.client.submitted).toEqual([]);
+    expect((await entryOf(h)).write_refused).toBe(true);
+
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({ questionId: Q1, canReassign: false });
+    await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
+    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({
+      result: "refused",
+      reason: "asker-only",
+    });
+    expect((await h.question(Q1))?.origin).toEqual(ORIGIN);
+    await stopped(h.delivery);
+  });
+
+  it("offers Try resume for a notice its run's own session can take, and types it there once tried", async () => {
+    // The first resume never sees the agent at its prompt; the one a person asks for does.
+    const prompt = { reached: false };
+    const h = setup({
+      advisory: settledAttempt(),
+      listTerminals: true,
+      resume: {
+        wait: async (terminalId) =>
+          prompt.reached
+            ? { terminalId, outcome: "settled", state: "waiting", waitingReason: "prompt" }
+            : { terminalId, outcome: "timeout", state: "working" },
+      },
+    });
+    const origin = { ...ORIGIN, agent_session_id: "claude-session-9" };
+    await advisoryExpired(h.store, Q1, 1, { origin });
+    h.client.terminals.delete(PANE);
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
+    expect(h.client.submitted).toEqual([]);
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({ questionId: Q1, canResume: true, canReassign: false });
+
+    prompt.reached = true;
+    const resumed = settledValue(h.delivery.resumeAnswer(Q1));
+    await until(() => resumed.done);
+    expect(h.client.submitted).toHaveLength(1);
+    expect(h.client.submitted[0].id).toBe(RESUMED);
+    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    expect(h.launches.every((launch) => launch.sessionId === "claude-session-9")).toBe(true);
+    await stopped(h.delivery);
+  });
+
+  it("clears a refused write when a person asks for the notice to be tried again", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    h.delivery.start();
+    await until(() => admittedWrite(h, Q1) !== null, 1_500);
+    h.client.generations.set(PANE, 8);
+    h.patch({ launchGeneration: 8 });
+    await until(async () => (await entryOf(h)).write_refused === true, 60_000);
+
+    // The run is back as it was: the retry types the notice and the refusal no longer stands.
+    h.client.generations.set(PANE, 7);
+    h.patch({ launchGeneration: 7 });
+    const retried = settledValue(h.delivery.resumeAnswer(Q1));
+    await until(() => retried.done);
+    expect(retried.value).toMatchObject({ result: "delivered" });
+    expect(h.client.submitted).toHaveLength(1);
+    expect((await entryOf(h)).write_refused).toBeUndefined();
+    await stopped(h.delivery);
+  });
+
+  it("refuses to move a never-published notice whose plan is due to another pane", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      local_status: "publish-failed",
+      question_revision: 0,
+      content_sealed: '{"sealed":1}',
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: serializeAnswers([
+        {
+          entry_id: `unpublished-${Q1}`,
+          kind: "unpublished",
+          action: "expire",
+          revision: 0,
+          source: "system",
+          fallback_due: true,
+          correction: false,
+          created_at: "2026-11-01T09:00:00.000Z",
+          deliver: true,
+          delivered: false,
+          sealed: null,
+        },
+      ]),
+    });
+    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({
+      result: "refused",
+      reason: "asker-only",
+    });
+    await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
+    await stopped(h.delivery);
+  });
+
+  it.each([
+    ["on the run's screen: delivered, never typed again", true, "terminal-delivered"],
+    ["missing from the screen: uncertain, never typed again", false, "delivery-uncertain"],
+  ])(
+    "reconciles a notice a restart interrupted, by its marker %s",
+    async (_label, onScreen, status) => {
+      const h = setup({ advisory: settledAttempt() });
+      await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
+      await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+      h.client.screens.set(PANE, onScreen ? `${markerFor(CRASHED)}\r\n❯ \r\n` : "❯ \r\n");
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.delivery_status === status);
+      const entry = await entryOf(h);
+      if (onScreen) expect(entry).toMatchObject({ delivered: true, injection_id: CRASHED });
+      else expect(entry).toMatchObject({ delivered: false, uncertain_injection_id: CRASHED });
+
+      h.signal("settled");
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    }
+  );
+
+  it("types the notice into a resume of the asking agent's own session", async () => {
+    const h = setup({ advisory: settledAttempt(), resume: {} });
+    const origin = { ...ORIGIN, agent_session_id: "claude-session-9" };
+    await advisoryExpired(h.store, Q1, 1, { origin });
+    h.client.terminals.delete(PANE);
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1);
+    expect(h.launches).toMatchObject([{ sessionId: "claude-session-9" }]);
+    expect(h.client.submitted[0].id).toBe(RESUMED);
+    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    await until(async () => (await entryOf(h)).delivered);
+    expect((await h.question(Q1))?.origin).toMatchObject({
+      pane_id: RESUMED,
+      agent_session_id: "claude-session-9",
+    });
+    await stopped(h.delivery);
+  });
+
+  it("never resumes another session for it: a run with none known needs a person", async () => {
+    const h = setup({ advisory: settledAttempt(), resume: {} });
+    await advisoryExpired(h.store, Q1, 1, { origin: { ...ORIGIN, agent_session_id: null } });
+    h.client.terminals.delete(PANE);
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+    expect(h.client.submitted).toEqual([]);
+    expect((await h.question(Q1))?.origin.pane_id).toBe(PANE);
+    await stopped(h.delivery);
+  });
+
+  it.each([
+    ["listening", false],
+    ["gone", true],
+  ])(
+    "treats a person's decline in the advisory round as any other, its run %s",
+    async (_l, gone) => {
+      // Its session could be reopened: an answer would be typed there.
+      const h = setup({ advisory: settledAttempt(), resume: {} });
+      await declined(h.store, Q1, 1, {
+        content_sealed: JSON.stringify({ aad: { reply_mode: "advisory", revision: 0 } }),
+      });
+      if (gone) h.client.terminals.delete(PANE);
+
+      h.delivery.start();
+      if (gone) {
+        await until(async () => !(await entryOf(h)).deliver);
+        expect(h.launches).toEqual([]);
+        expect(h.client.submitted).toEqual([]);
+        expect(await h.delivery.attentionItems()).toEqual([]);
+      } else {
+        await until(() => h.client.submitted.length === 1);
+        expect(h.client.submitted[0].text).toContain("status: declined\nauthorised: no\n");
+        expect(h.client.submitted[0].text).not.toContain("advisory-unanswered");
+      }
+      await stopped(h.delivery);
+    }
+  );
+});
 
 describe("AnswerDelivery, a person's decline (#17234)", () => {
   const declineOf = async (h: ReturnType<typeof setup>) =>

@@ -750,11 +750,11 @@ describe("/mcp/decisions (#16011)", () => {
     expect(question.record.expires_at).toBe(expiresAt);
     expect(question.record.workflow_gate_id_hash).toBeNull();
     expect(question.envelope.aad.reply_mode).toBe("advisory");
-    // The desktop still declares nothing of it until its sink types the advisory notice (#17941).
+    // The owner desktop declares it delivers the outcome, as its sink types the advisory notice (#17941).
     await vi.waitFor(() => expect(relay.tickets.length).toBeGreaterThan(0));
     for (const features of relay.tickets) {
       expect(features).toContain("involvement-v1");
-      expect(features).not.toContain("advisory-deadlines-v1");
+      expect(features).toContain("advisory-deadlines-v1");
     }
 
     const questionId = receipt.question_id as string;
