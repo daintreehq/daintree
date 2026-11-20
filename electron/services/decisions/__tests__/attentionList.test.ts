@@ -557,6 +557,20 @@ describe("questionLine", () => {
     expect(Date.now() - start).toBeLessThan(200);
   });
 
+  it("skips fenced blocks, bare rules and keeps code spans whole", () => {
+    expect(questionLine("## Context\n```bash\nnpm run migrate\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+    expect(questionLine("Context\n=\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("## Context\n* * *\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("```foo``` failed. Retry?")).toBe("foo failed. Retry?");
+    expect(questionLine("Use ``a `**b**``?")).toBe("Use a `**b**?");
+    expect(questionLine(`${" ".repeat(1500)}Should we deploy?`)).toBe("Should we deploy?");
+    expect(questionLine("##\tContext\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("<https://x.test/a> or not?")).toBe("https://x.test/a or not?");
+    expect(questionLine("Context\nSummary\nBackground")).toBe("Context");
+  });
+
   it("gives way from a generic heading to the first substantive line", () => {
     expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
       "Should the cache be cleared?"

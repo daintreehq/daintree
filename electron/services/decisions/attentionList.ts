@@ -290,7 +290,7 @@ const GENERIC_HEADINGS = new Set([
   "tldr",
 ]);
 
-const LINE_SCAN_CHARS = 1_000;
+const LINE_SCAN_CHARS = 4_000;
 
 /** Emphasis and links outside code spans; the line was already cut to a bounded length. */
 function stripInline(text: string): string {
@@ -303,17 +303,28 @@ function stripInline(text: string): string {
 
 /** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
 function stripMarkdown(raw: string): string {
-  let line = sanitizeAnswerText(raw.slice(0, LINE_SCAN_CHARS), LINE_SCAN_CHARS);
+  let line = sanitizeAnswerText(
+    raw.trim().replace(/\t/g, " ").slice(0, LINE_SCAN_CHARS),
+    LINE_SCAN_CHARS
+  );
+  if (/^(?:[-*_=]\s*){1,}$/.test(line) && /^(?:=+|(?:[-*_]\s*){3,})$/.test(line)) return "";
   line = line.replace(/^\s{0,3}(?:>\s*)+/, "").replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
-  if (/^\s*(?:`{3,}|~{3,})/.test(line) || /^\s*(?:[-*_=]\s*){3,}$/.test(line)) return "";
   const heading = /^\s*#{1,6}(?:\s+|$)/.test(line);
   line = line.replace(/^\s*#{1,6}(?:\s+|$)/, "");
   if (heading) line = line.replace(/\s+#+\s*$/, "");
-  return line
-    .split(/(`+[^`]*`+)/)
-    .map((part, index) => (index % 2 === 1 ? part.replace(/^`+|`+$/g, "") : stripInline(part)))
-    .join("")
-    .trim();
+  let out = "";
+  let last = 0;
+  for (const span of line.matchAll(/(`+)(?!`)(.+?)(?<!`)\1(?!`)/g)) {
+    out += stripInline(line.slice(last, span.index)) + span[2];
+    last = span.index + span[0].length;
+  }
+  return (out + stripInline(line.slice(last))).trim();
+}
+
+/** Whether a line opens or closes a fenced code block (a fence closed on its own line is inline code). */
+function isFenceLine(raw: string): boolean {
+  const line = raw.trim();
+  return /^(?:`{3,}|~{3,})/.test(line) && !/^(`{3,}).*[^`]\1(?!`)/.test(line);
 }
 
 function isGenericHeading(text: string): boolean {
@@ -322,16 +333,25 @@ function isGenericHeading(text: string): boolean {
 
 /** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
+  const lines = question.split(/\r\n?|\n|\u2028|\u2029/);
+  // An opened fence that never closes is not a block: its text counts as the question's.
+  const fences = lines.filter(isFenceLine).length;
+  const skipFenced = fences % 2 === 0;
   let first: string | undefined;
-  for (const raw of question.split(/\r\n?|\n|\u2028|\u2029/)) {
+  let fenced = false;
+  for (const raw of lines) {
     if (raw.trim() === "") continue;
+    if (isFenceLine(raw)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced && skipFenced) continue;
     const text = sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS);
     if (text === "") continue;
     first ??= text;
     if (!isGenericHeading(text)) return text;
   }
-  const line = first;
-  return line === undefined ? null : line;
+  return first ?? null;
 }
 
 /**
