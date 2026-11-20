@@ -632,9 +632,8 @@ function InboxList({
     return () => clearTimeout(held.timer);
   }, []);
 
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    roving.onKeyDown(event);
-    if (!event.isDefaultPrevented()) return;
+  // Started by each press that moves the keyboard to a row, for the row it moved to.
+  const armDwell = () => {
     clearTimeout(dwell.current.timer);
     const landed = lastFocused.current;
     if (landed === null || landed.key === selectedKey) return;
@@ -647,6 +646,10 @@ function InboxList({
       );
       if (position !== -1) onSelect(now.key, position);
     }, SELECTION_DWELL_MS);
+  };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    roving.onKeyDown(event);
+    if (event.isDefaultPrevented()) armDwell();
   };
 
   // A row that moves to another group is a new element, and the old one took
@@ -685,6 +688,7 @@ function InboxList({
           if (stop !== null) {
             event.preventDefault();
             stop.focus();
+            armDwell();
             return;
           }
         }
@@ -778,7 +782,11 @@ function InboxList({
                     agent={parts.agent}
                     where={parts.where}
                     selected={key === selectedKey}
-                    describedBy={key === selectedKey ? hintId : undefined}
+                    describedBy={
+                      (selectedKey === null ? key === roving.tabStopKey : key === selectedKey)
+                        ? hintId
+                        : undefined
+                    }
                     tabStop={key === roving.tabStopKey}
                     rowRef={roving.rowRef(key)}
                     onFocus={(element) => {
@@ -964,6 +972,7 @@ export function DecisionsInboxDialog() {
   const handOff = (key: string, to: FocusDestination) => {
     const detail = detailRef.current;
     if (detail === null) return;
+    choose(key);
     if (key === selectedKey && readResult !== null) {
       pendingFocus.current = null;
       // One that can't be read: the pane, on why.
@@ -971,7 +980,6 @@ export function DecisionsInboxDialog() {
       else detail.focus({ preventScroll: true });
       return;
     }
-    choose(key);
     // Already the question shown, still being read: it has reached it.
     pendingFocus.current =
       key === selectedKey
@@ -1079,16 +1087,20 @@ export function DecisionsInboxDialog() {
 
   // The question shown, said as it changes: by its id while the keyboard is on its row, whose
   // name has just been read, and with its line from anywhere else, once that line or the question
-  // itself is read. Not the one an opening shows by itself, which the focus on its row says, nor
+  // itself is read. Not what an opening's list first shows, which the focus on its row says, nor
   // a regroup or a late line, which change nothing shown.
-  const picked = chosen?.picked === true;
-  const announced = useRef<{ seq: number; key: string } | null>(null);
+  const announced = useRef<{ seq: number; key: string | null } | null>(null);
   useEffect(() => {
-    if (!active || selected === null || selectedKey === null) return;
+    if (!active || listRead.state !== "listed") return;
     const last = announced.current;
-    if (last !== null && last.seq === request.seq && last.key === selectedKey) return;
-    if ((last === null || last.seq !== request.seq) && !picked) {
+    if (last === null || last.seq !== request.seq) {
       announced.current = { seq: request.seq, key: selectedKey };
+      return;
+    }
+    if (last.key === selectedKey) return;
+    // Nothing shown: forgotten, so a question that comes back is said again.
+    if (selected === null || selectedKey === null) {
+      announced.current = { seq: request.seq, key: null };
       return;
     }
     const focusedRow = document.activeElement?.closest("[data-roving-row]");
@@ -1098,7 +1110,7 @@ export function DecisionsInboxDialog() {
     announced.current = { seq: request.seq, key: selectedKey };
     const alias = aliasLabel(selected.alias);
     announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
-  }, [active, selected, selectedKey, request.seq, picked, lines, readResult, announce]);
+  }, [active, listRead.state, selected, selectedKey, request.seq, lines, readResult, announce]);
 
   // Each question is read from its top, wherever the last one was scrolled to.
   useLayoutEffect(() => {

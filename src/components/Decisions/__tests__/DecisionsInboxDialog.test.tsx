@@ -2169,11 +2169,16 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
       for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       expect(getQuestionContentByReference).not.toHaveBeenCalled();
+      useAnnouncerStore.setState({ polite: null });
       push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
       expect(document.activeElement).toBe(rowNamed("q-5"));
       expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
+      // Shown with the keyboard elsewhere: a screen reader hears which (#18038).
+      await waitFor(() =>
+        expect(useAnnouncerStore.getState().polite?.msg).toBe("Showing q-2: Line of question-2")
+      );
     });
 
     it("keeps a question the person picked as one comes to need them", async () => {
@@ -2258,6 +2263,9 @@ describe("DecisionsInboxDialog", () => {
       expect(document.activeElement).toBe(list);
       fireEvent.keyDown(list, { key: "ArrowDown" });
       expect(document.activeElement).toBe(rowNamed("q-5"));
+      // And shows it once the keyboard has rested there, as any arrow does (#18038).
+      await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
+      expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true");
     });
 
     it("leaves the keyboard where it went when Clear Needs you goes later", async () => {
