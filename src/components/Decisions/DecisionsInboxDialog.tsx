@@ -1492,15 +1492,23 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
     if (offered) setScopeChoice({ seq: request.seq, scope, ask, widened: false });
   } else if (active && opening.scope === "project" && opening.ask !== ask && asked !== null) {
     // Asked for another project's question while narrowed (#18119), the list goes back to every
-    // project, once per ask, so the question is shown and Clear says how far it reaches. Not once
-    // the person picked a row since the ask, which keeps the list it was picked in, nor before
-    // the question is listed, nor as the inbox closes.
-    const match = questions === null ? undefined : findAsked(questions, asked, viewHostId);
-    const picked = chosen?.picked === true;
-    if (match !== undefined || picked) {
-      const widened = !picked && match !== undefined && !inWindowProject(match, windowProject);
-      if (widened) scope = "all";
-      setScopeChoice({ seq: request.seq, scope, ask, widened });
+    // project, once per ask, so the question is shown and Clear says how far it reaches. Not while
+    // a row the person picked since the ask is still in the list it was picked in, nor before the
+    // question is listed, nor as the inbox closes. A pick that goes before the question is listed
+    // leaves the list as the person had it; one gone by the time it's listed gives way (#18048).
+    if (questions !== null) {
+      const match = findAsked(questions, asked, viewHostId);
+      const picked = chosen?.picked === true;
+      const pickStays =
+        picked &&
+        scopedQuestions(questions, "project", windowProject).some(
+          (item) => referenceKey(item.reference) === chosen.key
+        );
+      if (match !== undefined || (picked && !pickStays)) {
+        const widened = !pickStays && match !== undefined && !inWindowProject(match, windowProject);
+        if (widened) scope = "all";
+        setScopeChoice({ seq: request.seq, scope, ask, widened });
+      }
     }
   }
   const showScope = questions !== null && (offered || opening !== null);

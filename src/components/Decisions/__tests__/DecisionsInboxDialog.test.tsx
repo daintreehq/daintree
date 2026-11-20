@@ -3805,6 +3805,40 @@ describe("DecisionsInboxDialog", () => {
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
     });
 
+    it("widens all the same once the row picked meanwhile has left the narrowed list (#18048)", async () => {
+      listQuestions.mockResolvedValue({
+        ...MIXED,
+        questions: MIXED.questions.filter((q) => q !== BETA_WAITING),
+      });
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await act(async () => {});
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+
+      // The update that lists Beta's question also takes the picked one away.
+      push({
+        ...MIXED,
+        revision: 2,
+        questions: MIXED.questions.filter((q) => q !== ALPHA_WAITING),
+      });
+      await waitFor(() => expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true"));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+    });
+
     it("narrows to this project and back, choosing afresh when the question shown isn't this project's", async () => {
       open();
       await openHistory();
