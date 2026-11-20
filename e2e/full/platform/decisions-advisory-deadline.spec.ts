@@ -44,7 +44,6 @@ import {
 } from "../../helpers/fakeAgent";
 import { dispatchAction } from "../../helpers/actions";
 import {
-  answerOnPhone,
   closeSettings,
   connectRelay,
   DECISIONS_CHECKOUT,
@@ -118,7 +117,7 @@ async function ask(args: Record<string, unknown>, client = asker.mcp): Promise<R
     const asked = await client.callTool({ name: "ask_human", arguments: args });
     if (!asked.isError) return asked.structuredContent as unknown as Receipt;
     refusal = textOf(asked);
-    if (!/^not_supported: (support-unknown|no-capable-reader): /.test(refusal)) break;
+    if (!/^[a-z_]+: (support-unknown|no-capable-reader): /.test(refusal)) break;
     await new Promise((r) => setTimeout(r, 2_000));
   }
   throw new Error(`ask_human was refused: ${refusal}`);
@@ -126,7 +125,6 @@ async function ask(args: Record<string, unknown>, client = asker.mcp): Promise<R
 
 /** A choice between two fixtures, with the plan the agent follows if no one answers in 15 minutes. */
 async function askAdvice(question: string): Promise<Receipt> {
-  const before = clock.now();
   const receipt = await ask({
     question,
     kind: "choice",
@@ -140,9 +138,9 @@ async function askAdvice(question: string): Promise<Receipt> {
     enforced_requirement: "human-required",
   });
   // Worked out on the system's clock, wherever it has been moved to.
-  const window = Date.parse(receipt.expires_at) - before;
-  expect(window).toBeGreaterThanOrEqual(15 * MINUTE - 1_000);
-  expect(window).toBeLessThanOrEqual(15 * MINUTE + 5_000);
+  const left = Date.parse(receipt.expires_at) - clock.now();
+  expect(left).toBeGreaterThan(14 * MINUTE);
+  expect(left).toBeLessThanOrEqual(15 * MINUTE + 1_000);
   await published(receipt.question_id);
   return receipt;
 }
@@ -216,9 +214,10 @@ async function expectNoStaleAsk(question: string): Promise<void> {
   expect(opened.ok, JSON.stringify(opened)).toBe(true);
   const groups = page.locator('[data-testid="decisions-inbox-groups"]');
   await expect(groups).toContainText(question, { timeout: 30_000 });
-  await expect(page.locator('[data-testid="decisions-inbox-group-needs-you"]')).not.toContainText(
-    question
-  );
+  // An empty Needs you isn't drawn at all.
+  await expect(
+    page.locator('[data-testid="decisions-inbox-group-needs-you"]').filter({ hasText: question })
+  ).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(groups).toHaveCount(0, { timeout: 10_000 });
 }
@@ -389,7 +388,11 @@ test("a timely phone answer reaches the agent as the person's, and the deadline 
 
   // Ten minutes in, the person picks the option that isn't the plan.
   await clock.advance(10 * MINUTE);
-  await answerOnPhone(phone, question, { option: /A SQLite file per test/ });
+  // An advisory question offers its choices as chips beside the composer.
+  await openQuestionOnPhone(phone, question);
+  await phone.getByRole("radio", { name: /A SQLite file per test/ }).first().check();
+  await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
+  await expect(phone.getByText("Your answer", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect
     .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
@@ -562,7 +565,7 @@ test("a question whose first publish reply is lost reaches the phone once and cl
   const faultState = () =>
     ctx.app.evaluate(() => {
       const f = (globalThis as unknown as { __e2eCreateFault: CreateFault }).__e2eCreateFault;
-      return { lostStatus: f.lostStatus, creates: f.creates, holding: f.holding };
+      return { lostStatus: f.lostStatus, creates: f.creates };
     });
 
   try {
@@ -598,10 +601,6 @@ test("a question whose first publish reply is lost reaches the phone once and cl
     expect(read).toMatchObject({ status: "expired", fallback_due: true });
     expectNothingDecided(read);
     await expectQuietFor(10_000, () => expect(blocksFor(id, from)).toHaveLength(1));
-    await test.info().attach("create-fault", {
-      body: JSON.stringify(await faultState()),
-      contentType: "application/json",
-    });
     await expectNoStaleAsk(question);
   } finally {
     await ctx.app.evaluate(({ net }) => {

@@ -239,7 +239,7 @@ export async function connectRelay(
   await expect(panel.getByText(`${relay.host} is ready to claim`, { exact: true })).toBeVisible({
     timeout: 20_000,
   });
-  await panel.getByLabel("Claim secret").fill(relay.claimSecret);
+  await panel.getByRole("textbox", { name: "Claim secret" }).fill(relay.claimSecret);
   await panel.getByRole("button", { name: "Claim relay" }).click();
   await expect(panel.getByText("Setup isn't finished")).toBeVisible({ timeout: 30_000 });
   for (const name of agentNames) {
@@ -286,9 +286,10 @@ export async function pairPhone(
   const panel = page.locator(DECISIONS_SETTINGS_DIALOG);
   await panel.getByRole("button", { name: "Pair a phone" }).click();
   const dialog = page.locator('[data-testid="decisions-pairing-dialog"]');
-  const link = dialog.locator('span[title^="http"]');
+  // The whole link is the text; the dialog only clamps how much of it shows.
+  const link = dialog.locator("span.font-mono").filter({ hasText: /^https?:\/\// });
   await expect(link).toBeVisible({ timeout: 20_000 });
-  const invite = (await link.getAttribute("title"))!;
+  const invite = (await link.textContent())!.trim();
   expect(invite.startsWith(`${relay.origin}/pair#`)).toBe(true);
 
   await device.goto(invite);
