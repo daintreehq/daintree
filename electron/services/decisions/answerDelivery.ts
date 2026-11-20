@@ -48,6 +48,7 @@ import type {
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionReference,
+  DecisionQuestionPaneResult,
   DecisionQuestionSummary,
 } from "../../../shared/types/decisionsQuestion.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
@@ -94,6 +95,8 @@ import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js"
 import type { AdvisoryHost } from "./questionRound.js";
 import { closedReasonOf } from "./questionClosed.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
+import type { PaneSnapshotPtyClient } from "./paneSnapshots.js";
+import { REASSIGNED_STRATEGY, readQuestionPane } from "./questionPane.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
 
 /** A hold on the wake engine's queue (#15999), which takes wakes with the MCP server off. */
@@ -769,6 +772,33 @@ export class AnswerDelivery {
     return readQuestionImage(this.owner.ctx, row, attachmentId, offset);
   }
 
+  /**
+   * The pane that asked one of this machine's questions, as it shows now
+   * (#18037), whatever the question's status, through `getPtyClient`, which
+   * reads its screen. An imported question names no pane of this run.
+   */
+  async questionPane(
+    scope: QuestionReadRequest,
+    questionId: string,
+    getPtyClient: () => PaneSnapshotPtyClient | null
+  ): Promise<DecisionQuestionPaneResult> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null || row.history_only || !inScope(row, this.readScope(scope))) {
+      return { result: "not-found" };
+    }
+    const { deps } = this.o;
+    return readQuestionPane(
+      {
+        hostId: () => deps.hostId(),
+        principalFor: (paneId) => deps.principalFor(paneId),
+        getPtyClient,
+      },
+      getPtyClient(),
+      row,
+      () => this.clock()
+    );
+  }
+
   /** Each question's opening line, in the order asked for, each id once (#17097). */
   async questionSummaries(
     scope: QuestionReadRequest,
@@ -1073,7 +1103,7 @@ export class AnswerDelivery {
       await this.store.updateQuestion(questionId, {
         ...(await this.retryPatch(row)),
         origin,
-        agent_resume_strategy: "reassigned",
+        agent_resume_strategy: REASSIGNED_STRATEGY,
       });
       await this.owner.ctx.audit.log({
         event: "delivery.reassigned",

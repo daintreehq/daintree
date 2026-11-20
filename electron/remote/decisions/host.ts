@@ -7,6 +7,7 @@ import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -204,6 +205,7 @@ export interface DecisionsHostLifetime {
     | DecisionQuestionContentResult
     | DecisionQuestionImagePartResult
     | DecisionQuestionSummariesResult
+    | DecisionQuestionPaneResult
   >;
   /** The person withdrawing one of this Host's own questions by reference. */
   cancelQuestion(reference: DecisionQuestionReference): Promise<DecisionQuestionCancelResult>;
@@ -575,6 +577,29 @@ export function installDecisionsHostWith(
     return sequenced(session, sent);
   };
 
+  /**
+   * The pane that asked one of this Host's questions, as it shows now
+   * (#18037), for the owner that enrolled this Host only, and only while it
+   * still serves that owner once the read is done.
+   */
+  const readQuestionPane = async (
+    session: LinkSession,
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionPaneResult> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const answer = (await made.readQuestion({
+      read: "pane",
+      reference,
+    })) as DecisionQuestionPaneResult;
+    // What was read goes only to a session still served: its owner may have said otherwise meanwhile.
+    if (!servesQuestions(session)) return OFF;
+    return answer;
+  };
+
   const cancelQuestion = async (
     session: LinkSession,
     reference: DecisionQuestionReference
@@ -675,6 +700,13 @@ export function installDecisionsHostWith(
           ({ reference }) => readQuestionContentV2(session, reference, true)
         )
       : () => {};
+    const offQuestionPane = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.QUESTION_PANE,
+          HostQuestionContentV2ReadSchema,
+          ({ reference }) => readQuestionPane(session, reference)
+        )
+      : () => {};
     const offCancelQuestion = runtime
       ? session.registerCallHandler(
           DecisionsLinkMethod.CANCEL_QUESTION,
@@ -700,6 +732,7 @@ export function installDecisionsHostWith(
       offQuestionListV3();
       offQuestionContentV2();
       offQuestionContentV3();
+      offQuestionPane();
       offCancelQuestion();
       offAttention();
       offClose();

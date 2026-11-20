@@ -1010,6 +1010,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImageByReferencePayload];
     result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
   };
+  "decisions:get-question-pane-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionPaneResult;
+  };
   "decisions:get-question-summaries": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
