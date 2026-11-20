@@ -606,6 +606,7 @@ describe("DecisionsService question list (#17229)", () => {
       handled?: Record<string, number>;
       notifyQuestions?: DecisionsServiceOptions["notifyQuestions"];
       connect?: DecisionsServiceOptions["connect"];
+      askerPresence?: DecisionsServiceOptions["askerPresence"];
     } = {}
   ) {
     let rows: QuestionRow[] = [];
@@ -662,6 +663,7 @@ describe("DecisionsService question list (#17229)", () => {
         hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
       notifyQuestions: options.notifyQuestions,
       ...(options.connect ? { connect: options.connect } : {}),
+      ...(options.askerPresence ? { askerPresence: options.askerPresence } : {}),
     });
     const commit = async (next: QuestionRow[]) => {
       rows = next;
@@ -1161,6 +1163,118 @@ describe("DecisionsService question list (#17229)", () => {
     expect(lists.at(-1)).toHaveLength(1);
     await service.stop();
     expect(hostLists.filter((list) => list !== null)).toEqual([]);
+  });
+
+  /** One pane, as the pty host reports it, and the pane events main would emit (#18029). */
+  function panes(asked: QuestionRow["origin"]) {
+    const record: { id: string; hasPty: boolean; isTrashed?: boolean } & Record<string, unknown> = {
+      id: asked.pane_id,
+      hasPty: true,
+      launchGeneration: asked.terminal_generation,
+      agentIncarnation: Number(asked.agent_incarnation),
+      agentSessionId: asked.agent_session_id ?? undefined,
+      worktreeId: asked.worktree_id,
+      detectedAgentId: asked.agent_kind,
+      everDetectedAgent: true,
+    };
+    const listeners = new Set<() => void>();
+    const sources: NonNullable<DecisionsServiceOptions["askerPresence"]> = {
+      hostId: () => HOST.hostId,
+      principalFor: () => asked.ownership_principal,
+      getPtyClient: () => ({
+        getLiveGeneration: () => asked.terminal_generation,
+        isLiveGeneration: () => true,
+        getAllTerminalsWithCompletenessAsync: async () => ({
+          terminals: [{ ...record }],
+          degraded: false,
+        }),
+      }),
+      stat: async () => ({ isDirectory: () => true }),
+      watch: (onPane) => {
+        listeners.add(onPane);
+        return () => listeners.delete(onPane);
+      },
+      settleMs: 0,
+    };
+    return {
+      sources,
+      record,
+      watching: () => listeners.size,
+      emit: () => {
+        for (const listener of [...listeners]) listener();
+      },
+    };
+  }
+
+  it("lists what it observed of an open question's asker, again on a pane event, without reading the store (#18029)", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, lists, setRows, reads } = listed({ askerPresence: pane.sources });
+    setRows([
+      open,
+      row(2, {
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(lists.at(-1)?.[0]?.asker).toEqual({
+        target: "running",
+        directory: "present",
+        resume: "resumable",
+      })
+    );
+    // Only an open ask is observed: a delivered answer says how delivery went instead.
+    expect(lists.at(-1)?.[1]).not.toHaveProperty("asker");
+    const readsBefore = reads();
+
+    pane.record.isTrashed = true;
+    pane.emit();
+
+    await vi.waitFor(() => expect(lists.at(-1)?.[0]?.asker?.target).toBe("trashed"));
+    expect(reads()).toBe(readsBefore);
+    // Observed, never acted on: the question still waits for the person.
+    expect(lists.at(-1)?.[0]?.standing).toEqual({ kind: "waiting", reason: "open" });
+    await service.stop();
+    expect(pane.watching()).toBe(0);
+  });
+
+  it("stops watching panes once its last open question is answered (#18029)", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, lists, setRows, commit } = listed({ askerPresence: pane.sources });
+    setRows([open]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)?.[0]?.asker?.target).toBe("running"));
+    expect(pane.watching()).toBe(1);
+
+    await commit([
+      row(1, {
+        origin: { agent_incarnation: "4" },
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
+    ]);
+
+    expect(pane.watching()).toBe(0);
+    expect(lists.at(-1)?.[0]).not.toHaveProperty("asker");
+    await service.stop();
+  });
+
+  it("observes no asker for a Remote Host's lifetime, whose owner can't see its panes", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, hostLists, setRows } = listed({ askerPresence: pane.sources });
+    setRows([open]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() => expect(hostLists.at(-1)?.questions).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pane.watching()).toBe(0);
+    expect(hostLists.at(-1)?.questions[0]).not.toHaveProperty("asker");
+    await service.stop();
   });
 });
 

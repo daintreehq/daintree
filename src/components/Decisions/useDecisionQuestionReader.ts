@@ -68,8 +68,11 @@ function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () 
     const item = list.questions.find(
       (question) => targetKey({ scope: "reference", reference: question.reference }) === key
     );
-    // The person's marks (#17895) move nothing that is read; a new ask does.
-    const now = JSON.stringify(item === undefined ? null : { ...item, inbox: item.inbox?.ask });
+    // The person's marks (#17895) and what was seen of its asker (#18029) move nothing that is
+    // read; a new ask does.
+    const now = JSON.stringify(
+      item === undefined ? null : { ...item, inbox: item.inbox?.ask, asker: undefined }
+    );
     if (now === last) return;
     last = now;
     moved();

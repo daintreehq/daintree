@@ -74,13 +74,16 @@ import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
+  askerNotes,
   askShownIn,
   askedOnHost,
   attentionNotice,
   attentionText,
+  CLEAR_GONE_HINT,
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
   clearAllText,
+  clearGoneText,
   clearText,
   connectionNotice,
   DECLINE_TEXT,
@@ -88,6 +91,7 @@ import {
   emptyText,
   expiresSoon,
   GO_TO_TERMINAL_TEXT,
+  goneAsks,
   inboxGroupOf,
   inboxGroups,
   closedTime,
@@ -406,8 +410,11 @@ function useTerminalReach(
 ): { reach: TerminalReach; markGone: (key: string) => void } {
   const remote = isRemoteWindow();
   const sameMachine = item !== null && askedOnHost(item, currentHostId());
-  const terminalId = item?.reference.terminalId ?? null;
-  const projectId = item?.reference.projectId ?? null;
+  // The terminal that asked was seen to close or run another session: a pane under its id isn't it.
+  const target = item?.asker?.target;
+  const gone = target === "closed" || target === "trashed" || target === "replaced";
+  const terminalId = gone ? null : (item?.reference.terminalId ?? null);
+  const projectId = gone ? null : (item?.reference.projectId ?? null);
   const here = sameMachine && projectId !== null && projectId === getViewWorkspaceId();
   const openHere = usePanelStore((state) => {
     if (!here || terminalId === null) return false;
@@ -456,7 +463,7 @@ function useTerminalReach(
     setFound({ key: gone, open: false });
     setEpoch((n) => n + 1);
   }, []);
-  if (item === null || !sameMachine) return { reach: null, markGone };
+  if (item === null || !sameMachine || gone) return { reach: null, markGone };
   if (here) return { reach: openHere ? "here" : null, markGone };
   if (remote) return { reach: null, markGone };
   return {
@@ -602,6 +609,7 @@ function InboxRow({
     deadline !== null && nowMs !== null && expiresSoon(item, nowMs)
       ? expiryText(deadline, nowMs, item.replyMode)
       : null;
+  const asker = askerNotes(item);
   const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
   // Set aside, not over: the title steps down like History's, the question stays open.
@@ -668,11 +676,12 @@ function InboxRow({
           </span>
           {/* Only what sets this row apart from its group; the full sentence is for the ear.
               A closed row's outcome follows who asked on its where-line instead, so history stays two lines. */}
-          {((note !== null && !closed) || expiry !== null) && (
+          {((note !== null && !closed) || expiry !== null || asker !== null) && (
             <span
               aria-hidden="true"
               className={cn(
-                "flex min-w-0 items-center gap-1.5 text-xs leading-4",
+                // Wraps rather than squeeze what was seen of the asker out past a deadline chip.
+                "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-4",
                 attention || expiry !== null ? "text-text-primary" : "text-text-secondary"
               )}
             >
@@ -689,6 +698,11 @@ function InboxRow({
                 </span>
               )}
               {note !== null && !closed && <span className="min-w-0 truncate">{note}</span>}
+              {asker !== null && (
+                <span className="min-w-0 truncate" data-testid="decisions-inbox-row-asker">
+                  {asker.row}
+                </span>
+              )}
             </span>
           )}
           {/* A closed row's outcome is already read out with its where-line. */}
@@ -697,6 +711,7 @@ function InboxRow({
               {spoken}
               {cleared && `, ${CLEARED_NOTE.toLowerCase()}`}
               {expiry !== null && `, ${expiry.toLowerCase()}`}
+              {asker !== null && `, ${asker.row.toLowerCase()}`}
             </span>
           )}
           <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
@@ -1096,6 +1111,7 @@ export function DecisionsInboxDialog() {
           ? { text: dismissal.outcome, live: true }
           : null;
   const { reach, markGone } = useTerminalReach(selected, active);
+  const selectedAsker = selected === null ? null : askerNotes(selected);
   const questionHeadingId = useId();
   // `reached` once its question has been the one shown, so a later choice of another abandons it.
   const pendingFocus = useRef<{
@@ -1112,6 +1128,7 @@ export function DecisionsInboxDialog() {
   // Once the one shown no longer needs the person, the next that does is one press away:
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
+  const gone = goneAsks(waiting, nowMs);
   const nextUp =
     selected !== null && inboxGroupOf(selected, nowMs) !== "needs-you"
       ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
@@ -1154,6 +1171,7 @@ export function DecisionsInboxDialog() {
     };
   }, []);
   const clearHintId = useId();
+  const clearGoneHintId = useId();
   const clearHint = clearText(selectedGroup === "cleared");
   const choose = (key: string) => {
     const index = ordered.findIndex((item) => referenceKey(item.reference) === key);
@@ -1191,9 +1209,10 @@ export function DecisionsInboxDialog() {
   // Each look before going elsewhere belongs to the question shown when it
   // started, in this opening: closing, reopening or choosing another drops it.
   const navigation = useRef(0);
+  // Losing the way to it drops a look too: a terminal seen to end or restart meanwhile isn't it.
   useEffect(() => {
     navigation.current += 1;
-  }, [isOpen, request.seq, selectedKey]);
+  }, [isOpen, request.seq, selectedKey, reach]);
 
   // A hand-off's landing: once the question it asked for is read, its words or answer take the
   // keyboard, unless the keyboard went somewhere else meanwhile or another question was chosen.
@@ -1596,13 +1615,38 @@ export function DecisionsInboxDialog() {
                     options={SCOPE_OPTIONS}
                   />
                 )}
+                {/* Only while Needs you holds an ask with no agent: the press that clears them hands
+                    the keyboard to the list, as clearing Needs you does. */}
+                {gone.length > 0 && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={handBackToList}
+                          variant="ghost"
+                          size="xs"
+                          aria-describedby={clearGoneHintId}
+                          onClick={() => markShown("clear", gone)}
+                          className="ml-auto"
+                          data-testid="decisions-inbox-clear-gone"
+                        >
+                          {clearGoneText(gone.length)}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{CLEAR_GONE_HINT}</TooltipContent>
+                    </Tooltip>
+                    <span id={clearGoneHintId} className="sr-only">
+                      {CLEAR_GONE_HINT}
+                    </span>
+                  </>
+                )}
                 {waiting.length > 0 && (
                   <Button
                     ref={handBackToList}
                     variant="ghost"
                     size="xs"
                     onClick={() => markShown("clear", waiting)}
-                    className="ml-auto"
+                    className={gone.length > 0 ? undefined : "ml-auto"}
                     data-testid="decisions-inbox-clear-all"
                   >
                     {clearAllText(scope, clearNamesReach)}
@@ -1770,6 +1814,15 @@ export function DecisionsInboxDialog() {
                         {dismissNote.text}
                       </p>
                     )}
+                    {selectedAsker !== null && (
+                      <Callout
+                        severity="neutral"
+                        size="compact"
+                        data-testid="decisions-inbox-asker"
+                      >
+                        {selectedAsker.detail}
+                      </Callout>
+                    )}
                     {selected.standing.kind === "needs-attention" && (
                       <Callout
                         severity="warning"
@@ -1827,6 +1880,7 @@ export function DecisionsInboxDialog() {
                           </span>
                         </p>
                       }
+                      deliveryNotice={selectedAsker?.composer ?? null}
                       sendNote={
                         // Only while a connection is being retried, never past a problem that needs the person.
                         status !== null &&

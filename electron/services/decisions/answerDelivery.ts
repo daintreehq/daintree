@@ -1281,6 +1281,14 @@ export class AnswerDelivery {
     return origin.host_id === this.o.deps.hostId();
   }
 
+  /**
+   * Whether a resume already handed an answer to the run `origin` names this
+   * lifetime, and it went away, so delivery won't reopen it again (#18029).
+   */
+  resumeEnded(origin: QuestionOrigin): boolean {
+    return this.resume?.resumeEnded(origin) ?? false;
+  }
+
   /** The lock every bridge over this store must use, so answer appends and delivery marks never interleave. */
   get lock(): DecisionsBridge["ctx"]["lock"] {
     return this.owner.ctx.lock;

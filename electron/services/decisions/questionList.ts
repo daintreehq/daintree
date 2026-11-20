@@ -7,6 +7,7 @@ import {
 } from "@daintreehq/decisions-client";
 import { threadAwaitsHuman } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionAskerPresence,
   DecisionQuestionListItem,
   DecisionQuestionStall,
   DecisionQuestionStanding,
@@ -39,12 +40,15 @@ function attentionStatus(status: QuestionRow["delivery_status"]): boolean {
  * questions another machine asked aren't this computer's, and show nowhere.
  * Only ids, labels, times and statuses are copied, field by field: a row's
  * content and its answers' and follow-ups' sealed text are never read.
+ * `askerFor` gives what was last observed of the run that asked (#18029),
+ * which an open or queued question carries once there is any.
  */
 export function projectDecisionQuestions(
   rows: readonly QuestionRow[],
   handled: HandledAnswers,
   hostId: string | null,
-  advisory: AdvisoryHost = NO_ADVISORY_HOST
+  advisory: AdvisoryHost = NO_ADVISORY_HOST,
+  askerFor?: (origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined
 ): DecisionQuestionListItem[] {
   if (hostId === null) return [];
   return rows
@@ -60,6 +64,7 @@ export function projectDecisionQuestions(
       const { origin } = row;
       const standing = standingOf(row, handled);
       const round = roundOf(row, undefined, advisory);
+      const asker = asksAboutAsker(standing) ? askerFor?.(origin) : undefined;
       return {
         reference: {
           hostId,
@@ -82,8 +87,18 @@ export function projectDecisionQuestions(
         standing,
         replyRequest: replyRequestOf(row),
         stall: stallOf(row, handled),
+        ...(asker !== undefined ? { asker } : {}),
       };
     });
+}
+
+/**
+ * Whether the run that asked is observed for a question in this standing: an
+ * open or queued one, which an answer can still be given to. Later standings
+ * say how delivery went instead.
+ */
+export function asksAboutAsker(standing: DecisionQuestionStanding): boolean {
+  return (standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued";
 }
 
 /**

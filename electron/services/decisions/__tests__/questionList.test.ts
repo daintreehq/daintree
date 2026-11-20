@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { projectDecisionQuestions, questionAsks, standingOf } from "../questionList.js";
 import { NO_ADVISORY_HOST } from "../questionRound.js";
@@ -877,5 +877,68 @@ describe("questionAsks", () => {
 
   it("reads only the questions named", () => {
     expect(questionAsks([row(1), row(2)], new Set([qid(2)]))).toEqual(new Map([[qid(2), null]]));
+  });
+});
+
+describe("projectDecisionQuestions asker presence (#18029)", () => {
+  const seen = { target: "closed", directory: "present", resume: "resumable" } as const;
+
+  it("carries what was observed of the run that asked an open or queued question", () => {
+    const asked: QuestionRow["origin"][] = [];
+    const list = projectDecisionQuestions(
+      [row(1), row(2, { local_status: "queued" })],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      (origin) => {
+        asked.push(origin);
+        return seen;
+      }
+    );
+    expect(list.map((item) => item.asker)).toEqual([seen, seen]);
+    expect(asked.map((origin) => origin.pane_id)).toEqual(["pane-a", "pane-a"]);
+    // Enums only: no run identity reaches the list.
+    expect(JSON.stringify(list[0]!.asker)).not.toContain(SECRET);
+  });
+
+  it("observes nothing once a question is answered, settled, or waits for a reply", () => {
+    const lookup = vi.fn(() => seen);
+    const list = projectDecisionQuestions(
+      [
+        row(1, delivered),
+        row(2, { local_status: "cancelled" }),
+        row(3, { local_status: "expired" }),
+        row(4, {
+          local_status: "human-answered",
+          delivery_status: "terminal-delivered",
+          answers_json: answers({ delivered: true, event_seq: 1 }),
+          messages_json: messages({
+            message_id: "m-1",
+            side: "agent",
+            expects_reply: true,
+            event_seq: 2,
+          }),
+        }),
+      ],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      lookup
+    );
+    expect(list.map((item) => "asker" in item)).toEqual([false, false, false, false]);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("leaves the field out until there is an observation, and without a lookup", () => {
+    const [unread] = projectDecisionQuestions(
+      [row(1)],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      () => undefined
+    );
+    const [none] = projectDecisionQuestions([row(1)], new Map(), HOST, NO_ADVISORY_HOST);
+    expect("asker" in unread!).toBe(false);
+    expect("asker" in none!).toBe(false);
   });
 });

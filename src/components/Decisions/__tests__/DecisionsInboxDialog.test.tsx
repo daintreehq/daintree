@@ -3389,3 +3389,217 @@ describe("DecisionsInboxDialog", () => {
     });
   });
 });
+
+describe("DecisionsInboxDialog: the run that asked (#18029)", () => {
+  const CLOSED_NO_SESSION = {
+    target: "closed",
+    directory: "present",
+    resume: "no-session",
+  } as const;
+  const CLOSED_RESUMABLE = { target: "closed", directory: "present", resume: "resumable" } as const;
+  const RUNNING = { target: "running", directory: "present", resume: "resumable" } as const;
+  const UNDETECTED = {
+    target: "agent-undetected",
+    directory: "present",
+    resume: "resumable",
+  } as const;
+
+  function asking(
+    questionId: string,
+    alias: number,
+    asker: DecisionQuestionListItem["asker"],
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return {
+      ...item(questionId, alias, OPEN, {
+        askedAt: `2026-11-02T09:0${alias}:00.000Z`,
+        inbox: { ask: null, seen: false, cleared: false },
+        ...over,
+      }),
+      ...(asker !== undefined ? { asker } : {}),
+    };
+  }
+
+  it("says on the row and in its pane that the terminal that asked closed and can't be resumed, and warns before an answer is written", async () => {
+    // A pane under the same id is open here, but it isn't the run that asked.
+    panels = { t1: { location: "grid" } };
+    listQuestions.mockResolvedValue({
+      revision: 2,
+      questions: [asking("question-2", 2, CLOSED_NO_SESSION)],
+    });
+    open();
+    await waitFor(() =>
+      expect(drawnText(rowNamed("q-2"))).toContain("Terminal ended · Can't resume")
+    );
+    expect(nameOf(rowNamed("q-2"))).toContain("terminal ended · can't resume");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-asker").textContent).toBe(
+        "The terminal that asked is no longer running. No session id was recorded when it asked, so its session can't be resumed."
+      )
+    );
+    const warning = await screen.findByTestId("decision-answer-delivery");
+    expect(warning.textContent).toContain("Nothing observed can take this answer now.");
+    // Before the choices, so it is read before anything is chosen.
+    const firstChoice = screen.getAllByTestId("decision-answer-option")[0]!;
+    expect(
+      warning.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+    // Observed, never acted on: nothing is dismissed or withdrawn.
+    expect(declineQuestion).not.toHaveBeenCalled();
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+  });
+
+  it("names a session that can be resumed, without a warning in the answer", async () => {
+    listQuestions.mockResolvedValue({
+      revision: 2,
+      questions: [asking("question-2", 2, CLOSED_RESUMABLE)],
+    });
+    open();
+    await waitFor(() =>
+      expect(drawnText(rowNamed("q-2"))).toContain("Terminal ended · Resume possible")
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-asker").textContent).toContain(
+        "Daintree can try to resume its Claude session in a new terminal"
+      )
+    );
+    await screen.findByTestId("decision-answer-composer");
+    expect(screen.queryByTestId("decision-answer-delivery")).toBeNull();
+  });
+
+  it("says nothing of an asker still running, or of one not yet observed", async () => {
+    listQuestions.mockResolvedValue({
+      revision: 2,
+      questions: [asking("question-2", 2, RUNNING), asking("question-4", 4, undefined)],
+    });
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(screen.queryAllByTestId("decisions-inbox-row-asker")).toHaveLength(0);
+    expect(screen.queryByTestId("decisions-inbox-asker")).toBeNull();
+    expect(screen.queryByTestId("decisions-inbox-clear-gone")).toBeNull();
+  });
+
+  it("says a Host's terminal is unknown while the Host is away, rather than guessing", async () => {
+    getQuestionContentByReference.mockResolvedValue({ result: "host-not-connected" });
+    listQuestions.mockResolvedValue({
+      revision: 2,
+      questions: [
+        asking("question-9", 9, undefined, {
+          reference: reference("question-9", { hostId: "qhost_studio_0001" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+        }),
+      ],
+    });
+    open();
+    await waitFor(() => expect(drawnText(rowNamed("q-9"))).toContain("Terminal status unknown"));
+    expect(screen.getByTestId("decisions-inbox-asker").textContent).toBe(
+      "Studio isn't connected, so whether the terminal that asked is still open is unknown."
+    );
+    expect(screen.queryByTestId("decisions-inbox-clear-gone")).toBeNull();
+  });
+
+  it("clears every ask with no agent from Needs you in one press, leaving the live ones", async () => {
+    const live = asking("question-4", 4, RUNNING, {
+      inbox: { ask: "note-4", seen: false, cleared: false },
+    });
+    const undetected = {
+      ...asking("question-5", 5, UNDETECTED),
+      inbox: { ask: "note-5", seen: true, cleared: false },
+    };
+    listQuestions.mockResolvedValue({
+      revision: 2,
+      questions: [asking("question-2", 2, CLOSED_NO_SESSION), live, undetected],
+    });
+    open();
+    const button = await screen.findByTestId("decisions-inbox-clear-gone");
+    expect(button.textContent).toBe("Clear 2 questions with no agent detected");
+    fireEvent.click(button);
+    const clears = () => markQuestions.mock.calls.filter(([payload]) => payload.action === "clear");
+    await waitFor(() => expect(clears()).toHaveLength(1));
+    // One request, for the asks with no agent detected; the live one stays.
+    expect(clears()).toEqual([
+      [
+        {
+          action: "clear",
+          questions: [
+            { reference: reference("question-2"), ask: null },
+            { reference: reference("question-5"), ask: "note-5" },
+          ],
+        },
+      ],
+    ]);
+    expect(declineQuestion).not.toHaveBeenCalled();
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+
+    // Once they are set aside the button goes, and the keyboard on it goes to the list.
+    act(() => screen.getByTestId("decisions-inbox-clear-gone").focus());
+    push({
+      revision: 3,
+      questions: [
+        {
+          ...asking("question-2", 2, CLOSED_NO_SESSION),
+          inbox: { ask: null, seen: false, cleared: true },
+        },
+        live,
+        { ...undetected, inbox: { ask: "note-5", seen: true, cleared: true } },
+      ],
+    });
+    await waitFor(() => expect(screen.queryByTestId("decisions-inbox-clear-gone")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-groups").contains(document.activeElement)).toBe(
+        true
+      )
+    );
+  });
+
+  it("never offers Go to terminal for a terminal seen in the Trash or restarted, though a pane holds its id", async () => {
+    panels = { t1: { location: "grid" } };
+    for (const target of ["trashed", "replaced"] as const) {
+      listQuestions.mockResolvedValue({
+        revision: 2,
+        questions: [asking("question-2", 2, { ...CLOSED_RESUMABLE, target })],
+      });
+      open();
+      await waitFor(() => expect(screen.getByTestId("decisions-inbox-asker")).toBeTruthy());
+      expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+      act(() => useDecisionsInboxStore.getState().close());
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+    }
+    // Still offered while its agent is only no longer detected: that terminal is the one that asked.
+    listQuestions.mockResolvedValue({
+      revision: 3,
+      questions: [asking("question-2", 2, UNDETECTED)],
+    });
+    open();
+    expect(await screen.findByTestId("decisions-inbox-go-to-terminal")).toBeTruthy();
+  });
+
+  it("drops a look before going elsewhere once its terminal is seen to restart meanwhile", async () => {
+    const elsewhere = asking("question-3", 3, undefined, {
+      reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+    });
+    listQuestions.mockResolvedValue({ revision: 2, questions: [elsewhere] });
+    getAllTerminals.mockResolvedValue([
+      terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+    ]);
+    open({ terminalId: "t9" });
+    const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+    let resolveLook!: (terminals: BackendTerminalInfo[]) => void;
+    getAllTerminals.mockImplementationOnce(
+      () => new Promise<BackendTerminalInfo[]>((resolve) => (resolveLook = resolve))
+    );
+    fireEvent.click(go);
+    push({
+      revision: 3,
+      questions: [{ ...elsewhere, asker: { ...CLOSED_RESUMABLE, target: "replaced" } }],
+    });
+    await waitFor(() => expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull());
+    await act(async () =>
+      resolveLook([terminal({ id: "t9", projectId: "project-b", hasPty: true })])
+    );
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});

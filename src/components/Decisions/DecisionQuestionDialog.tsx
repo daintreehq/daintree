@@ -10,6 +10,7 @@ import {
 } from "@/store/decisionsQuestionViewStore";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
+import { askerNotes } from "./decisionsInboxModel";
 import { targetKey } from "./decisionQuestionTarget";
 import { positionText } from "./decisionQuestionModel";
 import {
@@ -233,6 +234,7 @@ export function DecisionQuestionDialog() {
               active={isOpen}
               followUps
               listed={listed}
+              deliveryNotice={listed === null ? null : (askerNotes(listed)?.composer ?? null)}
             />
           </div>
         </AppDialog.Body>
