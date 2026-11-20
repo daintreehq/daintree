@@ -3420,9 +3420,11 @@ describe("Decisions entry", () => {
           keys: `${versionOf("the first claim's keys")}.none`,
         })
       ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
-      await expect(
-        deleteLocalData({ oneClick: false, relayOrigin: null, keys: null })
-      ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      for (const keys of [null, `${versionOf("the first claim's keys")}.none`]) {
+        await expect(
+          deleteLocalData({ oneClick: false, relayOrigin: null, keys })
+        ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      }
       expect(readFileSync(keyFile.path, "utf8")).toBe("another claim's staged keys");
 
       const shown = (await getDecisionsStatus()).keysVersion ?? null;

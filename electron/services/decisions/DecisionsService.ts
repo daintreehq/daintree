@@ -1122,7 +1122,15 @@ export class DecisionsService {
           this.panes.clear(true);
           this.unlistQuestions();
         }
-        if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+        // A refusal leaves a store an unfinished deletion closed as it was, until one finishes it.
+        const refusedClosed =
+          outcome.result === "failed" && outcome.reason === "keys-changed" && !store;
+        if (
+          outcome.result !== "incomplete" &&
+          !refusedClosed &&
+          !this.disposed &&
+          this.settings !== null
+        ) {
           try {
             const reopened = await this.openStore(() => this.disposed);
             this.storeFailed = false;

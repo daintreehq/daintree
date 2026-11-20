@@ -2058,8 +2058,7 @@ export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsSta
  * version (#18064).
  */
 async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> {
-  const files = await readKeyFiles(running);
-  return files !== undefined && filesCovered(files);
+  return filesCovered(await readKeyFiles(running));
 }
 
 /**
@@ -2069,17 +2068,12 @@ async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> 
  */
 async function readKeyFiles(
   running: DecisionsService
-): Promise<{ held: string | null; setAside: string | null } | undefined> {
+): Promise<{ held: string | null; setAside: string | null }> {
   const path = running.getKeyFilePath();
-  try {
-    const [held, setAside] = await Promise.all([
-      keyFileVersion(path),
-      keyFileVersion(erasingKeyFilePath(path)),
-    ]);
-    return { held, setAside };
-  } catch {
-    return undefined;
-  }
+  // A file that can't be read is named as such, so a typed confirm of it still matches.
+  const read = (at: string) => keyFileVersion(at).catch(() => "unreadable");
+  const [held, setAside] = await Promise.all([read(path), read(erasingKeyFilePath(path))]);
+  return { held, setAside };
 }
 
 /** Each key file there is is exactly what the recorded verification checked. */
@@ -2105,8 +2099,7 @@ async function keysDifferFromConfirm(
   confirmed: string | null | undefined
 ): Promise<boolean> {
   if (confirmed === undefined) return false;
-  const files = await readKeyFiles(running);
-  return files === undefined || versionOfKeyFiles(files) !== confirmed;
+  return versionOfKeyFiles(await readKeyFiles(running)) !== confirmed;
 }
 
 /** Another relay is recorded than the one the person confirmed for (#18064). */
