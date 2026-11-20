@@ -322,7 +322,13 @@ describe("projectPaneDecisionStates", () => {
     ]);
 
     expect(state?.needsAttention).toEqual([
-      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      {
+        questionId: qid(1),
+        alias: 1,
+        deliveryStatus: "needs-attention",
+        reason: "pane_gone",
+        subject: "timeout notice",
+      },
     ]);
   });
 
@@ -423,7 +429,18 @@ describe("projectPaneDecisionStates", () => {
       answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
     };
     const state = only([
-      row(1, stopped),
+      // A follow-up still to be typed keeps the notice with the person (#18021); a lone stopped one is over.
+      row(1, {
+        ...stopped,
+        messages_json: messages({ event_seq: 4 }),
+        answers_json: answers({
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+          event_seq: 5,
+        }),
+      }),
       row(2, {
         ...stopped,
         messages_json: messages({
