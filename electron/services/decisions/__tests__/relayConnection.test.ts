@@ -79,6 +79,7 @@ import { createTrustedPolicy } from "../workflowGates.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
+import { DAINTREE_PROTOCOL_FEATURES } from "../relayFeatures.js";
 
 const RELAY: RelayBinding = {
   relayOrigin: "https://decisions.example.workers.dev",
@@ -2115,6 +2116,72 @@ describe("get_involvement over a connection (#17228)", () => {
     expect(relay.requests).not.toContain("PUT /api/v1/presence");
     expect(relay.requests).not.toContain("PUT /api/v1/involvement");
   });
+
+  // Every feature a 0.8.0 relay can advertise, and the two 0.9.0 adds.
+  const releasedBy080 = [
+    "thread-messages-v1",
+    "phone-images-v1",
+    "pane-snapshots-v1",
+    "owner-desktop-answers-v1",
+    "involvement-v1",
+    "person-declines-v1",
+    "owner-desktop-messages-v1",
+    "owner-desktop-declines-v1",
+    "presence-v1",
+  ];
+  it.each([
+    ["a 0.8.0 relay", releasedBy080],
+    ["a 0.9.0 relay", [...releasedBy080, "advisory-deadlines-v1", "agent-stopped-push-v1"]],
+  ])(
+    "asks through %s as it did on 0.8.0, declaring and asking for nothing 0.9.0 added (#17939)",
+    async (_label, advertised) => {
+      const relay = await relayWithPreference();
+      relay.advertise(advertised);
+      const created: Array<{ question: { envelope: { aad: Record<string, unknown> } } }> = [];
+      const wrapFetch =
+        (fetchImpl: RelayFetch): RelayFetch =>
+        (url, init) => {
+          if (new URL(url).pathname === "/api/v1/questions" && init.method === "POST") {
+            created.push(JSON.parse(String(init.body)) as (typeof created)[number]);
+          }
+          return relay.wrapFetch(fetchImpl)(url, init);
+        };
+      const push = vi.spyOn(DecisionsBridge.prototype, "requestAgentStoppedPush");
+      let source: QuestionSource | null = null;
+      const h = await harness({
+        wrapFetch,
+        overrides: { onQuestionsReady: (ready) => (source = ready) },
+      });
+      teardown.push(() => h.connection.stop());
+      h.connection.start();
+      await connectLive(h);
+      const bridge = new QuestionBridge({
+        source: source as unknown as QuestionSource,
+        isCurrent: () => true,
+      });
+
+      await bridge.registerQuestion({ origin: QUESTION_ORIGIN, input: { question: "Still asking?" } });
+      await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+      expect(h.statuses.at(-1)?.state).toBe("connected");
+      // An ordinary question's envelope binds only what a 0.8.0 reader's strict AAD allows.
+      expect(Object.keys(created[0]!.question.envelope.aad).sort()).toEqual([
+        "installation_id",
+        "question_id",
+        "record_type",
+        "revision",
+        "sender_device_id",
+      ]);
+      expect(relay.declared.length).toBeGreaterThan(0);
+      for (const features of relay.declared) {
+        for (const feature of (features as string[] | undefined) ?? []) {
+          expect(DAINTREE_PROTOCOL_FEATURES).toContain(feature);
+        }
+      }
+      expect(relay.declared.flat()).not.toContain("advisory-deadlines-v1");
+      expect(push).not.toHaveBeenCalled();
+      expect(relay.requests).not.toContain("POST /api/v1/push/agent-stopped");
+    }
+  );
 
   it("answers from the verified copy a 0.7.0 Daintree kept, and still refuses an older record against it (#17433)", async () => {
     const relay = await relayWithPreference();

@@ -404,8 +404,11 @@ describe("/mcp/decisions (#16011)", () => {
     ).toHaveProperty("thread");
 
     const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Which name?" });
-    const alias = (await store.listQuestions())[0].alias;
-    expect(asked.content[0].text).toBe(askedInstruction(alias));
+    const [row] = await store.listQuestions();
+    // From 0.9.0 the receipt goes on to the deadline that applies and how to find the question again.
+    expect(asked.content[0].text.startsWith(`${askedInstruction(row.alias)} `)).toBe(true);
+    expect(asked.content[0].text).toContain(`until ${row.expires_at} (UTC)`);
+    expect(asked.content[0].text).toContain(`get_decision with question_id ${row.question_id}`);
     expect(asked.structuredContent.instruction).toBe(asked.content[0].text);
     const questionId = asked.structuredContent.question_id as string;
 
@@ -418,6 +421,44 @@ describe("/mcp/decisions (#16011)", () => {
     expect(read.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
     // The follow-up joins the thread once the relay commits it; until then the thread is empty.
     expect(read.structuredContent.thread).toEqual([]);
+  });
+
+  it("refuses an advisory ask, storing nothing, and asks with a relative deadline as a blocking question (0.9.0, #17939)", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+
+    // The schema offers a stated plan from 0.9.0; this Daintree delivers no advisory outcome yet (#17940).
+    const advisory = await call(port, "pane-token-pane-a", "ask_human", {
+      question: "Which name?",
+      expires_in: "15m",
+      planned_fallback: "Keep the current name.",
+    });
+    expect(advisory.isError).toBe(true);
+    expect(advisory.content[0].text).toMatch(/host-unsupported/);
+    expect(await store.listQuestions()).toEqual([]);
+
+    const before = Date.now();
+    const asked = await call(port, "pane-token-pane-a", "ask_human", {
+      question: "Which name?",
+      expires_in: "15m",
+    });
+    expect(asked.isError).toBeUndefined();
+    const [row] = await store.listQuestions();
+    expect(row.alias).toBe(1);
+    expect(Date.parse(row.expires_at!) - before).toBeGreaterThanOrEqual(15 * 60_000 - 1_000);
+    expect(Date.parse(row.expires_at!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
+    expect(asked.structuredContent).toMatchObject({ reply_mode: "blocking", expires_at: row.expires_at });
+
+    const read = await call(port, "pane-token-pane-a", "get_decision", {
+      question_id: row.question_id,
+    });
+    expect(read.structuredContent).toMatchObject({
+      reply_mode: "blocking",
+      planned_fallback: null,
+      fallback_due: false,
+      advisory_timeout: null,
+    });
   });
 
   it("commits a follow-up on the pane's own question at once, alone or in a batch, before any network I/O", async () => {
