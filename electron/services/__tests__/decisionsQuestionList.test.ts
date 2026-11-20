@@ -52,6 +52,21 @@ describe("decisionsQuestionList", () => {
     expect(source.getDecisionQuestionList()).toBe(cleared);
   });
 
+  it("names the Remote Hosts away with the list, as a change of its own (#18022)", () => {
+    const heard = vi.fn();
+    source.onDecisionQuestionsChanged(heard);
+    const rows = [item(1)];
+    source.setDecisionQuestions(rows);
+    const away = source.setDecisionQuestions(rows, ["Studio"]);
+    expect(away).toEqual({ revision: 2, questions: rows, hostsAway: ["Studio"] });
+    expect(source.setDecisionQuestions(rows, ["Studio"])).toBeNull();
+    // Back: the field goes rather than staying empty.
+    const back = source.setDecisionQuestions(rows);
+    expect(back).toEqual({ revision: 3, questions: rows });
+    expect(back !== null && "hostsAway" in back).toBe(false);
+    expect(heard).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps a copy, so a later change to the array handed in changes nothing", () => {
     const questions = [item(1)];
     source.setDecisionQuestions(questions);

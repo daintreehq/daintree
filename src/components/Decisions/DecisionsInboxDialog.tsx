@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   AskingCircle,
   BrandMark,
@@ -76,10 +85,12 @@ import {
   resolveSelection,
   staleNote,
   standingText,
+  waitingText,
   whereFacts,
   worktreeName,
   type InboxChoice,
   type InboxGroup,
+  type InboxReach,
 } from "./decisionsInboxModel";
 import {
   useDecisionQuestionReader,
@@ -527,6 +538,8 @@ function InboxRow({
  * while the dialog is: what it holds of the rows goes with the close.
  */
 function InboxList({
+  listRef,
+  lead,
   groups,
   lines,
   partsOf,
@@ -534,6 +547,9 @@ function InboxList({
   onSelect,
   nowMs,
 }: {
+  listRef: RefObject<HTMLDivElement | null>;
+  /** Above the groups: what the list says when it has nothing, or that nothing waits (#18022). */
+  lead: ReactNode;
   groups: readonly InboxGroup[];
   lines: ReadonlyMap<string, string | null>;
   partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
@@ -541,7 +557,6 @@ function InboxList({
   onSelect: (key: string, index: number) => void;
   nowMs: number | null;
 }) {
-  const listRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
   const ordered = groups.flatMap((group) => group.items);
   const keys = ordered.map((item) => referenceKey(item.reference));
@@ -566,14 +581,36 @@ function InboxList({
       list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(last.key)}"]`) ??
       list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
     row?.focus({ preventScroll: true });
-  }, [shape]);
+  }, [shape, listRef]);
 
   return (
     <div
       ref={listRef}
-      onKeyDown={roving.onKeyDown}
-      tabIndex={roving.containerProps.tabIndex}
-      onFocus={roving.containerProps.onFocus}
+      onKeyDown={(event) => {
+        // On the list itself (it had no rows, or a click on its blank space), the first arrow
+        // goes to the row Tab would reach, rather than one past it.
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          const stop = event.currentTarget.querySelector<HTMLElement>(
+            '[data-roving-row][tabindex="0"]'
+          );
+          if (stop !== null) {
+            event.preventDefault();
+            stop.focus();
+            return;
+          }
+        }
+        roving.onKeyDown(event);
+      }}
+      // The dialog's first stop while it has no rows, so the keyboard still starts on the list; with
+      // rows, the rows are, and the list only holds focus a row it lost (or a control under it) hands back.
+      tabIndex={keys.length === 0 ? 0 : -1}
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (next instanceof Node && !event.currentTarget.contains(next)) {
@@ -592,12 +629,13 @@ function InboxList({
       }}
       role="region"
       aria-labelledby={labelId}
-      className="flex flex-col"
+      className="flex flex-1 flex-col outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       data-testid="decisions-inbox-groups"
     >
       <span id={labelId} className="sr-only">
         Questions
       </span>
+      {lead}
       {groups.map((group) => {
         const headingId = `${labelId}-${group.id}`;
         const stopped = groups.find((other) => other.id === "attention")?.items.length ?? 0;
@@ -724,14 +762,23 @@ export function DecisionsInboxDialog() {
   // The question shown sticks to the one chosen, by reference, as the list moves around it.
   const [choice, setChoice] = useState<(InboxChoice & { seq: number }) | null>(null);
   const chosen = choice !== null && choice.seq === request.seq ? choice : null;
-  const selected = resolveSelection(ordered, chosen, request.terminalId);
+  const selected = resolveSelection(groups, chosen, request.terminalId);
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
   const selectedIndex = selected === null ? -1 : ordered.indexOf(selected);
   if (
     selectedKey !== null &&
     (chosen === null || chosen.key !== selectedKey || chosen.index !== selectedIndex)
   ) {
-    setChoice({ seq: request.seq, key: selectedKey, index: selectedIndex });
+    // One that took a picked row's place stays picked; one the inbox opened on stays its own choice.
+    setChoice({
+      seq: request.seq,
+      key: selectedKey,
+      index: selectedIndex,
+      picked: chosen?.picked === true,
+    });
+  } else if (selectedKey === null && chosen !== null) {
+    // Gone with nothing in its place: a later list starts afresh, rather than reviving it in History.
+    setChoice(null);
   }
 
   // One target per question, so a push that only renews the list's objects
@@ -766,9 +813,6 @@ export function DecisionsInboxDialog() {
   // Once the one shown no longer needs the person, the next that does is one press away:
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
-  const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
-  // Kept with the footer: a press on Clear that the last deadline overtook keeps its place.
-  const awaiting = groups.find((group) => group.id === "awaiting")?.items ?? [];
   const nextUp =
     selected !== null && inboxGroupOf(selected, nowMs) !== "needs-you"
       ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
@@ -790,12 +834,32 @@ export function DecisionsInboxDialog() {
     );
   };
   const selectedGroup = selected === null ? null : inboxGroupOf(selected, nowMs);
+  // The question list, where the keyboard goes when a control beside it goes away under it.
+  const listRef = useRef<HTMLDivElement>(null);
+  // Clear Needs you goes once the group empties, by its own press or a deadline passing (#18022):
+  // the keyboard on it moves to the list's stop, or the list, rather than falling to the document.
+  const handBackToList = useCallback((button: HTMLElement | null) => {
+    if (button === null) return;
+    return () => {
+      if (document.activeElement !== button) return;
+      // After the commit, once the rows that replaced the group are in, and only while the inbox
+      // is still open: one closing in the same commit hands focus back to where it was opened.
+      queueMicrotask(() => {
+        const list = listRef.current;
+        if (button.isConnected || list === null || !list.isConnected) return;
+        if (!useDecisionsInboxStore.getState().isOpen) return;
+        const focused = document.activeElement;
+        if (focused !== null && focused !== document.body) return;
+        (list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ?? list).focus();
+      });
+    };
+  }, []);
   const clearHintId = useId();
   const clearHint = clearText(selectedGroup === "cleared");
   const showNext = () => {
     if (nextUp === null) return;
     const key = referenceKey(nextUp.reference);
-    setChoice({ seq: request.seq, key, index: ordered.indexOf(nextUp) });
+    setChoice({ seq: request.seq, key, index: ordered.indexOf(nextUp), picked: true });
     // The button goes with the question it followed: the keyboard waits in the pane, and
     // moves to the next question's words once they're read (the effect below), so the
     // next Tab leads into its answer. The list shows where that question sits.
@@ -919,9 +983,22 @@ export function DecisionsInboxDialog() {
   };
 
   const showListSkeleton = useSkeletonGate(active && listRead.state === "loading");
-  // Only once the relay is known to be reachable does an empty list say nothing was asked.
+  const listReach: InboxReach = !statusKnown
+    ? "pending"
+    : status === null
+      ? "unknown"
+      : status.problem === "storage"
+        ? "unreadable"
+        : notice !== null
+          ? "unavailable"
+          : "connected";
+  const listed = listRead.state === "listed";
+  const hostsAway = listRead.state === "listed" ? (listRead.list.hostsAway ?? []) : [];
+  // Only once the relay, and every Remote Host, is known to be reachable does an empty list say
+  // nothing was asked.
   const empty =
-    listRead.state === "listed" && statusKnown && notice === null ? emptyText(groups) : null;
+    listed && listReach === "connected" && hostsAway.length === 0 ? emptyText(groups) : null;
+  const waitingLine = listed && empty === null ? waitingText(groups, listReach, hostsAway) : null;
 
   return (
     <>
@@ -957,84 +1034,125 @@ export function DecisionsInboxDialog() {
             </Callout>
           </div>
         )}
-        {empty !== null ? (
+        {/* Two columns that scroll on their own, so a plain element rather than the dialog's body
+            column. With no question ever asked, the list spans both and says so; it stays the same
+            element throughout, so the keyboard on it stays as the canvas comes and goes. */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <div
-            className="flex min-h-0 flex-1 items-center justify-center p-8"
-            data-testid="decisions-inbox-empty"
+            className={cn(
+              "flex flex-col",
+              empty !== null
+                ? "min-w-0 flex-1"
+                : "w-80 shrink-0 border-r border-divider lg:w-[26rem]"
+            )}
           >
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<DecisionsIcon />}
-              title="No questions yet"
-              description={empty}
-            />
-          </div>
-        ) : (
-          // Two columns that scroll on their own, so a plain element rather than the dialog's body column.
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="flex w-80 shrink-0 flex-col border-r border-divider lg:w-[26rem]">
-              <div
-                className="decisions-inbox-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
-                data-testid="decisions-inbox-list"
-              >
-                {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
-                {listRead.state === "failed" && (
-                  <div className="p-3">
-                    <Callout
-                      severity="warning"
-                      size="compact"
-                      action={
-                        <Button variant="outline" size="xs" onClick={retry}>
-                          Retry
-                        </Button>
-                      }
-                      data-testid="decisions-inbox-failed"
-                    >
-                      The questions couldn&apos;t be read.
-                    </Callout>
-                  </div>
-                )}
-                {groups.length > 0 && (
-                  <InboxList
-                    groups={groups}
-                    lines={lines}
-                    partsOf={partsOf}
-                    nowMs={nowMs}
-                    selectedKey={selectedKey}
-                    onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
-                  />
-                )}
-              </div>
-              {/* Below the list rather than on its heading, so the dialog's first focus stays on the
-                question list. Kept while anything is cleared, so a press that empties Needs you
-                leaves the keyboard here rather than nowhere. */}
-              {(waiting.length > 0 || cleared.length > 0 || awaiting.length > 0) && (
-                <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-disabled={waiting.length === 0 || undefined}
-                    onClick={() => {
-                      if (waiting.length > 0) markShown("clear", waiting);
-                    }}
-                    className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                    data-testid="decisions-inbox-clear-all"
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain",
+                // The sidebar colour belongs to the list beside a question, not the canvas.
+                empty === null && "decisions-inbox-list"
+              )}
+              data-testid="decisions-inbox-list"
+            >
+              {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
+              {listRead.state === "failed" && (
+                <div className="p-3">
+                  <Callout
+                    severity="warning"
+                    size="compact"
+                    action={
+                      <Button variant="outline" size="xs" onClick={retry}>
+                        Retry
+                      </Button>
+                    }
+                    data-testid="decisions-inbox-failed"
                   >
-                    Clear Needs you
-                  </Button>
+                    The questions couldn&apos;t be read.
+                  </Callout>
                 </div>
               )}
+              {listed && (
+                <InboxList
+                  listRef={listRef}
+                  lead={
+                    empty !== null ? (
+                      <div
+                        className="flex min-h-0 flex-1 items-center justify-center p-8"
+                        data-testid="decisions-inbox-empty"
+                      >
+                        <EmptyState
+                          variant="zero-data"
+                          scale="canvas"
+                          icon={<DecisionsIcon />}
+                          title="No questions yet"
+                          description={empty}
+                        />
+                      </div>
+                    ) : waitingLine !== null ? (
+                      <p
+                        className="px-3 py-2.5 text-xs leading-4 text-text-secondary [text-wrap:pretty]"
+                        data-testid="decisions-inbox-waiting"
+                      >
+                        {waitingLine}
+                      </p>
+                    ) : null
+                  }
+                  groups={groups}
+                  lines={lines}
+                  partsOf={partsOf}
+                  nowMs={nowMs}
+                  selectedKey={selectedKey}
+                  onSelect={(key, index) =>
+                    setChoice({ seq: request.seq, key, index, picked: true })
+                  }
+                />
+              )}
             </div>
+            {/* Below the list rather than on its heading, so the dialog's first focus stays on the
+                question list. Only while Needs you has questions: the press that empties it hands
+                the keyboard to the list. */}
+            {waiting.length > 0 && (
+              <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
+                <Button
+                  ref={handBackToList}
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => markShown("clear", waiting)}
+                  data-testid="decisions-inbox-clear-all"
+                >
+                  Clear Needs you
+                </Button>
+              </div>
+            )}
+          </div>
+          {empty === null && (
             <section
               ref={detailRef}
               id={detailDomId}
               // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
               tabIndex={selected !== null ? 0 : -1}
               aria-labelledby={selected !== null ? detailHeadingId : undefined}
+              aria-label={selected === null ? "Question details" : undefined}
               className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               data-testid="decisions-inbox-detail"
             >
+              {/* Nothing opened by itself (#18022): a quiet word in the pane, never a blank one. */}
+              {selected === null && listRead.state !== "loading" && (
+                <div
+                  className="flex flex-1 items-center justify-center p-8"
+                  data-testid="decisions-inbox-detail-empty"
+                >
+                  <EmptyState
+                    variant="zero-data"
+                    scale="sidebar"
+                    title={
+                      ordered.length > 0
+                        ? "Choose a question to read it"
+                        : "Question details appear here"
+                    }
+                  />
+                </div>
+              )}
               {selected !== null && (
                 <>
                   {/* The pane's bar, as Canopy's: who asked and where, and what can be done to it. */}
@@ -1238,8 +1356,8 @@ export function DecisionsInboxDialog() {
                 </>
               )}
             </section>
-          </div>
-        )}
+          )}
+        </div>
         {/* After the columns, so the dialog's first focus still lands on the question list. Each
             opening has its own, so nothing a save in an earlier one settles reaches this one. */}
         <DecisionsInvolvementSection
