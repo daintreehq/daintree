@@ -21,7 +21,11 @@ import type {
   DecisionQuestionReference,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
-import type { AnswerRecord, DeclineSubmission } from "@/store/decisionsAnswerStore";
+import type {
+  AnswerRecord,
+  AnswerSubmission,
+  DeclineSubmission,
+} from "@/store/decisionsAnswerStore";
 import { deadlineElapsed, expiresSoon } from "./decisionDeadline";
 
 export { EXPIRY_SOON_MS, expiresSoon } from "./decisionDeadline";
@@ -1234,7 +1238,9 @@ export function landedBy(
  * other way, or Send stopped before signing anything.
  */
 export function answerFate(
-  record: Pick<AnswerRecord, "submission" | "preparing" | "hold">,
+  record: Pick<AnswerRecord, "preparing" | "hold"> & {
+    submission: Pick<AnswerSubmission, "answerId" | "phase"> | null;
+  },
   prior: string | null
 ): InboxActionFate {
   const submission = record.submission;

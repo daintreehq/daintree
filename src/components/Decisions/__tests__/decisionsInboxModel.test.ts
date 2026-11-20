@@ -9,12 +9,7 @@ import type {
   DecisionThreadEntry,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
-import type {
-  AnswerPhase,
-  AnswerRecord,
-  AnswerSubmission,
-  DeclinePhase,
-} from "@/store/decisionsAnswerStore";
+import type { AnswerPhase, DeclinePhase } from "@/store/decisionsAnswerStore";
 import {
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
@@ -1783,21 +1778,13 @@ describe("moving on once the person's action takes a question out of Needs you (
   });
 
   describe("answerFate", () => {
-    const record = (over: Partial<AnswerRecord> = {}): AnswerRecord => ({
-      draft: null,
+    const record = (over: Partial<Parameters<typeof answerFate>[0]> = {}) => ({
       submission: null,
       preparing: false,
       hold: null,
-      decline: null,
       ...over,
     });
-    const submission = (answerId: string, phase: AnswerPhase): AnswerSubmission => ({
-      answerId,
-      payload: {} as AnswerSubmission["payload"],
-      target: {} as AnswerSubmission["target"],
-      phase,
-      resubmitted: false,
-    });
+    const submission = (answerId: string, phase: AnswerPhase) => ({ answerId, phase });
     const sent: AnswerPhase = { kind: "settled", outcome: { status: "sent" } };
 
     it("is taken only once the relay took the submission this Send made", () => {

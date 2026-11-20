@@ -2849,6 +2849,7 @@ describe("DecisionsInboxDialog", () => {
 
     it("marks a follow-up seen only once it's scrolled into view", async () => {
       const observed: Array<{ target: Element; fire: (visible: boolean) => void }> = [];
+      const original: unknown = Reflect.get(globalThis, "IntersectionObserver");
       vi.stubGlobal(
         "IntersectionObserver",
         class implements IntersectionObserver {
@@ -2915,7 +2916,9 @@ describe("DecisionsInboxDialog", () => {
           expect(seenCalls().map(([payload]) => payload.questions[0]?.ask)).toEqual(["note-1"])
         );
       } finally {
-        vi.unstubAllGlobals();
+        // Only this test's stub: the setup's own (ResizeObserver, rAF) stay for the tests after it.
+        if (original === undefined) Reflect.deleteProperty(globalThis, "IntersectionObserver");
+        else Reflect.set(globalThis, "IntersectionObserver", original);
       }
     });
 
