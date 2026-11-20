@@ -5,14 +5,36 @@
  * terminal that asked, so it is named rather than "this terminal".
  */
 
-/** What of a question needs a person: its answer, the follow-ups after it (#16231), or both. */
+/**
+ * What of a question needs a person: its answer, the follow-ups after it
+ * (#16231), or both. In the answer's place, the notice that its deadline
+ * closed it without one (#17944).
+ */
 export type DeliverySubject =
-  "answer" | "follow-up" | "follow-ups" | "answer and follow-up" | "answer and follow-ups";
+  | "answer"
+  | "follow-up"
+  | "follow-ups"
+  | "answer and follow-up"
+  | "answer and follow-ups"
+  | "timeout notice"
+  | "timeout notice and follow-up"
+  | "timeout notice and follow-ups";
 
-export function deliverySubject(answer: boolean, followUps: number): DeliverySubject {
-  if (followUps === 0) return "answer";
+/** `notice`: what needs a person in the answer's place is its timeout notice. */
+export function deliverySubject(
+  answer: boolean,
+  followUps: number,
+  notice = false
+): DeliverySubject {
+  const lead = notice ? "timeout notice" : "answer";
+  if (followUps === 0) return lead;
   const held = followUps === 1 ? "follow-up" : "follow-ups";
-  return answer ? `answer and ${held}` : held;
+  return answer ? `${lead} and ${held}` : held;
+}
+
+/** Whether `subject` names one thing or several. */
+export function deliverySubjectPlural(subject: DeliverySubject): boolean {
+  return subject !== "answer" && subject !== "follow-up" && subject !== "timeout notice";
 }
 
 /**
@@ -74,6 +96,8 @@ export function deliveryReasonText(
   // Codes are only shaped like identifiers, so `constructor` must not reach Object's.
   if (!Object.hasOwn(REASONS, code)) return null;
   const text = REASONS[code]!;
+  // The code is the notice's own when it leads, as an answer's is.
+  if (subject.startsWith("timeout notice")) return text.replace("the answer", "the timeout notice");
   if (subject === "follow-up") return text.replace("the answer", "the follow-up");
   if (subject === "follow-ups") {
     return text

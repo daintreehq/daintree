@@ -847,6 +847,10 @@ const deliveryDeps: DecisionsDeliveryDeps = {
       return projectStore.getProjectById(projectId)?.name ?? null;
     },
     listTerminals: async () => (await getPtyClient()?.getAllTerminalsAsync()) ?? [],
+    hostName: (hostId) =>
+      getDecisionsHostsPort()
+        ?.hostQuestions()
+        .find((host) => host.questionHostId === hostId)?.name ?? null,
   },
 };
 

@@ -25,7 +25,13 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
-import { PLAN_REFUSED, roundOf, verifiedPlan } from "./questionRound.js";
+import {
+  NO_ADVISORY_HOST,
+  PLAN_REFUSED,
+  roundOf,
+  verifiedPlan,
+  type AdvisoryHost,
+} from "./questionRound.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
@@ -65,7 +71,8 @@ export function inScope(row: QuestionRow, scope: QuestionReadScope): boolean {
  */
 export async function readQuestionContent(
   ctx: SealContext,
-  row: QuestionRow
+  row: QuestionRow,
+  host: AdvisoryHost = NO_ADVISORY_HOST
 ): Promise<DecisionQuestionContentResult> {
   const content = await openedQuestion(ctx, row);
   if (content === null) return { result: "unreadable" };
@@ -73,7 +80,7 @@ export async function readQuestionContent(
   const plannedFallback = verifiedPlan(row, entries, content);
   // Advisory content the protocol refuses is malformed: never shown, as a phone never offers it.
   if (plannedFallback === PLAN_REFUSED) return { result: "unreadable" };
-  const round = roundOf(row, entries);
+  const round = roundOf(row, entries, host);
   const question: DecisionQuestionContent = {
     questionId: row.question_id,
     alias: row.alias,

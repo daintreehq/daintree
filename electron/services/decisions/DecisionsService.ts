@@ -821,7 +821,11 @@ export class DecisionsService {
   ): void {
     if (this.disposed || this.state === "off") return;
     const hostId = this.settings?.hostId ?? null;
-    const questions = projectDecisionQuestions(rows, handled, hostId);
+    // As the lifetime's delivery reads them before typing an advisory notice (#17944).
+    const questions = projectDecisionQuestions(rows, handled, hostId, {
+      outcomes: this.role === "owner" && this.advisoryOutcomes,
+      allowed: this.policy?.advisoryQuestions === true,
+    });
     const waiting = new Set(
       questions
         .filter((item) => item.standing.kind === "waiting" || item.standing.kind === "queued")

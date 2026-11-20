@@ -21,6 +21,12 @@ export interface DecisionsAnswerOrigin {
   paneId: string;
   /** The pane's title while it is still open here, perhaps running another session; null once it's gone. */
   paneTitle: string | null;
+  /**
+   * The machine that asked, when it isn't this computer (#17944): its id, and
+   * an enrolled Remote Host's name while this computer knows one. Null for a
+   * question this computer asked.
+   */
+  otherHost: { hostId: string; name: string | null } | null;
 }
 
 /** The answer waiting to be typed in, opened. */
@@ -34,6 +40,37 @@ export interface DecisionsAnswerPreview {
   correction: boolean;
   /** When the answer arrived, ISO 8601. */
   answeredAt: string;
+}
+
+/**
+ * The notice that a question's deadline closed it without an answer (#17944),
+ * waiting for a person because typing it into the terminal that asked
+ * stopped. Only what was recorded: which round it closed and when, how far
+ * typing it got, and for an advisory round what it says of the agent's plan.
+ * Never that the agent read it or acted on it.
+ */
+export interface DecisionsTimeoutNotice {
+  /**
+   * `expired`: the deadline passed with no answer. `never-published`: it
+   * passed before the question ever reached the relay.
+   */
+  kind: "expired" | "never-published";
+  /** The round it closed. */
+  revision: number;
+  /** When that round's deadline passed, ISO 8601; null when none was recorded. */
+  deadline: string | null;
+  /**
+   * `delivery-uncertain`: a write of it may or may not have reached the
+   * terminal, so it is never typed again from here.
+   */
+  delivery: "needs-attention" | "delivery-uncertain";
+  /**
+   * An advisory round's notice: whether, once typed (or as it may have been
+   * typed), it tells the agent it may go ahead with its stated plan
+   * (`fallback-due`) or not (`fallback-withheld`). Null for a question that
+   * waited for a reply, or when it can't be told.
+   */
+  disposition: "fallback-due" | "fallback-withheld" | null;
 }
 
 /** A follow-up the person sent (#16231) that Daintree won't type in on its own, opened. */
@@ -82,6 +119,11 @@ export interface DecisionsAttentionItem {
    * Null when there is an answer, or the answer doesn't need a person.
    */
   answerUnavailable: "none" | "unreadable" | null;
+  /**
+   * The timeout notice that needs a person in place of an answer (#17944);
+   * null when what needs one is an answer, or only follow-ups.
+   */
+  notice: DecisionsTimeoutNotice | null;
   /** The follow-ups that need a person, in the order they were sent. */
   followUps: DecisionsFollowUpPreview[];
   /**

@@ -3,10 +3,12 @@ import type {
   DecisionsAnswerDestination,
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
+  DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectPlural,
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
 
@@ -30,17 +32,25 @@ export function aliasLabel(alias: number): string {
 
 export type AttentionSubject = DeliverySubject;
 
-type SubjectFields = Pick<DecisionsAttentionItem, "answer" | "answerUnavailable" | "followUps">;
+type SubjectFields = Pick<
+  DecisionsAttentionItem,
+  "answer" | "answerUnavailable" | "notice" | "followUps"
+>;
 
+/** What of the question needs a person; a timeout notice (#17944) stands in the answer's place. */
 export function subjectOf(item: SubjectFields): AttentionSubject {
+  const notice = item.answer === null && item.answerUnavailable === null && item.notice !== null;
   return deliverySubject(
-    item.answer !== null || item.answerUnavailable !== null,
-    item.followUps.length
+    item.answer !== null || item.answerUnavailable !== null || notice,
+    item.followUps.length,
+    notice
   );
 }
 
-function isPlural(subject: AttentionSubject): boolean {
-  return subject !== "answer" && subject !== "follow-up";
+const isPlural = deliverySubjectPlural;
+
+function isNotice(subject: AttentionSubject): boolean {
+  return subject.startsWith("timeout notice");
 }
 
 function capitalized(text: string): string {
@@ -53,6 +63,11 @@ const UNCERTAIN_STATUS: Record<AttentionSubject, string> = {
   "follow-ups": "These follow-ups may or may not have been delivered",
   "answer and follow-up": "This answer or its follow-up may or may not have been delivered",
   "answer and follow-ups": "This answer or its follow-ups may or may not have been delivered",
+  "timeout notice": "This timeout notice may or may not have been delivered",
+  "timeout notice and follow-up":
+    "This timeout notice or its follow-up may or may not have been delivered",
+  "timeout notice and follow-ups":
+    "This timeout notice or its follow-ups may or may not have been delivered",
 };
 
 export function statusText(item: Pick<DecisionsAttentionItem, "status"> & SubjectFields): string {
@@ -61,12 +76,19 @@ export function statusText(item: Pick<DecisionsAttentionItem, "status"> & Subjec
   return `${capitalized(subject)} ${isPlural(subject) ? "need" : "needs"} attention`;
 }
 
-/** What the copy button copies, in its label's words. */
+/**
+ * What the copy button copies, in its label's words. A timeout notice is
+ * Daintree's to type into the agent that asked, never a person's to paste,
+ * so only the follow-ups beside one are copied.
+ */
 export function copyLabel(item: SubjectFields): string {
-  return `Copy ${subjectOf(item)}`;
+  return `Copy ${subjectOf({ ...item, notice: null })}`;
 }
 
-/** Whether everything that needs a person is here to copy: the answer, if it does, and each follow-up. */
+/**
+ * Whether everything a person can copy is here to copy: the answer, if it
+ * needs a person, and each follow-up. A timeout notice alone has nothing to copy.
+ */
 export function canCopy(item: SubjectFields): boolean {
   const answerHeld = item.answer !== null || item.answerUnavailable !== null;
   if (answerHeld && item.answer === null) return false;
@@ -95,6 +117,15 @@ export function handledConfirmTitle(alias: number): string {
 export function handledConfirmBody(subject: AttentionSubject): string {
   const plural = isPlural(subject);
   const it = plural ? "them" : "it";
+  if (isNotice(subject)) {
+    // Nothing of a notice is copied or sent to another agent: Try resume is all it offers.
+    const offered = plural ? "Copy and Try resume go" : "Try resume goes";
+    return (
+      `Its ${subject} ${plural ? "leave" : "leaves"} this list, the pane's chip and Canopy, and ` +
+      `Daintree won't type ${it} in. ${offered} with ${it}. ` +
+      `The Decisions audit trail records the question as handled.`
+    );
+  }
   return (
     `Its ${subject} ${plural ? "leave" : "leaves"} this list, the pane's chip and Canopy, and ` +
     `Daintree won't type ${it} in. Copy, Try resume and Choose destination go with ${it}, so ` +
@@ -110,9 +141,43 @@ export function agentLabel(origin: { agentId: string; agentName: string | null }
 
 /** The dialog's opening line, which also tells a screen reader what the list is. */
 export const LIST_DESCRIPTION =
-  "Daintree won't type these answers and follow-ups in on its own. Choose what happens to each one.";
+  "Daintree won't type these answers, timeout notices and follow-ups in on its own. Choose what happens to each one.";
 export const EMPTY_DESCRIPTION =
-  "Nothing needs attention right now. Answers and follow-ups Daintree won't type in on its own show up here.";
+  "Nothing needs attention right now. Answers, timeout notices and follow-ups Daintree won't type in on its own show up here.";
+
+/**
+ * How the question itself ended, apart from what became of its notice
+ * (#17944): its deadline passed, with no answer or before it reached the relay.
+ */
+export function noticeOutcomeText(notice: Pick<DecisionsTimeoutNotice, "kind">): string {
+  return notice.kind === "never-published"
+    ? "Its deadline passed before it reached the relay, so no answer was recorded."
+    : "Its deadline passed without an answer.";
+}
+
+/**
+ * What the notice says of the agent's stated plan, for an advisory round:
+ * only what typing it would say, or may have said. Never that the agent read
+ * it or acted on it, and never a decision anyone made. Null for a question
+ * that waited for a reply, or when it can't be told.
+ */
+export function noticePlanText(
+  notice: Pick<DecisionsTimeoutNotice, "delivery" | "disposition">
+): string | null {
+  const uncertain = notice.delivery === "delivery-uncertain";
+  switch (notice.disposition) {
+    case "fallback-due":
+      return uncertain
+        ? "If it reached the terminal, it told the agent it may go ahead with its stated plan. Nothing was decided or approved."
+        : "Once typed, it tells the agent it may go ahead with its stated plan. Nothing was decided or approved.";
+    case "fallback-withheld":
+      return uncertain
+        ? "If it reached the terminal, it didn't clear the agent to go ahead with its plan."
+        : "Once typed, it doesn't clear the agent to go ahead with its plan.";
+    default:
+      return null;
+  }
+}
 
 /** Why an item shows no answer: there is none waiting, or this computer can't open it. */
 export function missingAnswerText(unavailable: "none" | "unreadable" | null): string {
@@ -137,7 +202,11 @@ export function originParts(
   const { origin } = item;
   const agent = agentLabel(origin);
   const pane =
-    origin.paneTitle !== null ? `${agent} in “${origin.paneTitle}”` : `${agent}, terminal closed`;
+    origin.otherHost !== null
+      ? `${agent} on ${origin.otherHost.name ?? "another computer"}`
+      : origin.paneTitle !== null
+        ? `${agent} in “${origin.paneTitle}”`
+        : `${agent}, terminal closed`;
   const place = [origin.projectName, worktreeName].filter((part) => part !== null).join(" · ");
   return { pane, place: place === "" ? null : place };
 }
@@ -152,7 +221,12 @@ export interface PaneLines {
 export function fromLines(item: DecisionsAttentionItem, worktreeName: string | null): PaneLines {
   const { origin } = item;
   return {
-    primary: origin.paneTitle !== null ? `“${origin.paneTitle}”` : "Terminal closed",
+    primary:
+      origin.otherHost !== null
+        ? (origin.otherHost.name ?? "Another computer")
+        : origin.paneTitle !== null
+          ? `“${origin.paneTitle}”`
+          : "Terminal closed",
     detail: [agentLabel(origin), origin.projectName, worktreeName]
       .filter((part) => part !== null)
       .join(" · "),
@@ -202,7 +276,7 @@ export function outcomeText(
   subject: AttentionSubject = "answer"
 ): string {
   const q = aliasLabel(alias);
-  const what = `${capitalized(subject)} to ${q}`;
+  const what = `${capitalized(subject)} ${isNotice(subject) ? "for" : "to"} ${q}`;
   const plural = isPlural(subject);
   const needs = plural ? "need" : "needs";
   switch (outcome.result) {

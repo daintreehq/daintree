@@ -201,7 +201,11 @@ export class DaintreeTerminalSink implements TerminalSink {
         wake
       );
     } catch (err) {
-      console.error("[Decisions] Queueing an answer's wake failed:", err);
+      // The error's name only: its message could quote the pane's state, and this log can leave the machine.
+      console.error(
+        "[Decisions] Queueing an answer's wake failed:",
+        err instanceof Error ? err.name : "error"
+      );
       // Whether the engine kept it is unknown, so it may still be typed.
       finish({ outcome: "ambiguous", reason: "queue-failed" });
     }

@@ -36,15 +36,22 @@ type RoundRow = Pick<
   | "local_status"
   | "delivery_status"
   | "history_only"
+  | "expires_at"
 >;
 
 /**
- * Whether this Daintree delivers advisory outcomes, and whether its policy
- * allows advice: both off until #17940 and #17941 enable them. A notice not
- * yet typed follows them, so on this build an advisory expiry's notice is the
- * ordinary expiry, which lets no plan go ahead.
+ * Whether the lifetime reading the row delivers advisory outcomes, and whether
+ * its policy allows advice (#17944): what an untyped notice would say once
+ * typed follows them, never upgraded. The owner's delivery passes its own; a
+ * reader that doesn't know says neither, so an untyped advisory notice reads
+ * as the ordinary expiry, which lets no plan go ahead.
  */
-const ADVISORY_HOST = { outcomes: false, allowed: false } as const;
+export interface AdvisoryHost {
+  outcomes: boolean;
+  allowed: boolean;
+}
+
+export const NO_ADVISORY_HOST: AdvisoryHost = { outcomes: false, allowed: false };
 
 /** The envelope's AAD as published, or null when it can't be read as one. */
 function envelopeOf(row: Pick<RoundRow, "content_sealed">): { aad: unknown } | null {
@@ -177,7 +184,8 @@ function noticeDelivery(entry: AnswerEntry, row: RoundRow): DecisionClosureNotic
 function noticeDisposition(
   entry: AnswerEntry,
   delivery: DecisionClosureNotice["delivery"],
-  mode: DecisionReplyMode
+  mode: DecisionReplyMode,
+  host: AdvisoryHost
 ): DecisionClosureNotice["disposition"] {
   if (mode !== "advisory" || entry.kind === "declined") return null;
   const said = delivery === "delivered" || delivery === "uncertain";
@@ -185,11 +193,11 @@ function noticeDisposition(
     // Untyped, a notice whose plan was due may still have an uncertain write the row doesn't
     // show (the bridge reads the store's intents for it): what it says is unknown, not withheld.
     if (!said && entry.fallback_due === true) return null;
-    return unpublishedPlanDue(entry, said, ADVISORY_HOST) ? "fallback-due" : "fallback-withheld";
+    return unpublishedPlanDue(entry, said, host) ? "fallback-due" : "fallback-withheld";
   }
   const recorded = entry.advisory_disposition;
   if (recorded === undefined) return "fallback-withheld";
-  return said ? recorded : (currentDisposition(recorded, ADVISORY_HOST) ?? recorded);
+  return said ? recorded : (currentDisposition(recorded, host) ?? recorded);
 }
 
 /**
@@ -200,13 +208,51 @@ function noticeDisposition(
 export function closureNoticeOf(
   row: RoundRow,
   entries: readonly AnswerEntry[],
-  mode: DecisionReplyMode = replyModeOfRow(row, entries)
+  mode: DecisionReplyMode = replyModeOfRow(row, entries),
+  host: AdvisoryHost = NO_ADVISORY_HOST
 ): DecisionClosureNotice | null {
   if (row.history_only) return null;
   const entry = closureEntry(row, entries);
   if (entry === undefined) return null;
   const delivery = noticeDelivery(entry, row);
-  return { delivery, disposition: noticeDisposition(entry, delivery, mode) };
+  return { delivery, disposition: noticeDisposition(entry, delivery, mode, host) };
+}
+
+/**
+ * The notice that the current round's deadline closed it without an answer
+ * (#17944): its expiry, or that it passed before the question ever reached the
+ * relay, with how far it got into the asking terminal. Never a decline, which
+ * a person made and needs no one's attention. Null while no deadline closed
+ * the round, and for imported history.
+ */
+export interface TimeoutNotice extends DecisionClosureNotice {
+  kind: "expired" | "never-published";
+  /** The round it closed. */
+  revision: number;
+  /** When that round's deadline passed, ISO 8601; null when none was recorded. */
+  deadline: string | null;
+  /** The notice entry, by id, so a later read can tell whether this one was typed. */
+  entryId: string;
+}
+
+export function timeoutNoticeOf(
+  row: RoundRow,
+  entries: readonly AnswerEntry[] = parseAnswers(row.answers_json),
+  host: AdvisoryHost = NO_ADVISORY_HOST
+): TimeoutNotice | null {
+  if (row.history_only) return null;
+  const entry = closureEntry(row, entries);
+  if (entry === undefined || entry.kind === "declined") return null;
+  const delivery = noticeDelivery(entry, row);
+  return {
+    kind: entry.kind === "unpublished" ? "never-published" : "expired",
+    revision: entry.revision,
+    // An expiry records when its signed deadline passed; a never-published one, when it was settled.
+    deadline: entry.kind === "expired" ? entry.created_at : (row.expires_at ?? null),
+    entryId: entry.entry_id,
+    delivery,
+    disposition: noticeDisposition(entry, delivery, replyModeOfRow(row, entries), host),
+  };
 }
 
 /** The round facts a list item and a read both carry. */
@@ -216,12 +262,16 @@ export interface QuestionRound {
   closureNotice: DecisionClosureNotice | null;
 }
 
-export function roundOf(row: RoundRow, entries = parseAnswers(row.answers_json)): QuestionRound {
+export function roundOf(
+  row: RoundRow,
+  entries = parseAnswers(row.answers_json),
+  host: AdvisoryHost = NO_ADVISORY_HOST
+): QuestionRound {
   // Read once: the envelope is parsed for its mode only when it can be advisory.
   const replyMode = replyModeOfRow(row, entries);
   return {
     replyMode,
     closedReason: closedReasonOfRow(row, entries),
-    closureNotice: closureNoticeOf(row, entries, replyMode),
+    closureNotice: closureNoticeOf(row, entries, replyMode, host),
   };
 }

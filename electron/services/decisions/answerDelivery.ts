@@ -2,6 +2,7 @@ import {
   DecisionsBridge,
   DeliveryEngine,
   isAdvisoryNotice,
+  isClosure,
   isUndeliveredMessage,
   messageSentOn,
   openAnswerContent,
@@ -39,6 +40,7 @@ import type {
   DecisionsAnswerOrigin,
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
+  DecisionsTimeoutNotice,
 } from "../../../shared/types/decisionsAttention.js";
 import type {
   DecisionQuestionContentResult,
@@ -78,6 +80,7 @@ import {
   type SessionResumeDeps,
 } from "./daintreeResumeAdapter.js";
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
+import { timeoutNoticeOf, type AdvisoryHost } from "./questionRound.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
@@ -152,6 +155,8 @@ export interface AttentionLabelDeps {
   projectName(projectId: string): Promise<string | null>;
   /** Every pane the pty host holds now. */
   listTerminals(): Promise<AttentionTerminal[]>;
+  /** An enrolled Remote Host's name, by the id its questions carry; null for one this computer doesn't know. */
+  hostName?(hostId: string): string | null;
 }
 
 /**
@@ -230,6 +235,13 @@ function inAdvisoryRound(row: QuestionRow): boolean {
   } catch {
     return false;
   }
+}
+
+/** The closure notices a retry of `row` sends back to delivery, by entry id. */
+function closuresTried(row: QuestionRow): string[] {
+  return pendingEntries(row)
+    .filter((entry) => isClosure(entry))
+    .map((entry) => entry.entry_id);
 }
 
 export const DELIVERY_CHECK_INTERVAL_MS = 60_000;
@@ -460,8 +472,15 @@ export class AnswerDelivery {
       const answerHeld = answerNeedsAttention(row, handled);
       const opened = answerHeld ? await this.openPending(row) : [];
       const answer = opened === null ? null : answerPreviewOf(opened);
+      const notice = answerHeld ? this.heldNotice(row) : null;
       const answerUnavailable =
-        answer !== null || !answerHeld ? null : opened === null ? "unreadable" : "none";
+        answer !== null || !answerHeld
+          ? null
+          : opened === null
+            ? "unreadable"
+            : notice !== null
+              ? null
+              : "none";
       const followUps = await this.followUpPreviews(row);
       let question: string | null;
       try {
@@ -482,12 +501,8 @@ export class AnswerDelivery {
         followUps.every((followUp) => !followUp.unreadable) &&
         this.ownHostId(row.origin);
       const actionable = readable && (answerHeld ? answer !== null : followUps.length > 0);
-      // An advisory notice has no answer to show, but its own session can still be resumed for it.
-      const advisoryHeld =
-        readable &&
-        answerHeld &&
-        opened !== null &&
-        pendingEntries(row).some((e) => isAdvisoryNotice(e) || e.fallback_due === true);
+      // A timeout notice has no answer to show, but its own session can still be resumed for it.
+      const noticeHeld = readable && notice !== null && notice.delivery === "needs-attention";
       items.push({
         questionId: row.question_id,
         alias: row.alias,
@@ -498,12 +513,45 @@ export class AnswerDelivery {
         origin: await this.originOf(row.origin, terminals, projectName),
         answer,
         answerUnavailable,
+        notice,
         followUps,
-        canResume: (actionable || advisoryHeld) && (await this.resumable(row, code)),
+        canResume: (actionable || noticeHeld) && (await this.resumable(row, code)),
         canReassign: actionable && !inAdvisoryRound(row),
       });
     }
     return items;
+  }
+
+  /**
+   * Whether this delivery types advisory outcomes and its policy allows
+   * advice (#17944): what an advisory notice not yet typed would say follows
+   * them, as the engine reads them before typing it.
+   */
+  private get advisoryHost(): AdvisoryHost {
+    return {
+      outcomes: this.o.advisoryDeadlines === true,
+      allowed: this.o.policy?.advisoryQuestions === true,
+    };
+  }
+
+  /**
+   * The current round's timeout notice when it is what of the answer needs a
+   * person (#17944): still to be typed, its typing stopped or possibly done.
+   * Null for a notice of a round since replaced, which is never typed again.
+   */
+  private heldNotice(row: QuestionRow): DecisionsTimeoutNotice | null {
+    const entries = parseAnswers(row.answers_json);
+    const notice = timeoutNoticeOf(row, entries, this.advisoryHost);
+    if (notice === null) return null;
+    if (notice.delivery !== "needs-attention" && notice.delivery !== "uncertain") return null;
+    if (!pendingEntries(row).some((entry) => entry.entry_id === notice.entryId)) return null;
+    return {
+      kind: notice.kind,
+      revision: notice.revision,
+      deadline: notice.deadline,
+      delivery: notice.delivery === "uncertain" ? "delivery-uncertain" : "needs-attention",
+      disposition: notice.disposition,
+    };
   }
 
   /**
@@ -517,7 +565,7 @@ export class AnswerDelivery {
   ): Promise<DecisionQuestionContentResult> {
     const row = await this.store.getQuestion(questionId);
     if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
-    return readQuestionContent(this.owner.ctx, row);
+    return readQuestionContent(this.owner.ctx, row, this.advisoryHost);
   }
 
   /**
@@ -573,9 +621,11 @@ export class AnswerDelivery {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return null;
     const handled = await readHandledAnswers(this.store);
-    const opened = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
+    const pending = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
     const followUps = await this.openFollowUps(row);
-    if (opened === null || followUps === null) return null;
+    if (pending === null || followUps === null) return null;
+    // A closure notice is Daintree's to type into the run that asked, never a person's to paste (#17944).
+    const opened = pending.filter((entry) => !isClosure(entry));
     return copiedAnswerText(
       row,
       opened,
@@ -697,10 +747,12 @@ export class AnswerDelivery {
    */
   async resumeAnswer(questionId: string): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
+    let tried: string[] = [];
     const refused = await this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      tried = closuresTried(row);
       this.resume?.allowAgain(row.origin);
       await this.store.updateQuestion(questionId, await this.retryPatch(row));
       await this.owner.ctx.audit.log({
@@ -713,7 +765,7 @@ export class AnswerDelivery {
     });
     if (refused !== null) return refused;
     await this.deliverNow();
-    return this.outcomeOf(questionId);
+    return this.outcomeOf(questionId, tried);
   }
 
   /** The panes `questionId`'s answer could be typed into instead: agents running here now. */
@@ -906,7 +958,16 @@ export class AnswerDelivery {
     await this.running;
   }
 
-  private async outcomeOf(questionId: string): Promise<DecisionsAnswerOutcome> {
+  /**
+   * What became of `questionId` once delivery had its go. `tried`, the closure
+   * notices the action sent back, are delivered only once each is marked
+   * typed: one a reopen replaced, or a person handled meanwhile, left untyped,
+   * so it no longer needs attention rather than having been typed (#17944).
+   */
+  private async outcomeOf(
+    questionId: string,
+    tried: readonly string[] = []
+  ): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
     const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
@@ -927,7 +988,15 @@ export class AnswerDelivery {
       null;
     const waiting =
       pendingEntries(row).length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
-    if (!waiting) return { result: "delivered", terminalId, title };
+    if (!waiting) {
+      const typed = new Set(
+        parseAnswers(row.answers_json)
+          .filter((entry) => entry.delivered)
+          .map((entry) => entry.entry_id)
+      );
+      if (tried.some((id) => !typed.has(id))) return { result: "resolved" };
+      return { result: "delivered", terminalId, title };
+    }
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
     const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
     return {
@@ -1080,7 +1149,18 @@ export class AnswerDelivery {
       agentName: agentNameOf(origin.agent_kind),
       paneId: origin.pane_id,
       paneTitle: pane?.title?.trim() || null,
+      otherHost: this.ownHostId(origin) ? null : this.otherHostOf(origin.host_id),
     };
+  }
+
+  private otherHostOf(hostId: string): { hostId: string; name: string | null } {
+    let name: string | null = null;
+    try {
+      name = this.o.deps.labels?.hostName?.(hostId)?.trim() || null;
+    } catch {
+      name = null;
+    }
+    return { hostId, name };
   }
 
   private ownHostId(origin: QuestionOrigin): boolean {

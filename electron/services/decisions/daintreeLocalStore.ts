@@ -16,6 +16,7 @@ import {
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
 import { logWarn } from "../../utils/logger.js";
+import { noticeTrailOf, noticeUntypedOf } from "./noticeTrail.js";
 
 /** Every table the store keeps. */
 const DECISIONS_TABLES = [
@@ -112,6 +113,19 @@ function isBusyCode(code: unknown): boolean {
 
 function elapsedSince(since: number): number {
   return Math.round(performance.now() - since);
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** A diagnostic's entries, or none when reading them failed: it never fails the write it describes. */
+function trailOf(read: () => AuditEntry[]): AuditEntry[] {
+  try {
+    return read();
+  } catch {
+    return [];
+  }
 }
 
 interface QuestionRecord {
@@ -902,6 +916,15 @@ export class DaintreeLocalStore implements LocalStore {
       if (!current) return null;
       const next = { ...current, ...copy };
       this.writeIntent(next);
+      if (next.state === "abandoned" && current.state !== "abandoned") {
+        const row = this.readQuestion(next.question_id);
+        for (const trail of trailOf(() => {
+          const untyped = noticeUntypedOf(row, next, nowIso());
+          return untyped === null ? [] : [untyped];
+        })) {
+          this.writeAudit(trail);
+        }
+      }
       return next;
     });
   }
@@ -962,12 +985,17 @@ export class DaintreeLocalStore implements LocalStore {
 
   appendAudit(e: AuditEntry): Promise<void> {
     return this.enqueueWith("write", () => {
-      const at = e.at;
       const json = JSON.stringify(e);
+      const at = e.at;
       return () => {
         this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(at, json);
       };
     });
+  }
+
+  /** An audit entry written inside the write that it describes (#17944). */
+  private writeAudit(e: AuditEntry): void {
+    this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(e.at, JSON.stringify(e));
   }
 
   listAudit(limit: number): Promise<AuditEntry[]> {
@@ -1239,6 +1267,10 @@ export class DaintreeLocalStore implements LocalStore {
       origin: { ...current.origin, ...(patch.origin ?? {}) },
     };
     this.st(UPDATE_QUESTION).run(toRecord(next));
+    // The notice's trail goes in the same write as the change it records.
+    for (const trail of trailOf(() => noticeTrailOf(current, next, nowIso()))) {
+      this.writeAudit(trail);
+    }
     return next;
   }
 

@@ -21,7 +21,7 @@ import {
 } from "./attentionList.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { closedReasonOf, declineOf } from "./questionClosed.js";
-import { roundOf } from "./questionRound.js";
+import { NO_ADVISORY_HOST, roundOf, type AdvisoryHost } from "./questionRound.js";
 
 type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
 
@@ -43,7 +43,8 @@ function attentionStatus(status: QuestionRow["delivery_status"]): boolean {
 export function projectDecisionQuestions(
   rows: readonly QuestionRow[],
   handled: HandledAnswers,
-  hostId: string | null
+  hostId: string | null,
+  advisory: AdvisoryHost = NO_ADVISORY_HOST
 ): DecisionQuestionListItem[] {
   if (hostId === null) return [];
   return rows
@@ -58,7 +59,7 @@ export function projectDecisionQuestions(
     .map((row) => {
       const { origin } = row;
       const standing = standingOf(row, handled);
-      const round = roundOf(row);
+      const round = roundOf(row, undefined, advisory);
       return {
         reference: {
           hostId,

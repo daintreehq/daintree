@@ -33,6 +33,7 @@ import type {
   DecisionsAttentionItem,
   DecisionsAttentionList,
   DecisionsFollowUpPreview,
+  DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
   EMPTY_DESCRIPTION,
@@ -50,6 +51,8 @@ import {
   handledNeedsConfirm,
   leavesList,
   missingAnswerText,
+  noticeOutcomeText,
+  noticePlanText,
   originParts,
   outcomeSeverity,
   outcomeText,
@@ -183,6 +186,30 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
           {expanded ? "Show less" : "Show full answer"}
         </Button>
       )}
+    </figure>
+  );
+}
+
+/**
+ * The notice that the question's deadline closed it (#17944): how the question
+ * ended, and what typing the notice says of the agent's plan, apart from the
+ * status line above, which says how far typing it got.
+ */
+function NoticePreview({ notice }: { notice: DecisionsTimeoutNotice }) {
+  const plan = noticePlanText(notice);
+  return (
+    <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
+      <figcaption className="text-2xs text-text-secondary">
+        Timeout notice
+        {notice.deadline !== null && (
+          <>
+            {" "}
+            <FactSeparator /> <TimeAgo timestamp={notice.deadline} prefix="deadline " />
+          </>
+        )}
+      </figcaption>
+      <p className="text-xs text-text-primary [text-wrap:pretty]">{noticeOutcomeText(notice)}</p>
+      {plan !== null && <p className="text-xs text-text-secondary [text-wrap:pretty]">{plan}</p>}
     </figure>
   );
 }
@@ -343,6 +370,7 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
           {reason !== null && ` ${reason}`}
         </span>
       </p>
+      {item.notice !== null && <NoticePreview notice={item.notice} />}
       <AnswerPreview item={item} />
       {item.followUps.map((followUp) => (
         <FollowUpPreview key={followUp.messageId} followUp={followUp} alias={alias} />
@@ -560,22 +588,28 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     setHandling(null);
   }, [isOpen]);
 
-  // Panes' Decisions state changes whenever an answer moves; read again once a burst settles.
+  // Panes' Decisions state changes whenever an answer moves, but reaches only
+  // their project's window; the question list reaches every window here, so
+  // one handled or delivered from another leaves this one too (#17944). Read
+  // again once a burst of either settles.
   useEffect(() => {
     if (!isOpen) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let off: (() => void) | null = null;
-    try {
-      off = decisionsClient.onPaneState(() => {
-        if (timer !== null) clearTimeout(timer);
-        timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-      });
-    } catch {
-      off = null;
+    const changed = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+    };
+    const offs: (() => void)[] = [];
+    for (const subscribe of [decisionsClient.onPaneState, decisionsClient.onQuestionsChanged]) {
+      try {
+        offs.push(subscribe(changed));
+      } catch {
+        // A bridge without the event leaves the other, and the list's own reads.
+      }
     }
     return () => {
       if (timer !== null) clearTimeout(timer);
-      off?.();
+      for (const off of offs) off();
     };
   }, [isOpen, refresh]);
 
