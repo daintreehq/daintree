@@ -143,6 +143,17 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
     }
   ),
 }));
+// The built-in viewer's host (#17336): the props it is mounted with are the
+// seam; the hosted view and the document behind it have tests of their own.
+const { viewerHostProps } = vi.hoisted(() => ({
+  viewerHostProps: [] as Array<Record<string, unknown>>,
+}));
+vi.mock("@/panels/file/PluginFileEditorHost", () => ({
+  default: (props: Record<string, unknown>) => {
+    viewerHostProps.push(props);
+    return <div data-testid="plugin-viewer-host" />;
+  },
+}));
 vi.mock("@/components/Html/HtmlViewer", () => ({
   HtmlViewer: (props: { previewUrl: string | null }) => (
     <div data-testid="html-viewer-mock" data-preview-url={props.previewUrl ?? ""} />
@@ -267,6 +278,12 @@ import {
   __resetBuiltinRendererRegistryForTests,
 } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/pluginRuntimeStore";
+import {
+  usePluginHostedViewsStore,
+  _resetPluginHostedViewsStoreForTest,
+} from "@/store/pluginHostedViewsStore";
+import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import type { PluginHostedViewDescriptor } from "@shared/types/plugin";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useFileBrowserDraftReviewStore } from "@/store/fileBrowserDraftReviewStore";
 import { FileBrowserViewer } from "../FileBrowserViewer";
@@ -292,6 +309,7 @@ import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
   isFocused?: boolean;
+  rootPath?: string;
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   panelId?: string;
   sidebarCollapsed?: boolean;
@@ -363,7 +381,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         panelId={opts.panelId ?? "panel-1"}
         isFocused={opts.isFocused}
         filePath={filePath}
-        rootPath="/repo"
+        rootPath={opts.rootPath ?? "/repo"}
         fileName={fileName}
         relativePath={
           opts.relativePath !== undefined ? opts.relativePath : filePath ? fileName : null
@@ -2727,5 +2745,181 @@ describe("Copy host path in a remote window (#15722)", () => {
       { path: "/repo/src/notes.txt" },
       { source: "user" }
     );
+  });
+});
+
+describe("a built-in viewer in the file browser (#17336)", () => {
+  const context = { projectId: "project-1", worktreePath: "/repo", isFocused: true };
+  let bridge: PropertyDescriptor | undefined;
+
+  function viewerView(pluginId: string, builtin: boolean): PluginHostedViewDescriptor {
+    return {
+      ...(builtin && { builtin: true }),
+      id: `plugin-view:${pluginId}/table`,
+      pluginId,
+      viewId: "table",
+      name: `${pluginId} fileEditor`,
+      componentPath: `plugin://${pluginId}/table.js`,
+      location: "fileEditor",
+      fileEditors: [
+        { id: "table", mode: "view", extensions: ["csv"], paths: [], maxBytes: 2 * 1024 * 1024 },
+      ],
+    };
+  }
+
+  function seedPlugins(plugins: Array<{ id: string; name: string; builtin: boolean }>) {
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        plugin: {
+          list: async () =>
+            plugins.map((plugin) => ({
+              instanceId: plugin.id,
+              disabled: false,
+              devMode: false,
+              isBuiltin: plugin.builtin,
+              manifest: { name: plugin.id, displayName: plugin.name },
+            })),
+          onProvenanceChanged: () => () => {},
+        },
+      },
+    });
+    usePluginHostedViewsStore.setState({
+      views: plugins.map((plugin) => viewerView(plugin.id, plugin.builtin)),
+    });
+  }
+
+  beforeEach(() => {
+    bridge = Object.getOwnPropertyDescriptor(window, "electron");
+    _resetPluginRuntimeStoreForTest();
+    useFileEditorChoicesStore.setState({ choices: {}, loaded: true });
+    viewerHostProps.length = 0;
+    readMock.mockResolvedValue({ content: "id,name\n1,Ada\n", byteLength: 15 });
+  });
+
+  afterEach(() => {
+    _resetPluginRuntimeStoreForTest();
+    _resetPluginHostedViewsStoreForTest();
+    useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+    if (bridge) Object.defineProperty(window, "electron", bridge);
+    else Reflect.deleteProperty(window, "electron");
+  });
+
+  it("opens a CSV in the built-in table, with Source one click away", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    renderViewer("/repo/users.csv", { editorContext: context });
+
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+    expect(viewerHostProps.at(-1)).toMatchObject({
+      panelId: "panel-1",
+      projectId: "project-1",
+      filePath: "/repo/users.csv",
+      rootPath: "/repo",
+    });
+    expect(screen.getByRole("radio", { name: "Rendered · CSV viewer" })).toBeTruthy();
+
+    await clickMode("Source");
+    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(screen.getByTestId("code-viewer-mock")).toBeTruthy();
+  });
+
+  it("offers no installed plugin's viewer", async () => {
+    seedPlugins([{ id: "acme.csv", name: "Acme CSV", builtin: false }]);
+    renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("offers the built-in viewer only inside a governed root", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    viewer.rerender(viewerJsx("/repo/users.csv"));
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
+  });
+
+  it("never hands the next file the last file's size", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/small.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    let refuse: (error: unknown) => void = () => {};
+    readMock.mockReturnValueOnce(new Promise((_resolve, reject) => (refuse = reject)));
+    viewer.rerender(viewerJsx("/repo/big.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+
+    await act(async () =>
+      refuse(
+        new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+          code: "FILE_TOO_LARGE",
+          sizeBytes: 3 * 1024 * 1024,
+        })
+      )
+    );
+    expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+  });
+
+  it("never reuses a file's size when the browser comes back to it", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+    viewer.rerender(viewerJsx("/repo/photo.png", { editorContext: context }));
+    await act(async () => {});
+    viewerHostProps.length = 0;
+
+    readMock.mockReturnValueOnce(new Promise(() => {}));
+    viewer.rerender(viewerJsx("/repo/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("never reuses a file's size across a change of root and back", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/sub/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    readMock.mockReturnValue(new Promise(() => {}));
+    viewer.rerender(
+      viewerJsx("/repo/sub/users.csv", { editorContext: context, rootPath: "/repo/sub" })
+    );
+    await act(async () => {});
+    viewerHostProps.length = 0;
+    viewer.rerender(viewerJsx("/repo/sub/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("shows a CSV too large for Source in the table, and Source points at it", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 1024 * 1024,
+      })
+    );
+    renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    await clickMode("Source");
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Too large for Source");
+    fireEvent.click(screen.getByRole("button", { name: "Show in Rendered" }));
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+  });
+
+  it("keeps Source for a CSV the read found isn't UTF-8", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    readMock.mockResolvedValue({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" });
+    renderViewer("/repo/legacy.csv", { editorContext: context });
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
   });
 });

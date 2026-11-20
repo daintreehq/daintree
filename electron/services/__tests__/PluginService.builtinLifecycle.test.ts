@@ -1018,6 +1018,40 @@ describe("contributes.fileEditors is built-in only (#12323)", () => {
     expect(view?.fileEditors).toEqual([
       { id: "csv", mode: "view", extensions: ["csv"], paths: [], maxBytes: 2 * 1024 * 1024 },
     ]);
+    expect(view?.builtin).toBeUndefined();
+  });
+
+  // The renderer picks a built-in viewer as the default from the same snapshot
+  // that offers it (#17336), so the view carries where it came from.
+  it("serves a built-in plugin's view-backed file editor marked as built in, with no main", async () => {
+    await writePluginAt(builtinDir, "csv-viewer", {
+      name: "daintree.csv-viewer",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "table", componentPath: "renderer/index.js", location: "fileEditor" }],
+        fileEditors: [
+          {
+            id: "table",
+            view: "table",
+            mode: "view",
+            extensions: ["csv", "tsv"],
+            maxBytes: 2097152,
+          },
+        ],
+      },
+    });
+    clearPluginHostedViewRegistry();
+    const service = new PluginService(path.join(tmpDir, "user"), "0.0.0", {
+      builtinPluginsRoot: builtinDir,
+    });
+    await service.initialize();
+    expect(service.hasPlugin("daintree.csv-viewer")).toBe(true);
+    const view = getPluginHostedViews().find((entry) => entry.pluginId === "daintree.csv-viewer");
+    expect(view).toMatchObject({
+      id: "plugin-view:daintree.csv-viewer/table",
+      location: "fileEditor",
+      builtin: true,
+    });
   });
 
   it("still loads an installed plugin whose fileEditors is empty", async () => {

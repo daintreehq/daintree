@@ -51,8 +51,10 @@ type PluginFileDocumentSaveResult = {
 interface PluginFileDocumentChange {
     /**
      * `"disk"`: the file changed on disk — re-read it, or keep your draft and
-     * let the conflict stand. `"saved"`: the host saved the draft (the close
-     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
+     * let the conflict stand. `"saved"`: the host saved the whole draft (the
+     * close prompt's Save); edits that landed during that save stay the draft,
+     * now based on `revision`, and arrive as `"disk"` instead. `"discarded"`:
+     * the host dropped the draft — re-read.
      */
     readonly reason: "disk" | "saved" | "discarded";
     /**
@@ -92,8 +94,26 @@ interface PluginFileDocument {
      * it on mount to restore a draft from before the user switched modes.
      */
     getDraft(): string | null;
-    /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
-    setDraft(text: string | null): void;
+    /**
+     * The revision the host's draft is based on, or null when clean or when the
+     * draft started without one. A restored draft is saved against this, not
+     * against a fresh read.
+     */
+    getDraftBaseRevision(): string | null;
+    /**
+     * Report the unsaved text (null when clean). The host derives "dirty" from
+     * it. When a draft starts (the first text after clean), pass `baseRevision`:
+     * the `revision` of the read or save your text came from. The close prompt's
+     * Save writes the draft only if the file is still at that revision, and a
+     * draft started without one stays dirty but can't be saved from the prompt.
+     * Later calls keep the base the draft started with, and a save of the draft
+     * moves it to the revision that save wrote. To rebase a draft onto a newer
+     * revision, clear it and start it again: `setDraft(null)`, then
+     * `setDraft(text, { baseRevision })`.
+     */
+    setDraft(text: string | null, options?: {
+        baseRevision?: string;
+    }): void;
     /**
      * Report a conflict your editor detected itself. It can raise the host's
      * conflict flag but never clear one the host observed on disk.
@@ -593,11 +613,13 @@ interface PanelViewProps {
     /**
      * Present only for a `location: "fileEditor"` view (#13809): the file it was
      * opened for, owned by the host. Read it with a revision, save against the
-     * revision you read, and report your unsaved text with `setDraft` so the
-     * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
-     * on close all apply. The draft is the host's, not the view's: it survives
-     * the user switching to Source and back, and the close prompt can save it
-     * after your view has unmounted.
+     * revision you read, and report your unsaved text with `setDraft`, naming the
+     * revision it started from, so the host's dirty indicator, Rendered preview
+     * and Save / Discard / Cancel prompt on close all apply. The draft is the
+     * host's, not the view's: it survives the user switching to Source and back,
+     * and the close prompt can save it after your view has unmounted. Calls made
+     * after your view unmounts change nothing, so flush a pending (debounced)
+     * draft in your unmount cleanup.
      */
     readonly fileDocument?: PluginFileDocument;
     /**

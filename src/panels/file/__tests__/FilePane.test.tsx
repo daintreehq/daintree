@@ -1574,12 +1574,14 @@ describe("FilePane parity with the file browser's viewer (#16917)", () => {
       );
     }
 
+    // Source is left unset rather than written, so a built-in viewer can still
+    // claim the file once it has loaded (#17336).
     it.each([
       ["docs/spec.md", "rendered"],
-      ["dist/report.html", "source"],
-      ["src/index.ts", "source"],
+      ["dist/report.html", null],
+      ["src/index.ts", null],
     ])(
-      "opens %s in its type's own mode (%s), in the same write as the path",
+      "opens %s in its type's own mode (%s, unset for Source), in the same write as the path",
       async (path, mode) => {
         searchMock.mockResolvedValue({ files: [path] });
         renderEmpty();
@@ -4572,6 +4574,58 @@ describe("FilePane edit mode (#12323)", () => {
     );
   });
 
+  // A file Source refuses only for its size still opens in an editor with room.
+  it("keeps Edit on offer for a file refused only for its size", async () => {
+    seedWorktree();
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "source",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(screen.getByRole("radio", { name: "Edit" })).toBeTruthy();
+  });
+
+  // A file that grows past Source's cap now surfaces the refusal (#17336), but
+  // a standing draft is document state and Rendered keeps previewing it.
+  it("keeps previewing a draft in Rendered when the file grows too large to read", async () => {
+    seedWorktree();
+    useFileDocumentStore.getState().setFileDocument("file-1", {
+      identityKey: "doc",
+      draftText: "# Plan (edited)\n",
+      dirty: true,
+      conflict: false,
+      save: async () => ({ status: "saved" as const }),
+      discard: async () => {},
+    });
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "rendered",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(markdownViewerProps.current?.content).toBe("# Plan (edited)\n");
+    expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+  });
+
   // #13920: the host refuses a save from a view another screen drives.
   describe("while another screen drives the project", () => {
     const drivenElsewhere = {
@@ -4760,22 +4814,180 @@ describe("FilePane edit mode (#12323)", () => {
       expect(screen.queryByTestId("file-editor-picker")).toBeNull();
     });
 
-    it("draws only the plugin viewer when the host's own reader refused the file", async () => {
+    function refusedFor(sizeBytes: number | null) {
+      readMock.mockRejectedValue(
+        new ClientAppError(
+          "FILE_TOO_LARGE",
+          "too big",
+          undefined,
+          sizeBytes === null ? undefined : { code: "FILE_TOO_LARGE", sizeBytes }
+        )
+      );
+    }
+
+    function seedRefusedCsv(sizeBytes: number | null, fileViewMode?: string) {
       seedWorktree();
       fileEditorState.resolved = null;
-      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
-      readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "too big"));
+      const viewer = candidate("acme.csv", "Acme CSV", "view");
+      viewer.editor.maxBytes = 2 * 1024 * 1024;
+      fileEditorState.plugin.view = [viewer];
+      refusedFor(sizeBytes);
       panelsById["file-1"] = {
         id: "file-1",
         kind: "file",
         filePath: "/repo/data/table.csv",
         worktreeId: WORKTREE_ID,
-        fileViewMode: "rendered",
+        fileViewMode,
       };
+    }
+
+    it("draws only the plugin viewer when the host's own reader refused a file it fits", async () => {
+      // Exactly the viewer's ceiling still fits.
+      seedRefusedCsv(2 * 1024 * 1024, "rendered");
       render(paneElement());
       await act(async () => {});
       expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
       expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+    });
+
+    it("never offers a viewer a refused file is too large for", async () => {
+      seedRefusedCsv(3 * 1024 * 1024, "rendered");
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    it("offers no viewer on a refusal that doesn't say how large the file is", async () => {
+      seedRefusedCsv(null, "rendered");
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    it("points a Source too large to show at the viewer that fits it", async () => {
+      seedRefusedCsv(1024 * 1024, "source");
+      render(paneElement());
+      await act(async () => {});
+      const unavailable = await screen.findByTestId("file-pane-unavailable");
+      expect(unavailable.textContent).toContain("Too large for Source");
+      expect(unavailable.textContent).toContain("Acme CSV");
+      await act(async () => {
+        screen.getByRole("button", { name: "Show in Rendered" }).click();
+      });
+      expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "rendered");
+    });
+
+    it("opens an unset mode in a built-in viewer, and in Source for an installed one", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(fileEditorState.pluginHostProps.at(-1)).toMatchObject({
+        candidate: expect.objectContaining({ choiceId: "daintree.csv-viewer/main" }),
+      });
+      cleanup();
+
+      fileEditorState.pluginHostProps = [];
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(radioLabels()).toEqual(["Source", "Rendered · Acme CSV"]);
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+    });
+
+    it("keeps Source once it is picked over a built-in viewer", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      const view = await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      await act(async () => {
+        screen.getByRole("radio", { name: "Source" }).click();
+      });
+      expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+
+      panelsById["file-1"] = { ...panelsById["file-1"]!, fileViewMode: "source" };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe(
+        "true"
+      );
+    });
+
+    it("keeps a file the read found isn't UTF-8 out of the viewer, through a refresh", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      readMock.mockResolvedValue({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" });
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/data/legacy.csv",
+        worktreeId: WORKTREE_ID,
+      };
+      render(paneElement());
+      await act(async () => {});
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+
+      let finish: (value: unknown) => void = () => {};
+      readMock.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await act(async () => {
+        screen.getByRole("button", { name: "Refresh" }).click();
+      });
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+      await act(async () => finish({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" }));
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    describe("which viewer an unset mode opens", () => {
+      const builtin = () => ({
+        ...candidate("daintree.csv-viewer", "CSV viewer", "view"),
+        builtin: true,
+      });
+      const installed = () => candidate("acme.csv", "Acme CSV", "view");
+
+      async function openUnset() {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        // Installed first, the order the candidates sort in by id.
+        fileEditorState.plugin.view = [installed(), builtin()];
+        await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+        await act(async () => {});
+      }
+
+      const mounted = () =>
+        (fileEditorState.pluginHostProps.at(-1)?.candidate as { choiceId?: string } | undefined)
+          ?.choiceId;
+
+      it("is the built-in while the answers are still loading", async () => {
+        useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the built-in when nothing is remembered", async () => {
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the remembered viewer when the user picked an installed one", async () => {
+        useFileEditorChoicesStore.setState({
+          choices: { "view:csv": "acme.csv/main" },
+          loaded: true,
+        });
+        await openUnset();
+        expect(mounted()).toBe("acme.csv/main");
+      });
     });
 
     it("never offers plugin editors in the read-only dialog", async () => {

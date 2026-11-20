@@ -1321,6 +1321,11 @@ interface PluginHostedViewDescriptorBase {
   componentPath: string;
   /** For a `location: "fileEditor"` view, the file editors it backs (#13809). */
   fileEditors?: readonly HostedFileEditorDescriptor[];
+  /**
+   * The plugin ships with Daintree. Carried on the view so whoever chooses
+   * between views learns it from the same snapshot, never a later one.
+   */
+  builtin?: boolean;
 }
 
 export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {
@@ -1828,11 +1833,13 @@ export interface PanelViewProps {
   /**
    * Present only for a `location: "fileEditor"` view (#13809): the file it was
    * opened for, owned by the host. Read it with a revision, save against the
-   * revision you read, and report your unsaved text with `setDraft` so the
-   * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
-   * on close all apply. The draft is the host's, not the view's: it survives
-   * the user switching to Source and back, and the close prompt can save it
-   * after your view has unmounted.
+   * revision you read, and report your unsaved text with `setDraft`, naming the
+   * revision it started from, so the host's dirty indicator, Rendered preview
+   * and Save / Discard / Cancel prompt on close all apply. The draft is the
+   * host's, not the view's: it survives the user switching to Source and back,
+   * and the close prompt can save it after your view has unmounted. Calls made
+   * after your view unmounts change nothing, so flush a pending (debounced)
+   * draft in your unmount cleanup.
    */
   readonly fileDocument?: PluginFileDocument;
   /**

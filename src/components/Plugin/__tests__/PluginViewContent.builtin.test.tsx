@@ -188,6 +188,43 @@ describe("built-in panel views", () => {
     expect(documentViews.calls).toEqual([]);
   });
 
+  // A built-in's file editor view (#17336) is a hosted view, keyed by its
+  // hosted-view kind id rather than a panel kind, and has no bundle either.
+  it("renders a built-in file editor view by its hosted-view id, handing it the document", async () => {
+    const seen: PanelViewProps[] = [];
+    function Table(props: PanelViewProps) {
+      seen.push(props);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/table`;
+    registerBuiltinView(kindId, Table, { pluginId: BUILTIN_ID, label: "Table" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Table fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const fileDocument = { fileName: "users.csv" } as unknown as NonNullable<
+      PanelViewProps["fileDocument"]
+    >;
+    render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+
+    await screen.findByTestId("builtin-view");
+    expect(seen.at(-1)?.fileDocument).toBe(fileDocument);
+    expect(seen.at(-1)?.hostContext).toEqual({ kind: "fileEditor" });
+    expect(activateForView).toHaveBeenCalledWith(kindId);
+    expect(stylePrep.calls).toEqual([]);
+    expect(documentViews.calls).toEqual([]);
+  });
+
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {
     const seen: PanelViewProps[] = [];
     function Inspector(props: PanelViewProps) {

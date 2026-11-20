@@ -4,6 +4,7 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "@shared/types/ipc/agentUsage";
+import { formatResetClock } from "../agentAccountHeadroom";
 import { describeAgentUsage } from "../agentUsageFormat";
 
 const NOW = new Date(2026, 10, 18, 12, 0, 0).getTime();
@@ -161,11 +162,49 @@ describe("describeAgentUsage", () => {
     );
   });
 
-  it("words a used figure as printed, and gives Claude Code's age its own slot", () => {
+  it("words a used figure as printed, with the age in the detail and not the row", () => {
     const line = describeAgentUsage(claude({ usedPercent: 85.6 }), "Claude", NOW);
     expect(line.text).toBe("Claude 85%");
+    expect(line.row).toBe("85%");
     expect(line.detail[0]).toBe("Weekly limit 85% used");
-    expect(line.age).toBe("12m ago");
-    expect(describeAgentUsage(codex(), "Codex", NOW).age).toBeNull();
+    expect(line.detail[2]).toBe("Printed in a terminal 12m ago");
+  });
+
+  it("keeps the agent, login and machine out of the dense row, and the reset in", () => {
+    const resetsAt = new Date(2026, 10, 18, 15, 40).getTime();
+    const named = describeAgentUsage(
+      {
+        ...claude({ defaultLoginName: "Home", accountNames: ["Personal"], resetsAt }),
+        hostId: "h1",
+        hostName: "Studio",
+      },
+      "Claude",
+      NOW
+    );
+    expect(named.row).toBe(`40% · resets ${formatResetClock(resetsAt, NOW)}`);
+    expect(named.row).not.toMatch(/Claude|Home|Personal|Studio/);
+    expect(named.text).toMatch(/^Claude 40% · Home, Personal · Studio · resets /);
+    expect(describeAgentUsage(codex(), "Codex", NOW).row).toBe("82%");
+  });
+
+  it("words every Claude Code statement and a stale Codex reading in the dense row", () => {
+    const resetsAt = new Date(2026, 10, 18, 15, 40).getTime();
+    const row = (readout: AgentUsageReadout) => describeAgentUsage(readout, "X", NOW).row;
+    expect(row(claude({ statement: "approaching", usedPercent: null }))).toBe("Near limit");
+    expect(row(claude({ statement: "reached", usedPercent: null }))).toBe("Limit reached");
+    expect(row(claude({ statement: "over", usedPercent: 90 }))).toBe("Over 90%");
+    expect(row(claude({ statement: "over", usedPercent: 93.8 }))).toBe("Over 93%");
+    expect(row(codex({ observedAt: NOW - 20 * 60_000 }))).toBe("82% · stale");
+    expect(row(codex({ observedAt: NOW - 20 * 60_000, resetsAt }))).toBe(
+      `82% · stale · resets ${formatResetClock(resetsAt, NOW)}`
+    );
+    // The window stays in the text and the detail the row drops it from.
+    const approaching = describeAgentUsage(
+      claude({ statement: "approaching", usedPercent: null }),
+      "Claude",
+      NOW
+    );
+    expect(approaching.text).toBe("Claude approaching weekly limit");
+    expect(approaching.detail[0]).toBe("Approaching weekly limit");
   });
 });

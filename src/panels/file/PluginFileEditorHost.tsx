@@ -15,6 +15,11 @@ export interface PluginFileEditorHostProps {
   candidate: PluginFileEditorCandidate;
   /** The panel's disk-change signal, composed the same way Source mode's is. */
   changeTick: number | undefined;
+  /**
+   * Moves on a moment that could have missed a write (toolbar Refresh, focus
+   * regain, coming back to the project), so the document re-checks the disk.
+   */
+  refreshEpoch?: number;
 }
 
 /**
@@ -36,6 +41,7 @@ export default function PluginFileEditorHost({
   rootPath,
   candidate,
   changeTick,
+  refreshEpoch,
 }: PluginFileEditorHostProps) {
   const [handle] = useState<PluginFileDocumentHandle>(() =>
     openPluginFileDocument({
@@ -51,13 +57,15 @@ export default function PluginFileEditorHost({
 
   useEffect(() => handle.retain(), [handle]);
 
-  // The first tick is the one the panel mounted with, not a change.
-  const lastTick = useRef(changeTick);
+  // The values the panel mounted with are not changes. Either signal moving is
+  // one re-check, even when a Refresh moves both in the same commit.
+  const lastSignals = useRef({ changeTick, refreshEpoch });
   useEffect(() => {
-    if (changeTick === lastTick.current) return;
-    lastTick.current = changeTick;
+    const last = lastSignals.current;
+    if (changeTick === last.changeTick && refreshEpoch === last.refreshEpoch) return;
+    lastSignals.current = { changeTick, refreshEpoch };
     void handle.notifyDiskChange();
-  }, [changeTick, handle]);
+  }, [changeTick, refreshEpoch, handle]);
 
   return (
     <PluginHostedView

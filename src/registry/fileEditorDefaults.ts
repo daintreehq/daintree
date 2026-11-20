@@ -11,7 +11,7 @@ import {
   type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotState,
 } from "@shared/types/plugin";
-import { matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
+import { extensionOf, matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
 import { useProjectStore } from "@/store/projectStore";
 import { selectViewProject } from "@/store/viewWorkspace";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -222,4 +222,44 @@ export function currentFileEditorDefault(filePath: string): FileEditorDefault | 
     rootPath,
     filePath,
   });
+}
+
+/**
+ * Whether a plugin viewer claims the file for Rendered (#17336), read once
+ * outside React for an opener deciding what mode to ask for: true when an
+ * enabled plugin's `mode: "view"` editor matches it by extension or by a path
+ * under a root the file sits under, false when no viewer could, and null
+ * otherwise: no snapshot yet, or path claims none of the roots known so far
+ * match, since a root still loading (a nested worktree) might. A null keeps the
+ * request, and the pane, which knows its root, clamps it live.
+ */
+export function currentFileViewerClaim(filePath: string): boolean | null {
+  const hosted = usePluginHostedViewsStore.getState();
+  hosted.init();
+  if (hosted.views === null) return null;
+  const disabled = usePluginRuntimeStore.getState().disabledPluginIds;
+  const editors = hosted.views.flatMap((view) =>
+    view.location === "fileEditor" && !disabled.has(view.pluginId)
+      ? (view.fileEditors ?? []).filter((editor) => editor.mode === "view")
+      : []
+  );
+  const ext = extensionOf(filePath);
+  if (ext !== null && editors.some((editor) => editor.extensions.includes(ext))) return true;
+  const pathClaims = editors.flatMap((editor) => editor.paths);
+  if (pathClaims.length === 0) return false;
+  const matched = containingRoots(filePath).some((root) => {
+    const relative = relativeFilePath(root, filePath);
+    return (
+      relative !== null && pathClaims.some((pattern) => matchesFileEditorGlob(relative, pattern))
+    );
+  });
+  return matched ? true : null;
+}
+
+/** Every worktree root and this view's project root the file sits under. */
+function containingRoots(filePath: string): string[] {
+  const project = selectViewProject(getViewWorkspaceId(), useProjectStore.getState())?.path;
+  return [...(getWorktreePathIndex()?.values() ?? []), ...(project ? [project] : [])].filter(
+    (root) => relativeFilePath(root, filePath) !== null
+  );
 }

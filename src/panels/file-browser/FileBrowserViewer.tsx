@@ -65,7 +65,12 @@ import {
 } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
-import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import {
+  refusedFileSize,
+  refusedPathIsCanonical,
+  toFileReadErrorCode,
+} from "@/components/FileViewer/fileReadErrors";
+import { useFileViewerChoice } from "@/panels/file/useFileEditorChoice";
 import { useFileChangeCount, type FileChangeSignal } from "@/hooks/useFileChangeCount";
 import {
   FileUnavailableState as UnavailableState,
@@ -293,6 +298,19 @@ type ViewerState =
   | { status: "pdf" }
   | { status: "error"; reason: UnavailableReason; message: string };
 
+/**
+ * What the latest settled read of a file said about its size, for the viewers
+ * that may show it (#17336): the bytes it loaded, or the size a too-large
+ * refusal reported; null when it said nothing, or the text isn't UTF-8 (the
+ * document read is strict). Kept with the file it describes, because `state`
+ * still holds the previous file's read for the render that selects the next.
+ */
+interface SizeEvidence {
+  filePath: string;
+  rootPath: string;
+  bytes: number | null;
+}
+
 // The toggle's segments, in toggle order. Rendered is offered for markdown and
 // HTML, Diff for a file the worktree reports as changed, Edit for a file a
 // plugin editor claims. Typed as `FileViewMode` locally — never widen
@@ -311,6 +329,10 @@ const MODE_LABELS: Record<FileViewMode, string> = {
 const LazyDiffViewer = lazy(() =>
   import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
 );
+
+// A built-in viewer's host (#17336): the plugin view loader and the document
+// controller stay out of the browser's chunk until a table is shown.
+const LazyPluginFileEditorHost = lazy(() => import("@/panels/file/PluginFileEditorHost"));
 
 // Shared by the fetch wait and the lazy-chunk wait so the two are
 // indistinguishable on screen. `Skeleton` carries the 400ms anti-flicker gate.
@@ -381,6 +403,7 @@ export function FileBrowserViewer({
   onOpenAsPanel,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
+  const [sizeEvidence, setSizeEvidence] = useState<SizeEvidence | null>(null);
   // The reader's explicit Source/Rendered choice, `null` until they touch the
   // toggle. Untouched, each type opens on its own default, the one FilePane's
   // picker uses too (`defaultFileViewMode`, #12205). Once chosen the mode is
@@ -425,6 +448,23 @@ export function FileBrowserViewer({
     () => (state.status === "text" ? (state.byteLength ?? utf8ByteLength(state.content)) : null),
     [state]
   );
+  // A viewer that ships with Daintree fills Rendered for a type the host can't
+  // render itself (a CSV's table, #17336), on the file's size as the last read
+  // saw it: the text it loaded, or the size a too-large refusal reported. The
+  // browser offers built-in viewers only, inside a governed root, as it does
+  // editors.
+  const { pluginViewer, hasBuiltinViewer } = useFileViewerChoice({
+    filePath: filePath ?? undefined,
+    rootPath,
+    enabled: !!editorContext && !isRenderable,
+    fileBytes:
+      sizeEvidence !== null &&
+      sizeEvidence.filePath === filePath &&
+      sizeEvidence.rootPath === rootPath
+        ? sizeEvidence.bytes
+        : null,
+    builtinOnly: true,
+  });
   const editable =
     !!editorContext &&
     !!editor &&
@@ -474,16 +514,24 @@ export function FileBrowserViewer({
   const readable = state.status !== "error";
   const availableModes: FileViewMode[] = [
     "source",
-    ...(isRenderable && readable ? (["rendered"] as const) : []),
+    ...((isRenderable && readable) || pluginViewer !== null ? (["rendered"] as const) : []),
     ...(changeStatus !== undefined ? (["diff"] as const) : []),
     ...(canEdit ? (["edit"] as const) : []),
   ];
   const requestedMode =
-    chosenMode ?? (filePath !== null ? defaultFileViewMode(filePath) : "source");
+    chosenMode ??
+    (filePath === null ? "source" : hasBuiltinViewer ? "rendered" : defaultFileViewMode(filePath));
   const renderMode: FileViewMode = availableModes.includes(requestedMode)
     ? requestedMode
     : "source";
-  const renderOptions = availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
+  // A mode a plugin fills carries the plugin's name, as in the file panel.
+  const renderOptions = availableModes.map((mode) => ({
+    value: mode,
+    label:
+      mode === "rendered" && pluginViewer !== null
+        ? `${MODE_LABELS[mode]} · ${pluginViewer.pluginName}`
+        : MODE_LABELS[mode],
+  }));
   // Only fetch while Diff is the live mode; a null subject also drops any
   // response still in flight from a mode the reader has since left.
   const diffSubject = useMemo<DiffSubject | null>(
@@ -625,6 +673,7 @@ export function FileBrowserViewer({
   // Which file the state on screen belongs to. A re-read triggered by a listing
   // change is for the same file, so it must not clear what is already rendered.
   const shownPathRef = useRef<string | null>(null);
+  const shownRootRef = useRef<string | null>(null);
   const lastContentRef = useRef<string | null>(null);
   const lastSurfaceRefreshNonceRef = useRef(surfaceRefreshNonce);
   // Survives a read the next one cancelled, so a Refresh pressed mid-read
@@ -639,13 +688,16 @@ export function FileBrowserViewer({
     revision,
     changeSignal,
     relativePath,
-    canonicalFilePath !== null && canonicalFilePath === filePath && state.status !== "error"
+    canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      (state.status !== "error" || state.reason === "FILE_TOO_LARGE")
   );
 
   useEffect(() => {
     if (!filePath || !rootPath) {
       shownPathRef.current = null;
       setState({ status: "idle" });
+      setSizeEvidence(null);
       return;
     }
 
@@ -654,7 +706,12 @@ export function FileBrowserViewer({
     const isSvg = isSvgFilePath(filePath);
     const isSameFile = shownPathRef.current === filePath;
     shownPathRef.current = filePath;
+    // A size seen for an earlier selection says nothing about this read, even
+    // for the same file met again after another, or through another root: it
+    // may have grown since.
     if (!isSameFile) lastContentRef.current = null;
+    if (!isSameFile || shownRootRef.current !== rootPath) setSizeEvidence(null);
+    shownRootRef.current = rootPath;
     if (lastSurfaceRefreshNonceRef.current !== surfaceRefreshNonce) {
       forceSurfaceReloadRef.current = true;
       lastSurfaceRefreshNonceRef.current = surfaceRefreshNonce;
@@ -746,10 +803,22 @@ export function FileBrowserViewer({
           });
           return;
         }
+        setSizeEvidence({
+          filePath,
+          rootPath,
+          bytes:
+            result.encoding === "invalid"
+              ? null
+              : (result.byteLength ?? utf8ByteLength(result.content)),
+        });
         setState({ status: "text", content: result.content, byteLength: result.byteLength });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setSizeEvidence({ filePath, rootPath, bytes: refusedFileSize(error) });
+        // Refused only for its size through its own canonical path: the
+        // watcher's directories still scope its re-reads and the viewer's.
+        if (refusedPathIsCanonical(error)) setCanonicalFilePath(filePath);
         if (isClientAppError(error)) {
           setState({ status: "error", reason: toFileReadErrorCode(error.code), message: "" });
           return;
@@ -930,9 +999,9 @@ export function FileBrowserViewer({
   // Reading controls only for content that can be read: a Markdown file that
   // failed as oversized has no source or rendered view for them to change.
   // A plugin's Edit mode stays, since it may open what the reader could not,
-  // and so does Diff: the diff is fetched from git, not from the failed read.
-  const showModeToggle =
-    filePath !== null && ((isRenderable && readable) || canEdit || changeStatus !== undefined);
+  // and so does Diff: the diff is fetched from git, not from the failed read,
+  // and so does a viewer's Rendered, which reads the file itself.
+  const showModeToggle = filePath !== null && availableModes.length > 1;
   return (
     <>
       <FileViewerToolbar.Root
@@ -1323,6 +1392,39 @@ export function FileBrowserViewer({
         </div>
       );
     }
+    if (renderMode === "rendered" && pluginViewer !== null && editorContext) {
+      return (
+        <div className="flex h-full min-h-0 flex-col">
+          <Suspense
+            fallback={
+              <div className="p-4">
+                <Skeleton label="Loading viewer">
+                  <SkeletonText lines={10} />
+                </Skeleton>
+              </div>
+            }
+          >
+            <LazyPluginFileEditorHost
+              // Every input the host captures at mount: a tab group reuses this
+              // viewer for another panel, which must not keep this one's document.
+              key={`${panelId}\u0000${editorContext.projectId}\u0000${pluginViewer.choiceId}\u0000${rootPath}\u0000${filePath}`}
+              panelId={panelId}
+              projectId={editorContext.projectId}
+              filePath={filePath}
+              fileName={fileName}
+              rootPath={rootPath}
+              candidate={pluginViewer}
+              // Only a write that could have touched the file, or a foreground
+              // refresh, re-checks it: a viewer has no draft to protect. The
+              // refresh rides on its own signal, since a scoped count can
+              // skip the revision a Refresh shares with an unrelated tick.
+              changeTick={fileChangeCount}
+              refreshEpoch={surfaceRefreshNonce}
+            />
+          </Suspense>
+        </div>
+      );
+    }
     if (renderMode === "edit") {
       if (!canEdit || !editor || !editorContext) return null;
       return (
@@ -1378,9 +1480,27 @@ export function FileBrowserViewer({
             />
           );
         }
-        const copy = unavailableCopy(state.reason, state.message, remoteFile);
+        const copy = unavailableCopy(
+          state.reason,
+          state.message,
+          remoteFile,
+          availableModes.includes("rendered") ? (pluginViewer?.pluginName ?? null) : null
+        );
         const wayOut =
-          copy.action === "save" ? (
+          copy.action === "rendered" ? (
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={(event) => {
+                // The button unmounts with the state it leaves; hand focus to
+                // the toggle, as HTML's View source does.
+                sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                setExplicitRenderMode("rendered");
+              }}
+            >
+              Show in Rendered
+            </Button>
+          ) : copy.action === "save" ? (
             <SaveHostFileButton hostPath={filePath} />
           ) : copy.action === "open" ? (
             <Button variant="subtle" size="sm" onClick={runOpen}>

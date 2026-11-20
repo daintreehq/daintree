@@ -59,7 +59,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     const release = handle.retain();
     await handle.document.read();
-    handle.document.setDraft('{"a":1}');
+    handle.document.setDraft('{"a":1}', { baseRevision: REV_A });
     const projection = useFileDocumentStore.getState().byPanelId["panel-1"];
     expect(projection).toMatchObject({ dirty: true, draftText: '{"a":1}', conflict: false });
 
@@ -93,7 +93,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     await expect(handle.document.save("mine", { expectedRevision: REV_A })).resolves.toEqual({
       status: "conflict",
       revision: REV_C,
@@ -117,7 +117,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     await expect(handle.document.save("mine", { expectedRevision: REV_A })).resolves.toEqual({
       status: "error",
       message: wording,
@@ -133,7 +133,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     const listener = vi.fn();
     handle.document.onDidChange(listener);
 
@@ -151,8 +151,9 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     await handle.document.save("mine", { expectedRevision: REV_A });
+    handle.document.setConflict(true);
     handle.document.setConflict(false);
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
   });
@@ -190,7 +191,7 @@ describe("pluginFileDocument (#13809)", () => {
       const handle = openPluginFileDocument(target());
       handle.retain();
       await handle.document.read();
-      handle.document.setDraft("mine");
+      handle.document.setDraft("mine", { baseRevision: REV_A });
       await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual(
         outcome
       );
@@ -211,27 +212,51 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("first");
+    handle.document.setDraft("first", { baseRevision: REV_A });
     const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
     handle.document.setDraft("second");
+    // An editor that treats a host save as clean.
+    const listener = vi.fn((change: { reason: string }) => {
+      if (change.reason === "saved") handle.document.setDraft(null);
+    });
+    handle.document.onDidChange(listener);
     release({ status: "saved", revision: REV_B });
     await expect(saving).resolves.toEqual({
       status: "refused",
       reason: "Edits made during the save are still unsaved",
     });
+    expect(listener.mock.calls).toEqual([[{ reason: "disk", revision: REV_B }]]);
     expect(handle.document.getDraft()).toBe("second");
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(true);
+
+    // The newer edits sit on top of what that save wrote.
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_C });
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "second", expectedRevision: REV_B })
+    );
   });
 
-  it("refuses the close prompt's Save for a draft with no revision read yet", async () => {
+  it.each([
+    ["without a base revision", undefined],
+    ["with an empty base revision", ""],
+  ])("refuses the close prompt's Save for a draft started %s", async (_label, baseRevision) => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
     const handle = openPluginFileDocument(target());
     handle.retain();
-    handle.document.setDraft("mine");
+    // A read the editor may or may not have applied is no base.
+    await handle.document.read();
+    handle.document.setDraft("mine", baseRevision === undefined ? undefined : { baseRevision });
+    handle.document.setDraft("mine more", { baseRevision: REV_A });
     await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
       status: "refused",
-      reason: "The file hasn't finished loading",
+      reason: "The editor didn't say which version of the file these edits are based on",
     });
     expect(bridge.save).not.toHaveBeenCalled();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "mine more",
+    });
   });
 
   it("never rebases a standing draft on a re-read, so the close prompt can't overwrite a change", async () => {
@@ -240,7 +265,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     // The disk moved on and a remounted view re-reads it.
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
     await handle.document.read();
@@ -256,7 +281,7 @@ describe("pluginFileDocument (#13809)", () => {
     const handle = openPluginFileDocument(target());
     handle.retain();
     await handle.document.read();
-    handle.document.setDraft("mine");
+    handle.document.setDraft("mine", { baseRevision: REV_A });
     const listener = vi.fn();
     handle.document.onDidChange(listener);
     bridge.read.mockResolvedValue({ status: "too-large" });
@@ -265,6 +290,625 @@ describe("pluginFileDocument (#13809)", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: null });
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("tells a view whose first read was refused once the file reads again", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "unavailable" });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await expect(handle.document.read()).resolves.toEqual({ status: "unavailable" });
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("tells a view whose first read threw once the file reads", async () => {
+    bridge.read.mockRejectedValueOnce(new Error("link dropped"));
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await expect(handle.document.read()).resolves.toEqual({ status: "unavailable" });
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("tells a view showing a refusal when the file goes back to the revision it had", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "a,b", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    bridge.read.mockResolvedValue({ status: "not-text" });
+    await handle.notifyDiskChange();
+    await handle.document.read();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("makes the view read again when a check overtakes its first read", async () => {
+    let finishFirst: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    const first = handle.document.read();
+
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "new", revision: REV_B });
+    await handle.notifyDiskChange();
+    finishFirst({ status: "ok", text: "old", revision: REV_A });
+    await first;
+    await Promise.resolve();
+
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+  });
+
+  it("still conflicts a draft on the next check after a read saw the file stop reading", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine", { baseRevision: REV_A });
+
+    bridge.read.mockResolvedValue({ status: "not-text" });
+    await handle.document.read();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+    await handle.notifyDiskChange();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("conflicts a draft on a disk check, never on the editor's own re-read", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine", { baseRevision: REV_A });
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_B });
+    await handle.document.read();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_B });
+    await handle.notifyDiskChange();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("checks again for a change asked about while the last check was finishing", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_B });
+    const first = handle.notifyDiskChange();
+    // Lands once the first check's read has answered, before its runner returns.
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_C });
+    await Promise.resolve();
+    await Promise.resolve();
+    const second = handle.notifyDiskChange();
+    await Promise.all([first, second]);
+    expect(listener).toHaveBeenLastCalledWith({ reason: "disk", revision: REV_C });
+  });
+
+  it("keeps the draft owner's save ceiling when a viewer opens the same document", async () => {
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_A });
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const editor = openPluginFileDocument(target({ maxBytes: 10 }));
+    editor.retain();
+    await editor.document.read();
+    editor.document.setDraft("mine", { baseRevision: REV_A });
+
+    const viewer = openPluginFileDocument(target({ mode: "view", maxBytes: 2048 }));
+    await viewer.document.read();
+    expect(bridge.read).toHaveBeenLastCalledWith(expect.objectContaining({ maxBytes: 2048 }));
+
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ maxBytes: 10 }));
+  });
+
+  it("runs one disk check at a time, and one more for changes meanwhile", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    bridge.read.mockClear();
+    let finish: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_C });
+
+    const checks = [
+      handle.notifyDiskChange(),
+      handle.notifyDiskChange(),
+      handle.notifyDiskChange(),
+    ];
+    finish({ status: "ok", text: "{}", revision: REV_B });
+    await Promise.all(checks);
+    expect(bridge.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lets a superseded read move the revision a draft is saved against", async () => {
+    let finishFirst: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    const first = handle.document.read();
+    // The editor reads again (a change arrived) and holds A.
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "a", revision: REV_A });
+    await handle.document.read();
+    // B is written; the first read, which sampled it, lands last.
+    finishFirst({ status: "ok", text: "b", revision: REV_B });
+    await first;
+    // A is what was last observed, so a check that finds B reports it.
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "b", revision: REV_B });
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+
+    handle.document.setDraft("edited from a", { baseRevision: REV_A });
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: REV_A }));
+  });
+
+  it.each([
+    ["after the newer read failed", true],
+    ["before the newer read failed", false],
+  ])(
+    "saves the draft of an editor that applies every answer against the text it holds, the older read landing %s",
+    async (_order, newerFirst) => {
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "b", revision: REV_B });
+      bridge.save.mockImplementation(async ({ expectedRevision }) =>
+        expectedRevision === REV_B
+          ? { status: "saved", revision: REV_C }
+          : { status: "conflict", revision: REV_B }
+      );
+      const handle = openPluginFileDocument(target());
+      handle.retain();
+      // Applies each answer as it lands and keeps its last good text when a read fails.
+      let held = { text: "", revision: "" };
+      const apply = (result: Awaited<ReturnType<typeof handle.document.read>>) => {
+        if (result.status === "ok") held = { text: result.text, revision: result.revision };
+      };
+      apply(await handle.document.read());
+
+      let finishOlder: (value: unknown) => void = () => {};
+      let failNewer: (reason: unknown) => void = () => {};
+      bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishOlder = resolve)));
+      bridge.read.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (failNewer = reject))
+      );
+      let newerResult: Awaited<ReturnType<typeof handle.document.read>> | null = null;
+      const older = handle.document.read().then(apply);
+      const newer = handle.document.read().then((result) => {
+        newerResult = result;
+        apply(result);
+      });
+      if (newerFirst) {
+        failNewer(new Error("link dropped"));
+        await newer;
+        finishOlder({ status: "ok", text: "a", revision: REV_A });
+      } else {
+        finishOlder({ status: "ok", text: "a", revision: REV_A });
+        await Promise.resolve();
+        failNewer(new Error("link dropped"));
+      }
+      await Promise.all([older, newer]);
+      expect(newerResult).toEqual({ status: "unavailable" });
+      expect(held).toEqual({ text: "a", revision: REV_A });
+
+      // The disk went back to B before the close prompt saves.
+      handle.document.setDraft("a edited", { baseRevision: held.revision });
+      await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+        status: "conflict",
+        reason: "The file changed on disk",
+      });
+      expect(bridge.save).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "a edited", expectedRevision: REV_A })
+      );
+      expect(handle.document.getDraft()).toBe("a edited");
+    }
+  );
+
+  it.each([
+    ["a clean re-read by the editor", "edit" as const, 1024],
+    ["a roomier viewer's read", "view" as const, 4096],
+  ])(
+    "saves a draft against the text the editor still shows, not %s it hasn't applied",
+    async (_reader, mode, maxBytes) => {
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "a", revision: REV_A });
+      // The disk is at B by the time the close prompt saves: only a write
+      // against B would land.
+      bridge.save.mockImplementation(async ({ expectedRevision }) =>
+        expectedRevision === REV_B
+          ? { status: "saved", revision: REV_C }
+          : { status: "conflict", revision: REV_B }
+      );
+      const editor = openPluginFileDocument(target());
+      editor.retain();
+      await editor.document.read();
+      const reader = mode === "edit" ? editor : openPluginFileDocument(target({ mode, maxBytes }));
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "b", revision: REV_B });
+      await expect(reader.document.read()).resolves.toMatchObject({ revision: REV_B });
+      expect(bridge.read).toHaveBeenLastCalledWith(expect.objectContaining({ maxBytes }));
+      expect(reader.document.mode).toBe(mode);
+
+      // The editor is still showing A when the user types.
+      editor.document.setDraft("a edited", { baseRevision: REV_A });
+      await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+        status: "conflict",
+        reason: "The file changed on disk",
+      });
+      expect(bridge.save).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "a edited", expectedRevision: REV_A })
+      );
+      expect(editor.document.getDraft()).toBe("a edited");
+    }
+  );
+
+  it("keeps the base a draft started with when a remounted editor reports another", async () => {
+    bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
+    const first = openPluginFileDocument(target());
+    const release = first.retain();
+    first.document.setDraft("draft", { baseRevision: REV_A });
+    release();
+
+    const second = openPluginFileDocument(target());
+    second.retain();
+    expect(second.document.getDraftBaseRevision()).toBe(REV_A);
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
+    await expect(second.document.read()).resolves.toMatchObject({ revision: REV_B });
+    second.document.setDraft(`${second.document.getDraft()} more`, { baseRevision: REV_B });
+    expect(second.document.getDraftBaseRevision()).toBe(REV_A);
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "draft more", expectedRevision: REV_A })
+    );
+  });
+
+  it.each([
+    ["the same text", "first"],
+    ["other text", "second"],
+  ])(
+    "leaves a draft started during the close prompt's Save alone when its reply lands, with %s",
+    async (_label, replacement) => {
+      let finishSave: (value: unknown) => void = () => {};
+      bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
+      const handle = openPluginFileDocument(target());
+      handle.retain();
+      handle.document.setDraft("first", { baseRevision: REV_A });
+      const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+
+      // Discarded and started again from another revision.
+      await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+      handle.document.setDraft(replacement, { baseRevision: REV_C });
+      // An editor that treats a host save as clean.
+      const listener = vi.fn((change: { reason: string }) => {
+        if (change.reason === "saved") handle.document.setDraft(null);
+      });
+      handle.document.onDidChange(listener);
+      finishSave({ status: "saved", revision: REV_B });
+      await expect(saving).resolves.toEqual({
+        status: "refused",
+        reason: "Edits made during the save are still unsaved",
+      });
+      expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+      expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ reason: "saved" }));
+      // The file moved off the replacement's base.
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+        dirty: true,
+        draftText: replacement,
+        conflict: true,
+      });
+
+      bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
+      await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+      expect(bridge.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: replacement, expectedRevision: REV_C })
+      );
+      expect(handle.document.getDraft()).toBe(replacement);
+    }
+  );
+
+  it("refuses to close when the editor starts a new draft on hearing its draft was saved", async () => {
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason === "saved")
+        handle.document.setDraft("reformatted", { baseRevision: REV_B });
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "reformatted",
+    });
+  });
+
+  it("closes when a draft started during the close prompt's Save was cleared before it landed", async () => {
+    let finishSave: (value: unknown) => void = () => {};
+    bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+    handle.document.setDraft("second", { baseRevision: REV_C });
+    handle.document.setDraft(null);
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    finishSave({ status: "saved", revision: REV_B });
+    await expect(saving).resolves.toEqual({ status: "saved" });
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+  });
+
+  it("leaves a draft on its own base when the editor saves other text", async () => {
+    bridge.save.mockResolvedValueOnce({ status: "saved", revision: REV_C });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("mine", { baseRevision: REV_A });
+    handle.document.setConflict(true);
+    // A merged buffer saved against B, with the draft not yet cleared.
+    await handle.document.save("merged", { expectedRevision: REV_B });
+    expect(handle.document.getDraftBaseRevision()).toBe(REV_A);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+
+    bridge.save.mockResolvedValue({ status: "conflict", revision: REV_C });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "conflict",
+      reason: "The file changed on disk",
+    });
+    expect(bridge.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "mine", expectedRevision: REV_A })
+    );
+  });
+
+  it.each([
+    ["is on the disk", REV_B, false],
+    ["is off the disk", REV_C, true],
+  ])(
+    "flags a newer draft whose base %s only by that, when an older save's conflict lands",
+    async (_label, newBase, conflict) => {
+      let finishSave: (value: unknown) => void = () => {};
+      bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
+      const handle = openPluginFileDocument(target());
+      handle.retain();
+      handle.document.setDraft("old", { baseRevision: REV_A });
+      const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+      await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+      handle.document.setDraft("new", { baseRevision: newBase });
+
+      finishSave({ status: "conflict", revision: REV_B });
+      await saving;
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+        draftText: "new",
+        conflict,
+      });
+    }
+  );
+
+  it("clears a draft's base and conflict with the draft, so a restart starts fresh", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine", { baseRevision: REV_A });
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
+    await handle.notifyDiskChange();
+    handle.document.setConflict(true);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+
+    handle.document.setDraft(null);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+    handle.document.setDraft("again");
+    expect(handle.document.getDraftBaseRevision()).toBeNull();
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "The editor didn't say which version of the file these edits are based on",
+    });
+  });
+
+  it.each([
+    ["a draft", "newer"],
+    ["no draft", null],
+  ])(
+    "ignores a released view's late calls while a newer view with %s holds the panel",
+    async (_label, newer) => {
+      const old = openPluginFileDocument(target());
+      old.retain()();
+      await Promise.resolve();
+      const fresh = openPluginFileDocument(target());
+      fresh.retain();
+      if (newer !== null) fresh.document.setDraft(newer, { baseRevision: REV_B });
+
+      // A debounced report and a late save from the view that has gone.
+      old.document.setDraft("late", { baseRevision: REV_A });
+      old.document.setConflict(true);
+      await expect(old.document.save("late", { expectedRevision: REV_A })).resolves.toEqual({
+        status: "refused",
+        reason: "unavailable",
+      });
+      expect(bridge.save).not.toHaveBeenCalled();
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+        draftText: newer,
+        dirty: newer !== null,
+        conflict: false,
+      });
+      expect(openPluginFileDocument(target()).document.getDraft()).toBe(newer);
+    }
+  );
+
+  it("never lets a departed editor clear the draft its successor holds on the same document", async () => {
+    // An editor swap: the new host opens the shared document while rendering,
+    // before the old host's cleanup releases it.
+    const departing = openPluginFileDocument(target());
+    const releaseDeparting = departing.retain();
+    const successor = openPluginFileDocument(target());
+    releaseDeparting();
+    successor.retain();
+    await Promise.resolve();
+
+    successor.document.setDraft("successor", { baseRevision: REV_B });
+    // The departed editor's delayed save callback marks itself clean.
+    departing.document.setDraft(null);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "successor",
+    });
+  });
+
+  it("takes a view's flush from its unmount cleanup and keeps it through a remount in the same commit", async () => {
+    const handle = openPluginFileDocument(target());
+    const release = handle.retain();
+    release();
+    handle.document.setDraft("flushed", { baseRevision: REV_A });
+    // StrictMode mounts the same handle again before anything else runs.
+    handle.retain();
+    await Promise.resolve();
+
+    handle.document.setDraft("flushed more");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "flushed more",
+    });
+    expect(handle.document.getDraftBaseRevision()).toBe(REV_A);
+  });
+
+  it("keeps a draft the view flushes after its host released the record, for the next view", async () => {
+    const handle = openPluginFileDocument(target());
+    const release = handle.retain();
+    // The host's cleanup runs first and releases the clean record; the view's
+    // own cleanup then flushes its debounced draft.
+    release();
+    handle.document.setDraft("flushed", { baseRevision: REV_A });
+    await Promise.resolve();
+
+    const next = openPluginFileDocument(target());
+    next.retain();
+    expect(next.document.getDraft()).toBe("flushed");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "flushed",
+    });
+  });
+
+  it("ignores a released view's call in the same turn once a newer record holds the panel", () => {
+    const old = openPluginFileDocument(target());
+    old.retain()();
+    const fresh = openPluginFileDocument(target());
+    fresh.retain();
+    fresh.document.setDraft("newer", { baseRevision: REV_B });
+
+    old.document.setDraft("late", { baseRevision: REV_A });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      draftText: "newer",
+    });
+  });
+
+  it("still publishes a handle mounted again after a newer record took the panel's key", () => {
+    const first = openPluginFileDocument(target());
+    const releaseFirst = first.retain();
+    const second = openPluginFileDocument(target());
+    releaseFirst();
+    openPluginFileDocument(target());
+    second.retain();
+
+    second.document.setDraft("kept", { baseRevision: REV_A });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "kept",
+    });
+  });
+
+  it("refuses to close when the editor queues a new draft on hearing its draft was saved", async () => {
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason !== "saved") return;
+      queueMicrotask(() => handle.document.setDraft("reformatted", { baseRevision: REV_B }));
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+  });
+
+  it("fails the close prompt's Discard when the editor starts a new draft on hearing of it", async () => {
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason !== "discarded") return;
+      queueMicrotask(() => handle.document.setDraft("again", { baseRevision: REV_A }));
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.discard()).rejects.toThrow();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "again",
+    });
+  });
+
+  it("never conflicts a roomier editor's draft over a viewer's tighter ceiling", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const editor = openPluginFileDocument(target({ maxBytes: 4096 }));
+    editor.retain();
+    await editor.document.read();
+    editor.document.setDraft("mine", { baseRevision: REV_A });
+
+    const viewer = openPluginFileDocument(target({ mode: "view", maxBytes: 16 }));
+    bridge.read.mockResolvedValueOnce({ status: "too-large" });
+    await viewer.notifyDiskChange();
+    expect(bridge.read).toHaveBeenLastCalledWith(expect.objectContaining({ maxBytes: 16 }));
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+
+    bridge.read.mockResolvedValueOnce({ status: "too-large" });
+    await editor.notifyDiskChange();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("reports every move of the disk, back to an earlier revision included", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine", { baseRevision: REV_A });
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    for (const revision of [REV_B, REV_A, REV_B]) {
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision });
+      await handle.notifyDiskChange();
+    }
+    expect(listener.mock.calls.map(([change]) => change.revision)).toEqual([REV_B, REV_A, REV_B]);
+  });
+
+  it("stays quiet on a disk change before anything was read", async () => {
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("releases a clean record on unmount even with a conflict reported", () => {
@@ -304,8 +948,9 @@ describe("pluginFileDocument (#13809)", () => {
       status: "refused",
       reason: "read-only",
     });
-    document.setDraft("x");
+    document.setDraft("x", { baseRevision: REV_A });
     expect(document.getDraft()).toBeNull();
+    expect(document.getDraftBaseRevision()).toBeNull();
     expect(bridge.save).not.toHaveBeenCalled();
   });
 });
