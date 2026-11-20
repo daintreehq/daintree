@@ -1073,18 +1073,12 @@ const agentStoppedDeps: DecisionsAgentStoppedDeps = {
   watchReportedStops: watchHostStops,
 };
 
-/** Desktop notifications on as the last status pushed for a write showed them; null before one. */
-let pushedDesktopNotifications: boolean | null = null;
-
 // Turning desktop notifications off ends presence at once, and on starts it;
-// Settings shows which (#18061), pushed only when that turns, not for every
-// sound or quiet-hours write. This module loads only once Decisions is on, so
-// vanilla Daintree never listens.
+// Settings shows which (#18061). Every write pushes, since a value remembered
+// here would go stale when a configuration reload changes the store unheard.
+// This module loads only once Decisions is on, so vanilla Daintree never listens.
 onNotificationSettingsWritten(() => {
   service?.presenceChanged();
-  const on = desktopNotificationsOn();
-  if (on === pushedDesktopNotifications) return;
-  pushedDesktopNotifications = on;
   publishStatus();
 });
 
@@ -3756,7 +3750,6 @@ export function _resetDecisionsForTesting(): void {
   questionNotifier = null;
   holdPhonePushesOffs = 0;
   agentStoppedPushesOffs = 0;
-  pushedDesktopNotifications = null;
   decisionsOffsPending = 0;
   shutDown = false;
   transitions = Promise.resolve();

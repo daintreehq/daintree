@@ -195,6 +195,10 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
         ]),
       });
       expect(described()).not.toContain(NO_PHONE);
+      cleanup();
+
+      await renderSection(status, { devices: devicesRead([phone({ pushEnabled: true })]) });
+      expect(described()).not.toContain(NO_PHONE);
     });
 
     it("says nothing about phones before a list is read, or when the latest read failed", async () => {
