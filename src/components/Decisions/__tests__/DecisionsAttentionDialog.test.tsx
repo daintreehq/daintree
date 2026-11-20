@@ -619,7 +619,7 @@ describe("DecisionsAttentionDialog: where and when a moved answer goes (#18056)"
     if (!row) throw new Error(`no destination ${title}`);
     act(() => row.focus());
     fireEvent.keyDown(row, { key: "Enter" });
-    return screen.findByRole("alertdialog");
+    return screen.findByRole("dialog", { name: /^Send q-3/ });
   }
 
   it.each([
