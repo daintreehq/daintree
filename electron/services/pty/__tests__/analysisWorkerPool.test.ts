@@ -530,7 +530,9 @@ describe("AnalysisWorkerPool", () => {
 
     const screen = await backend.serializeScreen();
     expect(screen?.data).toContain("MARKER-held-bytes");
-    expect(screen?.data).not.toContain("scrolled-away\r\nscrolled-away\r\nscrolled-away\r\nscrolled-away");
+    expect(screen?.data).not.toContain(
+      "scrolled-away\r\nscrolled-away\r\nscrolled-away\r\nscrolled-away"
+    );
     expect(screen?.partial).toBe(true);
 
     e2ePool.dispose();

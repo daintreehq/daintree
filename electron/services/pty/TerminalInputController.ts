@@ -530,7 +530,7 @@ export class TerminalInputController {
     // its body and its Enter: an update observation recorded anew or a choice
     // dialog the terminal reports by then holds back the Enter the person
     // approved for an empty prompt. A dialog drawn in the delay itself isn't
-    // reported yet, as for every guarded line (#17984).
+    // reported yet; the screen read before every guarded Enter sees it (#17984).
     const holdsAtEnter =
       typeof guard === "object" && guard.updateObservedAt !== undefined
         ? () => this.stillOffersUpdate(guard.updateObservedAt!)

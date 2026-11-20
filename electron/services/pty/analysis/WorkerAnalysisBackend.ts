@@ -575,9 +575,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // A hold that can't reach the worker is output the screen would miss.
     const breaks = this.continuityBreaks;
     if (!this.flushHeldFeed()) return null;
-    const snapshot = asSnapshot(
-      await this.pool.request(this.spec.terminalId, "serialize-screen")
-    );
+    const snapshot = asSnapshot(await this.pool.request(this.spec.terminalId, "serialize-screen"));
     // A slot rebuilt or a chunk dropped meanwhile left a mirror that never
     // saw some of what was fed before the request.
     return snapshot !== null && !this.inactive() && this.continuityBreaks === breaks

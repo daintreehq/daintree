@@ -488,7 +488,9 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return new Promise((resolve) => {
       headlessMirrorScheduler.flush(this.id, headless, () => {
         resolve(
-          terminal.headlessTerminal === headless ? serializeTerminalTail(this.id, terminal, 0) : null
+          terminal.headlessTerminal === headless
+            ? serializeTerminalTail(this.id, terminal, 0)
+            : null
         );
       });
     });

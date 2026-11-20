@@ -1146,6 +1146,27 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
     }
   );
 
+  it("holds the Enter of a Claude Code update's /restart with its footer observation unchanged", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const observed = { observedAt: 900, namesRestart: true };
+    Object.assign(info(terminal), { agentIncarnation: 0, updateInstalled: observed });
+    terminal.submit("/restart", "tok-1", undefined, {
+      kind: "settled-prompt-exact",
+      agentIncarnation: 0,
+      updateObservedAt: 900,
+    });
+    expect(written()).toEqual(["/restart"]);
+    ptyOutput!(CLEAR + PERMISSION_DIALOG);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(info(terminal)).toMatchObject({ agentState: "waiting", waitingReason: "prompt" });
+    expect(info(terminal).updateInstalled).toBe(observed);
+    expect(written()).toEqual(["/restart"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
+  });
+
   it("holds the Enter when a selector is drawn under a composer still holding the line", async () => {
     const terminal = submitGuarded();
     ptyOutput!(CLEAR + ["⏺ Done.", RULE, "❯ wake", RULE, " ❯ 1. Allow", "   2. Deny"].join("\r\n"));
