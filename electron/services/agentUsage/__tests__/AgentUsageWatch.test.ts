@@ -269,26 +269,7 @@ describe("AgentUsageWatch", () => {
       };
     }
 
-    it("never shows a reading from before tracking went off in place of a read that fails after", async () => {
-      const h = harness();
-      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
-      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
-      const release = h.watch.acquire();
-      await settle();
-      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 70 });
-      release();
-      h.watch.trackingTurnedOff();
-
-      await vi.advanceTimersByTimeAsync(60 * 60_000);
-      h.codexAnswers.set("/accts/work", failing);
-      h.watch.acquire();
-      await settle();
-      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
-      expect(h.watch.latest()).toEqual([]);
-      h.watch.dispose();
-    });
-
-    it("still shows a reading within the cadence, without asking Codex again", async () => {
+    it("reads Codex afresh when turned back on, even within the cadence", async () => {
       const h = harness();
       h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
       h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
@@ -298,10 +279,30 @@ describe("AgentUsageWatch", () => {
       h.watch.trackingTurnedOff();
 
       await vi.advanceTimersByTimeAsync(TICK);
+      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 40));
       h.watch.acquire();
       await settle();
-      expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
-      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 70, observedAt: START });
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
+      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 40, observedAt: START + TICK });
+      h.watch.dispose();
+    });
+
+    it("never falls back to an answer from before tracking went off when the fresh read fails", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
+      const release = h.watch.acquire();
+      await settle();
+      release();
+      h.watch.trackingTurnedOff();
+
+      // Well before the 70% reading's reset, so only the switch can hide it.
+      await vi.advanceTimersByTimeAsync(CADENCE);
+      h.codexAnswers.set("/accts/work", failing);
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
+      expect(h.watch.latest()).toEqual([]);
       h.watch.dispose();
     });
 
@@ -328,6 +329,26 @@ describe("AgentUsageWatch", () => {
       await settle();
       expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
       expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 40 });
+      h.watch.dispose();
+    });
+
+    it("keeps the cadence for a read that was made after its watch stopped", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      let answer!: (value: CodexHomeQuota[]) => void;
+      h.readCodexHomes.mockImplementationOnce(
+        () => new Promise<CodexHomeQuota[]>((resolve) => (answer = resolve))
+      );
+      const release = h.watch.acquire();
+      await settle();
+      release();
+      answer([codexQuota("/accts/work", 55)]);
+      await settle();
+
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
+      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 55 });
       h.watch.dispose();
     });
   });

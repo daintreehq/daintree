@@ -308,9 +308,14 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         const gate = new Promise<void>((resolve) => (open = resolve));
         const asked: Array<string | undefined> = [];
         runSession.mockImplementation(
-          async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
-            asked.push(options.codexHome);
+          async (
+            run: (call: Call) => Promise<unknown>,
+            options: { codexHome?: string; beforeSpawn?: () => void } = {}
+          ) => {
             if (options.codexHome === realpathSync.native(defaultHome)) await gate;
+            // As the transport does once a slot is held: a throw here spawns nothing.
+            options.beforeSpawn?.();
+            asked.push(options.codexHome);
             return run(async () => ({
               rateLimits: { primary: { usedPercent: 33, windowDurationMins: 300 } },
             }));
@@ -320,7 +325,7 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         return { open, held, asked };
       }
 
-      const turn = () => new Promise((resolve) => setTimeout(resolve, 20));
+      const turn = () => new Promise((resolve) => setTimeout(resolve, 100));
 
       it("is dropped without starting Codex, and a later read of the home still asks", async () => {
         const queue = holdQueue();
@@ -339,6 +344,18 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
       });
 
+      it("runs a queued background read that's still wanted by its turn", async () => {
+        const queue = holdQueue();
+        const background = readCodexQuotaForHomes(await homes(second), () => true);
+        await turn();
+        queue.open();
+        await queue.held;
+        const readings = await background;
+        expect(readings).toHaveLength(1);
+        expect(used(readings[0]!.result)).toBe(33);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
+      });
+
       it("still runs once a caller that needs the answer has joined it", async () => {
         const queue = holdQueue();
         let wanted = true;
@@ -353,7 +370,7 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         const [readings, needed] = await Promise.all([background, explicit]);
         expect(readings).toHaveLength(1);
         expect(used(readings[0]!.result)).toBe(33);
-        expect(needed).toHaveLength(1);
+        expect(needed).toEqual(readings);
         expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
       });
     });

@@ -139,6 +139,12 @@ export interface CodexAppServerSessionOptions {
    * default profile even though the pane itself ran against a redirected one.
    */
   codexHome?: string;
+  /**
+   * Asked once a slot is held, just before Codex is spawned; a throw ends the
+   * session unstarted, with that error. For a background read whose caller may
+   * stop wanting it while it waits for a slot (#17981).
+   */
+  beforeSpawn?: () => void;
 }
 
 function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
@@ -184,6 +190,7 @@ export async function runCodexAppServerSession<T>(
   const deadlineAt = Date.now() + (options.timeoutMs ?? SESSION_TIMEOUT_MS);
   await acquireSessionSlot(deadlineAt);
   try {
+    options.beforeSpawn?.();
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
       throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");

@@ -284,6 +284,38 @@ describe("installHostMetricsHostWith", () => {
       return seen;
     }
 
+    /** Per frame received, the usage it carried; absent when none. */
+    function usageBodies(client: LinkSession): Array<AgentUsageReading[] | undefined> {
+      const seen: Array<AgentUsageReading[] | undefined> = [];
+      client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.agentUsage));
+      return seen;
+    }
+
+    it("reads nothing for a Shell that said either way in its HELLO until it confirms as its session opens", async () => {
+      const server = new FakeServer();
+      const watchAgentUsage = vi.fn(() => vi.fn());
+      const samples = usageLoop();
+      samples.seed(withUsage(1));
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({ watchAgentUsage, loop: samples.loop })
+      );
+      const p = await pair();
+      const seen = usageFrames(p.client);
+      // It may have turned tracking off between its HELLO and now.
+      server.attach(p.host, "shell", undefined, { agentUsage: true });
+      await waitFor(() => seen.length === 1);
+      expect(seen).toEqual([false]);
+      expect(watchAgentUsage).not.toHaveBeenCalled();
+
+      await p.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(2));
+      await waitFor(() => seen.length === 2);
+      expect(seen).toEqual([false, true]);
+      dispose();
+    });
+
     it("starts no usage watch for a Shell that doesn't track usage, and sends it none", async () => {
       const server = new FakeServer();
       const watchAgentUsage = vi.fn(() => vi.fn());
@@ -315,16 +347,16 @@ describe("installHostMetricsHostWith", () => {
       );
       const legacy = await pair();
       const off = await pair();
-      const seenLegacy = usageFrames(legacy.client);
-      const seenOff = usageFrames(off.client);
+      const seenLegacy = usageBodies(legacy.client);
+      const seenOff = usageBodies(off.client);
       // A Shell from before the switch never says, and keeps getting usage.
       server.attach(legacy.host, "legacy");
       server.attach(off.host, "off", undefined, { agentUsage: false });
       expect(watchAgentUsage).toHaveBeenCalledTimes(1);
       samples.sample(withUsage(1));
       await waitFor(() => seenLegacy.length === 1 && seenOff.length === 1);
-      expect(seenLegacy).toEqual([true]);
-      expect(seenOff).toEqual([false]);
+      expect(seenLegacy).toEqual([[READING]]);
+      expect(seenOff).toEqual([undefined]);
 
       await off.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
       await legacy.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: false });
@@ -332,8 +364,8 @@ describe("installHostMetricsHostWith", () => {
       expect(release).not.toHaveBeenCalled();
       samples.sample(withUsage(2));
       await waitFor(() => seenLegacy.length === 2 && seenOff.length === 2);
-      expect(seenLegacy).toEqual([true, false]);
-      expect(seenOff).toEqual([false, true]);
+      expect(seenLegacy).toEqual([[READING], undefined]);
+      expect(seenOff).toEqual([undefined, [READING]]);
 
       // The last Shell that wanted it turning off lets the watch go at once.
       await off.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: false });
@@ -356,9 +388,16 @@ describe("installHostMetricsHostWith", () => {
       );
       const on = await pair();
       const off = await pair();
+      const other = await pair();
       server.attach(on.host, "on", undefined, { agentUsage: true });
       server.attach(off.host, "off", undefined, { agentUsage: false });
+      server.attach(other.host, "other", undefined, { agentUsage: false });
+      await on.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
       expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      // A Shell that never wanted it leaving changes nothing.
+      off.host.close("gone");
+      await waitFor(() => !off.host.isOpen);
+      expect(release).not.toHaveBeenCalled();
       on.host.close("gone");
       await waitFor(() => release.mock.calls.length === 1);
       dispose();
@@ -386,7 +425,7 @@ describe("installHostMetricsHostWith", () => {
       );
       const p = await pair();
       const seen = usageFrames(p.client);
-      server.attach(p.host, "shell", undefined, { agentUsage: true });
+      server.attach(p.host, "shell");
       samples.sample(withUsage(1));
       await waitFor(() => seen.length === 1);
       expect(seen).toEqual([false]);
@@ -402,6 +441,9 @@ describe("installHostMetricsHostWith", () => {
       hostOn = false;
       changed!();
       expect(release).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(3));
+      await waitFor(() => seen.length === 3);
+      expect(seen).toEqual([false, true, false]);
       dispose();
       expect(changed).toBe(null);
     });

@@ -40,6 +40,11 @@ describe("AgentUsageTrackingSection (#17981)", () => {
     expect(setTracking).toHaveBeenLastCalledWith({ enabled: false });
     expect(switchEl(container).getAttribute("aria-checked")).toBe("false");
 
+    await act(async () => fireEvent.click(switchEl(container)));
+    expect(setTracking).toHaveBeenLastCalledWith({ enabled: true });
+    expect(switchEl(container).getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => fireEvent.click(switchEl(container)));
     await act(async () =>
       fireEvent.click(screen.getByLabelText("Reset Track agent usage to default"))
     );
@@ -47,18 +52,35 @@ describe("AgentUsageTrackingSection (#17981)", () => {
     expect(switchEl(container).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("shows main's value after a failed save, and saves it again on Retry", async () => {
+  it("shows what main holds after a failed save, and saves the change again on Retry", async () => {
+    // Another window turned it off meanwhile: the failed save shows main's value, not a guess.
+    useAgentUsageTrackingStore.setState({ enabled: true, revision: 0 });
     setTracking.mockRejectedValueOnce(new Error("disk full"));
-    getTracking.mockResolvedValue({ enabled: true, revision: 0 });
+    getTracking.mockResolvedValue({ enabled: false, revision: 3 });
     const { container } = render(<AgentUsageTrackingSection />);
     await act(async () => fireEvent.click(switchEl(container)));
-    expect(switchEl(container).getAttribute("aria-checked")).toBe("true");
+    expect(getTracking).toHaveBeenCalledTimes(1);
+    expect(switchEl(container).getAttribute("aria-checked")).toBe("false");
     const retry = screen.getByRole("button", { name: "Retry" });
 
-    setTracking.mockResolvedValueOnce({ enabled: false, revision: 1 });
+    setTracking.mockResolvedValueOnce({ enabled: false, revision: 3 });
     await act(async () => fireEvent.click(retry));
     expect(setTracking).toHaveBeenLastCalledWith({ enabled: false });
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("leaves Retry off screen when a later save went through", async () => {
+    let fail!: (error: Error) => void;
+    setTracking.mockImplementationOnce(
+      () => new Promise<AgentUsageTrackingSnapshot>((_resolve, reject) => (fail = reject))
+    );
+    setTracking.mockResolvedValueOnce({ enabled: false, revision: 1 });
+    getTracking.mockResolvedValue({ enabled: false, revision: 1 });
+    const { container } = render(<AgentUsageTrackingSection />);
+    fireEvent.click(switchEl(container));
+    await act(async () => fireEvent.click(switchEl(container)));
     expect(switchEl(container).getAttribute("aria-checked")).toBe("false");
+    await act(async () => fail(new Error("late")));
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

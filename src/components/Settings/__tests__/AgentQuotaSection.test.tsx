@@ -130,6 +130,27 @@ describe("AgentQuotaSection (#12797)", () => {
   });
 });
 
+describe("AgentQuotaSection on a page Settings isn't showing (#17981)", () => {
+  it("reads Codex and Claude only while its page can be seen", async () => {
+    readQuota.mockResolvedValue({ status: "unavailable", reason: "read-failed", fetchedAt: NOW });
+    const codex = render(<AgentQuotaSection agentId="codex" isActive={false} />);
+    await act(async () => {});
+    expect(readQuota).not.toHaveBeenCalled();
+    codex.rerender(<AgentQuotaSection agentId="codex" isActive />);
+    await act(async () => {});
+    expect(readQuota).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    readUsage.mockClear();
+    const claude = render(<AgentQuotaSection agentId="claude" isActive={false} />);
+    await act(async () => {});
+    expect(readUsage).not.toHaveBeenCalled();
+    claude.rerender(<AgentQuotaSection agentId="claude" isActive />);
+    await act(async () => {});
+    expect(readUsage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("AgentQuotaSection refresh (#12797)", () => {
   it("marks a fresh reading stale once one of its windows has reset", async () => {
     readQuota.mockResolvedValue({

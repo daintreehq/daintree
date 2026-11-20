@@ -31,10 +31,12 @@ import { SidebarAgentUsage } from "./SidebarAgentUsage";
 export function SidebarStatusBar({ trailing }: { trailing?: ReactNode } = {}) {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);
   const tracking = useAgentUsageTrackingStore((state) => state.enabled);
+  const revision = useAgentUsageTrackingStore((state) => state.revision);
 
   return (
     <>
-      {tracking === true && <SidebarAgentUsage />}
+      {/* Keyed by revision: an off and on that land in one render still follow afresh. */}
+      {tracking === true && <SidebarAgentUsage key={revision} />}
       <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />
     </>
   );

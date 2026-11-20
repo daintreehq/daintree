@@ -935,7 +935,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
       assistantSlots: MAX_ASSISTANT_SLOTS,
-      // Read for each HELLO, so a host knows before it sends a reading or reads one (#17981).
+      // Read for each HELLO: present, it tells a host to wait for this Shell's word on open (#17981).
       get agentUsage() {
         return isAgentUsageTrackingEnabled();
       },

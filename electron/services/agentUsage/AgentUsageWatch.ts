@@ -176,8 +176,6 @@ export class AgentUsageWatch {
   private readonly codexByHome = new Map<string, CodexHomeQuota>();
   /** Per home, when it was last asked. Kept across stops, so hiding and showing a window can't beat the cadence. */
   private readonly codexAskedAt = new Map<string, number>();
-  /** When tracking was last turned off here (#17981), on `now`'s clock. */
-  private trackingOffAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: AgentUsageWatchDeps) {}
 
@@ -208,12 +206,14 @@ export class AgentUsageWatch {
   }
 
   /**
-   * Tracking was turned off on this machine (#17981): a good Codex answer read
-   * before now no longer stands in for a read that fails once it's back on.
-   * Within the cadence it still shows, as after any hide and show.
+   * Tracking was turned off on this machine (#17981): what Codex answered
+   * before is forgotten with when it was asked, so turning it back on reads
+   * afresh rather than showing, or falling back to, an answer from before.
+   * The quota service's own short cache still bounds a quick off and on.
    */
   trackingTurnedOff(): void {
-    this.trackingOffAt = this.deps.now();
+    this.codexByHome.clear();
+    this.codexAskedAt.clear();
   }
 
   dispose(): void {
@@ -317,15 +317,8 @@ export class AgentUsageWatch {
       // Kept even when the watch stopped meanwhile: the read was made and counted.
       for (const answer of answers) {
         const kept = this.codexByHome.get(answer.homeKey);
-        // A failed read keeps the last good one, whose age then says how old
-        // it is, unless tracking was off since it was read.
-        if (
-          answer.result.status !== "ok" &&
-          kept?.result.status === "ok" &&
-          kept.result.fetchedAt > this.trackingOffAt
-        ) {
-          continue;
-        }
+        // A failed read keeps the last good one, whose age then says how old it is.
+        if (answer.result.status !== "ok" && kept?.result.status === "ok") continue;
         this.codexByHome.set(answer.homeKey, answer);
       }
       if (generation !== this.generation) {

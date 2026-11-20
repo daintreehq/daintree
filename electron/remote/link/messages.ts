@@ -85,9 +85,10 @@ export interface LinkClientInfo {
    */
   assistantSlots?: number;
   /**
-   * Whether this Shell tracks agent usage (#17981), as it stood when the
-   * session opened; `agentUsage.demand` carries changes. Absent from older
-   * Shells, which always want it.
+   * Whether this Shell tracked agent usage (#17981) when it sent the HELLO.
+   * Present, the Shell also says so with `host.agent-usage-demand` as the
+   * session opens and on every change, and the host waits for that before
+   * reading usage for it. Absent from older Shells, which always want it.
    */
   agentUsage?: boolean;
 }

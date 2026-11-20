@@ -56,8 +56,15 @@ const bridge = {
   setFollowing: vi.fn<(payload: { following: boolean }) => Promise<AgentUsageSnapshot | null>>(),
 };
 
-function installBridge(tracking: AgentUsageTrackingSnapshot | Promise<AgentUsageTrackingSnapshot>) {
-  bridge.getTracking.mockImplementation(() => Promise.resolve(tracking));
+function installBridge(
+  tracking:
+    | AgentUsageTrackingSnapshot
+    | Promise<AgentUsageTrackingSnapshot>
+    | (() => Promise<AgentUsageTrackingSnapshot>)
+) {
+  bridge.getTracking.mockImplementation(() =>
+    typeof tracking === "function" ? tracking() : Promise.resolve(tracking)
+  );
   bridge.setFollowing.mockImplementation(async ({ following }) =>
     following ? { readouts: bridge.readouts, revision: ++bridge.revision } : null
   );
@@ -133,6 +140,7 @@ describe("SidebarStatusBar with agent usage tracking (#17981)", () => {
   it("shows no Usage section and asks for no readings while tracking is off", async () => {
     installBridge({ enabled: false, revision: 0 });
     const { container } = await renderBar();
+    expect(useAgentUsageTrackingStore.getState()).toMatchObject({ enabled: false, revision: 0 });
     expect(section(container)).toBeNull();
     // Even a view that becomes observable again asks for nothing.
     view.observable = false;
@@ -148,10 +156,35 @@ describe("SidebarStatusBar with agent usage tracking (#17981)", () => {
   });
 
   it("asks for nothing until main says whether tracking is on", async () => {
-    installBridge(new Promise<AgentUsageTrackingSnapshot>(() => {}));
+    let answer!: (snapshot: AgentUsageTrackingSnapshot) => void;
+    installBridge(new Promise<AgentUsageTrackingSnapshot>((resolve) => (answer = resolve)));
     const { container } = await renderBar();
     expect(section(container)).toBeNull();
     expect(followCalls()).toEqual([]);
+    await act(async () => answer({ enabled: true, revision: 0 }));
+    expect(followCalls()).toEqual([true]);
+    expect(rowTexts(container)).toEqual(["40%"]);
+  });
+
+  it("reads again after a failed first read, rather than staying without Usage", async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      installBridge(() =>
+        ++reads === 1
+          ? Promise.reject(new Error("main busy"))
+          : Promise.resolve({ enabled: true, revision: 0 })
+      );
+      const { container } = await renderBar();
+      expect(section(container)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(reads).toBe(2);
+      expect(rowTexts(container)).toEqual(["40%"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("takes the section away when turned off, and brings it back with fresh readings when turned on", async () => {
@@ -175,8 +208,24 @@ describe("SidebarStatusBar with agent usage tracking (#17981)", () => {
     installBridge(new Promise<AgentUsageTrackingSnapshot>((resolve) => (answer = resolve)));
     const { container } = await renderBar();
     await pushTracking({ enabled: false, revision: 1 });
+    expect(useAgentUsageTrackingStore.getState()).toMatchObject({ enabled: false, revision: 1 });
     await act(async () => answer({ enabled: true, revision: 0 }));
+    expect(useAgentUsageTrackingStore.getState()).toMatchObject({ enabled: false, revision: 1 });
     expect(section(container)).toBeNull();
     expect(followCalls()).toEqual([]);
+  });
+
+  it("follows afresh when an off and an on land in one render", async () => {
+    installBridge({ enabled: true, revision: 0 });
+    const { container } = await renderBar();
+    expect(followCalls()).toEqual([true]);
+    bridge.readouts = [codex(70)];
+    await act(async () => {
+      bridge.pushTracking?.({ enabled: false, revision: 1 });
+      bridge.pushTracking?.({ enabled: true, revision: 2 });
+    });
+    // Main let go of this view at off: it must ask again, and shows the new seed.
+    expect(followCalls()).toEqual([true, false, true]);
+    expect(rowTexts(container)).toEqual(["70%"]);
   });
 });

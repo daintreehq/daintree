@@ -234,7 +234,10 @@ async function readAccountEmail(call: CodexAppServerCall): Promise<string | null
 }
 
 /** `codexHome` undefined means main's own env, exactly as before presets were read. */
-async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReading> {
+async function fetchCodexQuota(
+  codexHome: string | undefined,
+  beforeSpawn?: () => void
+): Promise<HomeReading> {
   // Held outside the session: if the deadline lands during the optional account
   // read, the quota that already arrived is still the answer.
   let quota: { raw: unknown; fetchedAt: number } | null = null;
@@ -253,7 +256,10 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
         const email = accountId ? await readAccountEmail(call) : null;
         return { raw, accountId, email };
       },
-      codexHome === undefined ? {} : { codexHome }
+      {
+        ...(codexHome === undefined ? {} : { codexHome }),
+        ...(beforeSpawn ? { beforeSpawn } : {}),
+      }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
@@ -263,6 +269,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       evidence: toCodexLimitEvidence(raw, requestedAt, answered?.fetchedAt ?? Date.now()),
     };
   } catch (error) {
+    if (error instanceof QuotaReadDropped) throw error;
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
     if (answered) {
       return {
@@ -280,9 +287,10 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
 }
 
 /**
- * `stillWanted` marks a background read: asked again when the read's turn in
- * the queue comes, it is dropped then if false and nobody that needs the
- * answer has joined it. Absent, the caller needs the answer.
+ * `stillWanted` marks a background read: asked again just before Codex would
+ * be spawned for it, after its turn in this queue and the transport's, it is
+ * dropped then if false and nobody that needs the answer has joined it.
+ * Absent, the caller needs the answer.
  */
 function readHome(
   home: string,
@@ -307,12 +315,12 @@ function readHome(
   }
   const owner = entry;
   owner.needed = !stillWanted;
-  const request = enqueue(() => {
-    if (!owner.needed && stillWanted && !stillWanted()) {
-      return Promise.reject(new QuotaReadDropped());
-    }
-    return fetchCodexQuota(codexHome);
-  }).then((result) => {
+  const beforeSpawn = stillWanted
+    ? () => {
+        if (!owner.needed && !stillWanted()) throw new QuotaReadDropped();
+      }
+    : undefined;
+  const request = enqueue(() => fetchCodexQuota(codexHome, beforeSpawn)).then((result) => {
     owner.cached = result;
     return result;
   });

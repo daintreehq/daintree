@@ -375,18 +375,15 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // The sidebar's usage readout takes in what every linked host reports (#17318).
-  const usageHosts = createAgentUsageHostsSource({
-    registry: client.registry,
-    manager: client.manager,
-    sessionFor: client.sessionFor,
-    metrics: () => getRemoteService("hostMetrics"),
-  });
-  teardowns.push(getAgentUsageReadouts().setRemoteSource(usageHosts));
-  // Tracking back on shows only what hosts report from then on (#17981).
   teardowns.push(
-    onAgentUsageTrackingChanged((enabled) => {
-      if (enabled) usageHosts.setAside();
-    })
+    getAgentUsageReadouts().setRemoteSource(
+      createAgentUsageHostsSource({
+        registry: client.registry,
+        manager: client.manager,
+        sessionFor: client.sessionFor,
+        metrics: () => getRemoteService("hostMetrics"),
+      })
+    )
   );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {

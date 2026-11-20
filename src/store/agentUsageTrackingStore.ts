@@ -49,26 +49,38 @@ export const useAgentUsageTrackingStore = create<AgentUsageTrackingStore>()((set
   },
 }));
 
+/** First retry after a failed read; doubles up to the cap until main answers. */
+const READ_RETRY_BASE_MS = 2_000;
+const READ_RETRY_CAP_MS = 30_000;
+
 /**
  * Keeps this view's copy of the switch current: subscribed before it is read,
  * so a change made between the two is never lost, and the revision drops a
- * read that a push overtook.
+ * read that a push overtook. A read that fails is tried again until main
+ * answers, by a read or a push; until then the view shows no Usage.
  */
 export function initAgentUsageTrackingSync(): () => void {
   const api = typeof window === "undefined" ? undefined : window.electron?.agentUsage;
   if (!api?.onTrackingChanged || !api.getTracking) return () => {};
 
   let disposed = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let attempt = 0;
   const apply = (snapshot: AgentUsageTrackingSnapshot) => {
     if (!disposed) useAgentUsageTrackingStore.getState().applySnapshot(snapshot);
   };
+  const read = () => {
+    api.getTracking().then(apply, () => {
+      if (disposed || useAgentUsageTrackingStore.getState().revision >= 0) return;
+      retry = setTimeout(read, Math.min(READ_RETRY_CAP_MS, READ_RETRY_BASE_MS * 2 ** attempt++));
+    });
+  };
   const unsubscribe = api.onTrackingChanged(apply);
-  api.getTracking().then(apply, () => {
-    // Unknown stays unknown: no Usage until main answers a push or a later read.
-  });
+  read();
 
   return () => {
     disposed = true;
+    clearTimeout(retry);
     unsubscribe();
   };
 }

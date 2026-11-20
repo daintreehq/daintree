@@ -146,20 +146,6 @@ function harness() {
 }
 
 describe("createAgentUsageHostsSource", () => {
-  it("never reads usage again from the summary a host last sent before tracking came back on (#17981)", () => {
-    const h = harness();
-    h.report("vps", [codex]);
-    const source = createAgentUsageHostsSource(h.deps);
-    source.setAside();
-    expect(source.list()).toEqual([]);
-    // The next summary the host sends is read as ever.
-    h.report("vps", [{ ...codex, usedPercent: 12 }]);
-    expect(source.list()[0]!.readings[0]!.usedPercent).toBe(12);
-    // With no metrics running there's nothing to set aside.
-    h.setMetricsUp(false);
-    expect(() => source.setAside()).not.toThrow();
-  });
-
   it("lists only connected hosts' reports from their current link, with the host named safely", () => {
     const h = harness();
     h.report("vps", [codex]);

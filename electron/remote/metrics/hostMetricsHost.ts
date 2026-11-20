@@ -216,7 +216,7 @@ export function installHostMetricsHostWith(
 ): () => void {
   const wired = new WeakSet<LinkSession>();
   const lastAttention = new Map<string, number>();
-  /** Per session, whether its Shell tracks usage: its HELLO's word, then its calls'. */
+  /** Per session, whether its Shell tracks usage, as its calls say. */
   const usageWanted = new WeakMap<LinkSession, boolean>();
   const hostTracks = (): boolean => deps.agentUsageTracking?.() ?? true;
   const sendsUsage = (session: LinkSession): boolean =>
@@ -225,8 +225,10 @@ export function installHostMetricsHostWith(
   const wire = ({ session, sessionId, client }: MetricsSessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
-    // A Shell from before #17981 can't say, and has always had usage.
-    usageWanted.set(session, client.agentUsage !== false);
+    // A Shell from before #17981 can't say, and has always had usage. One that
+    // can says again as its session opens, and nothing is read or sent for it
+    // until then: it may have turned tracking off since its HELLO.
+    usageWanted.set(session, client.agentUsage === undefined);
     session.registerCallHandler(
       MetricsLinkMethod.AGENT_USAGE_DEMAND,
       AgentUsageDemandSchema,

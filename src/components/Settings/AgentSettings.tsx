@@ -456,7 +456,7 @@ export function AgentSettings({
         />
       </div>
 
-      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} />}
+      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} isActive={isActive} />}
 
       {isGeneralActive && (
         <AgentInventorySection

@@ -27,7 +27,7 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 }));
 
 const readouts = vi.hoisted(() => ({
-  follow: vi.fn((): AgentUsageSnapshot => ({ readouts: [], revision: 1 })),
+  follow: vi.fn((_followerId: number): AgentUsageSnapshot => ({ readouts: [], revision: 1 })),
   unfollow: vi.fn(),
 }));
 vi.mock("../../../services/agentUsage/AgentUsageReadouts.js", () => ({
@@ -82,9 +82,12 @@ afterEach(() => {
 });
 
 describe("agent usage tracking switch (#17981)", () => {
-  it("reads as on until it is turned off", async () => {
+  it("reads as on until it is turned off, then as off", async () => {
     expect(isAgentUsageTrackingEnabled()).toBe(true);
     await expect(getTracking()).resolves.toEqual({ enabled: true, revision: 0 });
+    await setTracking({ enabled: false });
+    expect(isAgentUsageTrackingEnabled()).toBe(false);
+    await expect(getTracking()).resolves.toEqual({ enabled: false, revision: 1 });
   });
 
   it("stores and pushes a change, and treats a repeat as no change", async () => {
@@ -103,9 +106,14 @@ describe("agent usage tracking switch (#17981)", () => {
       revision: 1,
     });
     expect(broadcast).not.toHaveBeenCalled();
+    expect(fakeStore.set).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a value that isn't on or off", () => {
+  it("refuses a value that isn't on or off, at the IPC boundary and in the service", () => {
+    const schema = agentUsageNamespace.ops.setTracking.schema;
+    expect(schema.safeParse({ enabled: "off" }).success).toBe(false);
+    expect(schema.safeParse({ enabled: false, extra: true }).success).toBe(false);
+    expect(schema.safeParse({ enabled: false }).success).toBe(true);
     expect(() => setAgentUsageTracking("off" as unknown as boolean)).toThrow();
     expect(fakeStore.set).not.toHaveBeenCalled();
   });
@@ -129,8 +137,11 @@ describe("agent usage tracking switch (#17981)", () => {
 
     await setTracking({ enabled: false });
     expect(readouts.unfollow.mock.calls.map(([id]) => id)).toEqual([1, 2]);
-    expect(a.removeListener).toHaveBeenCalled();
-    expect(b.removeListener).toHaveBeenCalled();
+    // Every listener a follow put on its view comes off with it.
+    for (const view of [a, b]) {
+      expect(view.on).toHaveBeenCalled();
+      expect(view.removeListener.mock.calls).toEqual(view.on.mock.calls);
+    }
     const lastRelease = Math.max(...readouts.unfollow.mock.invocationCallOrder);
     expect(broadcast.mock.invocationCallOrder[0]).toBeGreaterThan(lastRelease);
 
@@ -140,8 +151,10 @@ describe("agent usage tracking switch (#17981)", () => {
   });
 
   it("follows again once turned back on, without a restart", async () => {
-    await setTracking({ enabled: false });
     const view = sender(3);
+    await setFollowing({ event: { sender: view } }, { following: true });
+    await setTracking({ enabled: false });
+    expect(readouts.unfollow).toHaveBeenCalledWith(3);
     await expect(setFollowing({ event: { sender: view } }, { following: true })).resolves.toBe(
       null
     );
@@ -150,6 +163,6 @@ describe("agent usage tracking switch (#17981)", () => {
       readouts: [],
       revision: 1,
     });
-    expect(readouts.follow).toHaveBeenCalledWith(3);
+    expect(readouts.follow.mock.calls.map(([id]) => id)).toEqual([3, 3]);
   });
 });

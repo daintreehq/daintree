@@ -58,23 +58,12 @@ export function onShellClock(reading: AgentUsageReading, offset: number): AgentU
   return next;
 }
 
-export interface AgentUsageHostsSource extends RemoteAgentUsageSource {
-  /**
-   * Never read usage from the summary each host last sent again (#17981):
-   * one from before tracking was turned back on may name an agent gone since,
-   * and a frame dropped on a busy link would leave it standing. The next
-   * summary a host sends is read as ever.
-   */
-  setAside(): void;
-}
-
 /**
  * Linked hosts' usage readings (#17318), from the summaries they already
  * send: a host connected now, on its current link. Nothing here dials a host
  * or keeps one linked.
  */
-export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): AgentUsageHostsSource {
-  const setAside = new WeakSet<HostMetricsSummary>();
+export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAgentUsageSource {
   // One offset per link, so frames every few seconds don't move a reading's
   // age by their own jitter, and a host's readings keep the order its clock
   // gave them. Taken again once a frame first bounds its trip.
@@ -92,7 +81,7 @@ export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): AgentUsa
           if (isLocalHostId(host.id)) continue;
           if (deps.manager.connectionState(host.id).status !== "connected") continue;
           const summary = metrics.latest(host.id);
-          if (!summary?.agentUsage?.length || setAside.has(summary)) continue;
+          if (!summary?.agentUsage?.length) continue;
           const session = deps.sessionFor(host.id);
           if (metrics.cameOn(summary, session) !== true) continue;
           const receipt = metrics.receiptOf(summary);
@@ -133,14 +122,6 @@ export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): AgentUsa
         for (const off of offs) off();
         offSummaries?.();
       };
-    },
-    setAside() {
-      const metrics = deps.metrics();
-      if (!metrics) return;
-      for (const host of deps.registry.list()) {
-        const summary = metrics.latest(host.id);
-        if (summary) setAside.add(summary);
-      }
     },
   };
 }

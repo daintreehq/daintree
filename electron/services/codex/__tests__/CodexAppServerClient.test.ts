@@ -236,6 +236,24 @@ describe("runCodexAppServerSession", () => {
     expect((error as CodexAppServerError).message).toContain("Server overloaded");
   });
 
+  it("spawns nothing for a caller that stopped wanting the session by its slot, and gives the slot back (#17981)", async () => {
+    const dropped = new Error("no longer wanted");
+    // More than the transport's slots: a slot kept by a drop would stall the rest.
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        runCodexAppServerSession(async () => "unused", {
+          command: "codex-test",
+          beforeSpawn: () => {
+            throw dropped;
+          },
+        })
+      ).rejects.toBe(dropped);
+    }
+    expect(spawnMock).not.toHaveBeenCalled();
+    await expect(startSession(async () => "ran")).resolves.toBe("ran");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a missing CLI distinctly from a protocol failure", async () => {
     spawnMock.mockImplementationOnce(() => {
       const error = new Error("spawn codex ENOENT") as NodeJS.ErrnoException;

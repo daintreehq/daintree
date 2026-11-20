@@ -76,49 +76,64 @@ async function hostHearing() {
 }
 
 describe("agent usage demand over a link (#17981)", () => {
-  it("tells each host as its session opens and on every change, and nothing when nothing changed", async () => {
+  it("tells every host as its session opens and on every change, and nothing when nothing changed", async () => {
     const manager = fakeManager();
     const tracking = fakeSource(false);
     const off = installAgentUsageDemandPush(manager, tracking.source);
-    const host = await hostHearing();
-    manager.opened(host.client);
-    await waitFor(() => host.heard.length === 1);
-    expect(host.heard).toEqual([false]);
+    const first = await hostHearing();
+    const second = await hostHearing();
+    manager.opened(first.client);
+    manager.opened(second.client);
+    // A session announced twice is still told once.
+    manager.opened(first.client);
+    await waitFor(() => first.heard.length === 1 && second.heard.length === 1);
 
     tracking.set(true);
-    await waitFor(() => host.heard.length === 2);
+    await waitFor(() => first.heard.length === 2 && second.heard.length === 2);
     tracking.set(true);
     tracking.set(false);
-    await waitFor(() => host.heard.length === 3);
+    await waitFor(() => first.heard.length === 3 && second.heard.length === 3);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(host.heard).toEqual([false, true, false]);
+    expect(first.heard).toEqual([false, true, false]);
+    expect(second.heard).toEqual([false, true, false]);
 
     off();
     tracking.set(true);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(host.heard).toEqual([false, true, false]);
+    expect(first.heard).toEqual([false, true, false]);
     expect(tracking.listeners.size).toBe(0);
   });
 
-  it("keeps the link up when a host from before it refuses the method", async () => {
+  it("keeps the link up, and keeps saying, when a host from before it refuses the method", async () => {
     const manager = fakeManager();
     const tracking = fakeSource(false);
     const off = installAgentUsageDemandPush(manager, tracking.source);
     const pair = await openSessionPair(dir);
     open.push(pair.host, pair.client);
+    const call = vi.spyOn(pair.client, "call");
+    // No host handler: the call is answered as an unknown method.
     manager.opened(pair.client);
+    await waitFor(() => call.mock.results.length === 1);
+    await expect(call.mock.results[0]!.value).rejects.toBeTruthy();
     tracking.set(true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => call.mock.results.length === 2);
+    expect(call.mock.calls.map(([method, payload]) => [method, payload])).toEqual([
+      [MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: false }],
+      [MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true }],
+    ]);
     expect(pair.client.isOpen).toBe(true);
     off();
   });
 
-  it("sends the latest value again after a busy link refused it, and stops once the session closes", async () => {
+  it("sends a value a busy link refused again, and stops once the session closes", async () => {
     vi.useFakeTimers();
     let closeSession: (() => void) | null = null;
+    const busy = () => Object.assign(new Error("busy"), { code: "RATE_LIMITED" });
     const call = vi
       .fn<(method: string, payload: unknown) => Promise<unknown>>()
-      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "RATE_LIMITED" }))
+      .mockRejectedValueOnce(busy())
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(busy())
       .mockResolvedValue(null);
     const session = {
       isOpen: true,
@@ -133,20 +148,20 @@ describe("agent usage demand over a link (#17981)", () => {
     const off = installAgentUsageDemandPush(manager, tracking.source);
     manager.opened(session);
     await vi.advanceTimersByTimeAsync(0);
-    tracking.set(true);
-    await vi.advanceTimersByTimeAsync(0);
-    // The refused `false` is overtaken by `true`, which needs no retry.
+    expect(call).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(AGENT_USAGE_DEMAND_RETRY_MS);
     expect(call.mock.calls.map(([, payload]) => payload)).toEqual([
       { enabled: false },
-      { enabled: true },
+      { enabled: false },
     ]);
-    await vi.advanceTimersByTimeAsync(AGENT_USAGE_DEMAND_RETRY_MS);
-    expect(call).toHaveBeenCalledTimes(2);
 
+    // Refused again, then the session closes with the retry pending: nothing more is sent.
+    tracking.set(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call).toHaveBeenCalledTimes(3);
     closeSession!();
-    tracking.set(false);
     await vi.advanceTimersByTimeAsync(AGENT_USAGE_DEMAND_RETRY_MS);
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
     off();
   });
 });

@@ -26,8 +26,8 @@ interface Delivery {
 /**
  * Shell side (#17981): tell every host this machine has a session open to
  * whether it tracks agent usage, as each session opens and whenever that
- * changes. The HELLO carried the value as it stood when it was sent; the send
- * on open covers a change since. Nothing here dials a host or keeps one linked.
+ * changes. A host reads usage for this Shell only once the send on open says
+ * so, whatever the HELLO said. Nothing here dials a host or keeps one linked.
  */
 export function installAgentUsageDemandPush(
   manager: {

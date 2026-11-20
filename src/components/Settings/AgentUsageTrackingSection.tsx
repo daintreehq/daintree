@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -17,14 +17,17 @@ export function AgentUsageTrackingSection() {
   const enabled = useAgentUsageTrackingStore((state) => state.enabled);
   const setEnabled = useAgentUsageTrackingStore((state) => state.setEnabled);
   const [unsaved, setUnsaved] = useState<boolean | null>(null);
+  const latestSave = useRef(0);
   // Drawn from the default until main answers.
   const isOn = enabled !== false;
 
   const save = (next: boolean) => {
+    const attempt = ++latestSave.current;
     setUnsaved(null);
     setEnabled(next).catch((error: unknown) => {
       logError("Failed to save agent usage tracking", error);
-      setUnsaved(next);
+      // A later save has the last word on what's shown.
+      if (attempt === latestSave.current) setUnsaved(next);
     });
   };
 
@@ -33,7 +36,7 @@ export function AgentUsageTrackingSection() {
       {unsaved !== null && (
         <SettingsLoadErrorBanner
           title="Couldn't save that change"
-          message="The setting is back to its previous value."
+          message="The switch shows what's saved now."
           onRetry={() => save(unsaved)}
         />
       )}
