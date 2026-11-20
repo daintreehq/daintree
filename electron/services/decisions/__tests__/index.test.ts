@@ -2365,7 +2365,11 @@ describe("Decisions entry", () => {
       });
 
       it("reads its own asking pane for its owner while it runs as a Host (#18037)", async () => {
-        const questionPane = vi.fn(async () => ({ result: "closed" as const }));
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => ({
+            result: "closed" as const,
+          })
+        );
         await running({ questionPane });
         vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
 
@@ -2377,6 +2381,7 @@ describe("Decisions entry", () => {
           OWN.questionId,
           expect.any(Function)
         );
+        expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
       });
 
       it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {

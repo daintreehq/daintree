@@ -186,7 +186,7 @@ export function DecisionAskingPane({ reference }: { reference: DecisionQuestionR
       {/* Mounted while open, so each outcome is announced as it changes. */}
       {open && (
         <p role="status" className="sr-only">
-          {outcomeText(read)}
+          {outcomeText(showSkeleton ? null : read)}
         </p>
       )}
     </section>

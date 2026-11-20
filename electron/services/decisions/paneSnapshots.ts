@@ -193,9 +193,19 @@ function verdict(
   if (mismatch !== null) return "gone";
   // Main still holds the run's generation, so a record that didn't come back is a read that failed.
   if (info === null) return "unreadable";
-  // Another agent seen in the same live pane is another run, though nothing respawned it.
+  // The agent that asked ended, though its pane lives on as a shell.
+  if (info.agentState === "exited") return "gone";
+  // Another agent seen in the same live pane is another run, though nothing respawned it. A
+  // plugin agent's own id can name a process detection credits to a built-in, so only a
+  // built-in asker is compared.
   const agent = info.detectedAgentId ?? info.launchAgentId;
-  if (agent !== undefined && agent !== origin.agent_kind) return "gone";
+  if (
+    agent !== undefined &&
+    agent !== origin.agent_kind &&
+    Object.hasOwn(AGENT_REGISTRY, origin.agent_kind)
+  ) {
+    return "gone";
+  }
   return "current";
 }
 

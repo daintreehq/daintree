@@ -55,7 +55,7 @@ class FakePane {
     launchGeneration: 3,
     agentIncarnation: 1,
     worktreeId: "wt-1",
-    detectedAgentId: "claude",
+    detectedAgentId: "claude" as string | undefined,
     launchAgentId: "claude",
     title: "Claude",
     titleMode: "default",
@@ -207,6 +207,25 @@ describe("readQuestionPane", () => {
     expect(pane.reads).toBe(0);
   });
 
+  it("says closed once the agent that asked exited back to its pane's shell", async () => {
+    const pane = new FakePane();
+    pane.record.agentState = "exited";
+    pane.record.detectedAgentId = undefined;
+    pane.screen = "$ ls\nREADME.md";
+
+    expect(await read(pane)).toEqual({ result: "closed" });
+    expect(pane.reads).toBe(0);
+  });
+
+  it("still reads a plugin agent's asker that detection credits to a built-in", async () => {
+    const pane = new FakePane();
+    pane.record.launchAgentId = "claude-custom";
+    pane.record.detectedAgentId = "claude";
+
+    const result = await read(pane, row({ origin: origin({ agent_kind: "claude-custom" }) }));
+    expect(result.result).toBe("read");
+  });
+
   it("says closed, never the screen it read, for an agent swapped in while being read", async () => {
     const pane = new FakePane();
     pane.screen = "maybe the other agent's screen";
@@ -218,7 +237,7 @@ describe("readQuestionPane", () => {
   });
 
   it("reads nothing once delivery moved the answer to another terminal, by a person or a resume", async () => {
-    for (const strategy of ["reassigned", "adapter:claude", "sink"]) {
+    for (const strategy of ["reassigned", "adapter:claude", "adapter:codex", "sink"]) {
       const pane = new FakePane();
 
       expect(await read(pane, row({ agent_resume_strategy: strategy }))).toEqual({
