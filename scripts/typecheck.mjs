@@ -43,6 +43,7 @@ const DEFAULT_CONCURRENCY = 3;
 const HEARTBEAT_MS = 30_000;
 const MEMORY_CHECK_MS = 2_000;
 const KILL_GRACE_MS = 5_000;
+const MAX_TIMER_MS = 2 ** 31 - 1;
 export const DEADLINE_STATUS = 124;
 
 // `configs` lists every tsconfig whose program the project checks, including
@@ -222,29 +223,34 @@ export function runOnly(argv, runProject = runProjectSync) {
   return runProject(argv[argv.indexOf("--only") + 1] ?? "");
 }
 
-function positiveNumber(env, name, integer) {
+function positiveNumber(env, name, { integer = false, max = Number.MAX_SAFE_INTEGER } = {}) {
   const raw = env[name];
   if (raw === undefined || raw === "") return null;
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0 || (integer && !Number.isInteger(value))) {
     throw new Error(`${name} must be a positive ${integer ? "integer" : "number"}, got "${raw}"`);
   }
+  if (value > max) throw new Error(`${name} must be at most ${max}, got "${raw}"`);
   return value;
 }
 
 // Throws on a malformed value, so a typo in CI cannot silently drop a limit.
 export function readRunOptions(env = process.env) {
-  const minutes = positiveNumber(env, "TYPECHECK_TIMEOUT_MINUTES", false);
-  const floorMb = positiveNumber(env, "TYPECHECK_MIN_AVAILABLE_MB", false);
+  // Past setTimeout's 32-bit range a deadline would fire at once.
+  const minutes = positiveNumber(env, "TYPECHECK_TIMEOUT_MINUTES", {
+    max: Math.floor(MAX_TIMER_MS / 60_000),
+  });
+  const floorMb = positiveNumber(env, "TYPECHECK_MIN_AVAILABLE_MB", { max: 2 ** 32 });
   return {
-    concurrency: positiveNumber(env, "TYPECHECK_CONCURRENCY", true) ?? DEFAULT_CONCURRENCY,
+    concurrency:
+      positiveNumber(env, "TYPECHECK_CONCURRENCY", { integer: true }) ?? DEFAULT_CONCURRENCY,
     deadlineMs: minutes === null ? 0 : minutes * 60_000,
     minAvailableBytes: floorMb === null ? 0 : floorMb * 2 ** 20,
     heartbeatMs: env.CI && env.CI !== "false" && env.CI !== "0" ? HEARTBEAT_MS : 0,
   };
 }
 
-function readProcBytes(file, field) {
+export function readProcBytes(file, field) {
   try {
     const line = readFileSync(file, "utf8")
       .split("\n")
@@ -261,26 +267,13 @@ const readRss = (pid) =>
 const readAvailable = () =>
   process.platform === "linux" ? readProcBytes("/proc/meminfo", "MemAvailable") : null;
 
-const spawnCompilerStep = (args) =>
-  spawn(process.execPath, [TSC, ...args], {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-
-// On POSIX the TS7 shim execve()s into the native compiler, so the child's pid
-// is the compiler. On Windows the shim waits on it in execFileSync, so /T
-// reaches it through the live wrapper.
-function killCompiler(child) {
-  if (process.platform === "win32" && child.pid) {
-    const result = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-      timeout: 10_000,
-    });
-    if (result.status === 0) return;
-  }
-  child.kill("SIGKILL");
+// The runner spawns the native binary the TS7 shim would run, so the pid it
+// reports and kills is the compiler itself: on Windows the shim keeps it as a
+// child of its own, which killing the shim would orphan.
+export async function resolveCompiler() {
+  const resolver = path.join(ROOT, "node_modules/typescript7/lib/getExePath.js");
+  const { default: getExePath } = await import(pathToFileURL(resolver).href);
+  return getExePath();
 }
 
 function duration(ms) {
@@ -293,9 +286,7 @@ function duration(ms) {
 const gib = (bytes) => `${(bytes / 2 ** 30).toFixed(1)} GiB`;
 
 function prefixed(name, chunks) {
-  const text = Buffer.concat(chunks)
-    .toString("utf8")
-    .replace(/\r?\n$/, "");
+  const text = chunks.join("").replace(/\r?\n$/, "");
   return text
     ? text
         .split(/\r?\n/)
@@ -312,7 +303,7 @@ const SIGNAL_STATUS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
 // status: 0, 1 when any project failed, DEADLINE_STATUS past the deadline, 1
 // under the memory floor, or 128 + n on a signal. A step settles on `close`,
 // not `exit`, so its last diagnostic is never left in the pipe.
-export function runProjects(projects, options = {}, deps = {}) {
+export function runProjects(projects, options, deps) {
   const {
     concurrency = DEFAULT_CONCURRENCY,
     deadlineMs = 0,
@@ -320,8 +311,8 @@ export function runProjects(projects, options = {}, deps = {}) {
     minAvailableBytes = 0,
   } = options;
   const {
-    spawnStep = spawnCompilerStep,
-    kill = killCompiler,
+    spawnStep,
+    kill = (child) => child.kill("SIGKILL"),
     write = (text) => process.stdout.write(text),
     rssOf = readRss,
     availableMemory = readAvailable,
@@ -339,10 +330,13 @@ export function runProjects(projects, options = {}, deps = {}) {
     let finished = 0;
     let status = 0;
     let stopped = false;
+    let signalled = false;
     let done = false;
 
+    // A second signal means the first stop is taking too long: leave now.
     const onSignal = (signal) => {
-      if (stopped) process.exit(SIGNAL_STATUS[signal]);
+      if (signalled) process.exit(SIGNAL_STATUS[signal]);
+      signalled = true;
       stop(`received ${signal}`, SIGNAL_STATUS[signal]);
     };
 
@@ -375,6 +369,13 @@ export function runProjects(projects, options = {}, deps = {}) {
       );
     };
 
+    // Output that reached the pipe after the stop report printed.
+    const flushLate = (run) => {
+      if (run.reported === undefined || run.output.length === run.reported) return;
+      write(prefixed(run.project.name, run.output.slice(run.reported)));
+      run.reported = run.output.length;
+    };
+
     const complete = (run, code) => {
       active.delete(run);
       finished += 1;
@@ -393,7 +394,7 @@ export function runProjects(projects, options = {}, deps = {}) {
       try {
         child = spawnStep(run.project.steps[run.step]);
       } catch (error) {
-        run.output.push(Buffer.from(`spawn failed: ${error.message}\n`));
+        run.output.push(`spawn failed: ${error.message}\n`);
         complete(run, 1);
         return;
       }
@@ -405,6 +406,7 @@ export function runProjects(projects, options = {}, deps = {}) {
         settled = true;
         live.delete(child);
         if (stopped) {
+          flushLate(run);
           if (live.size === 0) finish();
           return;
         }
@@ -415,14 +417,26 @@ export function runProjects(projects, options = {}, deps = {}) {
           complete(run, code);
         }
       };
-      const collect = (chunk) => run.output.push(Buffer.from(chunk));
-      child.stdout?.on("data", collect);
-      child.stderr?.on("data", collect);
+      const collect = (chunk) => {
+        if (!settled) run.output.push(String(chunk));
+      };
+      // Each stream decodes its own UTF-8, so a character split across chunks
+      // survives the other stream's chunks landing in between.
+      for (const stream of [child.stdout, child.stderr]) {
+        stream?.setEncoding?.("utf8");
+        stream?.on("data", collect);
+      }
       child.on("error", (error) => {
         collect(`spawn failed: ${error.message}\n`);
         if (child.pid === undefined) settle(1);
       });
-      child.on("close", (code, signal) => settle(signal ? 1 : (code ?? 1)));
+      child.on("close", (code, signal) => {
+        // Ctrl+C reaches the compilers from the terminal too, often before this
+        // process's own handler runs; it is an interruption, not a failure that
+        // lets the queue advance.
+        if (signal === "SIGINT") stop("compiler interrupted by SIGINT", SIGNAL_STATUS.SIGINT);
+        settle(signal ? 1 : (code ?? 1));
+      });
     };
 
     const next = () => {
@@ -450,29 +464,42 @@ export function runProjects(projects, options = {}, deps = {}) {
         const args = run.project.steps[run.step];
         report +=
           `[typecheck] unfinished: ${describe(run)}, this step ${duration(now() - run.stepStarted)}: ` +
-          `node ${TSC} ${args.join(" ")}\n` +
+          `tsc ${args.join(" ")}\n` +
           (run.output.length > 0
             ? prefixed(run.project.name, run.output)
             : `[${run.project.name}] (no compiler output yet)\n`);
+        run.reported = run.output.length;
       }
       write(report);
-      if (live.size === 0) {
-        finish();
-        return;
-      }
-      for (const child of live) kill(child);
       timeouts.push(
         setTimeout(() => {
-          for (const child of live) {
-            write(`[typecheck] pid ${child.pid} did not exit after it was killed\n`);
-            child.stdout?.destroy();
-            child.stderr?.destroy();
-            child.unref?.();
+          for (const run of active) {
+            if (!live.has(run.child)) continue;
+            flushLate(run);
+            write(`[typecheck] pid ${run.child.pid} did not exit after it was killed\n`);
+            run.child.stdout?.destroy();
+            run.child.stderr?.destroy();
+            run.child.unref?.();
           }
           finish();
         }, KILL_GRACE_MS)
       );
+      for (const child of [...live]) {
+        try {
+          kill(child);
+        } catch (error) {
+          write(`[typecheck] could not kill pid ${child.pid}: ${error.message}\n`);
+        }
+      }
+      if (live.size === 0) finish();
     }
+
+    const checkMemory = () => {
+      const available = availableMemory();
+      if (available !== null && available < minAvailableBytes) {
+        stop(`available memory is ${gib(available)}, under the ${gib(minAvailableBytes)} floor`, 1);
+      }
+    };
 
     for (const signal of SIGNALS) signals.on(signal, onSignal);
     if (heartbeatMs > 0) {
@@ -499,31 +526,35 @@ export function runProjects(projects, options = {}, deps = {}) {
       );
     }
     if (minAvailableBytes > 0 && availableMemory() !== null) {
-      intervals.push(
-        setInterval(() => {
-          const available = availableMemory();
-          if (available !== null && available < minAvailableBytes) {
-            stop(
-              `available memory fell to ${gib(available)}, under the ${gib(minAvailableBytes)} floor`,
-              1
-            );
-          }
-        }, MEMORY_CHECK_MS)
-      );
+      checkMemory();
+      if (!stopped) intervals.push(setInterval(checkMemory, MEMORY_CHECK_MS));
     }
     next();
   });
 }
 
-async function runAll(projects) {
-  let options;
+async function runAll(projects, options) {
+  let compiler;
   try {
-    options = readRunOptions();
+    compiler = await resolveCompiler();
   } catch (error) {
     console.error(`[typecheck] ${error.message}`);
-    return 2;
+    return 1;
   }
-  return runProjects(projects, options);
+  // A reader that leaves early (`| head`) must not crash the runner before it
+  // has reaped its compilers.
+  let stdoutClosed = false;
+  process.stdout.on("error", (error) => {
+    if (error.code !== "EPIPE") throw error;
+    stdoutClosed = true;
+  });
+  return runProjects(projects, options, {
+    spawnStep: (args) =>
+      spawn(compiler, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }),
+    write: (text) => {
+      if (!stdoutClosed) process.stdout.write(text);
+    },
+  });
 }
 
 async function main() {
@@ -537,8 +568,17 @@ async function main() {
 
   if (tscMissing()) process.exit(1);
 
+  // Validated before `--changed` lists any program, so a bad value fails fast.
+  let options;
+  try {
+    options = readRunOptions();
+  } catch (error) {
+    console.error(`[typecheck] ${error.message}`);
+    process.exit(2);
+  }
+
   if (!changedMode) {
-    if (!dryRun) process.exitCode = await runAll(PROJECTS);
+    if (!dryRun) process.exitCode = await runAll(PROJECTS, options);
     return;
   }
 
@@ -558,7 +598,10 @@ async function main() {
 
   for (const { project, reason } of selected) console.log(`  ${project.name}: ${reason}`);
   if (selected.length === 0 || dryRun) return;
-  process.exitCode = await runAll(selected.map(({ project }) => project));
+  process.exitCode = await runAll(
+    selected.map(({ project }) => project),
+    options
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

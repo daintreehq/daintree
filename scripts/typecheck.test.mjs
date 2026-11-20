@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -10,8 +11,10 @@ import {
   DEADLINE_STATUS,
   PROJECTS,
   parseNameStatus,
+  readProcBytes,
   readRunOptions,
   runAllReason,
+  resolveCompiler,
   runOnly,
   runProjectSync,
   runProjects,
@@ -291,12 +294,15 @@ describe("--only CLI", () => {
 
 describe("readRunOptions", () => {
   it("keeps the local defaults when nothing is set", () => {
-    expect(readRunOptions({})).toEqual({
-      concurrency: 3,
-      deadlineMs: 0,
-      minAvailableBytes: 0,
-      heartbeatMs: 0,
-    });
+    const defaults = { concurrency: 3, deadlineMs: 0, minAvailableBytes: 0, heartbeatMs: 0 };
+    expect(readRunOptions({})).toEqual(defaults);
+    expect(
+      readRunOptions({
+        TYPECHECK_CONCURRENCY: "",
+        TYPECHECK_TIMEOUT_MINUTES: "",
+        TYPECHECK_MIN_AVAILABLE_MB: "",
+      })
+    ).toEqual(defaults);
   });
 
   it("reads CI's limits and turns the heartbeat on under CI", () => {
@@ -313,6 +319,7 @@ describe("readRunOptions", () => {
       minAvailableBytes: 2 ** 30,
       heartbeatMs: 30_000,
     });
+    expect(readRunOptions({ TYPECHECK_TIMEOUT_MINUTES: "1.5" }).deadlineMs).toBe(90_000);
     expect(readRunOptions({ CI: "false" }).heartbeatMs).toBe(0);
   });
 
@@ -323,10 +330,42 @@ describe("readRunOptions", () => {
       ["TYPECHECK_CONCURRENCY", "two"],
       ["TYPECHECK_TIMEOUT_MINUTES", "-1"],
       ["TYPECHECK_TIMEOUT_MINUTES", "6m"],
+      ["TYPECHECK_TIMEOUT_MINUTES", "Infinity"],
       ["TYPECHECK_MIN_AVAILABLE_MB", "0"],
+      ["TYPECHECK_MIN_AVAILABLE_MB", "Infinity"],
     ]) {
       expect(() => readRunOptions({ [name]: value }), `${name}=${value}`).toThrow(name);
     }
+  });
+
+  it("rejects a deadline past setTimeout's range, which would fire at once", () => {
+    expect(readRunOptions({ TYPECHECK_TIMEOUT_MINUTES: "35791" }).deadlineMs).toBe(2_147_460_000);
+    expect(() => readRunOptions({ TYPECHECK_TIMEOUT_MINUTES: "36000" })).toThrow("at most 35791");
+  });
+});
+
+describe("readProcBytes", () => {
+  it("reads a /proc field in KiB as bytes, and null when it is missing", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "typecheck-proc-"));
+    try {
+      const file = path.join(dir, "meminfo");
+      writeFileSync(file, "MemTotal:       16384000 kB\nMemAvailable:    1048576 kB\n");
+      expect(readProcBytes(file, "MemAvailable")).toBe(2 ** 30);
+      expect(readProcBytes(file, "VmRSS")).toBeNull();
+      expect(readProcBytes(path.join(dir, "missing"), "MemAvailable")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveCompiler", () => {
+  it("finds the installed native TS7 compiler", async () => {
+    const compiler = await resolveCompiler();
+    expect(existsSync(compiler), compiler).toBe(true);
+    const result = spawnSync(compiler, ["--version"], { encoding: "utf8", timeout: 30_000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^Version 7\./);
   });
 });
 
@@ -377,9 +416,13 @@ describe("runProjects", () => {
   };
 
   const project = (name, steps = [["--noEmit", "-p", `${name}.json`]]) => ({ name, steps });
+  const pending = async (promise) => {
+    const marker = Symbol("pending");
+    return (await Promise.race([promise, Promise.resolve(marker)])) === marker;
+  };
 
   it("runs at most `concurrency` projects at once and prints each one's output as one block", async () => {
-    const h = harness({ concurrency: 2 });
+    const h = harness({ concurrency: 2 }, { now: () => 0 });
     const result = h.run([
       project("a", [
         ["-b", "a.json"],
@@ -409,6 +452,7 @@ describe("runProjects", () => {
     h.children[0].emit("close", 0, null);
     expect(h.spawnStep.mock.calls[3][0]).toEqual(["--noEmit", "-p", "a.preload.json"]);
 
+    h.children[3].stdout.emit("data", "a preload\r\n");
     h.children[3].emit("close", 0, null);
     h.children[2].emit("close", 0, null);
     await expect(result).resolves.toBe(0);
@@ -420,6 +464,7 @@ describe("runProjects", () => {
         "[a] a one",
         "[a] a two",
         "[a] a late",
+        "[a] a preload",
         "[typecheck] a passed in 0s",
         "[typecheck] c passed in 0s",
         "",
@@ -446,6 +491,23 @@ describe("runProjects", () => {
     expect(h.text()).toContain("[typecheck] b passed");
   });
 
+  it("fails the run when only a later step fails", async () => {
+    const h = harness({ concurrency: 1 });
+    const result = h.run([
+      project("a", [
+        ["-b", "a.json"],
+        ["-p", "a2.json"],
+      ]),
+      project("b"),
+    ]);
+    h.children[0].emit("close", 0, null);
+    h.children[1].stdout.emit("data", "preload.cts(2,2): error TS2304\n");
+    h.children[1].emit("close", 1, null);
+    h.children[2].emit("close", 0, null);
+    await expect(result).resolves.toBe(1);
+    expect(h.text()).toContain("[a] preload.cts(2,2): error TS2304\n[typecheck] a failed (exit 1)");
+  });
+
   it("fails a project whose compiler was killed or could not be spawned", async () => {
     let calls = 0;
     const h = harness(
@@ -465,13 +527,37 @@ describe("runProjects", () => {
     expect(h.text()).toContain("[typecheck] b failed (exit 1)");
   });
 
+  it("fails a project once when its spawn errors, whatever follows the error", async () => {
+    const h = harness({ concurrency: 1 });
+    const result = h.run([project("a"), project("b")]);
+    const [orphan] = h.children;
+    orphan.pid = undefined;
+    orphan.emit("error", new Error("ENOENT"));
+    orphan.emit("close", -2, null);
+    expect(h.spawnStep).toHaveBeenCalledTimes(2);
+    h.children[1].emit("close", 0, null);
+    h.children[1].emit("error", new Error("late"));
+    await expect(result).resolves.toBe(1);
+    expect(h.text()).toContain("[a] spawn failed: ENOENT\n[typecheck] a failed (exit 1)");
+    expect(h.text().match(/\[typecheck\] a failed/g)).toHaveLength(1);
+    expect(h.text()).not.toContain("late");
+  });
+
   it("stops at the deadline, naming every unfinished project and killing its compiler", async () => {
     vi.useFakeTimers();
     const h = harness(
       { concurrency: 2, deadlineMs: 6 * 60_000 },
       { rssOf: (pid) => (pid === 102 ? 7 * 2 ** 30 : null), availableMemory: () => 2 ** 30 }
     );
-    const result = h.run([project("a"), project("b"), project("c"), project("d")]);
+    const result = h.run([
+      project("a"),
+      project("b", [
+        ["-b", "b.json"],
+        ["-p", "b2.json"],
+      ]),
+      project("c"),
+      project("d"),
+    ]);
     h.children[1].stdout.emit("data", "partial output");
     vi.advanceTimersByTime(5 * 60_000);
     h.children[0].emit("close", 0, null);
@@ -484,18 +570,25 @@ describe("runProjects", () => {
     expect(report).toBe(
       [
         "[typecheck] deadline of 6m00s reached after 6m00s: 1/4 project(s) finished, 2 still running, not started: d; 1.0 GiB available",
-        "[typecheck] unfinished: b step 1/1 (pid 102, 6m00s, rss 7.0 GiB), this step 6m00s: node node_modules/typescript7/bin/tsc --noEmit -p b.json",
+        "[typecheck] unfinished: b step 1/2 (pid 102, 6m00s, rss 7.0 GiB), this step 6m00s: tsc -b b.json",
         "[b] partial output",
-        "[typecheck] unfinished: c step 1/1 (pid 103, 1m00s), this step 1m00s: node node_modules/typescript7/bin/tsc --noEmit -p c.json",
+        "[typecheck] unfinished: c step 1/1 (pid 103, 1m00s), this step 1m00s: tsc --noEmit -p c.json",
         "[c] (no compiler output yet)",
         "",
       ].join("\n")
     );
 
-    h.children[1].emit("close", null, "SIGKILL");
+    // A diagnostic still in b's pipe is printed once, and b's next step never starts.
+    h.children[1].stdout.emit("data", "b.ts(9,9): error TS2345\n");
+    h.children[1].emit("close", 0, null);
+    expect(await pending(result)).toBe(true);
     h.children[2].emit("close", null, "SIGKILL");
-    await expect(result).resolves.toBe(DEADLINE_STATUS);
+    await expect(result).resolves.toBe(124);
+    expect(DEADLINE_STATUS).toBe(124);
     expect(h.spawnStep).toHaveBeenCalledTimes(3);
+    expect(h.text().slice(h.text().indexOf("[typecheck] deadline") + report.length)).toBe(
+      "[b] b.ts(9,9): error TS2345\n"
+    );
     expect(h.text()).not.toContain("failed");
     expect(vi.getTimerCount()).toBe(0);
     expect(h.signals.eventNames()).toEqual([]);
@@ -507,12 +600,34 @@ describe("runProjects", () => {
     const result = h.run([project("a")]);
     vi.advanceTimersByTime(1000);
     expect(h.kill).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(5000);
+    h.children[0].stdout.emit("data", "late line\n");
+    vi.advanceTimersByTime(4999);
+    expect(await pending(result)).toBe(true);
+    vi.advanceTimersByTime(1);
     await expect(result).resolves.toBe(DEADLINE_STATUS);
     const [child] = h.children;
-    expect(h.text()).toContain("[typecheck] pid 101 did not exit after it was killed");
-    expect(child.stdout.destroy).toHaveBeenCalled();
-    expect(child.unref).toHaveBeenCalled();
+    expect(h.text()).toContain(
+      "[a] late line\n[typecheck] pid 101 did not exit after it was killed\n"
+    );
+    expect(child.stdout.destroy).toHaveBeenCalledTimes(1);
+    expect(child.stderr.destroy).toHaveBeenCalledTimes(1);
+    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps killing after one kill throws, and clears the grace timer once the rest close", async () => {
+    vi.useFakeTimers();
+    const h = harness({ concurrency: 2, deadlineMs: 1000 });
+    h.kill.mockImplementationOnce(() => {
+      throw new Error("EPERM");
+    });
+    h.kill.mockImplementation((child) => child.emit("close", null, "SIGKILL"));
+    const result = h.run([project("a"), project("b")]);
+    vi.advanceTimersByTime(1000);
+    expect(h.kill).toHaveBeenCalledTimes(2);
+    expect(h.text()).toContain("[typecheck] could not kill pid 101: EPERM\n");
+    h.children[0].emit("close", null, "SIGKILL");
+    await expect(result).resolves.toBe(DEADLINE_STATUS);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -539,26 +654,42 @@ describe("runProjects", () => {
       "[typecheck] 30s: 0/2 finished, running a step 2/2 (pid 102, 30s, rss 2.0 GiB); 1 queued; 8.0 GiB available\n"
     );
     h.children[1].emit("close", 0, null);
+    vi.advanceTimersByTime(30_000);
+    expect(h.text()).toContain(
+      "[typecheck] 1m00s: 1/2 finished, running b step 1/1 (pid 103, 30s, rss 2.0 GiB); 0 queued; 8.0 GiB available\n"
+    );
     h.children[2].emit("close", 0, null);
     await expect(result).resolves.toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("stops when available memory falls under the floor", async () => {
+  it("stops when available memory falls under the floor, ignoring unreadable samples", async () => {
     vi.useFakeTimers();
-    let available = 4 * 2 ** 30;
-    const h = harness({ minAvailableBytes: 2 ** 30 }, { availableMemory: () => available });
+    const samples = [4 * 2 ** 30, 4 * 2 ** 30, null, 2 ** 30, 2 ** 29];
+    const h = harness(
+      { minAvailableBytes: 2 ** 30 },
+      { availableMemory: () => (samples.length > 1 ? samples.shift() : samples[0]) }
+    );
     const result = h.run([project("a")]);
     vi.advanceTimersByTime(4000);
     expect(h.kill).not.toHaveBeenCalled();
-    available = 2 ** 29;
     vi.advanceTimersByTime(2000);
     expect(h.text()).toContain(
-      "[typecheck] available memory fell to 0.5 GiB, under the 1.0 GiB floor after 6s: 0/1 project(s) finished, 1 still running; 0.5 GiB available\n"
+      "[typecheck] available memory is 0.5 GiB, under the 1.0 GiB floor after 6s: 0/1 project(s) finished, 1 still running; 0.5 GiB available\n"
     );
     expect(h.kill).toHaveBeenCalledTimes(1);
     h.children[0].emit("close", null, "SIGKILL");
     await expect(result).resolves.toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts no compiler when memory is already under the floor", async () => {
+    vi.useFakeTimers();
+    const h = harness({ minAvailableBytes: 2 ** 30 }, { availableMemory: () => 2 ** 29 });
+    await expect(h.run([project("a"), project("b")])).resolves.toBe(1);
+    expect(h.spawnStep).not.toHaveBeenCalled();
+    expect(h.text()).toContain("not started: a, b");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("skips the memory floor where MemAvailable cannot be read", async () => {
@@ -570,56 +701,86 @@ describe("runProjects", () => {
     await expect(result).resolves.toBe(0);
   });
 
-  it("stops on a signal, kills the running compilers and removes its handlers", async () => {
-    const h = harness({ concurrency: 2 });
+  it.each([
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+    ["SIGHUP", 129],
+  ])("stops on %s, kills the running compilers and removes its handlers", async (signal, code) => {
+    const h = harness({ concurrency: 2 }, { now: () => 0 });
     const result = h.run([project("a"), project("b"), project("c")]);
-    expect(h.signals.listenerCount("SIGTERM")).toBe(1);
-    h.signals.emit("SIGTERM", "SIGTERM");
+    expect(h.signals.listenerCount(signal)).toBe(1);
+    h.signals.emit(signal, signal);
     expect(h.kill).toHaveBeenCalledTimes(2);
     expect(h.text()).toContain(
-      "[typecheck] received SIGTERM after 0s: 0/3 project(s) finished, 2 still running, not started: c"
+      `[typecheck] received ${signal} after 0s: 0/3 project(s) finished, 2 still running, not started: c`
     );
     h.children[0].emit("close", null, "SIGKILL");
     h.children[1].emit("close", null, "SIGKILL");
-    await expect(result).resolves.toBe(143);
+    await expect(result).resolves.toBe(code);
     expect(h.spawnStep).toHaveBeenCalledTimes(2);
     expect(h.signals.eventNames()).toEqual([]);
+  });
+
+  it("treats a compiler that Ctrl+C reached first as an interruption, not a failure", async () => {
+    const h = harness({ concurrency: 1 }, { now: () => 0 });
+    const result = h.run([project("a"), project("b")]);
+    h.children[0].emit("close", null, "SIGINT");
+    h.signals.emit("SIGINT", "SIGINT");
+    await expect(result).resolves.toBe(130);
+    expect(h.spawnStep).toHaveBeenCalledTimes(1);
+    expect(h.text()).toContain("[typecheck] compiler interrupted by SIGINT after 0s");
+    expect(h.text()).not.toContain("failed");
   });
 
   it("leaves no timers or signal handlers behind after a clean run", async () => {
     vi.useFakeTimers();
     const h = harness(
-      { heartbeatMs: 30_000, deadlineMs: 60_000 },
+      { heartbeatMs: 30_000, deadlineMs: 60_000, minAvailableBytes: 2 ** 30 },
       { availableMemory: () => 2 ** 33 }
     );
     const result = h.run([project("a")]);
+    expect(vi.getTimerCount()).toBe(3);
     h.children[0].emit("close", 0, null);
     await expect(result).resolves.toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     expect(h.signals.eventNames()).toEqual([]);
   });
 
-  it("kills a real hung compiler process at the deadline", async () => {
-    let pid;
+  it("kills a real compiler that ignores SIGTERM when the run stops", async () => {
+    const signals = new EventEmitter();
+    const output = [];
+    let child;
+    let ready;
+    const isReady = new Promise((resolve) => (ready = resolve));
     const spawnStep = () => {
-      const child = spawn(
+      child = spawn(
         process.execPath,
-        ["-e", "process.stdout.write('checking'); setInterval(() => {}, 1000)"],
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); process.stdout.write('checking'); setInterval(() => {}, 1000)",
+        ],
         { stdio: ["ignore", "pipe", "pipe"] }
       );
-      pid = child.pid;
+      child.stdout.once("data", () => ready());
       return child;
     };
-    const output = [];
-    const status = await runProjects(
-      [project("hung")],
-      { deadlineMs: 500 },
-      { spawnStep, write: (text) => output.push(text), signals: new EventEmitter() }
-    );
-    expect(status).toBe(DEADLINE_STATUS);
-    expect(output.join("")).toContain(`(pid ${pid}`);
-    expect(output.join("")).toContain("[hung] checking");
-    expect(() => process.kill(pid, 0)).toThrow();
+    try {
+      const result = runProjects(
+        [project("hung")],
+        {},
+        { spawnStep, write: (text) => output.push(text), signals }
+      );
+      await isReady;
+      const closed = new Promise((resolve) => child.once("close", (_, signal) => resolve(signal)));
+      signals.emit("SIGTERM", "SIGTERM");
+      await expect(closed).resolves.toBe(process.platform === "win32" ? null : "SIGKILL");
+      await expect(result).resolves.toBe(143);
+      expect(output.join("")).toContain(`(pid ${child.pid}`);
+      expect(output.join("")).toContain("[hung] checking");
+      if (process.platform === "linux") expect(output.join("")).toMatch(/\d\.\d GiB available/);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
   });
 });
 
