@@ -191,8 +191,18 @@ export interface DecisionsHost {
  * The Hosts Settings shows: every connected one, and every one this computer
  * has enrolled or seen revoked. `not-set-up`: no relay identity of an owner here.
  */
-export type DecisionsHostsResult =
-  { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] } | { result: "not-set-up" };
+export type DecisionsHostsResult = (
+  { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] } | { result: "not-set-up" }
+) & {
+  /**
+   * The Hosts whose questions this computer's inbox lists now (#18049), by
+   * host-list id: each whose last report of its questions was taken,
+   * connected or not, and with no question in it or some, whether or not
+   * this computer can enroll Hosts now. A read through `listHosts` carries
+   * it; an answer to a Settings change may not.
+   */
+  inboxHostIds?: string[];
+};
 
 export interface EnrollDecisionsHostPayload {
   hostId: string;

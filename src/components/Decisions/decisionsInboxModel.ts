@@ -1,6 +1,7 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
   deliveryReasonText,
   deliverySubjectPlural,
@@ -553,16 +554,30 @@ const AUTO_OPEN: ReadonlySet<InboxGroupId> = new Set([
 ]);
 
 /**
+ * Whether a question was asked on the machine a view works on (#18049): this
+ * computer's own for a local view (`hostId` "local"), else the enrolled Host
+ * with that host-list id. Ids repeat from one machine to the next, so a
+ * terminal or project id means nothing without it.
+ */
+export function askedOnHost(item: DecisionQuestionListItem, hostId: string): boolean {
+  return hostId === LOCAL_HOST_ID
+    ? item.remoteHost === undefined
+    : item.remoteHost?.hostId === hostId;
+}
+
+/**
  * The question the inbox shows: the one chosen while it is still listed; for
  * one the person picked that went, the one that took its place; else the
- * first of the pane that opened the inbox, in any group; else the first that
- * still needs something (#18022). Null when nothing does: a Cleared or
- * History question opens only when it's picked.
+ * first of the pane that opened the inbox, on the view's own machine
+ * (`viewHostId`), in any group; else the first that still needs something
+ * (#18022). Null when nothing does: a Cleared or History question opens only
+ * when it's picked.
  */
 export function resolveSelection(
   groups: readonly InboxGroup[],
   chosen: InboxChoice | null,
-  openerTerminalId: string | null
+  openerTerminalId: string | null,
+  viewHostId: string = LOCAL_HOST_ID
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
@@ -573,7 +588,9 @@ export function resolveSelection(
     }
   }
   if (openerTerminalId !== null) {
-    const own = ordered.find((item) => item.reference.terminalId === openerTerminalId);
+    const own = ordered.find(
+      (item) => item.reference.terminalId === openerTerminalId && askedOnHost(item, viewHostId)
+    );
     if (own !== undefined) return own;
   }
   return groups.find((group) => AUTO_OPEN.has(group.id))?.items[0] ?? null;

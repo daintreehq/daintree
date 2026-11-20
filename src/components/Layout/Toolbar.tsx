@@ -356,11 +356,11 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
-  // The inbox lists this computer's questions, which a Remote Host window's
-  // panes never asked. The toolbar holds the switch for the view, so the
-  // Decisions actions can read it whether or not the button is placed.
-  const localWindow = !isRemoteWindow();
-  const decisionsOn = useDecisionsSwitch(localWindow) === "on";
+  // The inbox lists this computer's questions and every enrolled Host's
+  // (#18049), so a Remote Host's window shows it too. The toolbar holds the
+  // switch for the view, so the Decisions actions can read it whether or not
+  // the button is placed.
+  const decisionsOn = useDecisionsSwitch() === "on";
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   // This machine's pins (#14702), live, so a pin from the launcher or another

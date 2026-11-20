@@ -31,7 +31,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
-import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { currentHostId, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useRovingRows } from "@/hooks/useRovingRows";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { resolveAgentIcon } from "@/config/agentIcons";
@@ -67,6 +67,7 @@ import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuest
 import {
   agentName,
   askShownIn,
+  askedOnHost,
   attentionText,
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
@@ -241,20 +242,22 @@ async function runsTerminal(terminalId: string, projectId: string): Promise<bool
 }
 
 /**
- * Whether the terminal that asked the question is still open on this
- * computer. This view's own panels answer for this project, as they change;
- * for another, the terminals this computer runs, looked for again a while
- * after each look settles. A Remote Host window's terminals are another
- * computer's, so from one it offers nothing.
+ * Whether the terminal that asked the question is still open, on the machine
+ * this view works on (#18049): this view's own panels answer for its project,
+ * as they change, in a Remote Host's window too. For another project of this
+ * computer's, the terminals it runs, looked for again a while after each look
+ * settles; a Remote Host window's other projects aren't looked for. A
+ * question another machine asked offers nothing, whatever its ids.
  */
 function useTerminalReach(
   item: DecisionQuestionListItem | null,
   active: boolean
 ): { reach: TerminalReach; markGone: (key: string) => void } {
   const remote = isRemoteWindow();
+  const sameMachine = item !== null && askedOnHost(item, currentHostId());
   const terminalId = item?.reference.terminalId ?? null;
   const projectId = item?.reference.projectId ?? null;
-  const here = !remote && projectId !== null && projectId === getViewWorkspaceId();
+  const here = sameMachine && projectId !== null && projectId === getViewWorkspaceId();
   const openHere = usePanelStore((state) => {
     if (!here || terminalId === null) return false;
     const panel = state.panelsById[terminalId];
@@ -267,7 +270,15 @@ function useTerminalReach(
   const looks = useRef(0);
 
   useEffect(() => {
-    if (!active || remote || here || key === null || terminalId === null || projectId === null) {
+    if (
+      !active ||
+      remote ||
+      !sameMachine ||
+      here ||
+      key === null ||
+      terminalId === null ||
+      projectId === null
+    ) {
       return;
     }
     let live = true;
@@ -287,15 +298,16 @@ function useTerminalReach(
       live = false;
       clearTimeout(timer);
     };
-  }, [active, remote, here, key, terminalId, projectId, epoch]);
+  }, [active, remote, sameMachine, here, key, terminalId, projectId, epoch]);
 
   const markGone = useCallback((gone: string) => {
     looks.current += 1;
     setFound({ key: gone, open: false });
     setEpoch((n) => n + 1);
   }, []);
-  if (item === null || remote) return { reach: null, markGone };
+  if (item === null || !sameMachine) return { reach: null, markGone };
   if (here) return { reach: openHere ? "here" : null, markGone };
+  if (remote) return { reach: null, markGone };
   return {
     reach: found !== null && found.key === key && found.open ? "elsewhere" : null,
     markGone,
@@ -739,14 +751,15 @@ export function DecisionsInboxDialog() {
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
   const viewWorkspace = getViewWorkspaceId();
   // A Remote Host window's projects are another computer's, whatever their
-  // ids: a question there keeps the names it was asked under.
+  // ids, and so is a Host's question in this computer's window: it keeps the
+  // names it was asked under.
   const partsOf = (item: DecisionQuestionListItem): { agent: string; where: string[] } => {
-    const local = !remote && item.reference.projectId === viewWorkspace;
+    const ours = !remote && item.remoteHost === undefined;
+    const local = ours && item.reference.projectId === viewWorkspace;
     const project =
-      (remote
-        ? undefined
-        : projects.find((candidate) => candidate.id === item.reference.projectId)?.name) ??
-      item.projectLabel;
+      (ours
+        ? projects.find((candidate) => candidate.id === item.reference.projectId)?.name
+        : undefined) ?? item.projectLabel;
     const known = local ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null) : null;
     return {
       agent: agentName(item.agentKind),
@@ -757,7 +770,7 @@ export function DecisionsInboxDialog() {
   // The question shown sticks to the one chosen, by reference, as the list moves around it.
   const [choice, setChoice] = useState<(InboxChoice & { seq: number }) | null>(null);
   const chosen = choice !== null && choice.seq === request.seq ? choice : null;
-  const selected = resolveSelection(groups, chosen, request.terminalId);
+  const selected = resolveSelection(groups, chosen, request.terminalId, currentHostId());
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
   const selectedIndex = selected === null ? -1 : ordered.indexOf(selected);
   if (

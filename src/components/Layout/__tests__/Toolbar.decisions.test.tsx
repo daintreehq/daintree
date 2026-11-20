@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
 /**
  * The Decisions inbox button (#17236) through the real Toolbar: absent while
- * Decisions is off or not yet known, in a Remote Host's window, and while the
- * person has hidden it, and in none of those does it read any question; on,
- * it counts those waiting on the person.
+ * Decisions is off or not yet known, and while the person has hidden it, and
+ * in none of those does it read any question; on, it counts those waiting on
+ * the person, in a Remote Host's window too (#18049).
  */
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CliAvailability } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import type { DecisionsHostsResult } from "@shared/types/decisionsHosts";
 import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -22,7 +23,10 @@ const decisions = vi.hoisted(() => ({
   onList: null as ((list: DecisionQuestionList) => void) | null,
   questionWatches: 0,
   remote: false,
+  hosts: { result: "not-set-up" } as DecisionsHostsResult,
 }));
+
+const REMOTE_HOST = "studio";
 
 vi.mock("@/clients/decisionsClient", () => ({
   decisionsClient: {
@@ -40,12 +44,17 @@ vi.mock("@/clients/decisionsClient", () => ({
         decisions.onList = null;
       };
     },
+    listHosts: async () => decisions.hosts,
   },
 }));
 
 vi.mock("@/hooks/useHostPlatform", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useHostPlatform")>();
-  return { ...actual, isRemoteWindow: () => decisions.remote };
+  return {
+    ...actual,
+    isRemoteWindow: () => decisions.remote,
+    currentHostId: () => (decisions.remote ? REMOTE_HOST : "local"),
+  };
 });
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -59,6 +68,7 @@ import { actionService } from "@/services/ActionService";
 import type { ActionRegistry } from "@/services/actions/actionTypes";
 import { registerDecisionsActions } from "@/services/actions/definitions/decisionsActions";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { readDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
 import { Toolbar } from "../Toolbar";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
@@ -174,6 +184,7 @@ beforeEach(() => {
     onList: null,
     questionWatches: 0,
     remote: false,
+    hosts: { result: "not-set-up" },
   });
 });
 
@@ -281,11 +292,100 @@ describe("Toolbar's Decisions inbox button", () => {
     expect(decisions.onList).toBeNull();
   });
 
-  it("is absent from a Remote Host's window, which watches neither the switch nor the questions", async () => {
+  it("shows in a Remote Host's window, counting every machine's questions and opening once the inbox lists its Host's (#18049)", async () => {
     decisions.remote = true;
-    await mount();
-    expect(slot()).toBeNull();
-    expect(decisions.statusWatches).toBe(0);
-    expect(decisions.questionWatches).toBe(0);
+    const registry: ActionRegistry = new Map();
+    registerDecisionsActions(registry);
+    for (const factory of registry.values()) actionService.register(factory());
+    const inboxBefore = useDecisionsInboxStore.getState();
+    const studio = { hostId: REMOTE_HOST, name: "Studio", connected: true };
+    /** This computer's question and Studio's, each waiting or answered. */
+    const pushBoth = (revision: number, ownWaits: boolean, studioWaits: boolean) => {
+      const answered: DecisionQuestionStanding = {
+        kind: "settled",
+        outcome: "answered",
+        handled: false,
+      };
+      const open: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
+      act(() =>
+        decisions.onList?.({
+          revision,
+          questions: [
+            question(1, ownWaits ? open : answered),
+            { ...question(2, studioWaits ? open : answered), remoteHost: studio },
+          ],
+        })
+      );
+      return settle();
+    };
+    try {
+      await mount();
+      expect(slot()).toBeNull();
+      await reportStatus("connected");
+      await pushBoth(1, true, true);
+      expect(inboxButton()!.getAttribute("aria-label")).toBe(
+        "Decisions inbox — 2 questions waiting"
+      );
+      await pushBoth(2, false, true);
+      expect(inboxButton()!.getAttribute("aria-label")).toBe(
+        "Decisions inbox — 1 question waiting"
+      );
+      await pushBoth(3, false, false);
+      expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox");
+
+      // Only another Host's questions listed: nothing opens.
+      decisions.hosts = { result: "listed", autoEnroll: true, hosts: [], inboxHostIds: ["lab"] };
+      fireEvent.click(inboxButton()!);
+      await settle();
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+
+      decisions.hosts = {
+        result: "listed",
+        autoEnroll: true,
+        hosts: [],
+        inboxHostIds: ["lab", REMOTE_HOST],
+      };
+      fireEvent.click(inboxButton()!);
+      await settle();
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    } finally {
+      cleanup();
+      for (const id of registry.keys()) actionService.unregister(id);
+      useDecisionsInboxStore.setState({ isOpen: inboxBefore.isOpen, request: inboxBefore.request });
+    }
+  });
+
+  it("holds the switch in a Remote Host's window while the button is hidden, so its actions can run", async () => {
+    decisions.remote = true;
+    decisions.hosts = {
+      result: "listed",
+      autoEnroll: true,
+      hosts: [],
+      inboxHostIds: [REMOTE_HOST],
+    };
+    const registry: ActionRegistry = new Map();
+    registerDecisionsActions(registry);
+    for (const factory of registry.values()) actionService.register(factory());
+    const inboxBefore = useDecisionsInboxStore.getState();
+    try {
+      // Hidden before the toolbar mounts, as a saved layout would have it.
+      await setPinned(false);
+      await mount();
+      await reportStatus("connected");
+      expect(slot()).toBeNull();
+      expect(decisions.statusWatches).toBe(1);
+      expect(readDecisionsSwitch()).toBe("on");
+      expect(decisions.questionWatches).toBe(0);
+
+      expect(
+        (await actionService.dispatch("decisions.openInbox", undefined, { source: "keybinding" }))
+          .ok
+      ).toBe(true);
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    } finally {
+      cleanup();
+      for (const id of registry.keys()) actionService.unregister(id);
+      useDecisionsInboxStore.setState({ isOpen: inboxBefore.isOpen, request: inboxBefore.request });
+    }
   });
 });

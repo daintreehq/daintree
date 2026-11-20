@@ -822,7 +822,12 @@ describe("Decisions entry", () => {
     ];
     const changed = new Set<() => void>();
     const withdraw = setDecisionsHostsPort({
-      hosts: () => [],
+      // Office is on the host list but has reported no questions.
+      hosts: () => [
+        { hostId: "studio", name: "Studio" },
+        { hostId: "lab", name: "Lab" },
+        { hostId: "office", name: "Office" },
+      ],
       linkFor: () => null,
       onLinkOpened: () => () => {},
       onHostsChanged: () => () => {},
@@ -852,6 +857,8 @@ describe("Decisions entry", () => {
         { ...own, inbox: UNMARKED },
         { ...theirsLater, remoteHost: studio, inbox: UNMARKED },
       ]);
+      // A Remote Host's window reads which Hosts' questions are listed (#18049).
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio", "lab"] });
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
       statusView.send.mockClear();
@@ -864,6 +871,7 @@ describe("Decisions entry", () => {
       });
       expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
       expect(listPushes()).toHaveLength(1);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
 
       // A Host that reported nothing goes away too (#18022): no row changes, yet the list names it.
       statusView.send.mockClear();
@@ -887,10 +895,17 @@ describe("Decisions entry", () => {
         theirs.reference,
       ]);
 
+      // A Host whose report holds no question is still one whose questions are listed.
+      hosts = [{ ...hosts[0], questions: [] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
+
       // A Host whose questions name this computer's own id lists none of them.
       hosts = [{ ...hosts[0], questionHostId: RELAY.hostId, questions: [own] }];
       for (const listener of changed) listener();
       expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
 
       // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
       hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
@@ -899,6 +914,7 @@ describe("Decisions entry", () => {
       const followed = [...changed];
       publish([], false);
       expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
       expect(changed.size).toBe(0);
       // A Host's change already on its way when it stopped lists nothing.
       for (const listener of followed) listener();

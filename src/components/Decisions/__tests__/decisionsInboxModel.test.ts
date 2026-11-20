@@ -14,6 +14,7 @@ import {
   ELAPSED_NOTE,
   agentName,
   askShownIn,
+  askedOnHost,
   attentionText,
   clearText,
   closedTime,
@@ -428,6 +429,38 @@ describe("decisionsInboxModel", () => {
       expect(listed).toMatch(/^None of the questions here wait on you\. /);
       expect(listed).toMatch(/status couldn't be read.*Studio is away/);
     });
+  });
+
+  it("takes a question as asked on a view's machine only by that machine, whatever its ids (#18049)", () => {
+    const studio = { hostId: "studio", name: "Studio", connected: true };
+    const own = item("q1", OPEN);
+    const theirs = item("q2", OPEN, { remoteHost: studio });
+    expect(askedOnHost(own, "local")).toBe(true);
+    expect(askedOnHost(theirs, "local")).toBe(false);
+    expect(askedOnHost(theirs, "studio")).toBe(true);
+    expect(askedOnHost(own, "studio")).toBe(false);
+    expect(askedOnHost(theirs, "build-box")).toBe(false);
+  });
+
+  it("opens at the opener's question on the view's own machine when terminal ids repeat across machines", () => {
+    // This computer, Studio and Build box each have a terminal "t1" with a question.
+    const own = item("q1", OPEN, { askedAt: "2026-11-02T10:00:00.000Z" });
+    const studio = item("q2", OPEN, {
+      askedAt: "2026-11-02T10:01:00.000Z",
+      remoteHost: { hostId: "studio", name: "Studio", connected: true },
+    });
+    const buildBox = item("q3", OPEN, {
+      askedAt: "2026-11-02T10:02:00.000Z",
+      remoteHost: { hostId: "build-box", name: "Build box", connected: false },
+    });
+    const groups = inboxGroups([own, studio, buildBox]);
+    expect(resolveSelection(groups, null, "t1")).toBe(own);
+    expect(resolveSelection(groups, null, "t1", "local")).toBe(own);
+    expect(resolveSelection(groups, null, "t1", "studio")).toBe(studio);
+    expect(resolveSelection(groups, null, "t1", "build-box")).toBe(buildBox);
+    // A Host whose questions aren't listed: no pane of its is the opener's, so the first waiting.
+    expect(resolveSelection(inboxGroups([own, buildBox]), null, "t1", "studio")).toBe(own);
+    expect(resolveSelection(inboxGroups([studio, buildBox]), null, "t1", "local")).toBe(studio);
   });
 
   it("says nothing about the relay while connected or before main has said", () => {
