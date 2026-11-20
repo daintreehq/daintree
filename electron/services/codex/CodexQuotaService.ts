@@ -71,6 +71,8 @@ interface HomeCacheEntry {
    * watch stops wanting it (#17981).
    */
   needed: boolean;
+  /** The background callers of `inFlight`: it's still wanted while any of them wants it. */
+  wantedBy: Array<() => boolean>;
 }
 
 /** What a dropped background read rejects with; never reaches a caller that needed the answer. */
@@ -304,7 +306,7 @@ function readHome(
 ): Promise<HomeReading> {
   let entry = cacheByHome.get(home);
   if (!entry) {
-    entry = { cached: null, inFlight: null, needed: false };
+    entry = { cached: null, inFlight: null, needed: false, wantedBy: [] };
     cacheByHome.set(home, entry);
   }
   const { cached } = entry;
@@ -314,14 +316,19 @@ function readHome(
   }
   // A refresh still joins a read already in flight rather than queueing a second.
   if (entry.inFlight) {
-    if (!stillWanted) entry.needed = true;
+    // A watch started again joins the stopped one's read and keeps it wanted.
+    if (stillWanted) entry.wantedBy.push(stillWanted);
+    else entry.needed = true;
     return entry.inFlight;
   }
   const owner = entry;
   owner.needed = !stillWanted;
+  owner.wantedBy = stillWanted ? [stillWanted] : [];
   const dropIfUnwanted = stillWanted
     ? () => {
-        if (!owner.needed && !stillWanted()) throw new QuotaReadDropped();
+        if (!owner.needed && !owner.wantedBy.some((wanted) => wanted())) {
+          throw new QuotaReadDropped();
+        }
       }
     : undefined;
   const request = enqueue(async () => {

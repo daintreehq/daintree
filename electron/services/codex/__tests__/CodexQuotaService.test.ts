@@ -359,6 +359,36 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         expect(used(readings[0]!.result)).toBe(21);
       });
 
+      it("still runs for a watch started again that joined a stopped watch's queued read", async () => {
+        const queue = holdQueue();
+        let stoppedWants = true;
+        const stopped = readCodexQuotaForHomes(await homes(second), () => stoppedWants);
+        await turn();
+        stoppedWants = false;
+        const restarted = readCodexQuotaForHomes(await homes(second), () => true);
+        await turn();
+        queue.open();
+        await queue.held;
+        const [old, fresh] = await Promise.all([stopped, restarted]);
+        expect(fresh).toHaveLength(1);
+        expect(old).toEqual(fresh);
+        expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
+      });
+
+      it("is dropped when every background caller waiting on it has stopped wanting it", async () => {
+        const queue = holdQueue();
+        let wanted = true;
+        const first = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        const again = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        await expect(Promise.all([first, again])).resolves.toEqual([[], []]);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome)]);
+      });
+
       it("runs a queued background read that's still wanted by its turn", async () => {
         const queue = holdQueue();
         const background = readCodexQuotaForHomes(await homes(second), () => true);
