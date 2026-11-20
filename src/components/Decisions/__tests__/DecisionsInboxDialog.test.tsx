@@ -1725,6 +1725,55 @@ describe("DecisionsInboxDialog", () => {
     );
   });
 
+  it("shows History a page at a time, reading lines only for the rows shown (#18033)", async () => {
+    const history = Array.from({ length: 150 }, (_, index) =>
+      item(
+        `old-${String(index).padStart(3, "0")}`,
+        1000 + index,
+        {
+          kind: "settled",
+          outcome: "expired",
+        },
+        { settledAt: new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString() }
+      )
+    );
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [item("question-1", 1, OPEN), ...history],
+    });
+    getQuestionSummariesByReference.mockImplementation(async ({ references }) => ({
+      result: "read",
+      summaries: references.map((ref) => ({
+        questionId: ref.questionId,
+        result: "read" as const,
+        line: `Line ${ref.questionId}`,
+      })),
+    }));
+    open();
+    const group = await screen.findByTestId("decisions-inbox-group-history");
+    // The count is every past question; the rows are the newest page.
+    await waitFor(() => expect(group.querySelectorAll("li")).toHaveLength(64));
+    expect(group.textContent).toContain("150");
+    expect(within(group).getAllByRole("listitem")[0]!.textContent).toContain("q-1149");
+    const asked = () =>
+      new Set(
+        getQuestionSummariesByReference.mock.calls.flatMap(([payload]) =>
+          payload.references.map((ref) => ref.questionId)
+        )
+      );
+    await waitFor(() => expect(asked().size).toBe(65));
+    expect(asked().has("old-000")).toBe(false);
+
+    fireEvent.click(within(group).getByTestId("decisions-inbox-show-older"));
+    await waitFor(() => expect(group.querySelectorAll("li")).toHaveLength(128));
+    // The keyboard goes on to the first of the rows it showed.
+    expect(document.activeElement?.closest("[data-inbox-key]")?.textContent).toContain("q-1085");
+    fireEvent.click(within(group).getByTestId("decisions-inbox-show-older"));
+    await waitFor(() => expect(group.querySelectorAll("li")).toHaveLength(150));
+    expect(within(group).queryByTestId("decisions-inbox-show-older")).toBeNull();
+    await waitFor(() => expect(asked().size).toBe(151));
+  });
+
   it("says what Decline does before it's pressed, and gives focus back to it with no tooltip after Keep question (#18041)", async () => {
     open();
     const decline = await screen.findByRole("button", { name: "Decline question" });

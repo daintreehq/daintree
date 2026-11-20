@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   DecisionsExportResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
@@ -25,6 +26,7 @@ const exportData = vi.fn<(payload: ExportDecisionsDataPayload) => Promise<Decisi
 const deleteRelayData =
   vi.fn<(payload: DeleteDecisionsRelayDataPayload) => Promise<DecisionsRelayDeleteResult>>();
 const deleteLocalData = vi.fn<() => Promise<DecisionsLocalDeleteResult>>();
+const removeSettledQuestions = vi.fn<() => Promise<DecisionsHistoryRemoveResult>>();
 
 function renderSection(
   status: DecisionsStatus,
@@ -74,8 +76,11 @@ describe("DecisionsDataSection", () => {
     exportData.mockReset();
     deleteRelayData.mockReset();
     deleteLocalData.mockReset();
+    removeSettledQuestions.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { exportData, deleteRelayData, deleteLocalData } },
+      value: {
+        decisions: { exportData, deleteRelayData, deleteLocalData, removeSettledQuestions },
+      },
       configurable: true,
       writable: true,
     });
@@ -467,10 +472,83 @@ describe("DecisionsDataSection", () => {
     expect(within(row).getByText(/Nothing was deleted/)).toBeTruthy();
   });
 
+  it("removes settled questions only after the confirm says what goes and stays, and gives the count (#18033)", async () => {
+    const removal = deferred<DecisionsHistoryRemoveResult>();
+    removeSettledQuestions.mockReturnValue(removal.promise);
+    const onChanged = vi.fn();
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, keysStored: true }, { onChanged });
+
+    fireEvent.click(button("Remove settled questions"));
+    const confirmDialog = screen.getByRole("alertdialog");
+    const body = confirmDialog.textContent ?? "";
+    expect(body).toContain("export");
+    expect(body).toContain("audit log");
+    expect(body).toContain("Open questions, stopped deliveries");
+    expect(body).toContain("Nothing is sent to the relay");
+    expect(removeSettledQuestions).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(confirmDialog).getByRole("button", { name: "Remove settled questions" })
+    );
+    // Held while main removes: nothing else starts, and one request is sent.
+    expect(button("Delete local data").disabled).toBe(true);
+    fireEvent.click(
+      within(confirmDialog).getByRole("button", { name: "Remove settled questions" })
+    );
+    await act(async () => {
+      removal.resolve({ result: "removed", count: 12 });
+    });
+
+    expect(removeSettledQuestions).toHaveBeenCalledOnce();
+    expect(deleteLocalData).not.toHaveBeenCalled();
+    // Only a local deletion changes the status Settings shows.
+    expect(onChanged).not.toHaveBeenCalled();
+    await gone("alertdialog");
+    expect(
+      within(document.getElementById("decisions-data-outcome")!).getByText(
+        "Removed 12 settled questions"
+      )
+    ).toBeTruthy();
+  });
+
+  it("says nothing was removed when nothing was ready, or the removal failed", async () => {
+    removeSettledQuestions.mockResolvedValueOnce({ result: "removed", count: 0 });
+    renderSection({ state: "not-connected" });
+
+    const remove = async () => {
+      fireEvent.click(button("Remove settled questions"));
+      await act(async () => {
+        fireEvent.click(
+          within(screen.getByRole("alertdialog")).getByRole("button", {
+            name: "Remove settled questions",
+          })
+        );
+      });
+      await gone("alertdialog");
+    };
+    await remove();
+    expect(
+      within(document.getElementById("decisions-data-outcome")!).getByText(
+        "No settled questions to remove"
+      )
+    ).toBeTruthy();
+
+    removeSettledQuestions.mockResolvedValueOnce({ result: "failed", reason: "disk-pressure" });
+    await remove();
+    const row = document.getElementById("decisions-data-outcome")!;
+    expect(within(row).getByText("Couldn't remove settled questions")).toBeTruthy();
+    expect(within(row).getByText(/Nothing was removed/)).toBeTruthy();
+  });
+
   it("starts nothing while the switch is changing", () => {
     renderSection({ state: "not-connected", relayOrigin: ORIGIN }, { locked: true });
 
-    for (const name of ["Export…", "Delete relay data", "Delete local data"]) {
+    for (const name of [
+      "Export…",
+      "Remove settled questions",
+      "Delete relay data",
+      "Delete local data",
+    ]) {
       expect(button(name).disabled).toBe(true);
     }
   });

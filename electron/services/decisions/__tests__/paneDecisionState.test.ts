@@ -4,6 +4,7 @@ import {
   PaneDecisionStates,
   closingsFor,
   projectPaneDecisionStates,
+  type PaneContributionMemo,
 } from "../paneDecisionState.js";
 import { standingOf } from "../questionList.js";
 import type { PaneDecisionState } from "../../../../shared/types/decisions.js";
@@ -1214,5 +1215,59 @@ describe("PaneDecisionStates answer attention", () => {
     expect(() => states.replace([stopped(1)])).not.toThrow();
     expect(pushes).toEqual(["pane-a"]);
     warn.mockRestore();
+  });
+});
+
+describe("projectPaneDecisionStates with a memo (#18033)", () => {
+  it("works out each row object's part once, and again only when its handled revision changes", () => {
+    const memo: PaneContributionMemo = new WeakMap();
+    const [open, waiting, attention] = outstandingRows();
+    const settled = Array.from({ length: 50 }, (_, i) =>
+      row(10 + i, { local_status: "expired", messages_json: messages({ delivery: null }) })
+    );
+    const rows = [...settled, open!, waiting!, attention!];
+
+    const first = projectPaneDecisionStates(rows, new Map(), new Map(), memo);
+    expect(first).toEqual(projectPaneDecisionStates(rows, new Map()));
+    const again = projectPaneDecisionStates(rows, new Map(), new Map(), memo);
+    expect(again).toEqual(first);
+    // The same parts, not parts worked out again.
+    expect(again.get("pane-a")!.content.openQuestions[0]).toBe(
+      first.get("pane-a")!.content.openQuestions[0]
+    );
+
+    const handled = new Map([[attention!.question_id, 1]]);
+    expect(projectPaneDecisionStates(rows, handled, new Map(), memo)).toEqual(
+      projectPaneDecisionStates(rows, handled)
+    );
+  });
+
+  it("works out a row's part again when a withdrawal or decline is queued for it or sent", () => {
+    const memo: PaneContributionMemo = new WeakMap();
+    const rows = [row(1)];
+    const closings = new Map([[qid(1), "withdrawing" as const]]);
+    expect(projectPaneDecisionStates(rows, new Map(), new Map(), memo)).toEqual(
+      projectPaneDecisionStates(rows)
+    );
+    expect(projectPaneDecisionStates(rows, new Map(), closings, memo)).toEqual(
+      projectPaneDecisionStates(rows, new Map(), closings)
+    );
+    expect(
+      projectPaneDecisionStates(rows, new Map(), new Map(), memo).get("pane-a")!.content
+        .openQuestions[0]
+    ).not.toHaveProperty("closing");
+  });
+
+  it("puts a pane in its newest question's project, whichever rows the memo holds", () => {
+    const memo: PaneContributionMemo = new WeakMap();
+    const older = row(1, { origin: { project_id: "project-old" } });
+    const newer = row(2, { local_status: "expired", origin: { project_id: "project-new" } });
+    expect(
+      projectPaneDecisionStates([older], new Map(), new Map(), memo).get("pane-a")?.projectId
+    ).toBe("project-old");
+    // By alias, not by where the row comes in the list.
+    expect(
+      projectPaneDecisionStates([newer, older], new Map(), new Map(), memo).get("pane-a")?.projectId
+    ).toBe("project-new");
   });
 });

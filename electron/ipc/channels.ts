@@ -1673,10 +1673,12 @@ export const CHANNELS = {
   DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
   DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
   // Exporting the decision history, and deleting the relay's stored content
-  // or this computer's Decisions data (#16025), all in main.
+  // or this computer's Decisions data (#16025), all in main; removing this
+  // computer's settled questions (#18033).
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
+  DECISIONS_REMOVE_SETTLED_QUESTIONS: "decisions:remove-settled-questions",
   // The trusted workflow gates, read-only (#16013), and the default question
   // expiry (#16122). Automatic answers are the decision model's (#18062).
   DECISIONS_GET_POLICY: "decisions:get-policy",

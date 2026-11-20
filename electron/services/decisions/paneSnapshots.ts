@@ -15,11 +15,14 @@ import { composeTitledPanel } from "../../../shared/utils/terminalTitleDisplay.j
 import type { PtyClient } from "../PtyClient.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
 import { redactSecrets } from "../redactSecrets.js";
+import { SNAPSHOTS_SHARED_META_KEY, sharedRecord } from "./snapshotsShared.js";
 import {
   identityMismatch,
   type DecisionGenerationReader,
   type DecisionIdentitySources,
 } from "./decisionWake.js";
+
+export { SNAPSHOTS_SHARED_META_KEY } from "./snapshotsShared.js";
 
 /** How many of the screen's newest lines a snapshot carries (#16230). */
 export const SNAPSHOT_LINES = 40;
@@ -39,15 +42,6 @@ const SETTLE_MS = 200;
 /** A read the pty host didn't answer in time is tried again this often, this many times in a row. */
 const READ_RETRY_MS = 5_000;
 const READ_RETRIES = 3;
-/**
- * The questions the relay may hold a snapshot of from this store's device,
- * as a JSON object of question id to when it was last shared (epoch ms),
- * recorded before each first share. A settled clear is no proof the relay
- * took it (a refusal settles too), so an entry goes only once the relay can
- * hold nothing of it: the question closed, or its last share is older than
- * the relay keeps any. A restart takes back what a crash or refusal left.
- */
-export const SNAPSHOTS_SHARED_META_KEY = "daintree:snapshots-shared";
 /** How stale an entry's time may grow while its question keeps sharing. */
 const SHARED_REFRESH_MS = 60 * 60_000;
 /**
@@ -153,22 +147,6 @@ function sameRun(a: QuestionOrigin, b: QuestionOrigin): boolean {
 function agentName(agentId: string | undefined): string | null {
   if (!agentId || !Object.hasOwn(AGENT_REGISTRY, agentId)) return null;
   return AGENT_REGISTRY[agentId as BuiltInAgentId].name;
-}
-
-/** What the store records as shared; anything unreadable is nothing. */
-function sharedRecord(raw: string | null): Map<string, number> {
-  const record = new Map<string, number>();
-  if (raw === null) return record;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return record;
-    for (const [id, at] of Object.entries(parsed)) {
-      if (typeof at === "number" && Number.isFinite(at)) record.set(id, at);
-    }
-  } catch {
-    // An unreadable record shares nothing.
-  }
-  return record;
 }
 
 /** A question the relay keeps no snapshot of: closed, never published, or only imported. */

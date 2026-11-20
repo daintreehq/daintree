@@ -39,6 +39,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   exportData: "decisions:export-data",
   deleteRelayData: "decisions:delete-relay-data",
   deleteLocalData: "decisions:delete-local-data",
+  removeSettledQuestions: "decisions:remove-settled-questions",
   getPolicy: "decisions:get-policy",
   setDefaultQuestionExpiry: "decisions:set-default-question-expiry",
   setAgentAskHuman: "decisions:set-agent-ask-human",

@@ -459,6 +459,39 @@ describe("QuestionNotifier", () => {
     expect(recordOf(store)).toEqual([questionKey(waiting.reference), ...keys.slice(2)]);
   });
 
+  it("lets go of the claims of questions removed from this computer's history, and no others (#18033)", async () => {
+    const removed = question("q-removed", { kind: "settled", outcome: "expired" });
+    const kept = question("q-kept", { kind: "settled", outcome: "expired" });
+    const sameIdElsewhere = question(
+      "q-removed",
+      { kind: "settled", outcome: "expired" },
+      { hostId: "host-2" }
+    );
+    // The same question claimed again after it moved terminals.
+    const moved = question(
+      "q-removed",
+      { kind: "settled", outcome: "expired" },
+      { terminalId: "term-2" }
+    );
+    const keys = [removed, kept, sameIdElsewhere, moved].map((item) => questionKey(item.reference));
+    const store = recorded(keys);
+    const list = questionList();
+    const { notifier: made } = notifier(store, list);
+    await made.start();
+    list.publish([removed, kept, sameIdElsewhere]);
+    await settle(made);
+
+    made.forget("host-1", new Set(["q-removed"]));
+    await settle(made);
+
+    expect(recordOf(store)).toEqual([keys[1], keys[2]]);
+    // Nothing left to forget writes nothing.
+    const writes = store.setMeta.mock.calls.length;
+    made.forget("host-1", new Set(["q-removed"]));
+    await settle(made);
+    expect(store.setMeta.mock.calls.length).toBe(writes);
+  });
+
   it("keeps its notifications and claims when the list empties as Decisions stops", async () => {
     const store = recorded();
     const list = questionList();

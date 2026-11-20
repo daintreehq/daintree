@@ -110,6 +110,7 @@ import {
   GO_TO_TERMINAL_TEXT,
   goneAsks,
   hiddenIn,
+  HISTORY_PAGE,
   inboxGroupOf,
   inboxGroups,
   closedTime,
@@ -135,6 +136,7 @@ import {
   scopedQuestions,
   scopeOffered,
   shownItems,
+  shownGroups,
   standingText,
   waitingText,
   whereFacts,
@@ -1054,6 +1056,9 @@ function InboxList({
   groups,
   open,
   onFold,
+  historyHidden,
+  nextOlderKey,
+  onShowOlder,
   lines,
   replyLines,
   partsOf,
@@ -1070,6 +1075,12 @@ function InboxList({
   /** The folding groups this opening has open; the rest of History and Cleared are shut. */
   open: ReadonlySet<InboxGroupId>;
   onFold: (id: InboxGroupId, open: boolean) => void;
+  /** History's rows left out of `groups`, older than every one shown. */
+  historyHidden: number;
+  /** The newest of them, the first row showing older ones brings in. */
+  nextOlderKey: string | null;
+  /** Shows the next page of older History rows. */
+  onShowOlder: () => void;
   lines: ReadonlyMap<string, string | null>;
   /** A request for a reply's line, by `replyLineKey`, in place of its question's. */
   replyLines: ReadonlyMap<string, string | null>;
@@ -1101,6 +1112,13 @@ function InboxList({
     selectedKey === null || selectedShut !== null || barStop ? roving.tabStopKey : selectedKey;
   // The row the keyboard was on, until focus goes somewhere else on purpose.
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
+  // The first History row showing older ones brings in: the keyboard goes on to it.
+  const showingOlder = useRef<string | null>(null);
+  // The button showing older rows has the keyboard, so a list update that takes it away hands it back.
+  const olderFocused = useRef(false);
+  const shape = groups
+    .flatMap((group) => group.items.map((item) => `${group.id}:${referenceKey(item.reference)}`))
+    .join("\n");
   // The arrows' rest before the row they reached shows. Armed only by the list's own keys:
   // a click shows at once, and focus put back on a row (a regroup, a dialog closing) shows nothing new.
   const dwell = useRef<{ timer?: ReturnType<typeof setTimeout> }>({});
@@ -1180,6 +1198,35 @@ function InboxList({
     row?.focus({ preventScroll: true });
   }, [groups, open, listRef]);
 
+  // The older rows asked for are shown: the keyboard goes on to the first of them, so the
+  // button it pressed can go without dropping focus. One a list update moved or took away
+  // leaves it on the list's own stop.
+  useLayoutEffect(() => {
+    const key = showingOlder.current;
+    const list = listRef.current;
+    if (key === null || list === null) return;
+    showingOlder.current = null;
+    olderFocused.current = false;
+    const row =
+      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`) ??
+      list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ??
+      list;
+    row.focus();
+    // Also when the rows asked for went in the same update: the hidden count moved, if not the rows.
+  }, [shape, historyHidden, listRef]);
+
+  // A list update that leaves nothing older to show takes the button away under the keyboard.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (historyHidden > 0 || !olderFocused.current || list === null) return;
+    olderFocused.current = false;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body) return;
+    (list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ?? list).focus({
+      preventScroll: true,
+    });
+  }, [historyHidden, listRef]);
+
   return (
     <div
       ref={listRef}
@@ -1247,12 +1294,12 @@ function InboxList({
         const headingId = `${labelId}-${group.id}`;
         const rowsId = `${headingId}-rows`;
         const stopped = groups.find((other) => other.id === "attention")?.items.length ?? 0;
+        const older = group.id === "history" ? historyHidden : 0;
+        const total = group.items.length + older;
         const label = (
           <>
             {group.title}
-            <CountBadge label={pluralize(group.items.length, "question")}>
-              {group.items.length.toLocaleString()}
-            </CountBadge>
+            <CountBadge label={pluralize(total, "question")}>{total.toLocaleString()}</CountBadge>
           </>
         );
         if (folds(group.id)) {
@@ -1300,6 +1347,28 @@ function InboxList({
               <ul id={rowsId} hidden={!expanded} className="flex flex-col">
                 {expanded && group.items.map((item) => renderRow(item))}
               </ul>
+              {expanded && older > 0 && (
+                <div className="flex px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onFocus={() => {
+                      olderFocused.current = true;
+                    }}
+                    onBlur={(event) => {
+                      // Taken out from under the keyboard, it has nowhere it went.
+                      if (event.relatedTarget !== null) olderFocused.current = false;
+                    }}
+                    onClick={() => {
+                      showingOlder.current = nextOlderKey;
+                      onShowOlder();
+                    }}
+                    data-testid="decisions-inbox-show-older"
+                  >
+                    Show {pluralize(Math.min(older, HISTORY_PAGE), "older question")}
+                  </Button>
+                </div>
+              )}
             </section>
           );
         }
@@ -1413,11 +1482,6 @@ export function DecisionsInboxDialog() {
       byPerson: byPerson ? new Set([...foldedByPerson, id]) : foldedByPerson,
     });
   };
-  // Only the rows drawn: a shut group's lines are read once it opens.
-  const drawn = shownItems(groups, openGroups);
-  const drawnIndexOf = (key: string) =>
-    drawn.findIndex((item) => referenceKey(item.reference) === key);
-  const { lines, release: releaseLines } = useQuestionLines(drawn, active);
   // The list as it came, so its next change, not every render, is what asks again; a shut
   // group's rows wait until it opens.
   const replyItems = useMemo(
@@ -1495,6 +1559,16 @@ export function DecisionsInboxDialog() {
     asked
   );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
+  // A page of History at a time (#18033), from the newest, for this opening; the question shown
+  // stays in view however far down it is.
+  const [historyPage, setHistoryPage] = useState<{ seq: number; shown: number } | null>(null);
+  const historyShown = historyPage?.seq === request.seq ? historyPage.shown : HISTORY_PAGE;
+  const visible = shownGroups(groups, historyShown, selected);
+  // Only the rows drawn: a shut group's lines are read once it opens, and History's a page at a time.
+  const drawn = shownItems(visible.groups, openGroups);
+  const drawnIndexOf = (key: string) =>
+    drawn.findIndex((item) => referenceKey(item.reference) === key);
+  const { lines, release: releaseLines } = useQuestionLines(drawn, active);
   const drawnAt = selectedKey === null ? -1 : drawnIndexOf(selectedKey);
   // Under a shut group, it keeps the place it was last drawn at.
   const selectedIndex = drawnAt >= 0 ? drawnAt : (chosen?.index ?? 0);
@@ -1832,7 +1906,8 @@ export function DecisionsInboxDialog() {
         : shutGroup !== null
           ? barKey(shutGroup)
           : selectedKey;
-    const key = stepFrom(listStops(groups, openGroups), fromKey, step);
+    // Through the rows shown, as the arrows go: a History row not shown yet has no row to land on.
+    const key = stepFrom(listStops(visible.groups, openGroups), fromKey, step);
     if (key === null) return;
     if (row !== null) {
       choose(key);
@@ -2327,9 +2402,14 @@ export function DecisionsInboxDialog() {
                       </p>
                     ) : null
                   }
-                  groups={groups}
+                  groups={visible.groups}
                   open={openGroups}
                   onFold={(id, open) => fold(id, open, true)}
+                  historyHidden={visible.hidden}
+                  nextOlderKey={visible.next === null ? null : referenceKey(visible.next.reference)}
+                  onShowOlder={() =>
+                    setHistoryPage({ seq: request.seq, shown: historyShown + HISTORY_PAGE })
+                  }
                   lines={lines}
                   replyLines={replyLines}
                   partsOf={partsOf}

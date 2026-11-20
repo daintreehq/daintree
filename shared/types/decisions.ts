@@ -742,6 +742,24 @@ export type DecisionsLocalDeleteResult =
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
 
 /**
+ * What removing this computer's settled questions observed (#18033): the
+ * answered, declined, withdrawn, expired and never-sent questions it asked
+ * whose deliveries are finished, with their answers and follow-ups. Open
+ * questions, stopped deliveries, anything still to be sent or typed, the
+ * keys, the relay record, enrolled Hosts and the decision model stay, and
+ * nothing is sent anywhere.
+ *
+ * - `removed`: `count` questions were removed; 0 when none was ready.
+ * - `failed`: nothing was removed (`disk-pressure`: writes are refused while
+ *   disk space is critical; `storage`: the database refused;
+ *   `store-unavailable`: the stored history couldn't be opened when
+ *   Decisions started).
+ */
+export type DecisionsHistoryRemoveResult =
+  | { result: "removed"; count: number }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "store-unavailable" };
+
+/**
  * Saving a recovery kit for this computer's identity (#16007). The
  * passphrase locks the file, and is kept nowhere after it does.
  */
