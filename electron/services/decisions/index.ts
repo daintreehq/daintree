@@ -494,11 +494,24 @@ function listedQuestions(hosts: readonly DecisionsHostQuestions[]): DecisionQues
     }
   }
   listedAsks = asks;
-  return withInbox(
+  const listed = withInbox(
     withHostQuestions(ownQuestions, hosts, ownHostId),
     asks,
     ownInbox?.marks ?? new Map()
   );
+  const closings = ownInbox?.closings;
+  if (closings === undefined || closings.size === 0) return listed;
+  // A withdrawal or decline queued here, for this computer's question or a Host's, while it is still open.
+  return listed.map((item) => {
+    const closing = closings.get(item.reference.questionId);
+    return closing !== undefined && openStanding(item) ? { ...item, closing } : item;
+  });
+}
+
+/** Still out for an answer, so a withdrawal or decline can be under way for it. */
+function openStanding(item: DecisionQuestionListItem): boolean {
+  const { standing } = item;
+  return (standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued";
 }
 
 /**

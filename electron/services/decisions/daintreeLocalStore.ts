@@ -823,6 +823,25 @@ export class DaintreeLocalStore implements LocalStore {
     );
   }
 
+  /**
+   * The questions a withdrawal or the person's decline is queued for (#18052),
+   * by question id, retrying or not: ids and kinds only, never a payload. A
+   * withdrawal outranks a decline queued beside it, as the pane's chip shows them.
+   */
+  pendingClosings(): Promise<Map<string, "withdrawing" | "declining">> {
+    return this.enqueue("read", () => {
+      const rows = this.st(
+        `SELECT question_id, kind FROM decisions_outbox WHERE kind IN ('cancel', 'owner-decline')`
+      ).all() as { question_id: string; kind: string }[];
+      const closings = new Map<string, "withdrawing" | "declining">();
+      for (const { question_id: questionId, kind } of rows) {
+        if (kind === "cancel") closings.set(questionId, "withdrawing");
+        else if (!closings.has(questionId)) closings.set(questionId, "declining");
+      }
+      return closings;
+    });
+  }
+
   insertEvent(ev: InboundEvent): Promise<boolean> {
     const event = eventFrom(ev);
     return this.enqueue("write", () => {

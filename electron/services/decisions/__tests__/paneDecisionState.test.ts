@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { PaneDecisionStates, projectPaneDecisionStates } from "../paneDecisionState.js";
+import { standingOf } from "../questionList.js";
 import type { PaneDecisionState } from "../../../../shared/types/decisions.js";
 import type { RunDecisionAttention } from "../../runAnswerAttentionSource.js";
 import {
@@ -22,6 +23,23 @@ function only(rows: QuestionRow[], paneId = "pane-a") {
 function empty(terminalId: string) {
   return { terminalId, openQuestions: [], waitingAnswers: [], needsAttention: [] };
 }
+
+/** Answered, and the answer typed in. */
+const TYPED = {
+  local_status: "human-answered" as const,
+  delivery_status: "terminal-delivered" as const,
+  answers_json: answers({ delivered: true, event_seq: 5 }),
+};
+
+/** The agent's follow-up asking the person for a reply. */
+const REQUEST = {
+  message_id: "agent-1",
+  side: "agent" as const,
+  expects_reply: true,
+  event_seq: 6,
+  created_at: "2026-11-01T10:07:00.000Z",
+  delivery: null,
+};
 
 describe("projectPaneDecisionStates", () => {
   it("lists a question whose follow-up needs a person, with the follow-up's status and code (#16231)", () => {
@@ -148,6 +166,188 @@ describe("projectPaneDecisionStates", () => {
       expect(only([row(1, { local_status })])).toBeUndefined();
     }
   );
+
+  it("keeps the asking pane while its agent waits on the person's reply (#18052)", () => {
+    const state = only([
+      row(1, {
+        ...TYPED,
+        messages_json: messages(REQUEST),
+      }),
+      // The model's own answer is no reply from the person.
+      row(2, {
+        ...TYPED,
+        local_status: "proxy-answered",
+        answers_json: answers({
+          delivered: true,
+          source: "proxy",
+          action: "proxy-answer",
+          event_seq: 8,
+        }),
+        messages_json: messages(REQUEST),
+      }),
+    ]);
+
+    expect(state).toEqual({
+      ...empty("pane-a"),
+      replyRequests: [
+        { questionId: qid(1), alias: 1, requestedAt: "2026-11-01T10:07:00.000Z" },
+        { questionId: qid(2), alias: 2, requestedAt: "2026-11-01T10:07:00.000Z" },
+      ],
+    });
+    expect(JSON.stringify(state)).not.toContain(SECRET);
+  });
+
+  it("reads the newest request for a reply, and lets it go once the person replies (#18052)", () => {
+    const asked = (...list: Parameters<typeof messages>) =>
+      only([row(1, { ...TYPED, messages_json: messages(...list) })]);
+
+    expect(
+      asked(
+        { ...REQUEST, message_id: "agent-1", event_seq: 6, created_at: "2026-11-01T10:07:00.000Z" },
+        { message_id: "message-2", event_seq: 7, delivery: { status: "terminal-delivered" } },
+        { ...REQUEST, message_id: "agent-2", event_seq: 8, created_at: "2026-11-01T10:09:00.000Z" }
+      )?.replyRequests
+    ).toEqual([{ questionId: qid(1), alias: 1, requestedAt: "2026-11-01T10:09:00.000Z" }]);
+    // Replied and typed: nothing left for the pane.
+    expect(
+      asked(REQUEST, {
+        message_id: "message-2",
+        event_seq: 7,
+        delivery: { status: "terminal-delivered" },
+      })
+    ).toBeUndefined();
+    // Replied and not yet typed: the reply is on its way in, not waited on.
+    expect(asked(REQUEST, { message_id: "message-2", event_seq: 7 })).toEqual({
+      ...empty("pane-a"),
+      waitingFollowUps: [{ questionId: qid(1), alias: 1 }],
+    });
+  });
+
+  it("shows a follow-up that needs a person over the agent's request for a reply", () => {
+    const state = only([
+      row(1, {
+        ...TYPED,
+        messages_json: messages(
+          { event_seq: 5, delivery: { status: "needs-attention", error_code: "pane_gone" } },
+          REQUEST
+        ),
+      }),
+    ]);
+
+    expect(state).toEqual({
+      ...empty("pane-a"),
+      needsAttention: [
+        { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      ],
+    });
+  });
+
+  it("keeps the pane while the person's follow-up waits to be typed (#18052)", () => {
+    const state = only([
+      row(1, { ...TYPED, messages_json: messages({ event_seq: 7 }) }),
+      // An answer still to type stands for its question; its follow-up comes after it.
+      row(2, {
+        local_status: "human-answered",
+        delivery_status: "desktop-received",
+        answers_json: answers({ event_seq: 5 }),
+        messages_json: messages({ event_seq: 7 }),
+      }),
+      // Typed, or withdrawn with its question: nothing waits.
+      row(3, {
+        ...TYPED,
+        messages_json: messages({ event_seq: 7, delivery: { status: "terminal-delivered" } }),
+      }),
+      row(4, { ...TYPED, messages_json: messages({ event_seq: 7, delivery: { deliver: false } }) }),
+    ]);
+
+    expect(state).toEqual({
+      ...empty("pane-a"),
+      waitingAnswers: [
+        { questionId: qid(2), alias: 2, kind: "answer", deliveryStatus: "desktop-received" },
+      ],
+      waitingFollowUps: [{ questionId: qid(1), alias: 1 }],
+    });
+    expect(JSON.stringify(state)).not.toContain(SECRET);
+  });
+
+  it("shows a follow-up waiting to be typed after an answer the person marked handled (#18052)", () => {
+    const refused = row(1, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({ event_seq: 5 }),
+      messages_json: messages({ event_seq: 7 }),
+    });
+    const handled = new Map([[qid(1), 1]]);
+
+    expect(projectPaneDecisionStates([refused], handled).get("pane-a")?.content).toEqual({
+      ...empty("pane-a"),
+      waitingFollowUps: [{ questionId: qid(1), alias: 1 }],
+    });
+    expect(standingOf(refused, handled)).toEqual({ kind: "to-type" });
+  });
+
+  it("marks an open or queued question a withdrawal or decline is queued for (#18052)", () => {
+    const closings = new Map([
+      [qid(1), "withdrawing"],
+      [qid(2), "declining"],
+      // Answered meanwhile: nothing of it is open to close.
+      [qid(4), "withdrawing"],
+    ] as const);
+    const state = projectPaneDecisionStates(
+      [
+        row(1),
+        row(2, { local_status: "queued" }),
+        row(3),
+        row(4, {
+          local_status: "human-answered",
+          delivery_status: "desktop-received",
+          answers_json: answers({}),
+        }),
+      ],
+      new Map(),
+      closings
+    ).get("pane-a")?.content;
+
+    expect(state?.openQuestions).toEqual([
+      expect.objectContaining({ questionId: qid(1), closing: "withdrawing" }),
+      expect.objectContaining({ questionId: qid(2), status: "queued", closing: "declining" }),
+      expect.not.objectContaining({ closing: expect.anything() }),
+    ]);
+    expect(state?.waitingAnswers).toEqual([
+      { questionId: qid(4), alias: 4, kind: "answer", deliveryStatus: "desktop-received" },
+    ]);
+  });
+
+  it("lists exactly the questions the list says wait on the person, as waiting (#18052)", () => {
+    const handled = new Map([[qid(6), 0]]);
+    const rows = [
+      row(1),
+      row(2, { local_status: "queued" }),
+      row(3, { ...TYPED, messages_json: messages(REQUEST) }),
+      row(4, { ...TYPED, messages_json: messages({ event_seq: 7 }) }),
+      row(5, { ...TYPED }),
+      row(6, { delivery_status: "needs-attention", error_code: "choice_required" }),
+      row(7, { local_status: "cancelled", answers_json: answers(DECLINE) }),
+      row(8, {
+        local_status: "human-answered",
+        delivery_status: "desktop-received",
+        answers_json: answers({}),
+      }),
+    ].map((r, i) => ({ ...r, origin: { ...r.origin, pane_id: `pane-${i + 1}` } }));
+    const panes = projectPaneDecisionStates(rows, handled);
+
+    for (const r of rows) {
+      const standing = standingOf(r, handled);
+      const waitsOnPerson = standing.kind === "waiting" || standing.kind === "queued";
+      const content = panes.get(r.origin.pane_id)?.content;
+      const waiting = [...(content?.openQuestions ?? []), ...(content?.replyRequests ?? [])];
+      expect({ alias: r.alias, waiting: waiting.length > 0 }).toEqual({
+        alias: r.alias,
+        waiting: waitsOnPerson,
+      });
+    }
+  });
 
   it("lists an answer marked for delivery and not yet delivered as waiting, with its status", () => {
     const state = only([
@@ -355,19 +555,21 @@ describe("projectPaneDecisionStates", () => {
     expect(panes.get("pane-a")?.content.needsAttention).toEqual([]);
   });
 
-  it("lets a question the person marked handled decide its pane's project, and show nothing there", () => {
-    // Still open, its refused answer marked handled: it adds no open question either.
+  it("lets a question the person marked handled decide its pane's project, and show no warning there", () => {
+    // Still open, its refused answer marked handled: it waits for an answer, as the list says (#18052).
     const refused = row(2, {
       question_id: "q_handled_0002",
       origin: { project_id: "project-2" },
       delivery_status: "needs-attention",
       error_code: "choice_required",
     });
-    const panes = projectPaneDecisionStates([row(1), refused], new Map([["q_handled_0002", 0]]));
+    const handled = new Map([["q_handled_0002", 0]]);
+    const panes = projectPaneDecisionStates([row(1), refused], handled);
 
     expect(panes.get("pane-a")?.projectId).toBe("project-2");
-    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1]);
+    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1, 2]);
     expect(panes.get("pane-a")?.content.needsAttention).toEqual([]);
+    expect(standingOf(refused, handled)).toEqual({ kind: "waiting", reason: "open" });
   });
 
   it("lists stopped deliveries as needing attention with the recorded reason, not as waiting", () => {
@@ -631,6 +833,27 @@ describe("PaneDecisionStates", () => {
     ]);
     expect(states.get("pane-a")).toEqual(pushes[2]?.state);
     expect(states.get("pane-b")).toEqual(pushes[1]?.state);
+  });
+
+  it("pushes a withdrawal queued, then let go, and a request for a reply, as each changes (#18052)", () => {
+    const { pushes, states } = recorder();
+    const answered = row(1, { ...TYPED, messages_json: messages(REQUEST) });
+
+    states.replace([row(1)]);
+    states.replace([row(1)], new Map(), new Map(), new Map([[qid(1), "withdrawing"]]));
+    states.replace([row(1)], new Map(), new Map(), new Map([[qid(1), "withdrawing"]]));
+    states.replace([row(1)]);
+    states.replace([answered]);
+
+    expect(pushes.map(({ state }) => state.openQuestions[0]?.closing ?? null)).toEqual([
+      null,
+      "withdrawing",
+      null,
+      null,
+    ]);
+    expect(pushes.at(-1)?.state.replyRequests).toEqual([
+      { questionId: qid(1), alias: 1, requestedAt: REQUEST.created_at },
+    ]);
   });
 
   it("pushes nothing for a feed that changes nothing a view shows", () => {

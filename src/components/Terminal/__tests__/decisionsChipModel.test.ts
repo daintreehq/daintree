@@ -722,3 +722,119 @@ describe("a question that never reached the relay (#17943)", () => {
     expect(cancelNote([unsent!])).toBe(cancelNote([expired!]));
   });
 });
+
+describe("a question waiting on the person's reply (#18052)", () => {
+  const replying = (alias: number, requestedAt = "2026-11-02T10:30:00.000Z") =>
+    ({ ...pane(), replyRequests: [{ questionId: `q${alias}`, alias, requestedAt }] }) as const;
+
+  it("shows as waiting on the person, with when the agent asked and no Dismiss", () => {
+    const [item] = decisionItems(replying(7));
+    expect(item).toMatchObject({ label: "q-7", kind: "reply", waitsFor: null, expiresAt: null });
+    expect(item?.askedAt).toBe(Date.parse("2026-11-02T10:30:00.000Z"));
+    expect(chipLabel([item!])).toEqual({ text: "q-7 wants a reply", detail: null });
+    expect(itemSentence(item!)).toBe(
+      "Question q-7 is waiting for your reply, here or on your phone"
+    );
+    expect(isCancellable(item!)).toBe(false);
+    // Answered once already, so it can't be dismissed, and its row opens the thread to reply.
+    expect(cancelNote([item!])).toBe("Answered questions can't be dismissed");
+    expect(answerNote([item!])).toBe("Open a question to reply here");
+    expect(deadlineNote(item!, Date.parse("2026-11-02T11:00:00.000Z"))).toBeNull();
+    expect(needsAttention([item!])).toBe(false);
+  });
+
+  it("sorts with the questions waiting for an answer, and is counted apart from them", () => {
+    const state = { ...replying(3), openQuestions: [open(2), open(4, "queued")] };
+    const items = decisionItems({ ...state, waitingAnswers: [waiting(5)] });
+    expect(items.map((item) => [item.label, item.kind])).toEqual([
+      ["q-5", "answer"],
+      ["q-2", "open"],
+      ["q-3", "reply"],
+      ["q-4", "queued"],
+    ]);
+    expect(chipSummary(items)).toBe(
+      "4 Decisions questions: 1 answered, typing in once the composer is empty; 1 waiting for an answer; 1 waiting for your reply; 1 queued to send"
+    );
+    expect(answerNote(items)).toBe("Open a question to answer or reply here");
+  });
+
+  it("reads the drafts, so the popover can say when a reply would be typed in", () => {
+    expect(readsPaneWait(replying(1))).toBe(true);
+    expect(deliveryNotes(decisionItems(replying(1)), "draft")).toEqual([
+      "Follow-ups are typed in here once the draft here is sent or cleared",
+    ]);
+  });
+});
+
+describe("the person's follow-up waiting to be typed (#18052)", () => {
+  const following = (alias: number) =>
+    ({ ...pane(), waitingFollowUps: [{ questionId: `q${alias}`, alias }] }) as const;
+
+  it("shows as delivering, the same as a waiting answer, by the pane's wait", () => {
+    const statuses = (["draft", "composer", "prompt"] as const).map((wait) => {
+      const [item] = decisionItems(following(4), wait);
+      expect(item).toMatchObject({ label: "q-4", kind: "follow-up", waitsFor: wait });
+      expect(chipLabel([item!])).toEqual({ text: "q-4 delivering", detail: null });
+      expect(itemSentence(item!)).toBe(`${item!.status} (q-4)`);
+      expect(cancelNote([item!])).toBe("Answered questions can't be dismissed");
+      return item!.status;
+    });
+    expect(new Set(statuses).size).toBe(3);
+    expect(readsPaneWait(following(4))).toBe(true);
+  });
+
+  it("counts as delivering beside answers, and is summarised apart from them", () => {
+    const items = decisionItems({
+      ...following(2),
+      waitingAnswers: [waiting(3)],
+      openQuestions: [open(1)],
+    });
+    expect(items.map((item) => item.kind)).toEqual(["follow-up", "answer", "open"]);
+    expect(chipLabel(items)).toEqual({ text: "3 questions", detail: "· 2 delivering" });
+    expect(chipSummary(items)).toBe(
+      "3 Decisions questions: 1 answered, typing in once the composer is empty; 1 with your follow-up, typing in once the composer is empty; 1 waiting for an answer"
+    );
+    expect(deliveryNotes(items)).toEqual([
+      "Answers and follow-ups are typed in here once the composer is empty",
+    ]);
+  });
+});
+
+describe("a withdrawal or decline started from another view (#18052)", () => {
+  it("shows what the pane's state names, with no Dismiss and no answer coming", () => {
+    const items = decisionItems(
+      pane({
+        open: [
+          { ...open(1), closing: "withdrawing" },
+          { ...open(2, "queued"), closing: "declining" },
+          open(3),
+        ],
+      })
+    );
+    expect(items.map((item) => [item.label, item.kind])).toEqual([
+      ["q-3", "open"],
+      ["q-2", "dismissing"],
+      ["q-1", "cancelling"],
+    ]);
+    expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-3"]);
+    const [withdrawn] = decisionItems(pane({ open: [{ ...open(1), closing: "withdrawing" }] }));
+    expect(chipLabel([withdrawn!])).toEqual({ text: "q-1 cancelling", detail: null });
+    expect(deliveryNotes([withdrawn!])).toEqual([]);
+  });
+
+  it("lets a withdrawal from this view outrank a decline the state names", () => {
+    const items = decisionItems(
+      pane({ open: [{ ...open(1), closing: "declining" }] }),
+      "composer",
+      new Set(["q1"])
+    );
+    expect(items.map((item) => item.kind)).toEqual(["cancelling"]);
+  });
+
+  it("reads a state from a Host from before it the way it always did", () => {
+    const legacy = pane({ open: [open(1)], waiting: [waiting(2)] });
+    expect("replyRequests" in legacy || "waitingFollowUps" in legacy).toBe(false);
+    expect(decisionItems(legacy).map((item) => item.kind)).toEqual(["answer", "open"]);
+    expect(readsPaneWait(pane())).toBe(false);
+  });
+});

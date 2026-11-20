@@ -490,6 +490,41 @@ describe("DaintreeLocalStore", () => {
     expect(await store.hasUncertainIntent("q1")).toBe(false);
   });
 
+  it("names each question a withdrawal or decline is queued for, retrying or not (#18052)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const queued = (id: string, kind: OutboxItem["kind"], qid: string, at = 1): OutboxItem => ({
+      ...item(id, qid, at),
+      kind,
+    });
+    expect(await store.pendingClosings()).toEqual(new Map());
+
+    await store.putOutbox(queued("o1", "cancel", "q1"));
+    await store.putOutbox(queued("o2", "owner-decline", "q2", 50_000));
+    // A withdrawal outranks a decline queued beside it, whichever came first.
+    await store.putOutbox(queued("o3", "owner-decline", "q3"));
+    await store.putOutbox(queued("o4", "cancel", "q3", 2));
+    // Nothing else closes a question.
+    await store.putOutbox(queued("o5", "create", "q4"));
+    await store.putOutbox(queued("o6", "owner-answer", "q5"));
+    await store.recordOutboxFailure("o2", "relay unreachable", 90_000);
+
+    expect(await store.pendingClosings()).toEqual(
+      new Map([
+        ["q1", "withdrawing"],
+        ["q2", "declining"],
+        ["q3", "withdrawing"],
+      ])
+    );
+    await store.deleteOutbox("o1");
+    await store.deleteOutbox("o4");
+    expect(await store.pendingClosings()).toEqual(
+      new Map([
+        ["q2", "declining"],
+        ["q3", "declining"],
+      ])
+    );
+  });
+
   it("stores what a call was given, not what its caller changed afterwards", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const question = row("q1", 1);

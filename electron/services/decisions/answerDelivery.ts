@@ -67,6 +67,7 @@ import {
   questionReference,
   readHandledAnswers,
   readableText,
+  reasonOf,
   resumableReason,
   threadNeedsAttention,
   type HandledAnswers,
@@ -91,7 +92,6 @@ import {
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
 import type { AdvisoryHost } from "./questionRound.js";
 import { closedReasonOf } from "./questionClosed.js";
-import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
 

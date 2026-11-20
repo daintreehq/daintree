@@ -21,9 +21,11 @@ export type DecisionItemKind =
   | "attention"
   | "uncertain"
   | "answer"
+  | "follow-up"
   | "expired"
   | "never-published"
   | "open"
+  | "reply"
   | "queued"
   | "dismissing"
   | "cancelling";
@@ -46,9 +48,10 @@ export function paneWaitOf(pane: { hasDraft: boolean; queuesInput: boolean }): P
 
 /**
  * Whether anything the chip says turns on the pane's wait: a question still
- * out and not past its deadline by the clock at `nowMs`, or an answer or
- * expiry notice waiting to be typed in. Only then does the chip need to read
- * the drafts that every keystroke rewrites.
+ * out and not past its deadline by the clock at `nowMs`, one waiting on the
+ * person's reply, or an answer, follow-up or expiry notice waiting to be typed
+ * in. Only then does the chip need to read the drafts that every keystroke
+ * rewrites.
  */
 export function readsPaneWait(
   state: PaneDecisionState | null,
@@ -57,6 +60,8 @@ export function readsPaneWait(
   return (
     state !== null &&
     (state.waitingAnswers.length > 0 ||
+      (state.replyRequests?.length ?? 0) > 0 ||
+      (state.waitingFollowUps?.length ?? 0) > 0 ||
       state.openQuestions.some((question) => !pastDeadline(question.expiresAt, nowMs)))
   );
 }
@@ -87,9 +92,9 @@ export interface DecisionItem {
   subject: DeliverySubject | null;
   /** Why delivery stopped, when the library recorded a code Daintree knows. */
   reason: string | null;
-  /** For an answer or expiry notice: what it waits for before it's typed in. */
+  /** For an answer, follow-up or expiry notice: what it waits for before it's typed in. */
   waitsFor: DecisionWaitFor | null;
-  /** Epoch ms, for an open or queued question. */
+  /** Epoch ms, for an open or queued question, or when the agent asked for a reply. */
   askedAt: number | null;
   expiresAt: number | null;
   /**
@@ -99,9 +104,9 @@ export interface DecisionItem {
    */
   elapsed: boolean;
   /**
-   * For an open or queued question: the person cleared what it asks now from
-   * Needs you on this computer (#17895). It still waits for the agent, and
-   * stays answerable, just not on the person.
+   * For an open or queued question, or one waiting on the person's reply: the
+   * person cleared what it asks now from Needs you on this computer (#17895).
+   * It still waits for the agent, and stays answerable, just not on the person.
    */
   cleared: boolean;
   /** An open or queued question whose round only offers advice. */
@@ -124,9 +129,11 @@ const KIND_ORDER: Record<DecisionItemKind, number> = {
   attention: 0,
   uncertain: 1,
   answer: 2,
+  "follow-up": 2,
   expired: 3,
   "never-published": 3,
   open: 4,
+  reply: 4,
   queued: 5,
   dismissing: 6,
   cancelling: 7,
@@ -169,8 +176,10 @@ const NOTHING_SET_ASIDE: SetAsideReading = { nowMs: null, cleared: NO_IDS };
  * that main has committed but the relay hasn't confirmed, and `dismissing`
  * those a person dismissed here (#17239) whose decline is under way or was
  * taken: each stays listed, so, until the pane's state no longer lists it as
- * waiting. An open or queued question the person cleared, or whose deadline
- * passed by `setAside.nowMs`, is listed last, as the inbox lists it.
+ * waiting. A withdrawal or decline the pane's state names (#18052), started
+ * from any view, shows the same way. An open or queued question the person
+ * cleared, or whose deadline passed by `setAside.nowMs`, and a request for a
+ * reply they cleared, are listed last, as the inbox lists them.
  */
 export function decisionItems(
   state: PaneDecisionState,
@@ -228,10 +237,45 @@ export function decisionItems(
       advisory: false,
     });
   }
+  for (const entry of state.waitingFollowUps ?? []) {
+    items.push({
+      questionId: entry.questionId,
+      label: aliasLabel(entry.alias),
+      kind: "follow-up",
+      status: `Follow-up received, typing it in ${WAIT_PHRASES[wait]}`,
+      subject: null,
+      reason: null,
+      waitsFor: wait,
+      askedAt: null,
+      expiresAt: null,
+      elapsed: false,
+      cleared: false,
+      advisory: false,
+    });
+  }
+  for (const request of state.replyRequests ?? []) {
+    const cleared = setAside.cleared.has(request.questionId);
+    items.push({
+      questionId: request.questionId,
+      label: aliasLabel(request.alias),
+      kind: "reply",
+      // Replied to from the question's view as well as on a phone (#17238).
+      status: cleared ? CLEARED_NOTE : "Waiting for your reply, here or on your phone",
+      subject: null,
+      reason: null,
+      waitsFor: null,
+      askedAt: epoch(request.requestedAt),
+      expiresAt: null,
+      elapsed: false,
+      cleared,
+      advisory: false,
+    });
+  }
   for (const question of state.openQuestions) {
     const queued = question.status === "queued";
-    const withdrawn = cancelling.has(question.questionId);
-    const declined = !withdrawn && dismissing.has(question.questionId);
+    const withdrawn = cancelling.has(question.questionId) || question.closing === "withdrawing";
+    const declined =
+      !withdrawn && (dismissing.has(question.questionId) || question.closing === "declining");
     // A dismissal or withdrawal under way says so whatever the clock or a clear says.
     const asking = !withdrawn && !declined;
     const elapsed = asking && pastDeadline(question.expiresAt, setAside.nowMs);
@@ -294,7 +338,10 @@ export function cancelNote(items: readonly DecisionItem[]): string | null {
     isAttention(item) && item.subject?.startsWith("timeout notice") === true;
   const answered = items.some(
     (item) =>
-      (item.kind === "answer" || (isAttention(item) && !noticeStopped(item))) &&
+      (item.kind === "answer" ||
+        item.kind === "follow-up" ||
+        item.kind === "reply" ||
+        (isAttention(item) && !noticeStopped(item))) &&
       !waiting.has(item.questionId)
   );
   // Past its deadline either way: one that never reached the relay is over too.
@@ -373,7 +420,10 @@ function setAsideLabel(items: readonly DecisionItem[]): ChipLabel {
 function itemLabel(item: DecisionItem): ChipLabel {
   switch (item.kind) {
     case "answer":
+    case "follow-up":
       return { text: `${item.label} delivering`, detail: null };
+    case "reply":
+      return { text: `${item.label} wants a reply`, detail: null };
     case "expired":
       return { text: `${item.label} expired`, detail: null };
     case "never-published":
@@ -412,15 +462,20 @@ export function deliveryNotes(
 ): string[] {
   const notes: string[] = [];
   // A question being declined or withdrawn has no answer coming, nor one past its deadline.
-  const waitsHere = items.some(
-    (item) =>
-      !isAttention(item) &&
-      item.kind !== "cancelling" &&
-      item.kind !== "dismissing" &&
-      !item.elapsed &&
-      item.waitsFor !== "host"
-  );
-  if (waitsHere) notes.push(`Answers are typed in here ${WAIT_PHRASES[wait]}`);
+  const waitsHere = (item: DecisionItem) =>
+    !isAttention(item) &&
+    item.kind !== "cancelling" &&
+    item.kind !== "dismissing" &&
+    !item.elapsed &&
+    item.waitsFor !== "host";
+  const followsUp = (item: DecisionItem) => item.kind === "follow-up" || item.kind === "reply";
+  const answers = items.some((item) => waitsHere(item) && !followsUp(item));
+  const followUps = items.some((item) => waitsHere(item) && followsUp(item));
+  if (answers || followUps) {
+    const what =
+      answers && followUps ? "Answers and follow-ups" : answers ? "Answers" : "Follow-ups";
+    notes.push(`${what} are typed in here ${WAIT_PHRASES[wait]}`);
+  }
   if (items.some((item) => item.waitsFor === "host")) {
     notes.push("Answers for a host that's away are typed in once it's back");
   }
@@ -431,14 +486,19 @@ export function deliveryNotes(
 }
 
 /**
- * How to answer, while any question still waits for one: its row opens the
- * composer. One the person cleared still can be; one past its deadline can't,
- * and nothing invites an answer once every such deadline has passed.
+ * How to answer, while any question still waits for one, or to reply, while
+ * an agent waits on the person's reply: its row opens the composer. One the
+ * person cleared still can be; one past its deadline can't, and nothing
+ * invites an answer once every such deadline has passed.
  */
 export function answerNote(items: readonly DecisionItem[], nowMs = 0): string | null {
-  return items.some((item) => isCancellable(item) && !item.elapsed && !deadlinePassed(item, nowMs))
-    ? "Open a question to answer it here"
-    : null;
+  const answer = items.some(
+    (item) => isCancellable(item) && !item.elapsed && !deadlinePassed(item, nowMs)
+  );
+  const reply = items.some((item) => item.kind === "reply");
+  if (answer && reply) return "Open a question to answer or reply here";
+  if (answer) return "Open a question to answer it here";
+  return reply ? "Open a question to reply here" : null;
 }
 
 /** An open or queued question whose deadline passed by this computer's clock. */
@@ -493,6 +553,8 @@ export function itemSentence(item: DecisionItem): string {
   switch (item.kind) {
     case "open":
       return `Question ${item.label} is waiting for an answer, here or on your phone`;
+    case "reply":
+      return `Question ${item.label} is waiting for your reply, here or on your phone`;
     case "queued":
       return `Question ${item.label} is queued to send; you can answer it here`;
     case "dismissing":
@@ -500,6 +562,7 @@ export function itemSentence(item: DecisionItem): string {
     case "cancelling":
       return `Question ${item.label} is being withdrawn, waiting for the relay to confirm`;
     case "answer":
+    case "follow-up":
     case "expired":
     case "never-published":
       return `${item.status} (${item.label})`;
@@ -529,6 +592,11 @@ const SUMMARY_GROUPS: Array<{
     one: `answered, typing in ${WAIT_PHRASES[wait]}`,
     many: `answered, typing in ${WAIT_PHRASES[wait]}`,
   })),
+  ...PANE_WAITS.map((wait) => ({
+    matches: (item: DecisionItem) => item.kind === "follow-up" && item.waitsFor === wait,
+    one: `with your follow-up, typing in ${WAIT_PHRASES[wait]}`,
+    many: `with your follow-ups, typing in ${WAIT_PHRASES[wait]}`,
+  })),
   {
     matches: (item) => item.kind === "answer" && item.waitsFor === "host",
     one: "answered, delivering when this terminal's host is back",
@@ -548,6 +616,11 @@ const SUMMARY_GROUPS: Array<{
     matches: (item) => item.kind === "open" && setAsideOf(item) === null,
     one: "waiting for an answer",
     many: "waiting for an answer",
+  },
+  {
+    matches: (item) => item.kind === "reply" && setAsideOf(item) === null,
+    one: "waiting for your reply",
+    many: "waiting for your reply",
   },
   {
     matches: (item) => item.kind === "queued" && setAsideOf(item) === null,

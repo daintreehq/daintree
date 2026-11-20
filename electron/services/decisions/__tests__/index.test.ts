@@ -592,6 +592,7 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
+import type { QuestionInboxFacts } from "../DecisionsService.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
@@ -869,6 +870,44 @@ describe("Decisions entry", () => {
       ]);
       // A Remote Host's window reads which Hosts' questions are listed (#18049).
       expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio", "lab"] });
+
+      // A withdrawal or decline queued here shows on this computer's question and a Host's,
+      // which only this computer signs a decline for, while each is still open (#18052).
+      const answered: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000002", "2026-11-02T10:06:00.000Z"),
+        standing: { kind: "to-type" },
+      };
+      (
+        publish as (
+          questions: DecisionQuestionListItem[],
+          listing: boolean,
+          inbox: QuestionInboxFacts
+        ) => void
+      )([own, answered], true, {
+        asks: new Map(),
+        marks: new Map(),
+        closings: new Map([
+          [own.reference.questionId, "withdrawing"],
+          [answered.reference.questionId, "withdrawing"],
+          [theirs.reference.questionId, "declining"],
+        ]),
+      });
+      expect(
+        getDecisionQuestionList().questions.map((question) => [
+          question.reference.questionId,
+          question.closing ?? null,
+        ])
+      ).toEqual([
+        [theirs.reference.questionId, "declining"],
+        [lab.reference.questionId, null],
+        [own.reference.questionId, "withdrawing"],
+        [answered.reference.questionId, null],
+        [theirsLater.reference.questionId, null],
+      ]);
+      publish([own]);
+      expect(getDecisionQuestionList().questions.some((question) => "closing" in question)).toBe(
+        false
+      );
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
       statusView.send.mockClear();

@@ -61,6 +61,7 @@ import {
   PaneDecisionStates,
   type AnswerAttentionPublisher,
   type PaneDecisionStatePublisher,
+  type PendingClosings,
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
@@ -129,6 +130,12 @@ export interface HostServedQuestions {
 export interface QuestionInboxFacts {
   asks: ReadonlyMap<string, string | null>;
   marks: QuestionMarks;
+  /**
+   * The withdrawals and declines this computer has queued for the relay
+   * (#18052), by question id, its own questions' and its Hosts': a decline of
+   * a Host's question is signed here, so only this computer knows of it.
+   */
+  closings?: PendingClosings;
 }
 
 /** What the service runs a relay connection with; tests hand in their own. */
@@ -862,11 +869,12 @@ export class DecisionsService {
   observeQuestions(
     rows: readonly QuestionRow[],
     handled: HandledAnswers = new Map(),
-    questions: ReadonlyMap<string, number> = new Map()
+    questions: ReadonlyMap<string, number> = new Map(),
+    closings: PendingClosings = new Map()
   ): void {
     if (this.disposed || this.state === "off") return;
     // The panes read every row, so a handled one still decides which project its pane is in.
-    this.panes.replace(rows, handled, questions);
+    this.panes.replace(rows, handled, questions, closings);
     this.connection?.observeQuestions?.(withoutHandled(rows, handled));
   }
 
@@ -880,6 +888,7 @@ export class DecisionsService {
     rows: readonly QuestionRow[],
     handled: HandledAnswers,
     marks: QuestionMarks,
+    closings: PendingClosings,
     presence: AskerPresence | null = null
   ): ReadonlyMap<string, number> {
     // Every read applied replaces what the last one counted, its deadline wait included.
@@ -907,7 +916,7 @@ export class DecisionsService {
         .map((item) => item.reference.questionId)
     );
     const asks = questionAsks(rows, waiting);
-    if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
+    if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks, closings });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
     // What raises each run on the fleet: a Host's lifetime has no marks, so none is cleared there.
     return hostId === null ? new Map() : this.countQuestions(questions, hostId, asks, marks);
@@ -1649,6 +1658,8 @@ export class DecisionsService {
     let handled: HandledAnswers = new Map();
     // The person's marks (#17895) are an owner's alone. One that can't be read keeps the last read.
     let marks: QuestionMarks = new Map();
+    // Withdrawals and declines queued for the relay (#18052), read like the marks.
+    let closings: PendingClosings = new Map();
     const owner = this.role === "owner";
     // The rows last listed, with what they were read with, while an asker is observed: a pane
     // event lists them again with what was observed since, without reading the store again.
@@ -1656,6 +1667,7 @@ export class DecisionsService {
       rows: readonly QuestionRow[];
       handled: HandledAnswers;
       marks: QuestionMarks;
+      closings: PendingClosings;
     } | null = null;
     const sources = this.askerSources;
     const presence =
@@ -1667,7 +1679,7 @@ export class DecisionsService {
             },
             () => {
               if (this.feed !== feed || this.askers !== presence || listed === null) return;
-              this.listQuestions(listed.rows, listed.handled, listed.marks, presence);
+              this.listQuestions(listed.rows, listed.handled, listed.marks, listed.closings, presence);
             }
           )
         : null;
@@ -1675,13 +1687,14 @@ export class DecisionsService {
       async () => {
         handled = await readHandledAnswers(store);
         if (owner) marks = await readQuestionMarks(store).catch(() => marks);
+        closings = await readPendingClosings(store).catch(() => closings);
         return store.listQuestions();
       },
       (rows) => {
-        const questions = this.listQuestions(rows, handled, marks, presence);
+        const questions = this.listQuestions(rows, handled, marks, closings, presence);
         // Kept only while an asker is observed, the one case a pane event can change the list.
-        listed = presence?.tracking === true ? { rows, handled, marks } : null;
-        this.observeQuestions(rows, handled, questions);
+        listed = presence?.tracking === true ? { rows, handled, marks, closings } : null;
+        this.observeQuestions(rows, handled, questions, closings);
       }
     );
     this.feed = feed;
@@ -1778,4 +1791,9 @@ export class DecisionsService {
       }
     }
   }
+}
+
+/** The withdrawals and declines `store` has queued; a read that fails rejects, never throws. */
+async function readPendingClosings(store: DaintreeLocalStore): Promise<PendingClosings> {
+  return store.pendingClosings();
 }

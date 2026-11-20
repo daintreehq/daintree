@@ -88,6 +88,17 @@ export async function markAnswerHandled(
   await store.setMeta(HANDLED_ANSWERS_META_KEY, JSON.stringify(next));
 }
 
+/**
+ * The library's codes are short identifiers (`pane_gone`, `inject_ambiguous`).
+ * Anything else is passed on as `unspecified` rather than trimmed into shape,
+ * so free text can never reach a view through this field.
+ */
+const REASON_CODE = /^[a-z0-9_.-]{1,48}$/;
+
+export function reasonOf(code: string | null): string {
+  return typeof code === "string" && REASON_CODE.test(code) ? code : "unspecified";
+}
+
 /** Delivery stopped at a point where a person decides what happens next. Imported history never does. */
 export function needsAttention(row: QuestionRow): boolean {
   return (

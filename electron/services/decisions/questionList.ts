@@ -18,9 +18,9 @@ import {
   heldFollowUps,
   isHandled,
   pendingEntries,
+  reasonOf,
   type HandledAnswers,
 } from "./attentionList.js";
-import { reasonOf } from "./paneDecisionState.js";
 import { closedReasonOf, declineOf } from "./questionClosed.js";
 import { NO_ADVISORY_HOST, roundOf, type AdvisoryHost } from "./questionRound.js";
 
@@ -168,12 +168,16 @@ function awaitsReply(
  * which `threadAwaitsHuman` reads the request from. Whatever the question's
  * standing shows first, an answered one can ask for a reply.
  */
-function replyRequestOf(row: QuestionRow): string | null {
+export function replyRequestMessage(row: QuestionRow): StoredMessage | null {
   const status = row.local_status;
   if (status !== "human-answered" && status !== "proxy-answered") return null;
   const messages = parseMessages(row.messages_json);
   if (!awaitsReply(row, status, messages)) return null;
-  return latestAgentMessage(messages)?.message_id ?? null;
+  return latestAgentMessage(messages);
+}
+
+function replyRequestOf(row: QuestionRow): string | null {
+  return replyRequestMessage(row)?.message_id ?? null;
 }
 
 /** The agent's latest message on the thread, by ledger seq; null before it sent one. */
