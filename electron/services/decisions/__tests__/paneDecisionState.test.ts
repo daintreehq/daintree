@@ -744,6 +744,13 @@ describe("PaneDecisionStates answer attention", () => {
     states.setQuestions(new Map());
     expect(counts.at(-1)?.size).toBe(0);
     expect(pushes).toEqual([]);
+
+    // A held pane's stopped answers stay through it.
+    states.replace([stopped(1)], new Map(), new Map([["pane-a", 1]]));
+    const pushed = pushes.length;
+    states.setQuestions(new Map());
+    expect(new Map(counts.at(-1))).toEqual(new Map([["pane-a", { answers: 1, questions: 0 }]]));
+    expect(pushes.length).toBe(pushed);
   });
 
   it("clears every count once the panes go, whether or not the views are told", () => {

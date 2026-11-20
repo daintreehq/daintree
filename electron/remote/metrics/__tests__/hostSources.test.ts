@@ -257,7 +257,11 @@ describe("observeAgents", () => {
           "asked-and-stopped",
           "parked-at-work",
           "snoozed-at-work",
-        ].map((id) => [id, { answers: 0, questions: 1 }])
+        ].map((id) => [
+          id,
+          // One asker at work holds only a stopped answer.
+          id === "asking-directing" ? { answers: 1, questions: 0 } : { answers: 0, questions: 1 },
+        ])
       )
     );
 

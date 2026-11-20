@@ -1866,6 +1866,14 @@ describe("buildPilotGroups — what Decisions recorded", () => {
         agePhrase: "working for 5m",
         agentReport: DECISIONS_QUESTION_EVIDENCE,
       });
+      const [answered] = buildPilotGroups(
+        [run({ agentState, since: NOW - 300_000, answerAttention: 1 })],
+        ctx()
+      );
+      expect(answered!.rows[0], agentState).toMatchObject({
+        agePhrase: "working for 5m",
+        agentReport: DECISIONS_ANSWER_EVIDENCE,
+      });
     }
   });
 
@@ -1882,7 +1890,7 @@ describe("buildPilotGroups — what Decisions recorded", () => {
           runId: "snoozed",
           agentState: "completed",
           snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 },
-          questionAttention: 1,
+          answerAttention: 1,
         }),
         run({
           runId: "error",

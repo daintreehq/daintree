@@ -977,11 +977,13 @@ describe("DecisionsService question list (#17229)", () => {
   it("stops raising a run once its question's deadline passes by the clock, with no row change", async () => {
     const { service, attention, setRows } = listed();
     const soon = new Date(Date.now() + 300).toISOString();
+    const later = new Date(Date.now() + 600).toISOString();
     const past = new Date(Date.now() - 60_000).toISOString();
     setRows([
       row(1, { expires_at: soon }),
       row(2, { expires_at: past, origin: { pane_id: "pane-b" } }),
       row(3, { origin: { pane_id: "pane-c" } }),
+      row(4, { expires_at: later, origin: { pane_id: "pane-d" } }),
     ]);
     await service.start(on(HOST));
     await vi.waitFor(() =>
@@ -989,9 +991,11 @@ describe("DecisionsService question list (#17229)", () => {
         new Map([
           ["pane-a", { answers: 0, questions: 1 }],
           ["pane-c", { answers: 0, questions: 1 }],
+          ["pane-d", { answers: 0, questions: 1 }],
         ])
       )
     );
+    // Each deadline in turn, the second counted on the wait the first armed.
     await vi.waitFor(() =>
       expect(attention.at(-1)).toEqual(new Map([["pane-c", { answers: 0, questions: 1 }]]))
     );

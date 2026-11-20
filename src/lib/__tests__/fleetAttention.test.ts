@@ -1113,6 +1113,7 @@ describe("Decisions attention", () => {
       const wait = run({ agentState: "waiting", waitingReason, questionAttention: 1 });
       expect(bandForRun(wait)).toBe("needs-you");
       expect(runUnseenAsk(wait), waitingReason).toBe("observed");
+      expect(runUnseenAsk({ ...wait, wait: unseen }), waitingReason).toBe("observed");
       expect(runUnseenAsk({ ...wait, wait: seen }), waitingReason).toBeUndefined();
     }
     // Canopy reading a question as asking nothing takes the mark away, as without Decisions.
@@ -1133,6 +1134,9 @@ describe("Decisions attention", () => {
     expect(bandForRun(run({ agentState: "completed", ...both }))).toBe("needs-you");
     const snoozed = { snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 } };
     expect(bandForRun(run({ agentState: "working", questionAttention: 1, ...snoozed }))).toBe(
+      "snoozed"
+    );
+    expect(bandForRun(run({ agentState: "working", answerAttention: 1, ...snoozed }))).toBe(
       "snoozed"
     );
     expect(

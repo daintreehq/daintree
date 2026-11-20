@@ -992,6 +992,10 @@ describe("FleetSnapshotService", () => {
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 3);
       expect(lastSnapshot().runs[0].questionAttention).toBe(2);
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 1 }]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 4);
+      expect(lastSnapshot().runs[0].questionAttention).toBe(1);
 
       // Decisions stopping takes every count with it.
       setDecisionAttention(new Map());
@@ -1051,6 +1055,19 @@ describe("FleetSnapshotService", () => {
         questionAttention: 1,
       });
       expect(bandForRun(lastSnapshot().runs[0])).toBe("parked");
+
+      // Unparked while reads keep failing: the next failed read carries it, and
+      // one with nothing moved publishes nothing.
+      parks.delete("t1");
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0].park).toBeUndefined();
+      expect(bandForRun(lastSnapshot().runs[0])).toBe("needs-you");
+      const published = broadcastMock.mock.calls.length;
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(broadcastMock.mock.calls.length).toBe(published);
     } finally {
       setDecisionAttention(new Map());
       service.stop();

@@ -72,7 +72,12 @@ import {
   unclearedQuestionsByTerminal,
   type QuestionMarks,
 } from "./questionMarks.js";
-import { nextAskDeadline } from "../../../shared/utils/decisionDeadline.js";
+import {
+  asksByDeadline,
+  deadlineMs,
+  nextAskDeadline,
+} from "../../../shared/utils/decisionDeadline.js";
+
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import type { AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
@@ -93,6 +98,9 @@ import {
 } from "./storageRecovery.js";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
+
+/** How long a count of questions bound by deadlines goes before reading the clock again. */
+const DEADLINE_RECHECK_MS = 60_000;
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -858,6 +866,8 @@ export class DecisionsService {
     handled: HandledAnswers,
     marks: QuestionMarks
   ): ReadonlyMap<string, number> {
+    // Every read applied replaces what the last one counted, its deadline wait included.
+    this.disarmQuestionDeadline();
     if (this.disposed || this.state === "off") return new Map();
     const hostId = this.settings?.hostId ?? null;
     const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
@@ -874,9 +884,10 @@ export class DecisionsService {
   }
 
   /**
-   * Each terminal's open, uncleared questions now, waiting for the next
-   * deadline that would take one out of the count: no row changes when it
-   * passes, so nothing else would count them again.
+   * Each terminal's open, uncleared questions now, counted again while any
+   * still asks by a deadline: no row changes when one passes, so nothing else
+   * would. The clock is read again at least every minute, since a timer runs
+   * late after sleep and the wall clock can be set back past a deadline.
    */
   private countQuestions(
     questions: readonly DecisionQuestionListItem[],
@@ -886,17 +897,19 @@ export class DecisionsService {
   ): ReadonlyMap<string, number> {
     this.disarmQuestionDeadline();
     const now = Date.now();
-    const next = nextAskDeadline(questions, now);
+    const bound = questions.some(
+      (item) => asksByDeadline(item.standing) && deadlineMs(item.expiresAt) !== null
+    );
     const feed = this.feed;
-    if (next !== null) {
-      // setTimeout fires at once past a signed 32-bit delay: a far deadline is waited out in chunks.
+    if (bound) {
+      const next = nextAskDeadline(questions, now);
       this.questionDeadline = setTimeout(
         () => {
           this.questionDeadline = null;
           if (this.disposed || this.state === "off" || this.feed !== feed) return;
           this.panes.setQuestions(this.countQuestions(questions, hostId, asks, marks));
         },
-        Math.min(next - now, 2_147_483_647)
+        next === null ? DEADLINE_RECHECK_MS : Math.min(next - now, DEADLINE_RECHECK_MS)
       );
       this.questionDeadline.unref?.();
     }

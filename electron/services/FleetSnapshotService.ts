@@ -548,9 +548,14 @@ export class FleetSnapshotService {
 
   private publishDegraded(): void {
     const previous = this.lastBroadcast;
-    if (previous?.degraded === true) return;
     const runs = previous === null ? [] : this.redecorate(previous.runs);
     const moved = previous !== null && !this.runsEqual(runs, previous.runs);
+    // Each failed read while degraded still carries a shelf released or lapsed
+    // since, and nothing else when nothing moved.
+    if (previous?.degraded === true) {
+      if (moved) this.publish({ ...previous, runs, changedAt: Date.now() });
+      return;
+    }
     this.publish({
       runs,
       changedAt: moved || previous === null ? Date.now() : previous.changedAt,
