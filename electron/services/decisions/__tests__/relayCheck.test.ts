@@ -182,7 +182,23 @@ describe("checkDecisionsRelay", () => {
         },
         diverges: true,
       },
+      advertisesAgentStoppedPushes: false,
     });
+  });
+
+  it("says whether the relay advertises agent-stopped pushes, ignoring what it doesn't know (#18061)", async () => {
+    for (const [features, advertises] of [
+      [["presence-v1", "agent-stopped-push-v1"], true],
+      [["presence-v1", "some-later-feature-v9"], false],
+      [[], false],
+      [undefined, false],
+    ] as const) {
+      const { fetchImpl } = healthyRelay(info({ claimed: true, features }));
+      await expect(checkDecisionsRelay(ORIGIN, { fetchImpl })).resolves.toMatchObject({
+        result: "claimed",
+        advertisesAgentStoppedPushes: advertises,
+      });
+    }
   });
 
   it("counts any overlap as compatible, and any difference as diverging", async () => {

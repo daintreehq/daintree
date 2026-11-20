@@ -182,6 +182,11 @@ interface SettingsRowProps {
   disabled?: boolean;
   /** Why the row is disabled. Rendered under the description only while disabled. */
   disabledReason?: ReactNode;
+  /**
+   * What keeps the setting from taking effect now, though it can still be
+   * changed: rendered under the description whatever its state.
+   */
+  note?: ReactNode;
   /** Field-level problem, under the control. */
   error?: ReactNode;
   /** A trailing control on the error's line, such as a Retry for a save that failed. */
@@ -208,6 +213,7 @@ export function SettingsRow({
   resetTestId,
   disabled: ownDisabled = false,
   disabledReason,
+  note,
   error,
   errorAction,
   id,
@@ -221,6 +227,7 @@ export function SettingsRow({
   const descriptionId = useId();
   const errorId = useId();
   const reasonId = useId();
+  const noteId = useId();
   const depth = group?.depth ?? 0;
   const disabled = ownDisabled || (group?.disabled ?? false);
   const showReset = !!isModified && !!onReset && !disabled;
@@ -234,6 +241,7 @@ export function SettingsRow({
     [
       error ? errorId : null,
       description ? descriptionId : null,
+      note ? noteId : null,
       showReason ? reasonId : null,
       inheritedReasonId ?? null,
     ]
@@ -283,15 +291,8 @@ export function SettingsRow({
           {description}
         </div>
       )}
-      {showReason && (
-        <p
-          id={reasonId}
-          className="mt-1 flex items-start gap-1.5 text-xs text-text-secondary select-text"
-        >
-          <Info className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
-          <span>{disabledReason}</span>
-        </p>
-      )}
+      {note && <RowNote id={noteId}>{note}</RowNote>}
+      {showReason && <RowNote id={reasonId}>{disabledReason}</RowNote>}
     </div>
   );
 
@@ -344,6 +345,16 @@ export function SettingsRow({
         </SettingsInlineError>
       )}
     </div>
+  );
+}
+
+/** A line under a row's description: why it is disabled, or what keeps it from taking effect. */
+function RowNote({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <p id={id} className="mt-1 flex items-start gap-1.5 text-xs text-text-secondary select-text">
+      <Info className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
+      <span>{children}</span>
+    </p>
   );
 }
 

@@ -40,7 +40,15 @@ vi.mock("../relayRemove", async (importOriginal) => ({
   openRelayRemoveTerminal,
 }));
 
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { useRelayCheck } from "../useRelayCheck";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(props: Omit<ComponentProps<typeof ConnectionSection>, "relay">) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://relay.example.workers.dev";
 const COMPATIBLE = {

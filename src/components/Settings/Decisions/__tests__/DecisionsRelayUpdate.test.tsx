@@ -62,8 +62,16 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 import { usePanelStore } from "@/store/panelStore";
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { useRelayCheck } from "../useRelayCheck";
 import { getRelayUpdateRun, resetRelayUpdateRunForTests } from "../relayUpdate";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(props: Omit<ComponentProps<typeof ConnectionSection>, "relay">) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const OTHER_ORIGIN = "https://other.example.workers.dev";

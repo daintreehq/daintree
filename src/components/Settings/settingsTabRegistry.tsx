@@ -2423,8 +2423,17 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-desktop-notifications",
+        section: "Notifications",
+        title: "Desktop notifications",
+        description:
+          "Questions, follow-ups that want a reply and answers that couldn't be typed in show on this computer while Settings → Notifications has notifications on",
+        keywords: ["desktop", "notification", "alert", "question", "banner", "os"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-hold-phone-pushes",
-        section: "Questions",
+        section: "Notifications",
         title: "Hold phone notifications while I'm at this computer",
         description:
           "While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question",
@@ -2444,7 +2453,7 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "decisions-agent-stopped-pushes",
-        section: "Questions",
+        section: "Notifications",
         title: "Notify my phone when an agent stops",
         description:
           "While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on.",

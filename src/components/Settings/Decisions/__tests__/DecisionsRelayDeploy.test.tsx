@@ -44,8 +44,16 @@ vi.mock("../relayDeploy", async (importOriginal) => ({
   openRelayDeployTerminal,
 }));
 
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { useRelayCheck } from "../useRelayCheck";
 import { requestRelayUrl, takePendingRelayUrlRequest } from "../relayUrlRequest";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(props: Omit<ComponentProps<typeof ConnectionSection>, "relay">) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const checkRelay = vi.fn<(url: string) => Promise<never>>();
 const claimDeployedRelay =

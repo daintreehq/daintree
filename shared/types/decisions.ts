@@ -234,6 +234,12 @@ export interface DecisionsStatus {
   /** Telling the phone when an agent stops is turned on (#17319); absent while off. */
   agentStoppedPushes?: true;
   /**
+   * Settings → Notifications has desktop notifications turned off, so no
+   * question shows here and no presence is reported to hold a phone push
+   * (#18061); absent while on.
+   */
+  desktopNotifications?: false;
+  /**
    * This computer's Decisions key file exists. Read only while on, from the
    * file's presence alone, so it never asks the keychain. With no relay set
    * up, it is the keys of a setup that didn't finish.
@@ -523,6 +529,8 @@ export type DecisionsRelayCheck =
       result: "incompatible" | "claim-not-configured" | "unclaimed" | "claimed";
       origin: string;
       compatibility: DecisionsRelayCompatibility;
+      /** Its `/info` lists `agent-stopped-push-v1`, so it can tell a phone an agent stopped (#18061). */
+      advertisesAgentStoppedPushes: boolean;
     };
 
 /**

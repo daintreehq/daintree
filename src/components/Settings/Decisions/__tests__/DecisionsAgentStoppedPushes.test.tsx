@@ -2,10 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import type { DecisionsPolicy, DecisionsStatus } from "@shared/types/decisions";
+import type {
+  DecisionsDevice,
+  DecisionsRelayCheck,
+  DecisionsStatus,
+} from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
-import { useDecisionsPolicy } from "../useDecisionsPolicy";
+import { DecisionsNotificationsSection } from "../DecisionsNotificationsSection";
+import type { UseDecisionsDevicesResult } from "../useDecisionsDevices";
+
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+
+const ORIGIN = "https://decisions.example.workers.dev";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -19,15 +27,55 @@ const setAgentStoppedPushes = vi.fn<(enabled: boolean) => Promise<DecisionsStatu
 const setHoldPhonePushes = vi.fn<(enabled: boolean) => Promise<DecisionsStatus>>();
 const getStatus = vi.fn<() => Promise<DecisionsStatus>>();
 
+/** The relay's devices as Devices last read them: unread unless a test lists some. */
+function devicesRead(
+  devices: DecisionsDevice[] | null,
+  failure: string | null = null
+): UseDecisionsDevicesResult {
+  return { devices, failure, loading: false, reload: () => {} };
+}
+
+function phone(overrides: Partial<DecisionsDevice> = {}): DecisionsDevice {
+  return {
+    deviceId: "phone-1",
+    label: "Pixel 9",
+    role: "phone",
+    pairedAt: "2026-01-01T00:00:00.000Z",
+    lastSeenAt: null,
+    pushEnabled: false,
+    ...overrides,
+  };
+}
+
+function checked(advertisesAgentStoppedPushes: boolean, origin = ORIGIN): DecisionsRelayCheck {
+  const versions = { protocolMin: 1, protocolMax: 1, workerVersion: "0.4.0" };
+  return {
+    result: "claimed",
+    origin,
+    compatibility: { relay: versions, daintree: versions, diverges: false },
+    advertisesAgentStoppedPushes,
+  };
+}
+
 /** The tab's part: the status main last showed, an answer applied, a failure read again. */
-function Section({ initial, locked = false }: { initial: DecisionsStatus; locked?: boolean }) {
+function Section({
+  initial,
+  locked = false,
+  relayCheck = null,
+  devices = devicesRead(null),
+}: {
+  initial: DecisionsStatus;
+  locked?: boolean;
+  relayCheck?: DecisionsRelayCheck | null;
+  devices?: UseDecisionsDevicesResult;
+}) {
   const [status, setStatus] = useState(initial);
-  const policy = useDecisionsPolicy(true);
   return (
     <TooltipProvider>
-      <DecisionsQuestionsSection
-        policy={policy}
+      <DecisionsNotificationsSection
         status={status}
+        relayCheck={relayCheck}
+        devices={devices}
         locked={locked}
         onChanged={(next) => {
           if (next) setStatus(next);
@@ -38,10 +86,27 @@ function Section({ initial, locked = false }: { initial: DecisionsStatus; locked
   );
 }
 
-async function renderSection(initial: DecisionsStatus, options: { locked?: boolean } = {}) {
-  render(<Section initial={initial} locked={options.locked} />);
+async function renderSection(
+  initial: DecisionsStatus,
+  options: {
+    locked?: boolean;
+    relayCheck?: DecisionsRelayCheck | null;
+    devices?: UseDecisionsDevicesResult;
+  } = {}
+) {
+  render(<Section initial={initial} {...options} />);
   await act(async () => {});
 }
+
+function described(): string {
+  return (stoppedSwitch().getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+const NO_PHONE = "No paired phone or tablet has notifications turned on";
+const NO_SUPPORT = "Your relay doesn't advertise support for them";
 
 function stoppedSwitch(): HTMLButtonElement {
   return screen.getByRole("switch", {
@@ -71,8 +136,6 @@ beforeEach(() => {
         setAgentStoppedPushes,
         setHoldPhonePushes,
         getStatus,
-        // The policy read, which these tests leave unanswered.
-        getPolicy: () => new Promise<DecisionsPolicy>(() => {}),
       },
       events: { on: () => () => {} },
     },
@@ -90,20 +153,88 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
     await renderSection({ state: "connected", consentedAt: 5 });
     expect(on()).toBe("false");
     expect(resetButton()).toBeNull();
-    const described = (stoppedSwitch().getAttribute("aria-describedby") ?? "")
-      .split(" ")
-      .map((id) => document.getElementById(id)?.textContent ?? "")
-      .join(" ");
+    const text = described();
     for (const promise of ["While you're away", "outside quiet hours", "never which one"]) {
-      expect(described, promise).toContain(promise);
+      expect(text, promise).toContain(promise);
     }
     // Which Hosts can report a stop: only those this computer is connected to (#17933).
     for (const scope of [
       "this computer and the Remote Hosts it's connected to",
       "one with a project open here, or with its notifications turned on",
     ]) {
-      expect(described, scope).toContain(scope);
+      expect(text, scope).toContain(scope);
     }
+    // Nothing read yet says nothing about what can't take effect.
+    expect(text).not.toContain(NO_PHONE);
+    expect(text).not.toContain(NO_SUPPORT);
+  });
+
+  describe("what keeps it from reaching a phone (#18061)", () => {
+    const status: DecisionsStatus = {
+      state: "connected",
+      relayOrigin: ORIGIN,
+      agentStoppedPushes: true,
+    };
+
+    it("says no phone has notifications on when the relay lists none with them, a tablet counting", async () => {
+      await renderSection(status, {
+        devices: devicesRead([
+          phone(),
+          phone({ deviceId: "host-1", label: "Studio", role: "desktop-host", pushEnabled: true }),
+        ]),
+      });
+      expect(described()).toContain(NO_PHONE);
+      expect(stoppedSwitch().disabled).toBe(false);
+      expect(on()).toBe("true");
+      cleanup();
+
+      await renderSection(status, {
+        devices: devicesRead([phone(), phone({ deviceId: "tablet-1", role: "tablet", pushEnabled: true })]),
+      });
+      expect(described()).not.toContain(NO_PHONE);
+    });
+
+    it("says nothing about phones before a list is read, or when the latest read failed", async () => {
+      await renderSection(status, { devices: devicesRead(null) });
+      expect(described()).not.toContain(NO_PHONE);
+      cleanup();
+
+      await renderSection(status, { devices: devicesRead([phone()], "The relay couldn't be reached") });
+      expect(described()).not.toContain(NO_PHONE);
+    });
+
+    it("says the relay doesn't support them only when a check of this relay found so", async () => {
+      await renderSection(status, { relayCheck: checked(false) });
+      expect(described()).toContain(NO_SUPPORT);
+      cleanup();
+
+      await renderSection(status, { relayCheck: checked(true) });
+      expect(described()).not.toContain(NO_SUPPORT);
+      cleanup();
+
+      // A check of another relay says nothing about this one.
+      await renderSection(status, {
+        relayCheck: checked(false, "https://other.example.workers.dev"),
+      });
+      expect(described()).not.toContain(NO_SUPPORT);
+      cleanup();
+
+      await renderSection(status, {
+        relayCheck: { result: "unreachable", origin: ORIGIN, endpoint: "info", reason: "timeout" },
+      });
+      expect(described()).not.toContain(NO_SUPPORT);
+    });
+
+    it("says both when both hold, and takes changes all the same", async () => {
+      setAgentStoppedPushes.mockResolvedValueOnce({ state: "connected", relayOrigin: ORIGIN });
+      await renderSection(status, { relayCheck: checked(false), devices: devicesRead([]) });
+      expect(described()).toContain(NO_PHONE);
+      expect(described()).toContain(NO_SUPPORT);
+      await act(async () => {
+        fireEvent.click(stoppedSwitch());
+      });
+      expect(setAgentStoppedPushes).toHaveBeenCalledExactlyOnceWith(false);
+    });
   });
 
   it("turns on with one click, without a dialog, and off from its reset", async () => {
