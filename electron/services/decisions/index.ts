@@ -942,6 +942,9 @@ function isHostStopKey(key: string): boolean {
   return key.startsWith("\0host\0");
 }
 
+/** Host stops kept to take back if the port goes; the oldest go first, long since sent. */
+const MAX_HELD_HOST_STOPS = 4000;
+
 /**
  * Hears connected Hosts' agents' stops through the Remote Hosts port, which
  * comes and goes with Remote Hosts itself. A port withdrawn takes back every
@@ -961,8 +964,11 @@ function watchHostStops(listener: (report: ReportedStop) => void): () => void {
     if (port === null) return;
     offPort = port.onAgentStopChanges((hostId, change) => {
       const key = hostStopKey(hostId, change.terminalId);
-      if (change.stopped) held.add(key);
-      else held.delete(key);
+      held.delete(key);
+      if (change.stopped) {
+        held.add(key);
+        if (held.size > MAX_HELD_HOST_STOPS) held.delete(held.values().next().value!);
+      }
       listener({ key, stopped: change.stopped });
     });
   });

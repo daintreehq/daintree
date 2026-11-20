@@ -66,6 +66,13 @@ const logLimiter = createKeyedLogLimiter();
  */
 export const HOST_STOP_MAX_AGE_MS = 3 * DEFAULT_PING_INTERVAL_MS;
 
+/**
+ * The most stops kept per host to take back. A stop is never taken back once
+ * its agent stays stopped, so the oldest go first: by then any batch that
+ * held one has long gone out.
+ */
+export const MAX_LIVE_STOPS_PER_HOST = 1000;
+
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
 
@@ -352,8 +359,13 @@ export class HostMetricsClient {
     if (since === null) return;
     const maxAgeMs = payload.ageMs + elapsedSince(since, (this.options.clock ?? stampNow)());
     if (maxAgeMs > HOST_STOP_MAX_AGE_MS) return;
-    if (live) live.set(payload.terminalId, session);
-    else this.liveStops.set(hostId, new Map([[payload.terminalId, session]]));
+    if (live) {
+      live.delete(payload.terminalId);
+      live.set(payload.terminalId, session);
+      if (live.size > MAX_LIVE_STOPS_PER_HOST) live.delete(live.keys().next().value!);
+    } else {
+      this.liveStops.set(hostId, new Map([[payload.terminalId, session]]));
+    }
     this.tellAgentStop(hostId, payload.terminalId, true);
   }
 

@@ -22,6 +22,7 @@ import {
 import {
   HOST_STOP_MAX_AGE_MS,
   HostMetricsClient,
+  MAX_LIVE_STOPS_PER_HOST,
   type HostMetricsClientOptions,
 } from "../client.js";
 import { MetricsLinkMethod, type AgentStopChangePayload } from "../linkMethods.js";
@@ -1421,6 +1422,25 @@ describe("HostMetricsClient agent stops (#17933)", () => {
       ["studio", { terminalId: "t1", stopped: false }],
       ["studio", { terminalId: "t2", stopped: false }],
     ]);
+    h.client.dispose();
+  });
+
+  it("keeps only the newest stops to take back, so a long link holds a bounded few", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    setNow(1_000);
+    for (let index = 0; index <= MAX_LIVE_STOPS_PER_HOST; index += 1) {
+      link.stop({ terminalId: `t${index}` });
+    }
+    // Heard again, the oldest is the newest now.
+    link.stop({ terminalId: "t0" });
+    heard.length = 0;
+    link.close();
+    const takenBack = heard.map(([, change]) => change.terminalId);
+    expect(takenBack).toHaveLength(MAX_LIVE_STOPS_PER_HOST);
+    expect(takenBack).not.toContain("t1");
+    expect(takenBack.at(-1)).toBe("t0");
     h.client.dispose();
   });
 
