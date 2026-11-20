@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type Ref,
   type RefObject,
 } from "react";
 import {
@@ -20,7 +21,7 @@ import {
 import { AppDialog } from "@/components/ui/AppDialog";
 import { CountBadge } from "@/components/ui/badge";
 import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FactRun } from "@/components/ui/FactSeparator";
@@ -81,9 +82,11 @@ import {
   clearAllText,
   clearText,
   connectionNotice,
+  DECLINE_TEXT,
   ELAPSED_NOTE,
   emptyText,
   expiresSoon,
+  GO_TO_TERMINAL_TEXT,
   inboxGroupOf,
   inboxGroups,
   closedTime,
@@ -100,12 +103,14 @@ import {
   replyLineKey,
   replyToShow,
   resolveSelection,
+  RETRY_DECLINE_TEXT,
   scopedQuestions,
   scopeOffered,
   standingText,
   waitingText,
   whereFacts,
   worktreeName,
+  WITHDRAW_TEXT,
   type InboxChoice,
   type InboxGroup,
   type InboxReach,
@@ -529,6 +534,31 @@ function StandingGlyph({
     case "send-failed":
       return <ExitedCircle className={cn(STATE_GLYPH, "text-text-secondary")} />;
   }
+}
+
+/**
+ * One of the detail bar's actions, saying what it does before it's pressed
+ * (#18041): on hover and focus, and as its description to the ear.
+ */
+function DescribedAction({
+  description,
+  ref,
+  ...props
+}: ButtonProps & { description: string; ref?: Ref<HTMLButtonElement> }) {
+  const descriptionId = useId();
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button ref={ref} {...props} aria-describedby={descriptionId} />
+        </TooltipTrigger>
+        <TooltipContent>{description}</TooltipContent>
+      </Tooltip>
+      <span id={descriptionId} className="sr-only">
+        {description}
+      </span>
+    </>
+  );
 }
 
 function InboxRow({
@@ -1641,14 +1671,15 @@ export function DecisionsInboxDialog() {
                       {/* Ghost buttons pad their ink; pulled out by that pad so the text ends where the body does. */}
                       <div className="-mr-2 flex shrink-0 items-center gap-1">
                         {reach !== null && (
-                          <Button
+                          <DescribedAction
+                            description={GO_TO_TERMINAL_TEXT}
                             variant="ghost"
                             size="xs"
                             onClick={goToTerminal}
                             data-testid="decisions-inbox-go-to-terminal"
                           >
                             Go to terminal
-                          </Button>
+                          </DescribedAction>
                         )}
                         {/* One button that turns into its inverse, so the keyboard stays on it as the
                             question moves between groups. Needs only the list: it works whether or
@@ -1690,37 +1721,40 @@ export function DecisionsInboxDialog() {
                         {reader.cancellable &&
                           (dismissal.progress !== null ? (
                             dismissal.phase?.kind === "lost" && (
-                              <Button
+                              <DescribedAction
                                 ref={cancelRef}
+                                description={RETRY_DECLINE_TEXT}
                                 variant="outline"
                                 size="xs"
                                 onClick={dismissal.retry}
                                 data-testid="decisions-inbox-dismiss-retry"
                               >
                                 Retry
-                              </Button>
+                              </DescribedAction>
                             )
                           ) : dismissal.fallback !== null ? (
-                            <Button
+                            <DescribedAction
                               ref={cancelRef}
-                              variant="ghost"
+                              description={WITHDRAW_TEXT}
+                              variant="ghost-danger"
                               size="xs"
                               onClick={cancel.askToWithdraw}
                               data-testid="decisions-inbox-withdraw"
                             >
                               Withdraw question
-                            </Button>
+                            </DescribedAction>
                           ) : (
-                            // Neutral here: the confirmation carries the danger, not the bar.
-                            <Button
+                            // Danger, as in the question view: unlike Clear, it's sent and can't be undone.
+                            <DescribedAction
                               ref={cancelRef}
-                              variant="ghost"
+                              description={DECLINE_TEXT}
+                              variant="ghost-danger"
                               size="xs"
                               onClick={cancel.ask}
                               data-testid="decisions-inbox-dismiss"
                             >
-                              Dismiss question
-                            </Button>
+                              Decline question
+                            </DescribedAction>
                           ))}
                       </div>
                     </div>

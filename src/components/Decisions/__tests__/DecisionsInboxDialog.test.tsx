@@ -1444,15 +1444,43 @@ describe("DecisionsInboxDialog", () => {
     );
   });
 
-  it("dismisses the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
+  it("says what Decline does before it's pressed, and gives focus back to it with no tooltip after Keep question (#18041)", async () => {
     open();
-    const dismiss = await screen.findByTestId("decisions-inbox-dismiss");
-    fireEvent.click(dismiss);
+    const decline = await screen.findByRole("button", { name: "Decline question" });
+    const description = (button: HTMLElement) =>
+      document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(description(decline)).toMatch(/chose not to answer/);
+    // Each action in the bar says what it does: Clear stays here, Decline is sent.
+    expect(description(screen.getByTestId("decisions-inbox-clear"))).toMatch(/this computer only/);
+    expect(description(decline)).not.toBe(description(screen.getByTestId("decisions-inbox-clear")));
+    // The consequential one looks it: never styled as the local, reversible Clear beside it.
+    expect(decline.dataset.variant).not.toBe(
+      screen.getByTestId("decisions-inbox-clear").dataset.variant
+    );
+
+    // A press focuses the button it lands on, which the confirmation hands focus back to.
+    act(() => decline.focus());
+    fireEvent.click(decline);
     const confirm = await screen.findByRole("alertdialog");
-    expect(confirm.textContent).toContain("Dismiss question q-2?");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep question" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(decline));
+    // Focus coming back opens no tooltip the pointer never asked for; a hover still does.
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(description(decline)).toMatch(/chose not to answer/);
+    fireEvent.pointerMove(decline, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(/chose not to answer/);
+    expect(declineQuestion).not.toHaveBeenCalled();
+  });
+
+  it("declines the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Decline question" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Decline question q-2?");
     expect(declineQuestion).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
     });
     await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
     expect(declineQuestion).toHaveBeenCalledWith({
@@ -1463,21 +1491,24 @@ describe("DecisionsInboxDialog", () => {
     expect(cancelQuestionByReference).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     await waitFor(() =>
-      expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(/^Dismissed/)
+      expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(/^Declined/)
     );
   });
 
-  it("withdraws the question shown only after a second confirmation, once the relay can't take a dismissal", async () => {
+  it("withdraws the question shown only after a second confirmation, once the relay can't take a decline", async () => {
     declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
       result: "submitted",
       declineId,
       outcome: { status: "unsupported", by: "relay" },
     }));
     open();
-    fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+    const decline = await screen.findByTestId("decisions-inbox-dismiss");
+    const declineVariant = decline.dataset.variant;
+    act(() => decline.focus());
+    fireEvent.click(decline);
     const asked = await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(within(asked).getByRole("button", { name: "Dismiss question" }));
+      fireEvent.click(within(asked).getByRole("button", { name: "Decline question" }));
     });
     expect(asked.textContent).toContain("Withdraw question q-2?");
     fireEvent.click(within(asked).getByRole("button", { name: "Keep question" }));
@@ -1487,7 +1518,14 @@ describe("DecisionsInboxDialog", () => {
     );
     expect(cancelQuestionByReference).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByTestId("decisions-inbox-withdraw"));
+    const offered = await screen.findByTestId("decisions-inbox-withdraw");
+    await waitFor(() => expect(document.activeElement).toBe(offered));
+    expect(
+      document.getElementById(offered.getAttribute("aria-describedby") ?? "")?.textContent
+    ).toMatch(/withdrawn when it checks/);
+    // As consequential as the Decline it takes the place of.
+    expect(offered.dataset.variant).toBe(declineVariant);
+    fireEvent.click(offered);
     const confirm = await screen.findByRole("alertdialog");
     expect(confirm.textContent).toContain("Withdraw question q-2?");
     const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
@@ -1500,7 +1538,7 @@ describe("DecisionsInboxDialog", () => {
     expect(declineQuestion).toHaveBeenCalledOnce();
   });
 
-  it("offers no dismissal for a question that has stopped waiting", async () => {
+  it("offers no decline for a question that has stopped waiting", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(3));
     fireEvent.click(rowNamed("q-1"));
@@ -1590,7 +1628,7 @@ describe("DecisionsInboxDialog", () => {
       listQuestions.mockResolvedValue({ revision: 2, questions: [AWAY] });
     });
 
-    it("dismisses it from what was last read of it, and never offers withdrawing in its place", async () => {
+    it("declines it from what was last read of it, and never offers withdrawing in its place", async () => {
       getQuestionContentByReference.mockResolvedValue({
         result: "host-not-connected",
         lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() - 60_000 },
@@ -1603,15 +1641,15 @@ describe("DecisionsInboxDialog", () => {
       open();
       await waitFor(() =>
         expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
-          /isn't connected.*last read it 1 minute ago, so you can still dismiss it/
+          /isn't connected.*last read it 1 minute ago, so you can still decline it/
         )
       );
       fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
-      expect(confirm.textContent).toContain("Dismiss question q-9?");
-      expect(confirm.textContent).toMatch(/dismissed as this computer last read it/);
+      expect(confirm.textContent).toContain("Decline question q-9?");
+      expect(confirm.textContent).toMatch(/If it hasn't changed since this computer last read it/);
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() =>
         expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
@@ -1634,7 +1672,7 @@ describe("DecisionsInboxDialog", () => {
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
     });
 
-    it("never offers withdrawing for a dismissal signed from the last read once the Host went away under the confirmation", async () => {
+    it("never offers withdrawing for a decline signed from the last read once the Host went away under the confirmation", async () => {
       getQuestionContentByReference.mockResolvedValue({
         result: "read",
         question: content("question-9", 9, {
@@ -1657,10 +1695,10 @@ describe("DecisionsInboxDialog", () => {
         lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() },
       });
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() =>
-        expect(confirm.textContent).toMatch(/Your relay needs an update.*q-9 wasn't dismissed/)
+        expect(confirm.textContent).toMatch(/Your relay needs an update.*q-9 wasn't declined/)
       );
       expect(declineQuestion).toHaveBeenCalledOnce();
       expect(confirm.textContent).not.toContain("Withdraw question");
@@ -1668,7 +1706,7 @@ describe("DecisionsInboxDialog", () => {
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
     });
 
-    it("offers no withdrawal for a dismissal signed from the last read once the Host is back", async () => {
+    it("offers no withdrawal for a decline signed from the last read once the Host is back", async () => {
       const declineId = "0190f0aa-1111-4222-8333-44445555ee01";
       useDecisionsAnswerStore.getState().update(answerKey(AWAY_REFERENCE), (record) => ({
         ...record,
@@ -1691,15 +1729,15 @@ describe("DecisionsInboxDialog", () => {
       open();
       await waitFor(() =>
         expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(
-          /^Your relay needs an update.*q-9 wasn't dismissed\.$/
+          /^Your relay needs an update.*q-9 wasn't declined\.$/
         )
       );
       expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
-      // A new Dismiss, from the live read, is its own decision.
+      // A new Decline, from the live read, is its own decision.
       expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
     });
 
-    it("says why it can't be dismissed when nothing read here says where it stands, and keeps Clear", async () => {
+    it("says why it can't be declined when nothing read here says where it stands, and keeps Clear", async () => {
       getQuestionContentByReference.mockResolvedValue({
         result: "host-not-connected",
         lastRead: { result: "not-read" },
@@ -1707,7 +1745,7 @@ describe("DecisionsInboxDialog", () => {
       open();
       await waitFor(() =>
         expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
-          /isn't connected.*can't be dismissed until the Host is back/
+          /isn't connected.*can't be declined until the Host is back/
         )
       );
       expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
@@ -1721,6 +1759,9 @@ describe("DecisionsInboxDialog", () => {
       panels = { t1: { location: "grid" } };
       open();
       const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      expect(
+        document.getElementById(go.getAttribute("aria-describedby") ?? "")?.textContent
+      ).toMatch(/terminal that asked/);
       fireEvent.click(go);
       expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
       expect(dispatch).not.toHaveBeenCalled();

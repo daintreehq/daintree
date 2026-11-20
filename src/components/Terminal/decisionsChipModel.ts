@@ -242,9 +242,9 @@ export function decisionItems(
       kind: withdrawn ? "cancelling" : declined ? "dismissing" : queued ? "queued" : "open",
       // Answered from the question's view as well as on a phone (#17102).
       status: withdrawn
-        ? "Cancelling, waiting for the relay to confirm"
+        ? "Withdrawing, waiting for the relay to confirm"
         : declined
-          ? "Dismissed here, waiting for it to close"
+          ? "Declining from this computer"
           : cleared
             ? CLEARED_NOTE
             : elapsed
@@ -270,18 +270,18 @@ function isAttention(item: DecisionItem): boolean {
   return item.kind === "attention" || item.kind === "uncertain";
 }
 
-/** Still waiting for an answer, so a person may dismiss it. */
+/** Still waiting for an answer, so a person may decline it. */
 export function isCancellable(item: DecisionItem): boolean {
   return item.kind === "open" || item.kind === "queued";
 }
 
 /**
- * Why some rows offer no Dismiss: an answered question's answer is already
+ * Why some rows offer no Decline: an answered question's answer is already
  * the agent's, and an expired one is over. Null when every row is waiting,
- * or already being dismissed or withdrawn.
+ * or already being declined or withdrawn.
  */
 export function cancelNote(items: readonly DecisionItem[]): string | null {
-  // A held follow-up puts a question still waiting under attention too; its waiting row offers Dismiss.
+  // A held follow-up puts a question still waiting under attention too; its waiting row offers Decline.
   const waiting = new Set(
     items
       .filter(
@@ -304,9 +304,9 @@ export function cancelNote(items: readonly DecisionItem[]): string | null {
       item.kind === "never-published" ||
       (noticeStopped(item) && !waiting.has(item.questionId))
   );
-  if (answered && expired) return "Answered and expired questions can't be dismissed";
-  if (answered) return "Answered questions can't be dismissed";
-  if (expired) return "Expired questions can't be dismissed";
+  if (answered && expired) return "Answered and expired questions can't be declined";
+  if (answered) return "Answered questions can't be declined";
+  if (expired) return "Expired questions can't be declined";
   return null;
 }
 
@@ -381,9 +381,9 @@ function itemLabel(item: DecisionItem): ChipLabel {
     case "queued":
       return { text: `${item.label} queued`, detail: null };
     case "dismissing":
-      return { text: `${item.label} dismissing`, detail: null };
+      return { text: `${item.label} declining`, detail: null };
     case "cancelling":
-      return { text: `${item.label} cancelling`, detail: null };
+      return { text: `${item.label} withdrawing`, detail: null };
     default:
       return { text: item.label, detail: null };
   }
@@ -411,7 +411,7 @@ export function deliveryNotes(
   wait: PaneWait = "composer"
 ): string[] {
   const notes: string[] = [];
-  // A question being dismissed or withdrawn has no answer coming, nor one past its deadline.
+  // A question being declined or withdrawn has no answer coming, nor one past its deadline.
   const waitsHere = items.some(
     (item) =>
       !isAttention(item) &&
@@ -496,9 +496,9 @@ export function itemSentence(item: DecisionItem): string {
     case "queued":
       return `Question ${item.label} is queued to send; you can answer it here`;
     case "dismissing":
-      return `Question ${item.label} was dismissed here, waiting for it to close`;
+      return `Question ${item.label} is being declined from this computer`;
     case "cancelling":
-      return `Question ${item.label} is being cancelled, waiting for the relay to confirm`;
+      return `Question ${item.label} is being withdrawn, waiting for the relay to confirm`;
     case "answer":
     case "expired":
     case "never-published":
@@ -554,8 +554,8 @@ const SUMMARY_GROUPS: Array<{
     one: "queued to send",
     many: "queued to send",
   },
-  { matches: (item) => item.kind === "dismissing", one: "dismissing", many: "dismissing" },
-  { matches: (item) => item.kind === "cancelling", one: "cancelling", many: "cancelling" },
+  { matches: (item) => item.kind === "dismissing", one: "declining", many: "declining" },
+  { matches: (item) => item.kind === "cancelling", one: "withdrawing", many: "withdrawing" },
   {
     matches: (item) => setAsideOf(item) === "awaiting",
     one: "past its deadline, awaiting an update",

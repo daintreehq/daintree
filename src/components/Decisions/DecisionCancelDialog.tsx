@@ -202,7 +202,7 @@ export function DecisionCancelDialog({
         return step === "dismiss" ? dismiss() : withdraw();
       })
       .catch((error: unknown) => {
-        const verb = step === "dismiss" ? "dismiss" : "withdraw";
+        const verb = step === "dismiss" ? "decline" : "withdraw";
         report({
           mode: step,
           fallback: because,
@@ -233,7 +233,7 @@ export function DecisionCancelDialog({
           </span>
         )
       }
-      confirmLabel={dismissing ? "Dismiss question" : "Withdraw question"}
+      confirmLabel={dismissing ? "Decline question" : "Withdraw question"}
       // Once nothing can be done, the only answer left is to close.
       cancelLabel={closed ? "Close" : "Keep question"}
       confirmDisabled={closed || reading}

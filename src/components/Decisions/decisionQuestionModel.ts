@@ -24,7 +24,8 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
   open: "Waiting for an answer",
   "proxy-answered": "Answered by the decision model",
   "human-answered": "Answered",
-  cancelled: "Cancelled",
+  // Declined or withdrawn, once its reason is read; this is only what's said without one.
+  cancelled: "Closed without an answer",
   expired: "Expired unanswered",
   "publish-failed": "Couldn't be sent",
 };
