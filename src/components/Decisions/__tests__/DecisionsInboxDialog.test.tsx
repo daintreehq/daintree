@@ -3754,6 +3754,27 @@ describe("DecisionsInboxDialog", () => {
       expect(rows().map(aliasOf)).not.toContain("q-6");
     });
 
+    it("keeps a narrowing made after a question asked for while every project showed (#18048)", async () => {
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+
+      fireEvent.click(scopeSegment("project"));
+      await act(async () => {});
+      expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      expect(rows().map(aliasOf)).not.toContain("q-6");
+    });
+
     it("narrows to this project and back, choosing afresh when the question shown isn't this project's", async () => {
       open();
       await openHistory();

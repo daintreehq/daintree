@@ -264,6 +264,40 @@ describe("openStoppedAnswers", () => {
     expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
   });
 
+  it("yields to an opening that came while it read, as a notification's click", async () => {
+    const read = deferred<DecisionsAttentionList>();
+    listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+    listAttention.mockReturnValue(read.promise);
+    const review = openStoppedAnswers({ terminalId: "t1" }, { fromPane: true });
+    await vi.waitFor(() => expect(listAttention).toHaveBeenCalled());
+    const notified = item("q7", {}, { terminalId: "t9" });
+    useDecisionsInboxStore.getState().open({
+      question: { terminalId: "t9", questionId: "q7", reference: notified.reference },
+    });
+    read.resolve({ result: "listed", items: [attentionItem("q2")] });
+    await review;
+
+    expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(
+      notified.reference
+    );
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
+  });
+
+  it("opens nothing for an opener that moved on while the attention list was read", async () => {
+    const read = deferred<DecisionsAttentionList>();
+    listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+    listAttention.mockReturnValue(read.promise);
+    let shown = true;
+    const review = openStoppedAnswers({ terminalId: "t1" }, { stillWanted: () => shown });
+    await vi.waitFor(() => expect(listAttention).toHaveBeenCalled());
+    shown = false;
+    read.resolve({ result: "listed", items: [attentionItem("q2")] });
+    await review;
+
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
+  });
+
   it("opens while main hasn't said whether Decisions is on, as in a window nothing else watches it from", async () => {
     decisionsSwitch.value = "unknown";
     listQuestions.mockResolvedValue({ revision: 1, questions: [item("q2")] });

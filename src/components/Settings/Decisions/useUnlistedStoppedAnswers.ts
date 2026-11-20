@@ -1,14 +1,8 @@
 import { useEffect, useState } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import type {
-  DecisionsAttentionItem,
-  DecisionsAttentionList,
-} from "@shared/types/decisionsAttention";
-import type {
-  DecisionQuestionList,
-  DecisionQuestionListItem,
-} from "@shared/types/decisionsQuestion";
+import type { DecisionsAttentionItem } from "@shared/types/decisionsAttention";
+import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
 
 /**
  * The answers needing a person whose question this computer's inbox doesn't
@@ -40,6 +34,15 @@ export function offersUnlisted(unlisted: UnlistedStoppedAnswers): boolean {
   return unlisted === "unknown" || (typeof unlisted === "number" && unlisted > 0);
 }
 
+/** A read, or null when it failed by rejecting or by throwing. */
+async function settle<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The stopped answers only the attention list holds, for Settings to offer
  * that list beside the inbox: read when the section shows, each time the list
@@ -54,20 +57,16 @@ export function useUnlistedStoppedAnswers(stopped: number): UnlistedStoppedAnswe
   useEffect(() => {
     if (listOpen) return;
     let live = true;
-    // Async, so a bridge that throws rather than rejects fails the read the same way.
-    const read = async (): Promise<[DecisionsAttentionList, DecisionQuestionList]> =>
-      Promise.all([decisionsClient.listAttention(), decisionsClient.listQuestions()]);
-    read().then(
-      ([attention, list]) => {
-        if (!live) return;
-        setUnlisted(
-          attention.result === "listed" ? unlistedAnswers(attention.items, list.questions) : 0
-        );
-      },
-      () => {
-        if (live) setUnlisted("unknown");
-      }
-    );
+    Promise.all([
+      settle(() => decisionsClient.listAttention()),
+      settle(() => decisionsClient.listQuestions()),
+    ]).then(([attention, list]) => {
+      if (!live) return;
+      // Not delivering holds nothing to review, whatever the other read did.
+      if (attention !== null && attention.result !== "listed") setUnlisted(0);
+      else if (attention === null || list === null) setUnlisted("unknown");
+      else setUnlisted(unlistedAnswers(attention.items, list.questions));
+    });
     return () => {
       live = false;
     };

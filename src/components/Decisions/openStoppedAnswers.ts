@@ -119,10 +119,22 @@ export async function openStoppedAnswers(
   opener: StoppedAnswersOpener = {}
 ): Promise<void> {
   const ticket = ++latest;
-  // A later press decides, Decisions switched off holds nothing to review, and an opener
-  // that moved on wants nothing opened over where it went.
-  const wanted = () =>
-    ticket === latest && readDecisionsSwitch() !== "off" && (opener.stillWanted?.() ?? true);
+  const inboxAt = useDecisionsInboxStore.getState().request;
+  const listAt = useDecisionsAttentionStore.getState().request.seq;
+  // A later press decides, as does anything that opened the inbox or the list meanwhile (a
+  // notification's click); Decisions switched off holds nothing to review, and an opener that
+  // moved on wants nothing opened over where it went.
+  const wanted = () => {
+    const inbox = useDecisionsInboxStore.getState().request;
+    return (
+      ticket === latest &&
+      inbox.seq === inboxAt.seq &&
+      inbox.ask === inboxAt.ask &&
+      useDecisionsAttentionStore.getState().request.seq === listAt &&
+      readDecisionsSwitch() !== "off" &&
+      (opener.stillWanted?.() ?? true)
+    );
+  };
   const list = await readOrNull(() => decisionsClient.listQuestions());
   if (!wanted()) return;
   let reference = list === null ? undefined : stoppedQuestion(list.questions, scope)?.reference;

@@ -404,7 +404,7 @@ describe("Questions → Inbox (#17231)", () => {
       listPushes = [];
       Reflect.set(window.electron.decisions, "listQuestions", listQuestions);
       Reflect.set(window.electron.decisions, "listAttention", listAttention);
-      const on = window.electron.events.on;
+      const on = window.electron.events.on as (name: string, listener: () => void) => () => void;
       Reflect.set(window.electron.events, "on", (name: string, listener: () => void) => {
         if (name !== "decisions:questions-changed") return on(name, listener);
         const push = listener as unknown as (list: DecisionQuestionList) => void;
@@ -504,6 +504,15 @@ describe("Questions → Inbox (#17231)", () => {
       render(<Sections />);
       await act(async () => {});
       expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+
+    it("offers nothing while Decisions isn't delivering, whatever the other read did", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockResolvedValue({ result: "not-running" });
+      render(<Sections />);
+      await act(async () => {});
+      expect(listAttention).toHaveBeenCalled();
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
     });
 
     it("reads again each time the attention list closes, and as the stopped count moves", async () => {
