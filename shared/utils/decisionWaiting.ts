@@ -5,8 +5,8 @@ import type {
 import { deadlineElapsed } from "./decisionDeadline.js";
 
 /**
- * Whether a question waits on the person: the one rule behind the toolbar
- * badge and its overflow, the window title and the Dock badge (#18046).
+ * Whether a question needs the person: the rules behind the toolbar button
+ * and its overflow, the window title and the Dock badge (#18046, #18045).
  */
 
 /**
@@ -37,4 +37,25 @@ export function isWaitingOnPerson(
     (nowMs === null ||
       !deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs))
   );
+}
+
+/**
+ * An answer or a person's follow-up that delivery stopped on, typed in or
+ * not, which only the person can decide what to do with (#18045): the inbox's
+ * Needs attention group. It stays until they do, whatever the clock says.
+ */
+export function deliveryNeedsPerson(standing: DecisionQuestionStanding): boolean {
+  return standing.kind === "needs-attention";
+}
+
+/**
+ * Whether anything about the question needs the person: one to answer, or a
+ * delivery stopped. The window title and Dock badge light by it, so they never
+ * say all clear while the toolbar marks either.
+ */
+export function needsPerson(
+  item: Parameters<typeof isWaitingOnPerson>[0],
+  nowMs: number | null = null
+): boolean {
+  return isWaitingOnPerson(item, nowMs) || deliveryNeedsPerson(item.standing);
 }

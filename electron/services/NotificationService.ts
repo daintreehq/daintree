@@ -20,7 +20,7 @@ import { readUserPresence, type UserPresence } from "./userPresence.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
 import { nextAskDeadline } from "../../shared/utils/decisionDeadline.js";
-import { isWaitingOnPerson } from "../../shared/utils/decisionWaiting.js";
+import { needsPerson } from "../../shared/utils/decisionWaiting.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   DecisionQuestionList,
@@ -345,9 +345,11 @@ class NotificationService {
   }
 
   /**
-   * Counts each pane with a question waiting on the person once, however many
-   * it holds. One whose ask they've seen or cleared here (#17895) waits on
-   * the agent's side only, and counts no more until it asks something new.
+   * Counts each pane with a question that needs the person once, however many
+   * it holds: one to answer, or a delivery stopped on their answer (#18045),
+   * so the Dock and title never say all clear while the toolbar marks either.
+   * One whose ask they've seen or cleared here (#17895) waits on the agent's
+   * side only, and counts no more until it asks something new.
    */
   private noteDecisionQuestions(list: DecisionQuestionList): void {
     this.latestQuestions = list;
@@ -356,8 +358,9 @@ class NotificationService {
     this.armQuestionDeadline(list, now);
     const panes = new Map<string, string>();
     for (const question of list.questions) {
-      // The toolbar's rule (#18046), queued included; past its deadline by the clock (#17943) it can't be answered.
-      if (!isWaitingOnPerson(question, now)) continue;
+      // The toolbar's rules: one to answer, queued included (#18046), unless its deadline
+      // passed by the clock (#17943); or a delivery stopped on their answer (#18045).
+      if (!needsPerson(question, now)) continue;
       const { projectId, terminalId } = question.reference;
       panes.set(paneKey(projectId, terminalId), projectId);
     }
