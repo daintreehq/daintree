@@ -2,7 +2,7 @@ import type { ActionRegistry } from "../actionTypes";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { inboxGroupOf } from "@/components/Decisions/decisionsInboxModel";
 import { readDecisionsSwitch } from "@/hooks/useDecisionsOn";
-import { isWaitingOnPerson } from "@/hooks/useDecisionsWaitingCount";
+import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";

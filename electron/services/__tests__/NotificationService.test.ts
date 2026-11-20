@@ -118,6 +118,7 @@ import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService, type NotificationState } from "../NotificationService.js";
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
+import { isWaitingOnPerson } from "../../../shared/utils/decisionWaiting.js";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
@@ -1194,6 +1195,52 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
+    it("counts the questions the toolbar counts, by the same rule, queued included (#18046)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      const standings: DecisionQuestionStanding[] = [
+        open,
+        { kind: "waiting", reason: "reply" },
+        { kind: "queued" },
+        { kind: "send-failed" },
+        { kind: "to-type" },
+        { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        { kind: "settled", outcome: "answered", handled: false },
+        { kind: "settled", outcome: "withdrawn" },
+      ];
+      const marked = { ask: null, seen: true, cleared: false };
+      const list = [
+        ...standings.map((standing, i) => question("project-11", `terminal-${i}`, standing)),
+        {
+          ...question("project-11", "terminal-seen", { kind: "queued" }),
+          inbox: marked,
+        },
+        {
+          ...question("project-11", "terminal-cleared", open),
+          inbox: { ...marked, seen: false, cleared: true },
+        },
+      ];
+
+      // Each standing on a pane of its own: it counts there exactly when the toolbar's rule says so.
+      for (const [i, standing] of standings.entries()) {
+        setDecisionQuestions([question("project-11", "terminal-solo", standing)]);
+        const solo = isWaitingOnPerson({ standing }, Date.now()) ? 1 : 0;
+        expect(win.setTitle, `${i}:${standing.kind}`).toHaveBeenLastCalledWith(
+          solo === 0 ? "Daintree" : `(${solo}) Daintree`
+        );
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(solo);
+      }
+      setDecisionQuestions(list);
+
+      // One pane each, so the pane count is the question count here.
+      const expected = list.filter((item) => isWaitingOnPerson(item, Date.now())).length;
+      expect(expected).toBe(3);
+      expect(win.setTitle).toHaveBeenLastCalledWith(`(${expected}) Daintree`);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(expected);
+    });
+
     it("reads the questions already waiting when it starts", async () => {
       setDecisionQuestions([question("project-11", "terminal-a")]);
       const win = windowWithViews(11);
@@ -1204,7 +1251,7 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
-    it("counts open questions and answered ones whose agent asked for a reply, and nothing else", async () => {
+    it("counts open, queued and replied-to questions, and nothing else", async () => {
       const win = windowWithViews(11);
       notificationService.initialize(createRegistryMock([win]) as never);
       await questionsLoaded();
@@ -1212,6 +1259,7 @@ describe("NotificationService", () => {
       setDecisionQuestions([
         question("project-11", "terminal-a", open),
         question("project-11", "terminal-b", { kind: "waiting", reason: "reply" }),
+        // Still queued to send, so still the person's to answer: the toolbar counts it too (#18046).
         question("project-11", "terminal-c", { kind: "queued" }),
         question("project-11", "terminal-d", { kind: "send-failed" }),
         question("project-11", "terminal-e", { kind: "to-type" }),
@@ -1228,8 +1276,8 @@ describe("NotificationService", () => {
         question("project-11", "terminal-i", { kind: "settled", outcome: "expired" }),
         question("project-11", "terminal-j", { kind: "settled", outcome: "declined" }),
       ]);
-      expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
-      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
 
       // Answered, then the reply's request withdrawn by a later expiry.
       setDecisionQuestions([
@@ -1419,9 +1467,15 @@ describe("NotificationService", () => {
             expiresAt: at(60_000),
           },
         ]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
+
+        vi.advanceTimersByTime(60_000);
         expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
         expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
 
+        // A queued question is bound by its deadline too (#18046).
         vi.advanceTimersByTime(60_000);
         expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
