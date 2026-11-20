@@ -418,6 +418,21 @@ export function readableText(text: string | null | undefined): string | null {
   return readable === "" ? null : readable;
 }
 
+/**
+ * A row's question as the attention list shows it (#18055), from one
+ * readable text so the two never disagree: its first line for the heading,
+ * and the whole of it only when that says more than the heading does.
+ */
+export function attentionQuestion(question: string | null | undefined): {
+  line: string | null;
+  whole: string | null;
+} {
+  const whole = readableText(question);
+  if (whole === null) return { line: null, whole: null };
+  const more = whole.includes("\n") || whole.length > QUESTION_CHARS;
+  return { line: questionLine(whole), whole: more ? whole : null };
+}
+
 /** IDs as a reference by question carries them over IPC. */
 const REFERENCE_ID_CHARS = 256;
 

@@ -3695,7 +3695,9 @@ describe("AnswerDelivery, the whole question in the needs-attention list (#18055
       origin: { ...ORIGIN, host_id: "host_elsewhere" },
       delivery_status: "needs-attention",
       error_code: "resume_other_host",
-      content_sealed: await sealQuestionContent({ identity }, Q1, { question: "Drop the index?" }),
+      content_sealed: await sealQuestionContent({ identity }, Q1, {
+        question: "Drop the index?\nIt holds last year's rows.",
+      }),
     });
     await answered(h.store, Q2, 2, "approve", {
       delivery_status: "needs-attention",
@@ -3705,10 +3707,15 @@ describe("AnswerDelivery, the whole question in the needs-attention list (#18055
     const [elsewhere, unopened] = await h.delivery.attentionItems();
     expect(elsewhere).toMatchObject({
       question: "Drop the index?",
-      fullQuestion: "Drop the index?",
+      fullQuestion: "Drop the index?\nIt holds last year's rows.",
       plan: null,
-      reference: { hostId: "host_elsewhere", terminalId: PANE, questionId: Q1 },
       origin: { otherHost: { hostId: "host_elsewhere" } },
+    });
+    expect(elsewhere!.reference).toEqual({
+      hostId: "host_elsewhere",
+      projectId: ORIGIN.project_id,
+      terminalId: PANE,
+      questionId: Q1,
     });
     expect(unopened).toMatchObject({
       questionId: Q2,

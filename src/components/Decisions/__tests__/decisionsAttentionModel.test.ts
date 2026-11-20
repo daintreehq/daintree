@@ -380,6 +380,9 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
       status: "needs-attention" as const,
       reason: "resume_other_host",
       question: null,
+      fullQuestion: null,
+      plan: null,
+      reference: null,
       askedAt: "2026-11-01T09:00:00.000Z",
       answer: null,
       answerUnavailable: null,
@@ -522,10 +525,10 @@ describe("an opening for a pane, and the whole question (#18055)", () => {
   });
 
   it("puts this computer's items for the pane first and the rest after, each in the order given", () => {
-    const a = origin("pane-2");
-    const b = origin("pane-1");
-    const c = origin("pane-1", { hostId: "host-2", name: "Studio" });
-    const d = origin("pane-1");
+    const a = { id: "a", ...origin("pane-2") };
+    const b = { id: "b", ...origin("pane-1") };
+    const c = { id: "c", ...origin("pane-1", { hostId: "host-2", name: "Studio" }) };
+    const d = { id: "d", ...origin("pane-1") };
     expect(groupForPane([a, b, c, d], "pane-1")).toEqual({ forPane: [b, d], elsewhere: [a, c] });
     expect(groupForPane([a, b], null)).toBeNull();
   });
@@ -540,6 +543,9 @@ describe("an opening for a pane, and the whole question (#18055)", () => {
     expect(canOpenQuestion(at({ hostId: "h2", name: "Studio" }))).toBe(true);
     expect(canOpenQuestion(at({ hostId: "h2", name: null }))).toBe(false);
     expect(canOpenQuestion({ ...at(null), reference: null })).toBe(false);
+    expect(canOpenQuestion({ ...at({ hostId: "h2", name: "Studio" }), reference: null })).toBe(
+      false
+    );
   });
 
   it("offers more of the question only when it says more than its first line", () => {
@@ -548,5 +554,6 @@ describe("an opening for a pane, and the whole question (#18055)", () => {
       hasFullerQuestion({ question: "Ship it?", fullQuestion: "Ship it?\nIt's Friday." })
     ).toBe(true);
     expect(hasFullerQuestion({ question: null, fullQuestion: null })).toBe(false);
+    expect(hasFullerQuestion({ question: "Ship it?", fullQuestion: null })).toBe(false);
   });
 });

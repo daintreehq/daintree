@@ -138,14 +138,22 @@ function useHeldFor(active: boolean, ms: number): boolean {
   return held;
 }
 
-/** Whether a folded quote's text runs past its clamp, measured again as the text changes and as it folds back. */
+/**
+ * Whether a folded quote's text runs past its clamp, measured again as the
+ * text changes, as it folds back, and as the dialog's width changes.
+ */
 function useClamped(text: string | null | undefined, expanded: boolean) {
   const textRef = useRef<HTMLQuoteElement>(null);
   const [clamped, setClamped] = useState(false);
   useLayoutEffect(() => {
     const el = textRef.current;
     if (el === null || expanded) return;
-    setClamped(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text, expanded]);
   return { textRef, clamped };
 }
@@ -186,8 +194,8 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
           id={textId}
           className={
             expanded
-              ? "whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
-              : "line-clamp-4 whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+              ? "whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
+              : "line-clamp-4 whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
           }
         >
           {answer.text}
@@ -264,8 +272,8 @@ function FollowUpPreview({
           id={textId}
           className={
             expanded
-              ? "whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
-              : "line-clamp-4 whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+              ? "whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
+              : "line-clamp-4 whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
           }
         >
           {followUp.text}
@@ -313,8 +321,8 @@ function PlanPreview({ plan, alias }: { plan: string; alias: string }) {
         id={textId}
         className={
           expanded
-            ? "whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
-            : "line-clamp-4 whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+            ? "whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
+            : "line-clamp-4 whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
         }
       >
         {plan}
@@ -387,7 +395,7 @@ function QuestionDetail({ item }: { item: DecisionsAttentionItem }) {
         <p
           id={textId}
           hidden={!expanded}
-          className="whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+          className="whitespace-pre-wrap break-words text-xs text-text-primary [text-wrap:pretty]"
           data-testid="decisions-attention-question"
         >
           {item.fullQuestion}
@@ -698,6 +706,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   /** The place in the list of an item whose action may take it off, for focus to land after. */
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
   const reading = useRef(0);
+  /**
+   * The opening whose read is being committed. Regrouping can move the row
+   * holding focus, and React hands focus back to it after the commit: that
+   * is no one's move.
+   */
+  const settling = useRef(0);
   /** The opening reads are launched for now, and the pane it was opened for. */
   const opening = useRef<{ seq: number; terminalId: string | null }>({ seq: 0, terminalId: null });
   /**
@@ -725,13 +739,13 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     () => (groups === null ? items : [...groups.forPane, ...groups.elsewhere]),
     [groups, items]
   );
-  const elsewhereStart = groups?.elsewhere[0]?.questionId ?? null;
-  // Said only of this opening's own pane, once its own read has listed nothing for it.
+  // Said only of this opening's own pane, once its own read has listed the rows: until
+  // then (or when it failed) the rows keep their places, unlabelled, rather than
+  // name the new pane's own items as elsewhere.
+  const ownRead = listedFor.seq === request.seq;
+  const elsewhereStart = ownRead ? (groups?.elsewhere[0]?.questionId ?? null) : null;
   const noneForPane =
-    groups !== null &&
-    groups.forPane.length === 0 &&
-    groups.elsewhere.length > 0 &&
-    listedFor.seq === request.seq;
+    ownRead && groups !== null && groups.forPane.length === 0 && groups.elsewhere.length > 0;
 
   const refresh = useCallback(async () => {
     const ticket = ++reading.current;
@@ -739,6 +753,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     try {
       const next = await decisionsClient.listAttention();
       if (ticket !== reading.current) return;
+      settling.current = launchedFor.seq;
       setList(next);
       setListedFor(launchedFor);
       setLoadError(null);
@@ -830,6 +845,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         heldAtWindowBlur = document.activeElement;
       };
       const onFocusIn = (event: FocusEvent) => {
+        if (settling.current === seq) return;
         const { target } = event;
         const replayed = target === heldAtWindowBlur;
         heldAtWindowBlur = null;
@@ -846,10 +862,16 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       };
     }
     focusedFor.current = seq;
+    settling.current = 0;
     // A control the refresh took away leaves focus on nothing, which no one chose.
     const active = document.activeElement;
     const kept = active !== null && active !== document.body;
     if (focusMovedFor.current === seq && kept) return undefined;
+    // A modal over this one (the question view, a confirmation) keeps the focus it holds.
+    const over = active?.closest('[aria-modal="true"]') ?? null;
+    if (over !== null && bodyRef.current !== null && !over.contains(bodyRef.current)) {
+      return undefined;
+    }
     // This opening's read has landed, so the rows marked for its pane are its pane's own.
     const target =
       loadError === null
@@ -874,6 +896,17 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     if (handling !== null && !stillShown(handling)) setHandling(null);
     if (move !== null && !stillShown(move.item)) setMove(null);
   }, [items, list, handling, move]);
+
+  // A row that moves keeps its saved place current, so when it does leave,
+  // focus goes to the row that followed it where it last showed.
+  useEffect(() => {
+    for (const saved of [confirmFrom, focusAfter]) {
+      const at = saved.current;
+      if (at === null) continue;
+      const index = shown.findIndex((item) => item.questionId === at.questionId);
+      if (index !== -1 && index !== at.index) saved.current = { ...at, index };
+    }
+  }, [shown]);
 
   // An item that left took the focus with it: the next one's first action
   // gets it, else the one before, else the list's own place in the dialog.

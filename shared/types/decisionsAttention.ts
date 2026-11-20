@@ -108,12 +108,14 @@ export interface DecisionsAttentionItem {
    * `unspecified` when none was recorded.
    */
   reason: string;
-  /** The question as asked, its first line; null when it couldn't be opened here. */
+  /**
+   * The question as asked, its first line; null when it couldn't be opened
+   * here, or the question view would refuse it as unreadable.
+   */
   question: string | null;
   /**
    * The whole question, controls stripped and uncut, to read in place
-   * (#18055); null when it couldn't be opened here, or the question view
-   * would refuse it as unreadable.
+   * (#18055), when it says more than its first line; null otherwise.
    */
   fullQuestion: string | null;
   /**

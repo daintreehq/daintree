@@ -133,7 +133,7 @@ export async function readQuestionContent(
  */
 export function questionDetail(
   row: QuestionRow,
-  opened: DecisionContentV1 | null
+  opened: unknown
 ): { question: string; plan: string | null } | null {
   const parsed = DecisionContentV1.safeParse(opened);
   if (!parsed.success) return null;

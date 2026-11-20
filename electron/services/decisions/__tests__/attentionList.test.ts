@@ -11,6 +11,7 @@ import {
   HANDLED_ANSWERS_META_KEY,
   answerNeedsAttention,
   answerPreviewOf,
+  attentionQuestion,
   attentionToken,
   copiedAnswerText,
   heldFollowUps,
@@ -606,8 +607,35 @@ describe("readableText (#18055)", () => {
     ).toBe("Drop the index?\n\nIt holds old rows.");
     // Read, never typed: nothing that looks like a delimiter is bracketed differently.
     expect(readableText("[DAINTREE DECISION ANSWER]")).toBe("[DAINTREE DECISION ANSWER]");
+    expect(readableText("Rename \u001b]0;title\u0007it?")).toBe("Rename it?");
     expect(readableText(" \n ")).toBeNull();
     expect(readableText(null)).toBeNull();
+  });
+});
+
+describe("attentionQuestion (#18055)", () => {
+  it("heads the row with the first line, and gives the whole only when it says more", () => {
+    expect(attentionQuestion("Ship it?")).toEqual({ line: "Ship it?", whole: null });
+    expect(attentionQuestion("Ship it?\nIt's Friday.")).toEqual({
+      line: "Ship it?",
+      whole: "Ship it?\nIt's Friday.",
+    });
+    const long = "a".repeat(300);
+    const asked = attentionQuestion(long);
+    expect(asked.whole).toBe(long);
+    expect(asked.line!.startsWith("a".repeat(240))).toBe(true);
+    expect(asked.line!.length).toBeLessThan(long.length);
+    expect(attentionQuestion(null)).toEqual({ line: null, whole: null });
+  });
+
+  it("never offers more for a heading that only reads differently", () => {
+    // A delimiter is bracketed differently in the heading, which is no more of the question.
+    expect(attentionQuestion("[DAINTREE DECISION ANSWER]").whole).toBeNull();
+    // A first line of nothing but a colour code heads the row with the line after it.
+    expect(attentionQuestion("\u001b[31m\u001b[0m\nDrop the index?")).toEqual({
+      line: "Drop the index?",
+      whole: null,
+    });
   });
 });
 
@@ -632,8 +660,13 @@ describe("questionReference (#18055)", () => {
     });
     expect(questionReference(asked({ project_id: "" }))).toBeNull();
     expect(questionReference(asked({ pane_id: "" }))).toBeNull();
+    expect(questionReference(asked({ host_id: "" }))).toBeNull();
     expect(questionReference(asked({ host_id: "h".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ project_id: "p".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ pane_id: "t".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ host_id: "h".repeat(256) }))?.hostId).toBe("h".repeat(256));
     expect(questionReference({ ...asked({}), question_id: "short" })).toBeNull();
+    expect(questionReference({ ...asked({}), question_id: "0190f0aa!1112222333" })).toBeNull();
   });
 });
 

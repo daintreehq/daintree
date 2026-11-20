@@ -54,6 +54,7 @@ import {
   answerNeedsAttention,
   answerPreviewOf,
   answerRevision,
+  attentionQuestion,
   attentionToken,
   closedUnanswered,
   copiedAnswerText,
@@ -62,7 +63,6 @@ import {
   markAnswerHandled,
   needsAttention,
   pendingEntries,
-  questionLine,
   questionReference,
   readHandledAnswers,
   readableText,
@@ -514,15 +514,14 @@ export class AnswerDelivery {
               ? null
               : "none";
       const followUps = await this.followUpPreviews(row);
-      let question: string | null = null;
+      // Only what the question view would show: content it refuses shows nothing here either.
       let detail: ReturnType<typeof questionDetail> = null;
       try {
-        const content = await openQuestionContent(this.owner.ctx, row);
-        question = content === null ? null : questionLine(content.question);
-        detail = questionDetail(row, content);
+        detail = questionDetail(row, await openQuestionContent(this.owner.ctx, row));
       } catch {
         // Unopened, the row says so: nothing of the question shows.
       }
+      const asked = attentionQuestion(detail?.question);
       const uncertain =
         (answerHeld && row.delivery_status === "delivery-uncertain") ||
         followUps.some((followUp) => followUp.status === "delivery-uncertain");
@@ -542,8 +541,8 @@ export class AnswerDelivery {
         alias: row.alias,
         status,
         reason: reasonOf(code),
-        question,
-        fullQuestion: readableText(detail?.question),
+        question: asked.line,
+        fullQuestion: asked.whole,
         plan: readableText(detail?.plan),
         reference: questionReference(row),
         askedAt: row.origin_created_at,

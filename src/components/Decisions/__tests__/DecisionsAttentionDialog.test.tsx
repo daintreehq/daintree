@@ -1085,6 +1085,80 @@ describe("DecisionsAttentionDialog: an opening for a pane leads with its items (
     expect(screen.queryByTestId("decisions-attention-none-for-pane")).toBeNull();
   });
 
+  it("lands on the new pane's item when reopened while open, though the old pane's focused row moves below it", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    // Both rows already show, so the new opening's read moves pane 3's focused row below pane 4's.
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    await act(async () => land());
+
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("leaves focus in a modal over the list when a new opening's read lands behind it", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+    // What the question view, opened from the list, holds while a notification opens the list for another pane.
+    const reader = document.createElement("div");
+    reader.setAttribute("aria-modal", "true");
+    const close = document.createElement("button");
+    reader.append(close);
+    document.body.append(reader);
+    onTestFinished(() => reader.remove());
+    act(() => close.focus());
+
+    openFor("pane-4");
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("names nothing elsewhere while a new opening's read is out, or once it failed", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    expect(elsewhereRow()).toBe(4);
+
+    let fail = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error("The relay went away"));
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    // Pane 4's own row still shows second, where the last opening put it, but isn't called elsewhere.
+    expect(elsewhereRow()).toBeNull();
+    await act(async () => fail());
+
+    await waitFor(() => expect(screen.getByText("The relay went away")).toBeTruthy());
+    expect(shownAliases()).toEqual([3, 4]);
+    expect(elsewhereRow()).toBeNull();
+    expect(screen.queryByTestId("decisions-attention-none-for-pane")).toBeNull();
+  });
+
   it("keeps one list in main's order when opened for no pane, or for a pane that holds them all", async () => {
     listed = [makeItem(4), makeItem(3)];
     const { rerender } = render(tree(false));
@@ -1120,16 +1194,19 @@ describe("DecisionsAttentionDialog: an opening for a pane leads with its items (
   });
 
   it("hands focus to the first row below once the pane's last item leaves, and says so", async () => {
-    listed = [plain(3), plain(4)];
+    // Main lists pane 4's item last; it shows first, so the row after it is 3, not 5.
+    listed = [plain(3), plain(5), plain(4)];
     const { rerender } = render(tree(false));
     openFor("pane-4");
     rerender(tree(true));
-    await listedRows(2);
-    expect(shownAliases()).toEqual([4, 3]);
+    await listedRows(3);
+    expect(shownAliases()).toEqual([4, 3, 5]);
     await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
 
-    fireEvent.click(markButton(4));
-    await listedRows(1);
+    const mark = markButton(4);
+    act(() => mark.focus());
+    fireEvent.click(mark);
+    await listedRows(2);
 
     await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
     expect(screen.getByTestId("decisions-attention-none-for-pane")).toBeTruthy();
@@ -1166,14 +1243,18 @@ describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", (
     const text = within(row).getByTestId("decisions-attention-question");
     expect(text.hidden).toBe(true);
     const show = within(row).getByRole("button", { name: "Show full question for q-3" });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(show);
     expect(text.hidden).toBe(false);
     expect(text.textContent).toBe(whole);
     expect(show.getAttribute("aria-expanded")).toBe("true");
     expect(show.getAttribute("aria-controls")).toBe(text.id);
+    fireEvent.click(within(row).getByRole("button", { name: "Show less of the question for q-3" }));
+    expect(text.hidden).toBe(true);
 
     // A question that is all heading has nothing more to show.
     const other = screen.getAllByTestId("decisions-attention-item")[1]!;
+    expect(within(other).queryByTestId("decisions-attention-question")).toBeNull();
     expect(within(other).queryByRole("button", { name: /Show full question/ })).toBeNull();
   });
 
@@ -1198,6 +1279,20 @@ describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", (
     const plan = screen.getByTestId("decisions-attention-plan");
     expect(plan.textContent).toContain("The agent's plan if unanswered");
     expect(plan.textContent).toContain("Keep the recorded fixture.");
+    // Right after the notice whose words refer to it.
+    expect(plan.previousElementSibling?.textContent).toContain("its stated plan");
+  });
+
+  it("shows an advisory question's plan when its answer stalled, with no notice", async () => {
+    listed = [makeItem(3, { plan: "Keep the recorded fixture." }), makeItem(4)];
+    render(tree(true));
+    await listedRows(2);
+
+    const [planned, plain] = screen.getAllByTestId("decisions-attention-item");
+    expect(within(planned!).getByTestId("decisions-attention-plan").textContent).toContain(
+      "Keep the recorded fixture."
+    );
+    expect(within(plain!).queryByTestId("decisions-attention-plan")).toBeNull();
   });
 
   it("opens the question in the question view by its reference, and only one it can reach", async () => {
@@ -1205,7 +1300,7 @@ describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", (
       hostId: "host-1",
       projectId: "project-1",
       terminalId: "pane-3",
-      questionId: "qid-3",
+      questionId: "0190f0aa11112222333344445555aa03",
     };
     listed = [
       makeItem(3, { reference }),
