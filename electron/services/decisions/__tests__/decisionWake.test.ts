@@ -138,9 +138,12 @@ describe("identityMismatch", () => {
     const sessionless = { ...TARGET, agentSessionId: null };
     expect(identityMismatch(value, sessionless, codex, ["claude"])).toBe("relaunched");
     expect(
-      identityMismatch(value, sessionless, record({ launchAgentId: "claude", detectedAgentId: "codex" }), [
-        "claude",
-      ])
+      identityMismatch(
+        value,
+        sessionless,
+        record({ launchAgentId: "claude", detectedAgentId: "codex" }),
+        ["claude"]
+      )
     ).toBe("relaunched");
     // Not every asker was replaced: that is the wake's to hand back, not a changed run.
     expect(identityMismatch(value, sessionless, codex, ["claude", "codex"])).toBeNull();
@@ -153,11 +156,16 @@ describe("identityMismatch", () => {
     const { value } = sources();
     expect(identityMismatch(value, TARGET, record(), ["claude"])).toBeNull();
     expect(
-      identityMismatch(value, TARGET, record({ launchAgentId: "claude", detectedAgentId: undefined }), [
-        "claude",
-      ])
+      identityMismatch(
+        value,
+        TARGET,
+        record({ launchAgentId: "claude", detectedAgentId: undefined }),
+        ["claude"]
+      )
     ).toBeNull();
-    expect(identityMismatch(value, TARGET, record({ detectedAgentId: undefined }), ["claude"])).toBeNull();
+    expect(
+      identityMismatch(value, TARGET, record({ detectedAgentId: undefined }), ["claude"])
+    ).toBeNull();
     expect(
       identityMismatch(value, TARGET, record({ launchAgentId: "acme-agent" }), ["acme-agent"])
     ).toBeNull();

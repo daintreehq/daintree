@@ -759,7 +759,10 @@ describe("DaintreeTerminalSink", () => {
     });
 
     it.each([
-      ["moved to another pane", (h: Harness) => h.origins.set(Q1, { ...ORIGIN, pane_id: "pane-2" })],
+      [
+        "moved to another pane",
+        (h: Harness) => h.origins.set(Q1, { ...ORIGIN, pane_id: "pane-2" }),
+      ],
       ["no longer in the store", (h: Harness) => h.origins.delete(Q1)],
       ["unreadable", (h: Harness) => h.origins.set(Q1, new Error("busy"))],
     ])(
