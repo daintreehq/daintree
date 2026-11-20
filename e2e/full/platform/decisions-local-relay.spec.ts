@@ -17,7 +17,9 @@
  * relay from (`pnpm install && pnpm build` there first):
  *
  *   DAINTREE_DECISIONS_CHECKOUT=<checkout> \
- *     npx playwright test --project=full-platform decisions-local-relay
+ *     npx playwright test --project=full-platform e2e/full/platform/decisions-local-relay.spec.ts
+ *
+ * The full path is needed: the bare name `decisions-local-relay` selects the whole bucket.
  */
 
 import { test, expect, chromium, type BrowserContext, type Page } from "@playwright/test";
@@ -27,6 +29,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { machineDisplayName } from "../../../electron/utils/machineName";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -381,9 +384,12 @@ test("an agent can withdraw a question it no longer needs, and the phone says so
 
   const cancelled = await mcp.callTool({ name: "cancel_question", arguments: { question_id: id } });
   expect(cancelled.isError, JSON.stringify(cancelled.content)).toBeFalsy();
-  await expect(phone.getByText("Withdrawn by your agent", { exact: true })).toBeVisible({
-    timeout: 30_000,
-  });
+  // The phone names the computer that signed the cancel and never who asked for it.
+  await expect(
+    phone.getByText(`Withdrawn on ${machineDisplayName().replace(/\s+/g, " ").trim()}`, {
+      exact: true,
+    })
+  ).toBeVisible({ timeout: 30_000 });
   const read = await mcp.callTool({ name: "get_decision", arguments: { question_id: id } });
   expect(read.structuredContent).toMatchObject({ status: "cancelled" });
 });
@@ -479,7 +485,7 @@ test("the setup check proves the whole loop with a test question answered on the
   await panel.screenshot({ path: test.info().outputPath("setup-check.png") });
 });
 
-test("answers wait while the agent works, then go in the order their questions were asked", async () => {
+test("answers wait behind a draft in the composer, then go in the order their questions were asked", async () => {
   test.setTimeout(240_000);
   const from = readFakeAgentStdin(binDir, paneId).length;
   const first = "Name the new settings page Integrations or Connections?";
@@ -502,33 +508,57 @@ test("answers wait while the agent works, then go in the order their questions w
     ],
   });
 
-  // Answered in the other order, both while the agent is still busy.
+  // Claude takes a line mid-turn, so its work holds nothing back: what holds an answer is a
+  // half-written reply in the pane's composer.
+  const editor = page.locator(`[data-panel-id="${paneId}"] .cm-content`).first();
+  await editor.click();
+  await page.keyboard.type("Half a reply to the agent");
+  await expect(editor).toContainText("Half a reply to the agent");
+
+  // Answered in the other order. Both have reached Daintree before the draft goes, so the order
+  // they leave in is the order of asking, never of arrival.
   await answerOnPhone(second, { option: /Redirect it/ });
   await answerOnPhone(first, { option: /Connections/ });
+  for (const id of [q1, q2]) {
+    await expect
+      .poll(async () => (await decision(id)).status, {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe("human-answered");
+  }
   const pane = page.locator(`[data-panel-id="${paneId}"]`);
   await expect(pane.getByText(/delivering/).first()).toBeVisible({ timeout: 30_000 });
   expect(await agentState()).toBe("working");
-  expect(typedSince(from)).toBe("");
-
-  await settle();
+  // Held and not just slow: nothing is typed over the draft for as long as it is there.
+  const heldAt = Date.now();
   await expect
     .poll(
-      async () => {
-        const typed = typedSince(from);
-        // A real agent takes a turn over what was typed and settles again.
-        if (typed.includes(q1) !== typed.includes(q2) && (await agentState()) !== "working") {
-          await work();
-          await settle();
-        }
-        return typed.includes(q1) && typed.includes(q2);
+      () => {
+        expect(typedSince(from)).toBe("");
+        return Date.now() - heldAt > 5_000;
       },
-      { timeout: 90_000, intervals: [1_000] }
+      { timeout: 15_000, intervals: [500] }
     )
     .toBe(true);
+
+  await editor.click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.press("Backspace");
+  await expect(editor.locator(".cm-placeholder")).toBeVisible();
+  await expect
+    .poll(() => typedSince(from).includes(q1) && typedSince(from).includes(q2), {
+      timeout: 90_000,
+      intervals: [1_000],
+    })
+    .toBe(true);
   const typed = typedSince(from);
-  expect(typed.indexOf(`question_id: ${q1}`)).toBeLessThan(typed.indexOf(`question_id: ${q2}`));
+  expect(typed.indexOf(`question_id: ${q1}`), typed).toBeLessThan(
+    typed.indexOf(`question_id: ${q2}`)
+  );
   expect(typed).toContain("choice: connections");
   expect(typed).toContain("choice: redirect");
+  await settle();
 });
 
 test("the design-review gate needs a person, and its approval is bound to the screenshots reviewed", async () => {
