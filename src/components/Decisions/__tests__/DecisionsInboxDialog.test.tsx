@@ -1751,7 +1751,10 @@ describe("DecisionsInboxDialog", () => {
     }));
     open();
     const group = await screen.findByTestId("decisions-inbox-group-history");
-    // The count is every past question; the rows are the newest page.
+    // Shut, its bar counts every past question; opened, its rows are the newest page.
+    await waitFor(() => expect(group.textContent).toContain("150"));
+    expect(group.querySelectorAll("li")).toHaveLength(0);
+    fireEvent.click(within(group).getByTestId("decisions-inbox-fold-history"));
     await waitFor(() => expect(group.querySelectorAll("li")).toHaveLength(64));
     expect(group.textContent).toContain("150");
     expect(within(group).getAllByRole("listitem")[0]!.textContent).toContain("q-1149");

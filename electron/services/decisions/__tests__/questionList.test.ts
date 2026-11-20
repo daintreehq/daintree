@@ -1245,7 +1245,7 @@ describe("projectDecisionQuestions with a memo (#18033)", () => {
     const memo: QuestionListMemo = new WeakMap();
     const rows = [row(1, { local_status: "expired" }), row(2)];
     let seen: DecisionAskerPresence | undefined;
-    const lookup = vi.fn(() => seen);
+    const lookup = vi.fn((_origin: QuestionRow["origin"]) => seen);
     const list = () =>
       projectDecisionQuestions(rows, new Map(), HOST, NO_ADVISORY_HOST, lookup, memo);
 

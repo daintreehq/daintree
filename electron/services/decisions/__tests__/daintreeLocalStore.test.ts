@@ -1753,6 +1753,22 @@ describe("DaintreeLocalStore commit changes and settled history (#18033)", () =>
     ]);
   });
 
+  it("names the question a withdrawal or decline was queued or sent for, and no other send's (#18052)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions].sort()));
+
+    await store.putOutbox({ ...item("c1", "q1"), kind: "cancel" });
+    await store.putOutbox({ ...item("d1", "q2"), kind: "owner-decline" });
+    await store.putOutbox({ ...item("a1", "q3"), kind: "owner-answer" });
+    await store.recordOutboxFailure("c1", "offline", 5);
+    await store.deleteOutbox("c1");
+    await store.deleteOutbox("a1");
+    await store.deleteOutbox("missing");
+
+    expect(commits).toEqual([["q1"], ["q2"], [], [], ["q1"], [], []]);
+  });
+
   it("leaves out a call that failed in a batch whose other calls committed", async () => {
     const store = new DaintreeLocalStore(sqlite);
     await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
