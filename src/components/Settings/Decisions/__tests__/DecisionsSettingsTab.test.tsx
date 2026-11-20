@@ -11,6 +11,7 @@ import type {
   DecisionsStatus,
   VerifyDecisionsRecoveryKitPayload,
 } from "@shared/types/decisions";
+import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { _resetHostPlatformForTests } from "@/hooks/useHostPlatform";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
@@ -41,6 +42,7 @@ function pushStatus(status: DecisionsStatus): void {
 const verifyRecoveryKit =
   vi.fn<(payload: VerifyDecisionsRecoveryKitPayload) => Promise<DecisionsKitVerifyResult>>();
 const listDevices = vi.fn<() => Promise<DecisionsDevicesResult>>();
+const getInvolvement = vi.fn<() => Promise<DecisionsInvolvementRead>>();
 
 function kitPassphraseField(): HTMLInputElement | null {
   return document.querySelector<HTMLInputElement>(
@@ -67,6 +69,8 @@ describe("DecisionsSettingsTab", () => {
     verifyRecoveryKit.mockReset();
     listDevices.mockReset();
     listDevices.mockReturnValue(new Promise(() => {}));
+    getInvolvement.mockReset();
+    getInvolvement.mockReturnValue(new Promise(() => {}));
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {
@@ -76,6 +80,7 @@ describe("DecisionsSettingsTab", () => {
           claimRelay,
           verifyRecoveryKit,
           listDevices,
+          getInvolvement,
           // The Remote Hosts, Policy, decision model, setup check, Questions and question list reads, which these tests leave unanswered.
           listQuestions: () => new Promise(() => {}),
           listHosts: () => new Promise(() => {}),
@@ -678,6 +683,52 @@ describe("DecisionsSettingsTab", () => {
     getStatus.mockResolvedValue({ state: "off" });
     await renderTab();
     expect(screen.queryByTestId("decisions-remote-window-note")).toBeNull();
+  });
+
+  it("keeps Involvement behind the switch, and reads it only while the tab shows (#18060)", async () => {
+    getStatus.mockResolvedValue({ state: "off" });
+    await renderTab();
+    expect(document.getElementById("decisions-involvement")).toBeNull();
+    cleanup();
+
+    getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, revision: 1 });
+    getInvolvement.mockResolvedValue({
+      result: "read",
+      role: "owner",
+      settable: true,
+      preference: {
+        status: "available",
+        normalMode: "recommend",
+        consultCount: 2,
+        override: null,
+        mode: "recommend",
+        overrideActive: false,
+        revision: 3,
+        setOn: "phone",
+        setAt: "2026-11-18T09:00:00.000Z",
+        lastSyncedAt: "2026-11-18T09:59:00.000Z",
+        stale: false,
+      },
+    });
+    const tab = (isActive: boolean) => (
+      <TooltipProvider>
+        <DecisionsSettingsTab isActive={isActive} />
+      </TooltipProvider>
+    );
+    // A visited tab stays mounted while another shows.
+    const view = render(tab(false));
+    await act(async () => {});
+    const section = document.getElementById("decisions-involvement");
+    expect(section).not.toBeNull();
+    expect(within(section!).getByText("How involved you want to be")).toBeTruthy();
+    expect(getInvolvement).not.toHaveBeenCalled();
+
+    view.rerender(tab(true));
+    await act(async () => {});
+    expect(getInvolvement).toHaveBeenCalledTimes(1);
+    expect(within(section!).getByTestId("decisions-involvement-mode").textContent).toBe(
+      "Bring a recommendation"
+    );
   });
 
   it("closes Settings before it opens the inbox (#17231)", async () => {

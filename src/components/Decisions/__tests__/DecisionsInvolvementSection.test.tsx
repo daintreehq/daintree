@@ -8,7 +8,8 @@ import type {
   SetDecisionsInvolvementPayload,
 } from "@shared/types/decisionsInvolvement";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsInvolvementSection, INVOLVEMENT_READ_MS } from "../DecisionsInvolvementSection";
+import { DecisionsInvolvementSection } from "../DecisionsInvolvementSection";
+import { INVOLVEMENT_READ_MS } from "../useInvolvementPreference";
 import { localDateTime } from "../decisionsInvolvementModel";
 
 const NOW = Date.parse("2026-11-18T10:00:00.000Z");
@@ -102,11 +103,15 @@ afterEach(() => {
 });
 
 describe("DecisionsInvolvementSection", () => {
-  it("shows a recommendation, how many agents it consults, where it was set and when this computer confirmed it", async () => {
+  it("rests on one line naming the mode, and shows how many agents it consults, where it was set and when this computer confirmed it only while it's changed", async () => {
     show();
     await settle();
 
     expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
+    expect(screen.queryByTestId("decisions-involvement-detail")).toBeNull();
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
+
+    fireEvent.click(byId("decisions-involvement-change"));
     expect(text("decisions-involvement-detail")).toContain("consult 2 other agents first");
     const facts = byId("decisions-involvement-facts");
     expect(facts.textContent).toContain("Set on a phone or tablet");
@@ -132,13 +137,17 @@ describe("DecisionsInvolvementSection", () => {
     show();
     await settle();
 
+    // Something keeps it from applying, so why, and where it came from, show unasked.
     expect(text("decisions-involvement-mode")).toBe("Ask while exploring");
-    expect(text("decisions-involvement-detail")).toContain("while they explore");
-    expect(text("decisions-involvement-facts")).toContain("Set on this computer");
     expect(text("decisions-involvement-stale")).toContain("agents use their usual behaviour");
+    expect(text("decisions-involvement-facts")).toContain("Set on this computer");
+    expect(screen.queryByTestId("decisions-involvement-detail")).toBeNull();
+
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-detail")).toContain("while they explore");
   });
 
-  it("shows a temporary mode, then what follows it with the count it consults, and flips at its end without waiting on a read", async () => {
+  it("shows a temporary mode with its end, what follows it only while it's changed, and flips at its end without waiting on a read", async () => {
     // Ends before the next regular read, so only its own end can flip it.
     const until = new Date(NOW + 2_000).toISOString();
     getInvolvement.mockResolvedValueOnce(
@@ -156,16 +165,22 @@ describe("DecisionsInvolvementSection", () => {
 
     const mode = byId("decisions-involvement-mode");
     expect(mode.textContent).toContain("Ask while exploring until");
-    expect(mode.textContent).toContain("then bring a recommendation, consulting 4 other agents");
+    expect(mode.textContent).not.toContain("then");
     expect(mode.querySelector("time")?.getAttribute("datetime")).toBe(until);
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-mode")).toContain(
+      "then bring a recommendation, consulting 4 other agents"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(getInvolvement).toHaveBeenCalledTimes(1);
 
     // The read the end starts never lands: the display flips on the time alone.
     getInvolvement.mockReturnValue(new Promise(() => {}));
     await settle(2_000);
     expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
-    expect(text("decisions-involvement-detail")).toContain("consult 4 other agents first");
     expect(getInvolvement).toHaveBeenCalledTimes(2);
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-detail")).toContain("consult 4 other agents first");
   });
 
   it("reads again while open, picking up a phone's change with no status push, and stops once closed", async () => {
@@ -225,7 +240,7 @@ describe("DecisionsInvolvementSection", () => {
     expect(screen.queryByTestId("decisions-involvement-editor")).toBeNull();
     expect(screen.queryByTestId("decisions-involvement-notice")).toBeNull();
     expect(text("decisions-involvement-mode")).toBe("Ask while exploring");
-    expect(text("decisions-involvement-facts")).toContain("Set on this computer");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
     expect(document.activeElement).toBe(byId("decisions-involvement-change"));
   });
 
@@ -359,7 +374,8 @@ describe("DecisionsInvolvementSection", () => {
     // A change from the revision the pending one replaces would only be refused: none is offered.
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
     await settle();
-    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+    // Nothing here can take it while the change is in flight, so the section itself holds it.
+    expect(document.activeElement).toBe(byId("decisions-involvement"));
     expect(setInvolvement).toHaveBeenCalledTimes(1);
 
     pending.resolve({ result: "conflict", latestRevision: null });
@@ -441,9 +457,10 @@ describe("DecisionsInvolvementSection", () => {
       reads(available({ consultCount: 3, revision: 5, setOn: "phone" }))
     );
     await settle(INVOLVEMENT_READ_MS);
-    expect(text("decisions-involvement-detail")).toContain("3 other agents");
+    expect(screen.queryByTestId("decisions-involvement-read-only")).toBeNull();
     fireEvent.click(byId("decisions-involvement-change"));
     expect(screen.queryByTestId("decisions-involvement-notice")).toBeNull();
+    expect(text("decisions-involvement-detail")).toContain("3 other agents");
     setInvolvement.mockResolvedValue({ result: "saved", revision: 6 });
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
@@ -504,8 +521,8 @@ describe("DecisionsInvolvementSection", () => {
     expect(text("decisions-involvement-read-only")).toContain("0.8.0");
     expect(text("decisions-involvement-notice")).toContain("wasn't saved");
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
-    // Nothing to press is left, so the keyboard waits on the dialog, inside its focus trap.
-    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+    // Nothing to press is left, so the keyboard waits on the section, inside the dialog's focus trap.
+    expect(document.activeElement).toBe(byId("decisions-involvement"));
 
     view.rerender({ opening: 2 });
     await settle();
@@ -541,10 +558,12 @@ describe("DecisionsInvolvementSection", () => {
     show();
     await settle();
 
-    expect(text("decisions-involvement-summary")).toContain("No involvement preference is set");
-    expect(text("decisions-involvement-facts")).toContain("Confirmed by this computer");
+    expect(text("decisions-involvement-summary")).toBe("Not set");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
     expect(text("decisions-involvement-change")).toBe("Set preference");
     fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-summary")).toContain("No involvement preference is set");
+    expect(text("decisions-involvement-facts")).toContain("Confirmed by this computer");
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
     expect(setInvolvement).toHaveBeenCalledExactlyOnceWith(
@@ -577,6 +596,46 @@ describe("DecisionsInvolvementSection", () => {
     expect(text("decisions-involvement-summary")).toContain("isn't connected to the relay");
     expect(text("decisions-involvement-summary")).toContain("usual behaviour");
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
+  });
+
+  it("names a preference set by a removed device in a few words, and offers to set another", async () => {
+    getInvolvement.mockResolvedValue(
+      reads({
+        status: "unavailable",
+        reason: "signer-revoked",
+        revision: 4,
+        lastSyncedAt: "2026-11-18T09:59:00.000Z",
+        stale: false,
+      })
+    );
+    show();
+    await settle();
+
+    expect(text("decisions-involvement-summary")).toBe("Set by a device that was removed");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
+    expect(text("decisions-involvement-change")).toBe("Set preference");
+  });
+
+  it("says why it can't be changed until this computer reconnects, with where it came from", async () => {
+    getInvolvement.mockResolvedValue(reads(available(), { settable: false }));
+    show();
+    await settle();
+
+    expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
+    expect(text("decisions-involvement-read-only")).toContain("reconnects");
+    expect(text("decisions-involvement-facts")).toContain("Set on a phone or tablet");
+    expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
+  });
+
+  it("offers Retry when the first read fails, and shows the preference once one lands", async () => {
+    getInvolvement.mockRejectedValueOnce(new Error("no bridge"));
+    show();
+    await settle();
+
+    expect(byId("decisions-involvement-failed")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
   });
 
   it("reads nothing while inactive", async () => {

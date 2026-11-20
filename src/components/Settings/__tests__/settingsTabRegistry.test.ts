@@ -32,7 +32,12 @@ describe("SETTINGS_REGISTRY", () => {
     ["rotate keys", "decisions-rotate-keys"],
     ["encryption", "decisions-rotate-keys"],
     ["export", "decisions-data-export"],
-  ])("indexes %s under Decisions for settings search (#18065)", (term, id) => {
+    ["involvement", "decisions-involvement"],
+    ["involved", "decisions-involvement"],
+    ["recommend", "decisions-involvement"],
+    ["consult", "decisions-involvement"],
+    ["temporary", "decisions-involvement"],
+  ])("indexes %s under Decisions for settings search (#18065, #18060)", (term, id) => {
     const decisions = SETTINGS_REGISTRY.find((e) => e.id === "decisions") as LazySettingsTabEntry;
     const hit = decisions.sections?.find((e) => e.id === id);
     expect(hit).toBeDefined();

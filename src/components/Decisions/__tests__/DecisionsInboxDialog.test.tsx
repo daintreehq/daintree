@@ -752,6 +752,9 @@ describe("DecisionsInboxDialog", () => {
       )
     );
     expect(screen.getByTestId("decisions-involvement-change")).not.toBeNull();
+    // One line at rest: what the mode asks and where it came from wait for Change (#18060).
+    expect(screen.queryByTestId("decisions-involvement-detail")).toBeNull();
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
     expect(document.activeElement).toBe(rowNamed("q-2"));
   });
 
