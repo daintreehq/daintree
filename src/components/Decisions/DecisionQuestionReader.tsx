@@ -3,7 +3,6 @@ import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { cn } from "@/lib/utils";
 import { Check, Clock } from "lucide-react";
 import type { DecisionQuestionContent, DecisionThreadEntry } from "@shared/types/decisionsQuestion";
