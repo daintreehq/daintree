@@ -166,6 +166,12 @@ export interface DecisionsAnswerDestination {
   worktreeName: string | null;
   /** The pane the question was asked in, relaunched since. */
   askedHere: boolean;
+  /**
+   * When an answer moved here is typed in, by its agent: once its composer is
+   * empty (an agent that takes a line mid-turn), or at its next prompt. Its
+   * host is live while it is listed.
+   */
+  waitsFor: "composer" | "prompt";
 }
 
 export type DecisionsAnswerDestinations =

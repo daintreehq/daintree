@@ -10,8 +10,10 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -46,13 +48,15 @@ import {
   attentionFingerprint,
   canCopy,
   copyLabel,
-  destinationDetail,
+  destinationGroups,
+  destinationRowDetail,
   fromLines,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
   leavesList,
   missingAnswerText,
+  moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
@@ -296,6 +300,7 @@ interface ItemProps {
 
 function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled }: ItemProps) {
   const headingId = useId();
+  const groupIdBase = useId();
   const alias = aliasLabel(item.alias);
   const { pane, place } = originParts(
     item,
@@ -420,7 +425,6 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-80">
-              <DropdownMenuLabel>Agents running here</DropdownMenuLabel>
               {destinations === null && destinationsError === null && (
                 <DropdownMenuItem disabled>Looking…</DropdownMenuItem>
               )}
@@ -438,29 +442,48 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
                 <DropdownMenuItem disabled>No agents are running here</DropdownMenuItem>
               )}
               {destinations?.result === "listed" &&
-                destinations.destinations.map((destination) => (
-                  <DropdownMenuItem
-                    key={destination.terminalId}
-                    focusHandoff
-                    onSelect={() => onChoose(destination)}
-                    className="flex-col items-start gap-0.5"
-                  >
-                    <span className="flex w-full items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-text-primary">
-                        {destination.title}
-                      </span>
-                      {destination.askedHere && (
-                        <span className="shrink-0 text-2xs text-text-secondary">asked here</span>
-                      )}
-                    </span>
-                    <span className="w-full truncate text-2xs text-text-secondary">
-                      {destinationDetail(
-                        destination,
-                        worktreeName(destination.worktreeId, destination.worktreeName)
-                      )}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
+                destinationGroups(destinations.destinations, item.origin.projectId).map(
+                  (group, index) => (
+                    <DropdownMenuGroup
+                      key={group.projectId}
+                      aria-labelledby={`${groupIdBase}-${index}`}
+                    >
+                      {index > 0 && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel id={`${groupIdBase}-${index}`}>
+                        {group.label}
+                      </DropdownMenuLabel>
+                      {group.destinations.map((destination) => (
+                        <DropdownMenuItem
+                          key={destination.terminalId}
+                          focusHandoff
+                          onSelect={() => onChoose(destination)}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span className="flex w-full items-baseline gap-2">
+                            <span className="min-w-0 flex-1 truncate text-text-primary">
+                              {destination.title}
+                            </span>
+                            {destination.askedHere && (
+                              <span className="shrink-0 text-2xs text-text-secondary">
+                                asked here
+                              </span>
+                            )}
+                          </span>
+                          <span className="w-full truncate text-2xs text-text-secondary">
+                            {destinationRowDetail(
+                              destination,
+                              worktreeName(destination.worktreeId, destination.worktreeName)
+                            )}
+                            {/* The section label shows the project; a row heard alone still names it. */}
+                            {destination.projectName !== null && (
+                              <span className="sr-only">{` · ${destination.projectName}`}</span>
+                            )}
+                          </span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuGroup>
+                  )
+                )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -928,9 +951,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         }
         description={
           <span className="[text-wrap:pretty]">
-            Daintree waits until it sees that agent at its prompt, types the{" "}
-            {move === null ? "answer" : subjectOf(move.item)} in once, and records the move in the
-            Decisions audit trail.
+            {move === null ? "" : moveConfirmBody(subjectOf(move.item), move.destination.waitsFor)}
           </span>
         }
         // The menu that opened it is its row's; when a fast move has already

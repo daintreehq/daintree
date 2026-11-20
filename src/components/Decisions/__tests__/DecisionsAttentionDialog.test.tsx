@@ -313,7 +313,11 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
   });
 });
 
-function destination(terminalId: string, title: string): DecisionsAnswerDestination {
+function destination(
+  terminalId: string,
+  title: string,
+  over: Partial<DecisionsAnswerDestination> = {}
+): DecisionsAnswerDestination {
   return {
     terminalId,
     title,
@@ -324,6 +328,8 @@ function destination(terminalId: string, title: string): DecisionsAnswerDestinat
     worktreeId: "worktree-1",
     worktreeName: "main",
     askedHere: false,
+    waitsFor: "composer",
+    ...over,
   };
 }
 
@@ -588,6 +594,136 @@ describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
       expect(destinationsMenu()!.textContent).not.toContain("The relay went away");
     }
   );
+});
+
+describe("DecisionsAttentionDialog: where and when a moved answer goes (#18056)", () => {
+  beforeEach(() => {
+    listed = [makeItem(3)];
+    listAttention.mockReset();
+    listAnswerDestinations.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    stubElectron();
+    useDecisionsAttentionStore.setState({
+      isOpen: true,
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function choose(title: string): Promise<HTMLElement> {
+    const row = within(destinationsMenu()!)
+      .getAllByRole("menuitem")
+      .find((candidate) => candidate.textContent?.includes(title));
+    if (!row) throw new Error(`no destination ${title}`);
+    act(() => row.focus());
+    fireEvent.keyDown(row, { key: "Enter" });
+    return screen.findByRole("dialog", { name: /^Send q-3/ });
+  }
+
+  it.each([
+    {
+      title: "Queueing agent",
+      says: /composer is empty, even while it's working/,
+      never: /prompt/,
+    },
+    {
+      title: "Prompt agent",
+      says: /at its prompt with its composer empty, never while it's working/,
+      never: /even while/,
+    },
+  ])(
+    "confirms the wait the chosen agent's delivery makes ($title)",
+    async ({ title, says, never }) => {
+      listAnswerDestinations.mockResolvedValue({
+        result: "listed",
+        destinations: [
+          destination("pane-8", "Queueing agent", { waitsFor: "composer" }),
+          destination("pane-9", "Prompt agent", { waitsFor: "prompt" }),
+        ],
+      });
+      render(tree(true));
+      await listedRows(1);
+      await openDestinations(3);
+      await waitFor(() => expect(menuRows()).toHaveLength(2));
+
+      const asking = await choose(title);
+      expect(asking.getAttribute("aria-labelledby")).not.toBeNull();
+      expect(
+        document.getElementById(asking.getAttribute("aria-labelledby")!)?.textContent
+      ).toContain(title);
+      const body = asking.textContent ?? "";
+      expect(body).toMatch(says);
+      expect(body).not.toMatch(never);
+    }
+  );
+
+  it("sets other projects' agents apart from the asking project's, each project under its own name", async () => {
+    listAnswerDestinations.mockResolvedValue({
+      result: "listed",
+      destinations: [
+        destination("pane-3", "Pane 3", { askedHere: true }),
+        destination("pane-5", "Sibling", { worktreeId: "worktree-2", worktreeName: "feature" }),
+        destination("pane-7", "Atlas agent", { projectId: "project-2", projectName: "Atlas" }),
+        destination("pane-8", "Nameless agent", { projectId: "project-3", projectName: null }),
+        destination("pane-9", "Atlas second", { projectId: "project-2", projectName: "Atlas" }),
+      ],
+    });
+    render(tree(true));
+    await listedRows(1);
+    await openDestinations(3);
+    await waitFor(() => expect(menuRows()[0]).toContain("Pane 3"));
+
+    const groups = within(destinationsMenu()!).getAllByRole("group");
+    const named = groups.map((group) => {
+      const label = document.getElementById(group.getAttribute("aria-labelledby") ?? "");
+      return {
+        label: label?.textContent ?? "",
+        rows: within(group)
+          .getAllByRole("menuitem")
+          .map((row) => row.textContent ?? ""),
+      };
+    });
+    expect(named.map((group) => group.label)).toEqual([
+      "Asking project · Helios",
+      "Other project · Atlas",
+      "Other project",
+    ]);
+    expect(named[0]!.rows.map((row) => row.split("Claude")[0])).toEqual([
+      expect.stringContaining("Pane 3"),
+      expect.stringContaining("Sibling"),
+    ]);
+    expect(named[1]!.rows).toEqual([
+      expect.stringContaining("Atlas agent"),
+      expect.stringContaining("Atlas second"),
+    ]);
+    expect(named[2]!.rows).toEqual([expect.stringContaining("Nameless agent")]);
+    // Every project after the asking one starts past a rule of its own.
+    expect(groups.map((group) => within(group).queryAllByRole("separator").length)).toEqual([
+      0, 1, 1,
+    ]);
+  });
+
+  it("still calls another project's agents another project's when none of the asking project's are running", async () => {
+    listAnswerDestinations.mockResolvedValue({
+      result: "listed",
+      destinations: [
+        destination("pane-7", "Atlas agent", { projectId: "project-2", projectName: "Atlas" }),
+      ],
+    });
+    render(tree(true));
+    await listedRows(1);
+    await openDestinations(3);
+    await waitFor(() => expect(menuRows()[0]).toContain("Atlas agent"));
+
+    const groups = within(destinationsMenu()!).getAllByRole("group");
+    expect(groups).toHaveLength(1);
+    const label = document.getElementById(groups[0]!.getAttribute("aria-labelledby") ?? "");
+    expect(label?.textContent).toContain("Atlas");
+    expect(label?.textContent).toMatch(/other project/i);
+    expect(within(destinationsMenu()!).queryAllByRole("separator")).toEqual([]);
+  });
 });
 
 describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {

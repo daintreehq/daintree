@@ -381,7 +381,7 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
           result: "waiting",
           terminalId: payload.terminalId,
           title: to?.title ?? null,
-          waitsFor: "idle",
+          waitsFor: to?.waitsFor ?? "prompt",
         };
       }
     );
@@ -559,6 +559,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
       worktreeId: featureId,
       worktreeName: "feature-auth-token-refresh",
       askedHere: false,
+      waitsFor: "composer",
     },
     {
       terminalId: panes.other,
@@ -570,6 +571,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
       worktreeId: featureId,
       worktreeName: "feature-auth-token-refresh",
       askedHere: false,
+      waitsFor: "composer",
     },
   ];
 }
@@ -814,7 +816,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await ready(page, panes);
     await openFromChip(page, panes);
     await page.getByRole("button", { name: "Choose destination for q-38" }).click();
-    const menu = page.locator('[role="menu"]').filter({ hasText: "Agents running here" });
+    const menu = page.getByRole("menu");
     await expect(menu).toContainText(OTHER_TITLE, { timeout: 8000 });
     await parkPointer(page);
     await snapLayers(page, "destinations", theme, [DIALOG, '[role="menu"]']);
@@ -823,7 +825,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await ready(page, panes);
     await openFromChip(page, panes);
     await page.getByRole("button", { name: "Choose destination for q-36" }).click();
-    const menu = page.locator('[role="menu"]').filter({ hasText: "Agents running here" });
+    const menu = page.getByRole("menu");
     await menu.getByText(OTHER_TITLE).click();
     const confirm = page
       .locator('[role="dialog"], [role="alertdialog"]')

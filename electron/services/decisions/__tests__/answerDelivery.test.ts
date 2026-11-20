@@ -3532,3 +3532,97 @@ describe("AnswerDelivery question reads (#17097)", () => {
     ]);
   });
 });
+
+describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => {
+  /** Main's labels list each pane with its title, which the pty host's record lacks. */
+  type Listed = Partial<NotifyTerminalInfo> & { title?: string };
+
+  function live(h: ReturnType<typeof setup>, id: string, info: Listed): void {
+    h.client.terminals.set(id, { ...atPrompt(), ...info } as NotifyTerminalInfo);
+    h.client.generations.set(id, 7);
+    h.principals.set(id, `principal-${id}`);
+  }
+
+  /** An answer whose pane went away, so it waits for a person to send it on. */
+  async function stalled(h: ReturnType<typeof setup>, over: Partial<QuestionRow> = {}) {
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      ...over,
+    });
+  }
+
+  async function order(h: ReturnType<typeof setup>) {
+    const listed = await h.delivery.answerDestinations(Q1);
+    expect(listed.result).toBe("listed");
+    return (listed.result === "listed" ? listed.destinations : []).map((d) => [
+      d.terminalId,
+      d.askedHere,
+      d.waitsFor,
+    ]);
+  }
+
+  it("lists the asking pane, its worktree, its project, then the rest, each with what its delivery waits for", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, PANE, { title: "Zed asker" });
+    h.principals.set(PANE, "principal-1");
+    // Titles that would sort ahead of the panes nearer the asker.
+    live(h, "pane-other", { title: "Aardvark", projectId: "project-2", worktreeId: "wt-9" });
+    live(h, "pane-project", { title: "Ant", worktreeId: "wt-2", detectedAgentId: "gemini" });
+    live(h, "pane-worktree", { title: "Yak" });
+
+    expect(await order(h)).toEqual([
+      [PANE, true, "composer"],
+      ["pane-worktree", false, "composer"],
+      // An agent that takes no line mid-turn waits for its prompt.
+      ["pane-project", false, "prompt"],
+      ["pane-other", false, "composer"],
+    ]);
+  });
+
+  it("ranks no pane by its worktree when the question was asked outside one", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h, { origin: { ...ORIGIN, worktree_id: "" } });
+    live(h, "pane-scratch", { title: "Zed", worktreeId: undefined });
+    live(h, "pane-worktree", { title: "Ant" });
+
+    expect((await order(h)).map(([id]) => id)).toEqual([PANE, "pane-worktree", "pane-scratch"]);
+  });
+
+  it.each([
+    {
+      how: "a working agent that takes no line mid-turn",
+      info: { detectedAgentId: "gemini", agentState: "working" as const },
+      draft: false,
+      waitsFor: "prompt",
+    },
+    {
+      how: "an agent that queues a line, with a draft in its composer",
+      info: {},
+      draft: true,
+      waitsFor: "composer",
+    },
+  ])(
+    "says the moved answer waits as its listing did, for $how",
+    async ({ info, draft, waitsFor }) => {
+      const h = setup({ listTerminals: true });
+      await stalled(h);
+      live(h, "pane-chosen", { ...info, lastStateChange: Date.now() });
+      if (draft) h.drafts.add("pane-chosen");
+      const listed = await h.delivery.answerDestinations(Q1);
+      const chosen =
+        listed.result === "listed"
+          ? listed.destinations.find((d) => d.terminalId === "pane-chosen")
+          : undefined;
+      expect(chosen?.waitsFor).toBe(waitsFor);
+
+      h.delivery.start();
+      let outcome: unknown = null;
+      void h.delivery.reassignAnswer(Q1, "pane-chosen").then((result) => (outcome = result));
+      await until(() => outcome !== null);
+      expect(outcome).toMatchObject({ result: "waiting", terminalId: "pane-chosen", waitsFor });
+      expect(h.client.submitted).toEqual([]);
+    }
+  );
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  DecisionsAnswerDestination,
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
 } from "@shared/types/decisionsAttention";
@@ -7,10 +8,13 @@ import {
   attentionFingerprint,
   canCopy,
   copyLabel,
+  destinationGroups,
+  destinationRowDetail,
   fromLines,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
@@ -21,6 +25,7 @@ import {
   sameAttention,
   statusText,
   subjectOf,
+  toLines,
 } from "../decisionsAttentionModel";
 
 function followUp(over: Partial<DecisionsFollowUpPreview> = {}): DecisionsFollowUpPreview {
@@ -397,5 +402,109 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(originParts(unknown, null).pane).toBe("Claude on another computer");
     const here = { ...base, origin: { ...origin, otherHost: null } };
     expect(originParts(here, null).pane).toBe("Claude, terminal closed");
+  });
+});
+
+describe("Choose destination's menu and confirmation (#18056)", () => {
+  function destination(
+    terminalId: string,
+    over: Partial<DecisionsAnswerDestination> = {}
+  ): DecisionsAnswerDestination {
+    return {
+      terminalId,
+      title: terminalId,
+      agentId: "claude",
+      agentName: "Claude",
+      projectId: "helios",
+      projectName: "Helios",
+      worktreeId: "w",
+      worktreeName: "main",
+      askedHere: false,
+      waitsFor: "composer",
+      ...over,
+    };
+  }
+
+  it("promises the wait the chosen agent's delivery makes, for whatever moves, never typed twice", () => {
+    for (const subject of ["answer", "follow-ups", "answer and follow-ups"] as const) {
+      const composer = moveConfirmBody(subject, "composer");
+      const prompt = moveConfirmBody(subject, "prompt");
+      const twice =
+        subject === "answer" ? "It's never typed in twice" : "They're never typed in twice";
+      for (const body of [composer, prompt]) {
+        expect(body).toContain(`types the ${subject} in`);
+        expect(body).toContain(twice);
+        expect(body).toContain("audit trail records the move");
+      }
+      expect(composer).toContain("its composer is empty, even while it's working");
+      expect(composer).not.toContain("prompt");
+      expect(prompt).toContain("at its prompt");
+      expect(prompt).toContain("never while it's working");
+      expect(prompt).not.toContain("even while");
+    }
+  });
+
+  it("puts the asking project's agents first, then each other project's in main's order, by id", () => {
+    const groups = destinationGroups(
+      [
+        destination("zeta-1", { projectId: "zeta", projectName: "Zeta" }),
+        destination("asker", { askedHere: true }),
+        destination("twin-1", { projectId: "twin", projectName: "Zeta" }),
+        destination("zeta-2", { projectId: "zeta", projectName: "Zeta" }),
+        destination("sibling"),
+        destination("nameless", { projectId: "anon", projectName: null }),
+      ],
+      "helios"
+    );
+    expect(
+      groups.map((group) => [
+        group.projectId,
+        group.label,
+        group.destinations.map((d) => d.terminalId),
+      ])
+    ).toEqual([
+      ["helios", "Asking project · Helios", ["asker", "sibling"]],
+      ["zeta", "Other project · Zeta", ["zeta-1", "zeta-2"]],
+      // Another project of the same name keeps a section of its own.
+      ["twin", "Other project · Zeta", ["twin-1"]],
+      ["anon", "Other project", ["nameless"]],
+    ]);
+  });
+
+  it("knows the asking project by id, not by the pane that asked, which may be gone", () => {
+    const groups = destinationGroups(
+      [
+        destination("zeta-1", { projectId: "zeta", projectName: "Zeta" }),
+        destination("sibling", { projectName: null }),
+      ],
+      "helios"
+    );
+    expect(groups.map((group) => [group.label, group.destinations[0]!.terminalId])).toEqual([
+      ["Asking project", "sibling"],
+      ["Other project · Zeta", "zeta-1"],
+    ]);
+  });
+
+  it("names no asking project when none of its agents are running, and no section for an empty list", () => {
+    expect(
+      destinationGroups(
+        [destination("atlas-1", { projectId: "atlas", projectName: null })],
+        "helios"
+      )
+    ).toEqual([
+      {
+        projectId: "atlas",
+        label: "Other project",
+        destinations: [expect.objectContaining({ terminalId: "atlas-1" })],
+      },
+    ]);
+    expect(destinationGroups([], "helios")).toEqual([]);
+  });
+
+  it("leaves the project to the menu's section label, and keeps it in the confirmation's To", () => {
+    const chosen = destination("atlas-1", { projectId: "atlas", projectName: "Atlas" });
+    expect(destinationRowDetail(chosen, "main")).toBe("Claude · main");
+    expect(destinationRowDetail(chosen, null)).toBe("Claude");
+    expect(toLines(chosen, "main").detail).toBe("Claude · Atlas · main");
   });
 });
