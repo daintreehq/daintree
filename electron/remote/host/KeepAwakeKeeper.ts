@@ -119,10 +119,16 @@ export class KeepAwakeKeeper {
 
   status(): KeepAwakeStatus {
     const held = this.held;
+    // What covers this host longest: the URL held, or the one behind it that it goes back to.
+    const fallback = this.fallback;
+    const covering =
+      held && fallback && fallback.expiresAt > held.expiresAt && fallback.expiresAt > this.now()
+        ? fallback
+        : held;
     return {
       port: this.listener?.port ?? null,
-      expiresAt: held?.expiresAt ?? null,
-      reachedAt: held?.reachedAt ?? null,
+      expiresAt: covering?.expiresAt ?? null,
+      reachedAt: covering?.reachedAt ?? null,
       problem: held ? null : (this.problem ?? this.listenerProblem),
     };
   }

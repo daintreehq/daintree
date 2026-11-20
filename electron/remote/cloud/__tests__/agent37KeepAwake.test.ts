@@ -584,6 +584,28 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(env.status().keepAwake).toMatchObject({ kind: "held" });
   });
 
+  it("spends a recheck's early link only once Agent 37 is asked for it", async () => {
+    const { mints, pass, loseUrl } = await failingQuestions();
+    await loseUrl();
+    await pass(0, true);
+    for (let i = 0; i < 4; i++) await pass(60);
+    await pass(50);
+    // Due, the recheck finds the host holding none, but the account's key can't be read.
+    const read = vi
+      .spyOn(CloudAccountService.prototype, "credentials")
+      .mockRejectedValueOnce(new Error("The keychain is locked"));
+    await pass(10);
+    read.mockRestore();
+    expect(mints()).toBe(1);
+    for (let i = 0; i < 5; i++) await pass(60);
+    expect(mints()).toBe(2);
+    // Lost again with a failed question: the recheck may still hand over one early.
+    await loseUrl();
+    await pass(0, true);
+    for (let i = 0; i < 6; i++) await pass(60);
+    expect(mints()).toBe(3);
+  });
+
   it("starts every linked host's attempt on a pass, whatever another keeps it waiting for", async () => {
     const env = await agent37();
     const gates = { status: opened(), arm: opened() };
@@ -678,18 +700,24 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       token,
       expiresAt: env.api.now / 1000 + 3600,
     });
-    const shorter = env.api.now + 3_600_000;
+    // What the host says it holds is how long it is covered: until the longer one's expiry.
+    const longer = working.expiresAt * 1000;
     await expect(
       env.keeper.arm({
         resourceId: env.machine.id,
         url: `https://${env.machine.id}-${PORT}.agent37.app/?a37_token=${token}`,
-        expiresAt: shorter,
+        expiresAt: env.api.now + 3_600_000,
       })
-    ).resolves.toMatchObject({ expiresAt: shorter, reachedAt: env.api.now });
+    ).resolves.toMatchObject({ expiresAt: longer });
+    // So the Shell, asking, records that, and renews nothing early.
+    await env.run(60);
+    await env.links.tick();
+    expect(env.status().keepAwake).toMatchObject({ kind: "held", expiresAt: longer });
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(1);
     // Agent 37 stops taking the longer one: the host stays awake on the shorter, never asking it.
     env.api.signedUrls.splice(0, 1, { ...working, token: "revoked" });
     expect(await env.run(1800)).toBe(true);
-    expect(env.keeper.status()).toMatchObject({ expiresAt: shorter, problem: null });
+    expect(env.keeper.status()).toMatchObject({ expiresAt: longer, problem: null });
     expect(new URL(env.edgeRequests.at(-1)!.url).searchParams.get("a37_token")).toBe(token);
     // Once the shorter one expires the host goes back to the longer, which Agent 37 now turns away.
     await env.run(1860);
@@ -703,6 +731,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     const env = await agent37({ idle_timeout_seconds: 86_400 });
     await env.connect();
     const working = env.api.signedUrls[0]!.expiresAt * 1000;
+    const workingToken = env.api.signedUrls[0]!.token;
     /** A URL from elsewhere for the same port, `seconds` from its expiry. */
     const elsewhere = (name: string, seconds: number) => {
       const token = name.padEnd(32, "x");
@@ -724,6 +753,9 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       expect(await env.run(120)).toBe(true);
       expect(env.keeper.status()).toMatchObject({ expiresAt: working, problem: null });
       expect(env.accepted()).toBeGreaterThan(hits);
+      expect(new URL(env.edgeRequests.at(-1)!.url).searchParams.get("a37_token")).toBe(
+        workingToken
+      );
     };
 
     // It reaches the host seconds before it expires, and its answer comes back too late.
@@ -735,27 +767,26 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     env.loseAnswers(null);
     await stillWorking();
 
-    // It reaches the host with seconds to spare: held for them, and the one that works comes back.
+    // It reaches the host with seconds to spare: held for them, the one that works behind it.
     accepted = env.accepted();
-    const soon = elsewhere("soon", 15);
-    await expect(env.keeper.arm(soon)).resolves.toMatchObject({ expiresAt: soon.expiresAt });
+    await expect(env.keeper.arm(elsewhere("soon", 15))).resolves.toMatchObject({
+      expiresAt: working,
+    });
     expect(env.accepted()).toBe(accepted + 1);
-    await env.run(30);
     await stillWorking();
 
     // Taken while idle, it reaches the host on the first busy pass, seconds from its expiry.
     env.setBusy(false);
-    const idle = elsewhere("idle", 40);
-    await expect(env.keeper.arm(idle)).resolves.toMatchObject({ reachedAt: null });
+    await expect(env.keeper.arm(elsewhere("idle", 40))).resolves.toMatchObject({
+      expiresAt: working,
+    });
     env.setBusy(true);
     accepted = env.accepted();
     await env.run(30);
     expect(env.accepted()).toBe(accepted + 1);
-    expect(env.keeper.status()).toMatchObject({
-      expiresAt: idle.expiresAt,
-      reachedAt: env.api.now,
-    });
-    await env.run(30);
+    expect(new URL(env.edgeRequests.at(-1)!.url).searchParams.get("a37_token")).toBe(
+      "idle".padEnd(32, "x")
+    );
     await stillWorking();
   });
 

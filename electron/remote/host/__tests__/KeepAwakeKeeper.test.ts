@@ -234,7 +234,8 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await env.keeper.open();
     await env.arm();
     env.setBusy(false);
-    const replaced = await env.arm(URL_B, env.now() + DAY);
+    // Outlasting the old one, it is what the host says it holds.
+    const replaced = await env.arm(URL_B, env.now() + 8 * DAY);
     // What reached it was the old URL, not this one.
     expect(replaced.reachedAt).toBeNull();
     env.setBusy(true);
@@ -331,9 +332,9 @@ describe("KeepAwakeKeeper (#17918)", () => {
     env.setBusy(false);
     await env.arm(URL_C, env.now() + 9 * DAY);
     env.setBusy(true);
+    // What covers the host longest is still the first.
     await expect(env.arm(URL_B, env.now() + DAY)).resolves.toMatchObject({
-      expiresAt: env.now() + DAY,
-      reachedAt: env.now(),
+      expiresAt: first.expiresAt,
     });
     await env.passes(1, 60_000);
     expect(env.tokens().at(-1)).toBe(TOKEN_B);
@@ -502,13 +503,14 @@ describe("KeepAwakeKeeper (#17918)", () => {
     env.advance(60_000);
     const pass = env.keeper.tick();
     await vi.waitFor(() => expect(refuse).toBeTypeOf("function"));
-    // A new URL arrives, taken while the host is idle, before the old request's answer.
+    // A new URL that outlasts the old one arrives, taken while the host is idle, before the old
+    // request's answer.
     env.setBusy(false);
-    await env.arm(URL_B, env.now() + DAY);
+    await env.arm(URL_B, env.now() + 8 * DAY);
     refuse();
     await pass;
     expect(env.keeper.status()).toMatchObject({
-      expiresAt: env.now() + DAY,
+      expiresAt: env.now() + 8 * DAY,
       problem: null,
     });
   });

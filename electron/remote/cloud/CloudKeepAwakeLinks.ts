@@ -368,13 +368,13 @@ export class CloudKeepAwakeLinks {
     let credentials: ProviderCredentials;
     let grant: { url: string; expiresAt: number };
     this.mintedAt.set(bindingId, this.now());
-    // Spent only on a link actually asked for.
-    if (bypassing) this.bypassedAt.set(bindingId, this.now());
     // A link handed over since the failed question answers it.
     this.recheckAt.delete(bindingId);
     try {
       credentials = await this.deps.accounts.credentials(account);
       if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+      // Spent only on a link Agent 37 is actually asked for.
+      if (bypassing) this.bypassedAt.set(bindingId, this.now());
       grant = await provider.keepAwakeUrl(credentials, resourceId, status.port);
     } catch (error) {
       if (!this.reaches(hostId, bindingId, resourceId, session)) return;
