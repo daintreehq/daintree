@@ -22,11 +22,18 @@ import type {
 } from "@shared/types/decisionsQuestion";
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type {
+  DecisionsAnswerDestinations,
+  DecisionsAnswerOutcome,
+  DecisionsAttentionItem,
+  DecisionsAttentionList,
+} from "@shared/types/decisionsAttention";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
@@ -104,6 +111,22 @@ const getDeclineResult =
 const getInvolvement = vi.fn<() => Promise<DecisionsInvolvementRead>>();
 const markQuestions =
   vi.fn<(payload: MarkDecisionQuestionsPayload) => Promise<DecisionQuestionMarkResult>>();
+const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
+const markAnswerHandled =
+  vi.fn<(payload: { questionId: string; expected?: string }) => Promise<DecisionsAnswerOutcome>>();
+const resumeAnswer = vi.fn<(questionId: string) => Promise<DecisionsAnswerOutcome>>();
+const reassignAnswer =
+  vi.fn<
+    (payload: {
+      questionId: string;
+      terminalId: string;
+      run: string;
+      expected?: string;
+    }) => Promise<DecisionsAnswerOutcome>
+  >();
+const listAnswerDestinations =
+  vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
+const copyAnswer = vi.fn<(questionId: string) => Promise<string>>();
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 
@@ -350,6 +373,16 @@ beforeEach(() => {
   markQuestions
     .mockReset()
     .mockImplementation(async ({ questions }) => ({ result: "marked", marked: questions.length }));
+  listAttention.mockReset().mockResolvedValue({ result: "listed", items: [] });
+  markAnswerHandled.mockReset().mockResolvedValue({ result: "handled" });
+  resumeAnswer.mockReset().mockResolvedValue({ result: "handled" });
+  reassignAnswer.mockReset().mockResolvedValue({ result: "handled" });
+  listAnswerDestinations.mockReset().mockResolvedValue({ result: "listed", destinations: [] });
+  copyAnswer.mockReset().mockResolvedValue("the block");
+  useDecisionsAttentionStore.setState({
+    isOpen: false,
+    request: { terminalId: null, returnFocusTo: null, seq: 0 },
+  });
   Reflect.set(window, "electron", {
     decisions: {
       listQuestions,
@@ -361,6 +394,12 @@ beforeEach(() => {
       getDeclineResult,
       getInvolvement,
       markQuestions,
+      listAttention,
+      markAnswerHandled,
+      resumeAnswer,
+      reassignAnswer,
+      listAnswerDestinations,
+      copyAnswer,
     },
     events: {
       on: (
@@ -1642,7 +1681,8 @@ describe("DecisionsInboxDialog", () => {
       expect(callout()).toContain(
         "The timeout notice wasn't typed in. The terminal that asked was closed. Choose what happens to it."
       );
-      expect(screen.getByTestId("decisions-inbox-review-attention")).not.toBeNull();
+      // This computer's stall is resolved in place, from its own needs-attention list (#18027).
+      await waitFor(() => expect(listAttention).toHaveBeenCalled());
       // The warning states the notice's delivery, so the facts keep only what it says of the plan.
       await waitFor(() =>
         expect(screen.getByTestId("decision-question-notice").textContent).toBe(
@@ -1666,7 +1706,7 @@ describe("DecisionsInboxDialog", () => {
         expect(callout()).toMatch(/Atlas keeps it, so it can't be resolved from this computer\./)
       );
       expect(callout()).not.toMatch(/Choose/);
-      expect(screen.queryByTestId("decisions-inbox-review-attention")).toBeNull();
+      expect(screen.queryByTestId("decisions-inbox-attention-actions")).toBeNull();
     } finally {
       CONTENT["question-3"] = shown;
     }
@@ -3601,5 +3641,635 @@ describe("DecisionsInboxDialog: the run that asked (#18029)", () => {
     );
     expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionsInboxDialog: resolving a stopped delivery in place (#18027)", () => {
+  const STOPPED: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "needs-attention",
+  };
+  const UNCERTAIN: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "delivery-uncertain",
+  };
+
+  /** A question on terminal t1 whose answer's delivery stopped. */
+  function stalled(
+    questionId: string,
+    alias: number,
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return item(questionId, alias, STOPPED, {
+      askedAt: `2026-11-02T0${alias}:00:00.000Z`,
+      stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+      ...over,
+    });
+  }
+
+  function attentionItem(
+    questionId: string,
+    alias: number,
+    over: Partial<DecisionsAttentionItem> = {}
+  ): DecisionsAttentionItem {
+    return {
+      questionId,
+      alias,
+      status: "needs-attention",
+      reason: "pane_gone",
+      question: `Question ${alias}?`,
+      fullQuestion: `Question ${alias}?`,
+      plan: null,
+      reference: reference(questionId),
+      askedAt: "2026-11-02T09:00:00.000Z",
+      origin: {
+        projectId: "project-a",
+        projectName: "Alpha",
+        worktreeId: "w1",
+        worktreeName: "feature-x",
+        agentId: "claude",
+        agentName: "Claude",
+        paneId: "t1",
+        paneTitle: "Pane one",
+        otherHost: null,
+      },
+      answer: {
+        source: "human",
+        choices: ["Ship it"],
+        text: null,
+        correction: false,
+        answeredAt: "2026-11-02T09:30:00.000Z",
+      },
+      answerUnavailable: null,
+      notice: null,
+      followUps: [],
+      canResume: true,
+      canReassign: true,
+      token: `token-${alias}`,
+      ...over,
+    };
+  }
+
+  function settleable<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  const detail = () => screen.getByTestId("decisions-inbox-detail");
+  const actionsShown = () => screen.queryByTestId("decisions-inbox-attention-actions");
+  const confirm = () => screen.queryByRole("alertdialog");
+
+  const Q5 = stalled("question-5", 5);
+  const Q6 = stalled("question-6", 6);
+  const OTHER = item("question-2", 2, OPEN, { askedAt: "2026-11-02T01:00:00.000Z" });
+
+  beforeEach(() => {
+    // A test above unstubs every global, the setup's ResizeObserver stub with them, and the
+    // confirmations here build scroll shadows that need one.
+    if (typeof globalThis.ResizeObserver !== "function") {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    }
+    getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => ({
+      result: "read",
+      question: content(ref.questionId, Number(ref.questionId.split("-")[1]), {
+        status: "human-answered",
+        reference: ref,
+        terminalId: ref.terminalId,
+      }),
+    }));
+    listQuestions.mockResolvedValue({ revision: 1, questions: [OTHER, Q5, Q6] });
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [attentionItem("question-5", 5), attentionItem("question-6", 6)],
+    });
+  });
+
+  async function select(alias: number) {
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    fireEvent.click(rowNamed(`q-${alias}`));
+    await waitFor(() => expect(shownBody()).toContain(`Body of question ${alias}`));
+  }
+
+  it("offers only the shown stall's actions, confirms in one dialog over the inbox, and keeps the keyboard in the detail as it moves to History", async () => {
+    const marking = settleable<DecisionsAnswerOutcome>();
+    markAnswerHandled.mockReturnValue(marking.promise);
+    open();
+    // Two stalls on one terminal: the one chosen is the one acted on.
+    await select(6);
+    const actions = await screen.findByTestId("decisions-inbox-attention-actions");
+    expect(detail().contains(actions)).toBe(true);
+    expect(within(actions).getByRole("button", { name: "Try resume for q-6" })).toBeTruthy();
+    expect(
+      within(actions).getByRole("button", { name: "Choose destination for q-6" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mark q-5 handled" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Resolve delivery|Review answers/ })).toBeNull();
+
+    const handled = within(actions).getByRole("button", { name: "Mark q-6 handled" });
+    act(() => handled.focus());
+    fireEvent.click(handled);
+    const asking = await screen.findByRole("alertdialog");
+    expect(within(asking).getByText("Mark q-6 handled?")).toBeTruthy();
+    // The detail's question is its own read: the confirmation names the answer this item holds.
+    expect(asking.textContent).toContain("Ship it");
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+
+    fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
+    await waitFor(() => expect(confirm()).toBeNull());
+    expect(markAnswerHandled).toHaveBeenCalledExactlyOnceWith({
+      questionId: "question-6",
+      expected: "token-6",
+    });
+
+    // The question list says it was handled before the action's own reply arrives.
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        {
+          ...Q6,
+          standing: { kind: "settled", outcome: "answered", handled: true },
+          settledAt: "2026-11-02T12:00:00Z",
+          stall: null,
+        },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-6")
+    );
+    expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true");
+    expect(actionsShown()).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(detail()));
+
+    await act(async () => marking.resolve({ result: "handled" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-attention-outcome").textContent).toContain(
+        "Answer to q-6 marked handled"
+      )
+    );
+    expect(document.activeElement).toBe(detail());
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+  });
+
+  it("marks an uncertain delivery handled in one click, offering neither resume nor a move", async () => {
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [OTHER, Q5, { ...Q6, standing: UNCERTAIN }],
+    });
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [
+        attentionItem("question-6", 6, {
+          status: "delivery-uncertain",
+          canResume: false,
+          canReassign: false,
+        }),
+      ],
+    });
+    open();
+    await select(6);
+    const actions = await screen.findByTestId("decisions-inbox-attention-actions");
+    expect(screen.getByTestId("decisions-inbox-attention").textContent).toContain(
+      "Delivery uncertain"
+    );
+    expect(within(actions).queryByRole("button", { name: /Try resume/ })).toBeNull();
+    expect(within(actions).queryByRole("button", { name: /Choose destination/ })).toBeNull();
+
+    fireEvent.click(within(actions).getByRole("button", { name: "Mark q-6 handled" }));
+    expect(confirm()).toBeNull();
+    await waitFor(() =>
+      expect(markAnswerHandled).toHaveBeenCalledExactlyOnceWith({
+        questionId: "question-6",
+        expected: "token-6",
+      })
+    );
+  });
+
+  it("drops a confirmation once the stall changes under it, and marks nothing", async () => {
+    open();
+    await select(6);
+    const actions = await screen.findByTestId("decisions-inbox-attention-actions");
+    fireEvent.click(within(actions).getByRole("button", { name: "Mark q-6 handled" }));
+    await screen.findByRole("alertdialog");
+
+    // Another window's follow-up stopped too: main mints the stall a new token.
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [attentionItem("question-6", 6, { token: "token-6b" })],
+    });
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "pane_gone" } },
+      ],
+    });
+    await waitFor(() => expect(confirm()).toBeNull());
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Mark q-6 handled" })).toBeTruthy();
+  });
+
+  it("holds the actions, keeping the keyboard on them, while a changed stall is read again", async () => {
+    open();
+    await select(6);
+    const copy = await screen.findByRole("button", { name: "Copy answer to q-6" });
+    act(() => copy.focus());
+
+    const reread = settleable<DecisionsAttentionList>();
+    listAttention.mockReturnValueOnce(reread.promise);
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "pane_gone" } },
+      ],
+    });
+    await waitFor(() => expect(copy.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.activeElement).toBe(copy);
+    fireEvent.click(copy);
+    fireEvent.click(screen.getByRole("button", { name: "Try resume for q-6" }));
+    await act(async () => {});
+    expect(copyAnswer).not.toHaveBeenCalled();
+    expect(resumeAnswer).not.toHaveBeenCalled();
+    const handled = screen.getByRole("button", { name: "Mark q-6 handled" });
+    expect(handled.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(handled);
+    expect(confirm()).toBeNull();
+
+    // Read again, it holds the follow-up too, and the actions act on what it holds now.
+    await act(async () =>
+      reread.resolve({
+        result: "listed",
+        items: [
+          attentionItem("question-6", 6, {
+            token: "token-6b",
+            followUps: [
+              {
+                messageId: "m-1",
+                status: "needs-attention",
+                reason: "pane_gone",
+                onComputer: false,
+                unreadable: false,
+                text: "And the docs.",
+                sentAt: "2026-11-02T10:00:00.000Z",
+              },
+            ],
+          }),
+        ],
+      })
+    );
+    const fresh = await screen.findByRole("button", {
+      name: "Copy answer and follow-up to q-6",
+    });
+    expect(fresh.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Mark q-6 handled" }).getAttribute("aria-disabled")
+    ).toBeNull();
+  });
+
+  it("shows what came of an action on coming back to its question, though it settled while another was shown", async () => {
+    const resuming = settleable<DecisionsAnswerOutcome>();
+    resumeAnswer.mockReturnValue(resuming.promise);
+    open();
+    await select(6);
+    fireEvent.click(await screen.findByRole("button", { name: "Try resume for q-6" }));
+    await waitFor(() => expect(resumeAnswer).toHaveBeenCalledExactlyOnceWith("question-6"));
+
+    fireEvent.click(rowNamed("q-5"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
+    await act(async () =>
+      resuming.resolve({ result: "delivered", terminalId: "t1", title: "Pane one" })
+    );
+    expect(screen.queryByTestId("decisions-inbox-attention-outcome")).toBeNull();
+
+    const delivered = {
+      ...Q6,
+      standing: { kind: "settled", outcome: "answered", handled: false } as const,
+      settledAt: "2026-11-02T12:00:00Z",
+      stall: null,
+    };
+    push({ revision: 2, questions: [OTHER, Q5, delivered] });
+    fireEvent.click(rowNamed("q-6"));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-attention-outcome").textContent).toContain(
+        "Answer to q-6 typed into “Pane one”"
+      )
+    );
+
+    // Delivery stops anew: what the resume reported is no longer so.
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [attentionItem("question-6", 6, { token: "token-6b" })],
+    });
+    push({
+      revision: 3,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 2, followUpIds: [], reason: "pane_gone" } },
+      ],
+    });
+    await screen.findByRole("button", { name: "Mark q-6 handled" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("decisions-inbox-attention-outcome")).toBeNull()
+    );
+
+    // Another window resolves the new stall: the old success doesn't come back with it.
+    push({ revision: 4, questions: [OTHER, Q5, delivered] });
+    await waitFor(() => expect(screen.queryByTestId("decisions-inbox-attention")).toBeNull());
+    expect(screen.queryByTestId("decisions-inbox-attention-outcome")).toBeNull();
+  });
+
+  it("holds a question's actions when it is shown again, until this showing has read it", async () => {
+    open();
+    await select(6);
+    await screen.findByRole("button", { name: "Mark q-6 handled" });
+    // A question that isn't a stall in between leaves q-6's last reading in place.
+    fireEvent.click(rowNamed("q-2"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+
+    const reread = settleable<DecisionsAttentionList>();
+    listAttention.mockReturnValueOnce(reread.promise);
+    fireEvent.click(rowNamed("q-6"));
+    const handled = await screen.findByRole("button", { name: "Mark q-6 handled" });
+    expect(handled.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(handled);
+    expect(confirm()).toBeNull();
+
+    await act(async () =>
+      reread.resolve({
+        result: "listed",
+        items: [attentionItem("question-6", 6, { canResume: false, canReassign: false })],
+      })
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Mark q-6 handled" }).getAttribute("aria-disabled")
+      ).toBeNull()
+    );
+    // As this showing read it, Mark handled no longer asks first.
+    expect(screen.queryByRole("button", { name: /Try resume/ })).toBeNull();
+  });
+
+  it("lists an open destination menu's agents again for the stall as it now reads, offering none while it's read again", async () => {
+    listAnswerDestinations.mockResolvedValue({
+      result: "listed",
+      destinations: [
+        {
+          terminalId: "t7",
+          title: "Pane seven",
+          agentId: "claude",
+          agentName: "Claude",
+          projectId: "project-a",
+          projectName: "Alpha",
+          worktreeId: "w1",
+          worktreeName: "feature-x",
+          askedHere: false,
+          waitsFor: "prompt",
+          run: "run-t7",
+        },
+      ],
+    });
+    open();
+    await select(6);
+    const trigger = await screen.findByRole("button", { name: "Choose destination for q-6" });
+    act(() => trigger.focus());
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("menuitem", { name: /Pane seven/ });
+    expect(listAnswerDestinations).toHaveBeenCalledTimes(1);
+
+    const reread = settleable<DecisionsAttentionList>();
+    listAttention.mockReturnValueOnce(reread.promise);
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "pane_gone" } },
+      ],
+    });
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /Pane seven/ })).toBeNull());
+    expect(screen.getByRole("menu").textContent).toContain("Looking…");
+
+    await act(async () =>
+      reread.resolve({
+        result: "listed",
+        items: [attentionItem("question-6", 6, { token: "token-6b" })],
+      })
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Pane seven/ }));
+    expect(listAnswerDestinations).toHaveBeenCalledTimes(2);
+    const asking = await screen.findByRole("dialog", {
+      name: "Send q-6's answer to “Pane seven”?",
+    });
+    fireEvent.click(within(asking).getByRole("button", { name: "Send answer" }));
+    await waitFor(() =>
+      expect(reassignAnswer).toHaveBeenCalledExactlyOnceWith({
+        questionId: "question-6",
+        terminalId: "t7",
+        run: "run-t7",
+        expected: "token-6b",
+      })
+    );
+  });
+
+  it("never reopens a destination menu by itself once Choose destination went and came back", async () => {
+    open();
+    await select(6);
+    const trigger = await screen.findByRole("button", { name: "Choose destination for q-6" });
+    act(() => trigger.focus());
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeNull());
+
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [attentionItem("question-6", 6, { token: "token-6b", canReassign: false })],
+    });
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "pane_gone" } },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Choose destination for q-6" })).toBeNull()
+    );
+
+    listAttention.mockResolvedValue({
+      result: "listed",
+      items: [attentionItem("question-6", 6, { token: "token-6c" })],
+    });
+    push({
+      revision: 3,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1", "m-2"], reason: "pane_gone" } },
+      ],
+    });
+    await screen.findByRole("button", { name: "Choose destination for q-6" });
+    await act(async () => {});
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens no destination menu while a changed stall is read again", async () => {
+    open();
+    await select(6);
+    const trigger = await screen.findByRole("button", { name: "Choose destination for q-6" });
+    listAttention.mockReturnValueOnce(new Promise(() => {}));
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        { ...Q6, stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "pane_gone" } },
+      ],
+    });
+    await waitFor(() => expect(trigger.getAttribute("aria-disabled")).toBe("true"));
+    act(() => trigger.focus());
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await act(async () => {});
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(listAnswerDestinations).not.toHaveBeenCalled();
+  });
+
+  it("keeps the keyboard in the detail when a Retry that worked goes with the error", async () => {
+    listAttention.mockRejectedValueOnce(new Error("The relay went away"));
+    open();
+    await select(6);
+    const failed = await screen.findByTestId("decisions-inbox-attention-failed");
+    const retry = within(failed).getByRole("button", { name: "Retry" });
+    act(() => retry.focus());
+    fireEvent.click(retry);
+    await screen.findByRole("button", { name: "Mark q-6 handled" });
+    await waitFor(() => expect(document.activeElement).toBe(detail()));
+  });
+
+  it("never offers one question's actions for another, however its reads land", async () => {
+    const firstRead = settleable<DecisionsAttentionList>();
+    listAttention.mockReturnValueOnce(firstRead.promise);
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    fireEvent.click(rowNamed("q-5"));
+    await waitFor(() => expect(listAttention).toHaveBeenCalled());
+    fireEvent.click(rowNamed("q-6"));
+    await screen.findByRole("button", { name: "Mark q-6 handled" });
+
+    // q-5's read, overtaken, lands last.
+    await act(async () =>
+      firstRead.resolve({ result: "listed", items: [attentionItem("question-5", 5)] })
+    );
+    expect(screen.getByRole("button", { name: "Mark q-6 handled" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mark q-5 handled" })).toBeNull();
+  });
+
+  it("leaves a Remote Host's stall to its Host", async () => {
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        OTHER,
+        Q5,
+        {
+          ...Q6,
+          reference: reference("question-6", { hostId: "qhost_studio_0001" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected: true },
+        },
+      ],
+    });
+    open();
+    await select(6);
+    expect(screen.getByTestId("decisions-inbox-attention")).toBeTruthy();
+    await act(async () => {});
+    expect(actionsShown()).toBeNull();
+    expect(listAttention.mock.calls.length).toBe(0);
+  });
+
+  it("keeps the question shown once its answer is sent to another pane, though its place in the list goes to another", async () => {
+    listAnswerDestinations.mockResolvedValue({
+      result: "listed",
+      destinations: [
+        {
+          terminalId: "t7",
+          title: "Pane seven",
+          agentId: "claude",
+          agentName: "Claude",
+          projectId: "project-a",
+          projectName: "Alpha",
+          worktreeId: "w1",
+          worktreeName: "feature-x",
+          askedHere: false,
+          waitsFor: "prompt",
+          run: "run-t7",
+        },
+      ],
+    });
+    reassignAnswer.mockResolvedValue({
+      result: "waiting",
+      terminalId: "t7",
+      title: "Pane seven",
+      waitsFor: "prompt",
+    });
+    open();
+    await select(6);
+    const trigger = await screen.findByRole("button", { name: "Choose destination for q-6" });
+    act(() => trigger.focus());
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const choice = await screen.findByRole("menuitem", { name: /Pane seven/ });
+    fireEvent.click(choice);
+    const asking = await screen.findByRole("dialog", {
+      name: "Send q-6's answer to “Pane seven”?",
+    });
+    fireEvent.click(within(asking).getByRole("button", { name: "Send answer" }));
+    await waitFor(() =>
+      expect(reassignAnswer).toHaveBeenCalledExactlyOnceWith({
+        questionId: "question-6",
+        terminalId: "t7",
+        run: "run-t7",
+        expected: "token-6",
+      })
+    );
+
+    // Now listed under the pane it went to, waiting to be typed in; a new stall sits where it was.
+    const Q8 = stalled("question-8", 8, { askedAt: "2026-11-02T09:30:00.000Z" });
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        Q8,
+        {
+          ...Q6,
+          reference: reference("question-6", { terminalId: "t7" }),
+          standing: { kind: "to-type" },
+          stall: null,
+        },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-6")
+    );
+    expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true");
+    expect(rowNamed("q-8").getAttribute("aria-current")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-attention-outcome").textContent).toContain(
+        "Answer to q-6 goes to “Pane seven”"
+      )
+    );
   });
 });

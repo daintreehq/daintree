@@ -911,6 +911,12 @@ async function daintreeStates(run: Run): Promise<void> {
         timeout: 8000,
       });
     }
+    // Resolving the last answer closes the list rather than leave it empty (#18027).
+    await expect(page.locator(DIALOG)).toHaveCount(0, { timeout: 8000 });
+    // Opened with nothing left, as a notification click can after another window
+    // handled the answer, it says so.
+    await pushEvent(run.app, "decisions:open-attention", { terminalId: panes.asker });
+    await page.locator(DIALOG).waitFor({ state: "visible", timeout: 10_000 });
     await expect(page.locator(DIALOG)).toContainText("Nothing needs attention");
     await parkPointer(page);
     await snapLayers(page, "empty", theme, [DIALOG]);

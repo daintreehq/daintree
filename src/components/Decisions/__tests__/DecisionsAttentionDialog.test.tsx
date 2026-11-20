@@ -1492,3 +1492,183 @@ describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", (
     expect(screen.queryByRole("button", { name: "Open question q-5" })).toBeNull();
   });
 });
+
+describe("DecisionsAttentionDialog: closing once its last answer is resolved (#18027)", () => {
+  let paneState: ((state: unknown) => void) | null = null;
+
+  /** The list as the view's host mounts it: open and closed by the store, beside its opener. */
+  function Hosted() {
+    const isOpen = useDecisionsAttentionStore((state) => state.isOpen);
+    const close = useDecisionsAttentionStore((state) => state.close);
+    return (
+      <TooltipProvider>
+        <button type="button" data-testid="opener">
+          Opener
+        </button>
+        <DecisionsAttentionDialog isOpen={isOpen} onClose={close} />
+      </TooltipProvider>
+    );
+  }
+
+  const dialog = () => screen.queryByTestId("decisions-attention-dialog");
+
+  async function openFromOpener() {
+    render(<Hosted />);
+    const opener = screen.getByTestId("opener");
+    act(() => opener.focus());
+    act(() => useDecisionsAttentionStore.getState().open(null));
+    return opener;
+  }
+
+  beforeEach(() => {
+    listed = [];
+    paneState = null;
+    listAttention.mockReset();
+    markAnswerHandled.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    handlesQuestions();
+    Object.defineProperty(window, "electron", {
+      value: {
+        decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
+        terminal: {
+          onDecisionState: (callback: (state: unknown) => void) => {
+            paneState = callback;
+            return () => {
+              paneState = null;
+            };
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    useDecisionsAttentionStore.setState({
+      isOpen: false,
+      request: { terminalId: null, returnFocusTo: null, seq: 0 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("closes once its last answer is marked handled, handing focus back to where it was opened", async () => {
+    listed = [makeItem(3)];
+    const opener = await openFromOpener();
+    await listedRows(1);
+
+    const asking = await ask(3);
+    fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
+
+    await waitFor(() => expect(useDecisionsAttentionStore.getState().isOpen).toBe(false));
+    expect(markAnswerHandled).toHaveBeenCalledExactlyOnceWith({
+      questionId: "qid-3",
+      expected: "token-3",
+    });
+    await waitFor(() => expect(dialog()).toBeNull());
+    await waitFor(() => expect(confirm()).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it("stays open while an answer is left, and closes with the last", async () => {
+    listed = [makeItem(3, { canResume: false, canReassign: false }), makeItem(4)];
+    await openFromOpener();
+    await listedRows(2);
+
+    fireEvent.click(markButton(3));
+    await listedRows(1);
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+
+    const asking = await ask(4);
+    fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
+    await waitFor(() => expect(useDecisionsAttentionStore.getState().isOpen).toBe(false));
+  });
+
+  it("leaves the keyboard in a confirmation already open when it's opened again for another pane", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    await openFromOpener();
+    await listedRows(2);
+    const asking = await ask(3);
+    const cancel = within(asking).getByRole("button", { name: "Cancel" });
+
+    const reads = listAttention.mock.calls.length;
+    act(() => useDecisionsAttentionStore.getState().open("pane-4"));
+    await waitFor(() => expect(listAttention.mock.calls.length).toBeGreaterThan(reads));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(confirm()).not.toBeNull();
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it("stays open, saying so, when its last answer is resolved in another window", async () => {
+    listed = [makeItem(3)];
+    await openFromOpener();
+    await listedRows(1);
+
+    listed = [];
+    act(() => paneState?.({}));
+    await waitFor(() =>
+      expect(screen.queryAllByTestId("decisions-attention-item")).toHaveLength(0)
+    );
+    expect(dialog()?.textContent).toContain("Nothing needs attention right now");
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+  });
+
+  it("stays open when its last answer turns out to have been handled in another window first", async () => {
+    listed = [makeItem(3, { canResume: false, canReassign: false })];
+    markAnswerHandled.mockImplementation(async () => {
+      listed = [];
+      return { result: "resolved" };
+    });
+    await openFromOpener();
+    await listedRows(1);
+
+    fireEvent.click(markButton(3));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
+        "no longer needs attention"
+      )
+    );
+    await waitFor(() =>
+      expect(screen.queryAllByTestId("decisions-attention-item")).toHaveLength(0)
+    );
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+  });
+
+  it("still closes once a read after a failed one finds its last answer gone", async () => {
+    listed = [makeItem(3, { canResume: false, canReassign: false })];
+    await openFromOpener();
+    await listedRows(1);
+
+    listAttention.mockRejectedValueOnce(new Error("The relay went away"));
+    fireEvent.click(markButton(3));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(useDecisionsAttentionStore.getState().isOpen).toBe(false));
+  });
+
+  it("stays open when an action leaves its last answer listed", async () => {
+    listed = [makeItem(3, { canResume: false, canReassign: false })];
+    markAnswerHandled.mockResolvedValue({ result: "refused", reason: "changed" });
+    await openFromOpener();
+    await listedRows(1);
+
+    fireEvent.click(markButton(3));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
+        "changed after this list was read"
+      )
+    );
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+  });
+
+  it("stays open, saying so, when opened with nothing listed", async () => {
+    await openFromOpener();
+    await waitFor(() =>
+      expect(dialog()?.textContent).toContain("Nothing needs attention right now")
+    );
+    expect(useDecisionsAttentionStore.getState().isOpen).toBe(true);
+  });
+});

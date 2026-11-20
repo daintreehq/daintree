@@ -47,7 +47,6 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -63,13 +62,19 @@ import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
+import {
+  ATTENTION_ACTIONS,
+  AttentionActionRow,
+  AttentionConfirmations,
+  ResumePending,
+  useWorktreeNames,
+} from "./AttentionActions";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
 import { asksByDeadline, deadlineMs, expiryText } from "./decisionDeadline";
 import { useDecisionsClock } from "./useDecisionsClock";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { REVIEW_ATTENTION_LABEL } from "./decisionsAttentionModel";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
@@ -129,8 +134,10 @@ import {
   useQuestionCancel,
   type TaggedRead,
 } from "./useDecisionQuestionReader";
+import { useAttentionActions } from "./useAttentionActions";
 import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
 import { replyRequest } from "./decisionFollowUpModel";
+import { useInboxAttentionItem } from "./useInboxAttentionItem";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -1112,6 +1119,45 @@ export function DecisionsInboxDialog() {
           : null;
   const { reach, markGone } = useTerminalReach(selected, active);
   const selectedAsker = selected === null ? null : askerNotes(selected);
+  // A stopped delivery on this computer is resolved here, in the detail, rather than in a
+  // second list over it (#18027). A Remote Host's stall stays that Host's.
+  const attention = useInboxAttentionItem(selected, active, request.seq);
+  const attentionItem = attention.read.state === "found" ? attention.read.item : null;
+  const attentionWorktreeName = useWorktreeNames();
+  const attentionActions = useAttentionActions({
+    scope: isOpen ? `${request.seq}:${selected?.reference.questionId ?? ""}` : null,
+    // A confirmation asked about a reading the stall has since moved past goes with it.
+    shown: attention.stale
+      ? []
+      : attention.read.state === "found"
+        ? [attention.read.item]
+        : attention.read.state === "loading" || attention.read.state === "failed"
+          ? null
+          : [],
+    refresh: attention.refresh,
+  });
+  const attentionBusy =
+    selected === null ? null : (attentionActions.busy.get(selected.reference.questionId) ?? null);
+  const attentionActionsRef = useRef<HTMLDivElement>(null);
+  /** The control of the stall the keyboard was on, until it goes with the stall it resolved. */
+  const attentionFocus = useRef<HTMLElement | null>(null);
+  // What an action did stays with its question until the question stalls anew: a success it
+  // reported (typed in, sent on) is no longer so once a read finds a stall it wasn't taken on.
+  const attentionScope = isOpen ? `${request.seq}:${selected?.reference.questionId ?? ""}` : null;
+  const attentionOutcome = attentionActions.outcome;
+  const outcomeSuperseded =
+    attentionOutcome !== null &&
+    attentionOutcome.severity === "success" &&
+    attention.read.state === "found" &&
+    !attention.stale &&
+    attention.read.item.token !== attentionOutcome.token;
+  const { clearOutcome } = attentionActions;
+  const supersededToken = outcomeSuperseded ? attentionOutcome.token : null;
+  useEffect(() => {
+    if (supersededToken !== null && attentionScope !== null) {
+      clearOutcome(attentionScope, supersededToken);
+    }
+  }, [supersededToken, attentionScope, clearOutcome]);
   const questionHeadingId = useId();
   // `reached` once its question has been the one shown, so a later choice of another abandons it.
   const pendingFocus = useRef<{
@@ -1123,8 +1169,6 @@ export function DecisionsInboxDialog() {
   const detailRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const detailHeadingId = useId();
-  // Where the needs-attention list hands the keyboard back once it closes over the inbox.
-  const detailDomId = useId();
   // Once the one shown no longer needs the person, the next that does is one press away:
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
@@ -1324,6 +1368,18 @@ export function DecisionsInboxDialog() {
     announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
   }, [active, listRead.state, selected, selectedKey, request.seq, lines, readResult, announce]);
 
+  // An action that resolved the stall went with it, taking the keyboard along: it
+  // waits in the detail, on the question that moved, rather than on nothing.
+  useEffect(() => {
+    const last = attentionFocus.current;
+    if (last === null || last.isConnected) return;
+    attentionFocus.current = null;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body && focused.isConnected) return;
+    if (!useDecisionsInboxStore.getState().isOpen) return;
+    detailRef.current?.focus({ preventScroll: true });
+  });
+
   // Each question is read from its top, wherever the last one was scrolled to.
   useLayoutEffect(() => {
     if (detailRef.current !== null) detailRef.current.scrollTop = 0;
@@ -1444,6 +1500,7 @@ export function DecisionsInboxDialog() {
   const onCloseComplete = (restoreSkipped?: () => void) => {
     // Content is never kept past the close.
     reader.release();
+    attention.release();
     releaseLines();
     releaseReplyLines();
     releaseList();
@@ -1658,7 +1715,6 @@ export function DecisionsInboxDialog() {
           {empty === null && (
             <section
               ref={detailRef}
-              id={detailDomId}
               // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
               tabIndex={selected !== null ? 0 : -1}
               // A hand-off waits only while the keyboard waits here with it.
@@ -1824,36 +1880,83 @@ export function DecisionsInboxDialog() {
                       </Callout>
                     )}
                     {selected.standing.kind === "needs-attention" && (
-                      <Callout
-                        severity="warning"
-                        size="compact"
-                        title={
-                          selected.standing.deliveryStatus === "delivery-uncertain"
-                            ? "Delivery uncertain"
-                            : "Delivery stopped"
-                        }
-                        action={
-                          // This computer's list of stopped answers; a Remote Host keeps its own.
-                          selected.remoteHost === undefined ? (
-                            <Button
-                              variant="outline"
-                              size="xs"
-                              onClick={() =>
-                                useDecisionsAttentionStore
-                                  .getState()
-                                  .open(selected.reference.terminalId, {
-                                    returnFocusTo: detailDomId,
-                                  })
-                              }
-                              data-testid="decisions-inbox-review-attention"
-                            >
-                              {REVIEW_ATTENTION_LABEL}
-                            </Button>
-                          ) : undefined
-                        }
-                        data-testid="decisions-inbox-attention"
+                      <div
+                        className="flex flex-col gap-2"
+                        // Its actions and its Retry alike, so whichever goes leaves the keyboard here.
+                        onFocus={(event) => {
+                          attentionFocus.current = event.target;
+                        }}
                       >
-                        {attentionText(selected)}
+                        <Callout
+                          severity="warning"
+                          size="compact"
+                          title={
+                            selected.standing.deliveryStatus === "delivery-uncertain"
+                              ? "Delivery uncertain"
+                              : "Delivery stopped"
+                          }
+                          data-testid="decisions-inbox-attention"
+                        >
+                          {attentionText(selected)}
+                        </Callout>
+                        {attentionItem !== null && (
+                          <div
+                            ref={attentionActionsRef}
+                            data-testid="decisions-inbox-attention-actions"
+                          >
+                            <AttentionActionRow
+                              item={attentionItem}
+                              worktreeName={attentionWorktreeName}
+                              busy={attentionBusy}
+                              onResume={() => attentionActions.resume(attentionItem)}
+                              onChoose={(destination) =>
+                                attentionActions.choose(attentionItem, destination)
+                              }
+                              onHandled={() => attentionActions.handle(attentionItem)}
+                              held={attention.stale}
+                            />
+                          </div>
+                        )}
+                        {attention.read.state === "not-running" && (
+                          <p className="text-xs text-text-secondary [text-wrap:pretty]">
+                            Decisions isn&apos;t delivering answers on this computer right now, so
+                            this one can&apos;t be resolved here.
+                          </p>
+                        )}
+                        {attention.read.state === "failed" && (
+                          <Callout
+                            severity="warning"
+                            size="compact"
+                            action={
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => void attention.refresh()}
+                              >
+                                Retry
+                              </Button>
+                            }
+                            data-testid="decisions-inbox-attention-failed"
+                          >
+                            {attention.read.message}
+                          </Callout>
+                        )}
+                      </div>
+                    )}
+                    {/* Kept apart from the stall, so a resume that moves the question while it
+                        runs, and what came of it, stay in view as it changes group. */}
+                    <ResumePending
+                      key={selected.reference.questionId}
+                      alias={selected.alias}
+                      active={attentionBusy === "resume"}
+                    />
+                    {attentionOutcome !== null && !outcomeSuperseded && (
+                      <Callout
+                        severity={attentionOutcome.severity}
+                        size="compact"
+                        data-testid="decisions-inbox-attention-outcome"
+                      >
+                        {attentionOutcome.message}
                       </Callout>
                     )}
                     <DecisionQuestionReadView
@@ -1926,6 +2029,20 @@ export function DecisionsInboxDialog() {
         // The button goes once the question stops waiting; the detail then takes focus.
         restoreFocusTo={() =>
           cancelRef.current?.isConnected ? cancelRef.current : detailRef.current
+        }
+      />
+      <AttentionConfirmations
+        actions={attentionActions}
+        worktreeName={attentionWorktreeName}
+        restoreFocusOnClose={isOpen}
+        // The detail's question is a read of its own: the confirmation names what this item holds.
+        showSubject
+        // Back to an action of the stall's that can take it; once a fast action has
+        // resolved the stall and its actions went with it, to the detail.
+        restoreFocusTo={() =>
+          attentionActionsRef.current?.querySelector<HTMLElement>(
+            `${ATTENTION_ACTIONS}:not(:disabled)`
+          ) ?? detailRef.current
         }
       />
     </>
