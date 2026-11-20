@@ -479,7 +479,9 @@ describe("Decisions → Decision model", () => {
     expect(answering).not.toContain("Policy");
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Reset Answer automatically to default" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset Answer automatically to default" })
+      );
     });
     expect(setModelThreshold).toHaveBeenCalledExactlyOnceWith({
       threshold: null,

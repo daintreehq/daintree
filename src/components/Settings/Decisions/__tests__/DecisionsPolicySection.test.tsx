@@ -443,7 +443,9 @@ describe("useDecisionsPolicy", () => {
   });
 
   it("saves the expiry and an agent's switch side by side, and keeps both once main has", async () => {
-    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS }));
+    getPolicy.mockResolvedValueOnce(
+      policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS })
+    );
     const { result } = renderHook(() => useDecisionsPolicy(true));
     await act(async () => {});
 

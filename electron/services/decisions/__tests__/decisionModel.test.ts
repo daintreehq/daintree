@@ -168,7 +168,11 @@ async function learnPast(runtime: DecisionModelRuntime, count = PAST): Promise<v
 /** A runtime that has learned, been evaluated through `cli` and given a threshold its evaluation supports. */
 async function armedRuntime(cli = rebasingCli()) {
   const made = makeRuntime({ claude: cli });
-  await made.runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+  await made.runtime.update({
+    modelLearning: true,
+    modelAdapter: "claude",
+    proxyAllowlisted: true,
+  });
   await learnPast(made.runtime);
   await made.runtime.evaluate();
   await made.runtime.setAutoAnswerThreshold(0.8);
@@ -416,7 +420,11 @@ describe("the decision model's runtime (#16026)", () => {
 
     const cli = rebasingCli();
     const later = makeRuntime({ claude: cli });
-    await later.runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+    await later.runtime.update({
+      modelLearning: true,
+      modelAdapter: "claude",
+      proxyAllowlisted: true,
+    });
     expect(later.runtime.proxy()).not.toBeNull();
     expect(later.runtime.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
     expect(cli.calls).toHaveLength(0);
@@ -437,7 +445,11 @@ describe("the decision model's runtime (#16026)", () => {
     for (const value of damaged) {
       writeFileSync(files.evaluation, typeof value === "string" ? value : JSON.stringify(value));
       const later = makeRuntime({ claude: rebasingCli() });
-      await later.runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+      await later.runtime.update({
+        modelLearning: true,
+        modelAdapter: "claude",
+        proxyAllowlisted: true,
+      });
       expect(later.runtime.proxy(), JSON.stringify(value).slice(0, 60)).toBeNull();
       await later.runtime.close();
     }
@@ -478,7 +490,11 @@ describe("the decision model's runtime (#16026)", () => {
     await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
-    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex", proxyAllowlisted: true });
+    const switched = runtime.update({
+      modelLearning: true,
+      modelAdapter: "codex",
+      proxyAllowlisted: true,
+    });
     const evaluating = runtime.evaluate();
     await switched;
     await expect(evaluating).resolves.toMatchObject({ adapter: "codex" });
@@ -508,9 +524,9 @@ describe("the decision model's runtime (#16026)", () => {
       },
     });
     runtimes.push(runtime);
-    await expect(runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true })).rejects.toThrow(
-      /readonly/
-    );
+    await expect(
+      runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true })
+    ).rejects.toThrow(/readonly/);
     expect(closed).toHaveBeenCalledTimes(1);
 
     fail = false;
@@ -629,7 +645,11 @@ describe("the decision model's settings (#16027)", () => {
     await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
-    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex", proxyAllowlisted: true });
+    const switched = runtime.update({
+      modelLearning: true,
+      modelAdapter: "codex",
+      proxyAllowlisted: true,
+    });
     const run = runtime.startEvaluation();
     expect(run.adapter).toBe("claude");
     await switched;

@@ -1426,7 +1426,11 @@ describe("Decisions entry", () => {
         createAdapter: () => cli,
       });
       try {
-        await seeding.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+        await seeding.update({
+          modelLearning: true,
+          modelAdapter: "claude",
+          proxyAllowlisted: true,
+        });
         for (let n = 1; n <= 36; n += 1) await seeding.learner.learn(learned(n));
         const { evaluatedAt } = await seeding.evaluate();
         await seeding.setAutoAnswerThreshold(threshold, evaluatedAt);
@@ -2897,7 +2901,10 @@ describe("Decisions entry", () => {
       expect(agents.askHumanAgents).toEqual(["claude"]);
       // The later save is applied over the earlier one, so its answer holds both.
       expect(expiry).toMatchObject({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: null });
-      expect(saved.value).toMatchObject({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: null });
+      expect(saved.value).toMatchObject({
+        askHumanAgents: ["claude"],
+        defaultQuestionExpiryMs: null,
+      });
       expect(running.defaultQuestionExpiryMs).toBeNull();
     });
 
