@@ -288,7 +288,7 @@ export function DecisionQuestionDialog() {
                 onClick={cancel.ask}
                 data-testid="decision-question-dismiss"
               >
-                Dismiss question
+                Decline question
               </Button>
             )}
           </AppDialog.Footer>

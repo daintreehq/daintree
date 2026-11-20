@@ -130,7 +130,7 @@ const OBSERVED: {
       case "expired":
         return "The test question expired before it was answered";
       case "cancelled":
-        return "The test question was cancelled before it was answered";
+        return "The test question closed before it was answered";
       case "not-typed":
         return "An answer came back, but it wasn't typed into the diagnostic terminal";
       case "unexpected":

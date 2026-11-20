@@ -48,7 +48,7 @@ export function questionExpiryText(
   const { defaultQuestionExpiryMs: wait, maxQuestionExpiryMs: max } = policy;
   const first =
     wait === null
-      ? "A question waits for your answer until it's answered or cancelled, unless the agent that asked sets an expiry"
+      ? "A question waits for your answer until it's answered, declined or withdrawn, unless the agent that asked sets an expiry"
       : `A question waits ${questionWaitText(wait)} for your answer, unless the agent that asked sets another time`;
   const limit = max === null ? "" : `, at most ${questionWaitText(max)}`;
   // A Host asks under its own default (#17942); the owner's choice isn't sent to it.

@@ -20,7 +20,8 @@ export function closedText(status: DecisionQuestionStatus): string {
     case "proxy-answered":
       return "The decision model answered this question, so your answer wasn't sent.";
     case "cancelled":
-      return "This question was cancelled, so your answer wasn't sent.";
+      // Declined or withdrawn: the view's status says which.
+      return "This question closed, so your answer wasn't sent.";
     case "publish-failed":
       return "This question couldn't be sent, so it can't be answered.";
     // An open one past its time: the store records the expiry once the relay does.
@@ -43,7 +44,7 @@ export function outcomeText(outcome: DecisionAnswerOutcome): string | null {
       return outcome.reason === "expired"
         ? "This question expired before your answer reached it, so it wasn't taken."
         : outcome.reason === "cancelled"
-          ? "This question was cancelled before your answer reached it, so it wasn't taken."
+          ? "This question closed before your answer reached it, so it wasn't taken."
           : "The relay no longer holds this question, so your answer wasn't taken.";
     case "unsupported":
       return outcome.by === "relay"

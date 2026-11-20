@@ -160,7 +160,7 @@ export const CLEARED_ELAPSED_NOTE = "Deadline passed";
 
 /**
  * What Clear or Restore does, said before it's pressed (#17943): only this
- * computer's inbox moves. Unlike Dismiss, nothing is declined or sent, and
+ * computer's inbox moves. Unlike Decline, nothing is declined or sent, and
  * the question stays open for an answer, here or on a phone.
  */
 export function clearText(cleared: boolean): string {
@@ -168,6 +168,15 @@ export function clearText(cleared: boolean): string {
     ? "Takes it out of Cleared on this computer. Nothing is sent to the agent or your phones."
     : "Moves it to Cleared on this computer only. Nothing is declined or sent, and while it's open it can still be answered here or on your phone.";
 }
+
+/** What the inbox bar's other actions do, said before each is pressed (#18041), as Clear's is. */
+export const GO_TO_TERMINAL_TEXT = "Shows the terminal that asked it.";
+export const DECLINE_TEXT =
+  "Declines it for you. Your phones and an agent still listening are told you chose not to answer.";
+export const WITHDRAW_TEXT =
+  "Calls it off from this computer. Phones it reached show it withdrawn, and the agent sees it withdrawn when it checks.";
+export const RETRY_DECLINE_TEXT =
+  "Checks whether your decline went through, and sends the same decline again if it never arrived.";
 
 /**
  * What clearing or restoring says once it lands, for the ear; null when it
@@ -866,6 +875,6 @@ export function connectionNotice(
   }
   return {
     severity: "neutral",
-    text: "Not connected to the relay. These are the questions this computer already holds; new ones, answers and dismissals wait until it reconnects.",
+    text: "Not connected to the relay. These are the questions this computer already holds; new ones, answers and declines wait until it reconnects.",
   };
 }

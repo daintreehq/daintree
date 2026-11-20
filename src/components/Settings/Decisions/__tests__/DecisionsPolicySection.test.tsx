@@ -227,7 +227,7 @@ describe("Decisions policy and questions sections", () => {
     );
     expect(expirySelect().textContent).toBe("Never");
     expect(expirySelect().disabled).toBe(false);
-    expect(expiryRow()).toContain("until it's answered or cancelled");
+    expect(expiryRow()).toContain("until it's answered, declined or withdrawn");
     expect(expiryRow()).not.toContain("at most");
     expect(resetExpiry()).not.toBeNull();
   });
@@ -571,7 +571,7 @@ describe("policy copy", () => {
       defaultQuestionExpiryMs: null,
       maxQuestionExpiryMs: null,
     });
-    expect(unbounded).toContain("until it's answered or cancelled");
+    expect(unbounded).toContain("until it's answered, declined or withdrawn");
     expect(unbounded).not.toContain("at most");
   });
 

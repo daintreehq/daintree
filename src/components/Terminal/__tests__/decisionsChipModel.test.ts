@@ -494,7 +494,7 @@ describe("answering here (#17102)", () => {
 });
 
 describe("a person's dismissal or withdrawal", () => {
-  it("offers Dismiss only on questions still waiting for an answer", () => {
+  it("offers Decline only on questions still waiting for an answer", () => {
     const items = decisionItems(
       pane({
         open: [open(1), open(2, "queued")],
@@ -505,7 +505,7 @@ describe("a person's dismissal or withdrawal", () => {
     expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-1", "q-2"]);
   });
 
-  it("shows a withdrawal the relay hasn't confirmed as cancelling, last, with no cancel and no answer coming", () => {
+  it("shows a withdrawal the relay hasn't confirmed as withdrawing, last, with no cancel and no answer coming", () => {
     const state = pane({ open: [open(1), open(2, "queued"), open(3)] });
     const items = decisionItems(state, "composer", new Set(["q1", "q2"]));
 
@@ -516,18 +516,19 @@ describe("a person's dismissal or withdrawal", () => {
     ]);
     expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-3"]);
     expect(chipSummary(items)).toBe(
-      "3 Decisions questions: 1\u00a0waiting for an answer; 2\u00a0cancelling"
+      "3 Decisions questions: 1\u00a0waiting for an answer; 2\u00a0withdrawing"
     );
 
     const withdrawn = decisionItems(pane({ open: [open(1)] }), "composer", new Set(["q1"]));
-    expect(chipLabel(withdrawn)).toEqual({ text: "q-1 cancelling", detail: null });
-    expect(itemSentence(withdrawn[0]!)).toMatch(/^Question q-1 is being cancelled/);
+    expect(chipLabel(withdrawn)).toEqual({ text: "q-1 withdrawing", detail: null });
+    expect(withdrawn[0]!.status).toMatch(/^Withdrawing, waiting for the relay to confirm/);
+    expect(itemSentence(withdrawn[0]!)).toMatch(/^Question q-1 is being withdrawn/);
     // Nothing will be typed in for it, so the pane makes no promise.
     expect(deliveryNotes(withdrawn)).toEqual([]);
     expect(deliveryNotes(decisionItems(pane({ open: [open(1)] })))).toHaveLength(1);
   });
 
-  it("shows a dismissal from here as dismissing, after the questions still waiting, with no Dismiss and no answer coming (#17239)", () => {
+  it("shows a decline from here as declining, after the questions still waiting, with no Decline and no answer coming (#17239)", () => {
     const state = pane({ open: [open(1), open(2, "queued"), open(3)] });
     const items = decisionItems(state, "composer", new Set(["q3"]), new Set(["q1", "q3"]));
 
@@ -539,7 +540,7 @@ describe("a person's dismissal or withdrawal", () => {
     ]);
     expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-2"]);
     expect(chipSummary(items)).toBe(
-      "3 Decisions questions: 1\u00a0queued to send; 1\u00a0dismissing; 1\u00a0cancelling"
+      "3 Decisions questions: 1\u00a0queued to send; 1\u00a0declining; 1\u00a0withdrawing"
     );
 
     const dismissed = decisionItems(
@@ -548,8 +549,10 @@ describe("a person's dismissal or withdrawal", () => {
       undefined,
       new Set(["q1"])
     );
-    expect(chipLabel(dismissed)).toEqual({ text: "q-1 dismissing", detail: null });
-    expect(itemSentence(dismissed[0]!)).toMatch(/^Question q-1 was dismissed here/);
+    expect(chipLabel(dismissed)).toEqual({ text: "q-1 declining", detail: null });
+    // Under way, whether queued, sent or unconfirmed: never said as declined yet.
+    expect(dismissed[0]!.status).toMatch(/^Declining/);
+    expect(itemSentence(dismissed[0]!)).toMatch(/^Question q-1 is being declined/);
     expect(deliveryNotes(dismissed)).toEqual([]);
     expect(cancelNote(dismissed)).toBeNull();
     // A follow-up held on a question being dismissed lists it under attention too, but it isn't answered.
@@ -568,25 +571,25 @@ describe("a person's dismissal or withdrawal", () => {
     expect(items.map((item) => item.kind)).toEqual(["answer"]);
   });
 
-  it("says why answered and expired rows offer no Dismiss, and nothing when every row is waiting", () => {
+  it("says why answered and expired rows offer no Decline, and nothing when every row is waiting", () => {
     const note = (state: PaneDecisionState) => cancelNote(decisionItems(state));
     expect(note(pane({ open: [open(1), open(2, "queued")] }))).toBeNull();
     expect(note(pane({ open: [open(1)], waiting: [waiting(2)] }))).toBe(
-      "Answered questions can't be dismissed"
+      "Answered questions can't be declined"
     );
     expect(note(pane({ attention: [stopped(2, "delivery-uncertain")] }))).toBe(
-      "Answered questions can't be dismissed"
+      "Answered questions can't be declined"
     );
     expect(note(pane({ waiting: [waiting(2, "expired")] }))).toBe(
-      "Expired questions can't be dismissed"
+      "Expired questions can't be declined"
     );
     expect(note(pane({ waiting: [waiting(2, "expired")], attention: [stopped(3)] }))).toBe(
-      "Answered and expired questions can't be dismissed"
+      "Answered and expired questions can't be declined"
     );
     // A follow-up held on a question still waiting lists it under attention too, but it isn't answered.
     expect(note(pane({ open: [open(1)], attention: [stopped(1)] }))).toBeNull();
     expect(note(pane({ open: [open(1)], attention: [stopped(1), stopped(2)] }))).toBe(
-      "Answered questions can't be dismissed"
+      "Answered questions can't be declined"
     );
     const withdrawn = decisionItems(
       pane({ open: [open(1)], attention: [stopped(1)] }),
@@ -651,8 +654,8 @@ describe("the footer for what stopped (#18054)", () => {
     decisionItems(pane({ attention: [{ ...stopped(1), subject }] }));
 
   it("calls a stopped timeout notice expired, not answered, and names what isn't typed in", () => {
-    expect(cancelNote(held("timeout notice"))).toBe("Expired questions can't be dismissed");
-    expect(cancelNote(held("answer"))).toBe("Answered questions can't be dismissed");
+    expect(cancelNote(held("timeout notice"))).toBe("Expired questions can't be declined");
+    expect(cancelNote(held("answer"))).toBe("Answered questions can't be declined");
     expect(deliveryNotes(held("timeout notice"))).toEqual([
       "Timeout notices that need attention aren't typed in on their own",
     ]);

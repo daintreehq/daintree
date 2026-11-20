@@ -167,7 +167,7 @@ async function reachWithdrawal(): Promise<HTMLElement> {
   fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
   const asked = await screen.findByRole("alertdialog");
   await act(async () => {
-    fireEvent.click(within(asked).getByRole("button", { name: "Dismiss question" }));
+    fireEvent.click(within(asked).getByRole("button", { name: "Decline question" }));
   });
   fireEvent.click(within(asked).getByRole("button", { name: "Keep question" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -1014,7 +1014,7 @@ describe("DecisionQuestionDialog", () => {
       expect(paneListeners).toHaveLength(0);
     });
 
-    it("dismisses a waiting question by its reference, after a confirmation naming it, at the revision read (#17239)", async () => {
+    it("declines a waiting question by its reference, after a confirmation naming it, at the revision read (#17239)", async () => {
       const waiting = { ...OTHER_PROJECT, questionId: "qw" };
       QUESTIONS.qw = content("qw", 11, {
         status: "open",
@@ -1028,15 +1028,15 @@ describe("DecisionQuestionDialog", () => {
       });
       try {
         openReference([waiting]);
-        fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
+        fireEvent.click(await screen.findByRole("button", { name: "Decline question" }));
         const confirm = await screen.findByRole("alertdialog");
-        expect(confirm.textContent).toContain("Dismiss question q-11?");
+        expect(confirm.textContent).toContain("Decline question q-11?");
         await waitFor(() => expect(confirm.textContent).toContain("Ship the migration?"));
         expect(getQuestionSummariesByReference).toHaveBeenCalledWith({ references: [waiting] });
         const reads = getQuestionContentByReference.mock.calls.length;
 
         await act(async () => {
-          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+          fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
         });
         expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
           reference: waiting,
@@ -1051,7 +1051,7 @@ describe("DecisionQuestionDialog", () => {
           expect(getQuestionContentByReference.mock.calls.length).toBeGreaterThanOrEqual(reads + 2)
         );
         expect(screen.getByTestId("decision-question-dismiss-status").textContent).toMatch(
-          /^Dismissed/
+          /^Declined/
         );
       } finally {
         delete QUESTIONS.qw;
@@ -1073,14 +1073,14 @@ describe("DecisionQuestionDialog", () => {
         // Reopened on the relay since: the view still shows revision 4.
         QUESTIONS.qw = { ...QUESTIONS.qw!, revision: 5 };
         await act(async () => {
-          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+          fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
         });
 
         expect(declineQuestion).not.toHaveBeenCalled();
         expect(confirm.textContent).toContain("q-11 changed since you opened it");
         expect(
           within(confirm)
-            .getByRole("button", { name: "Dismiss question" })
+            .getByRole("button", { name: "Decline question" })
             .getAttribute("aria-disabled")
         ).toBe("true");
       } finally {
@@ -1097,7 +1097,7 @@ describe("DecisionQuestionDialog", () => {
         fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
         const confirm = await screen.findByRole("alertdialog");
         await act(async () => {
-          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+          fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
         });
         expect(confirm.textContent).toContain("Withdraw question q-11?");
         expect(confirm.textContent).toContain("Your relay needs an update");
@@ -1170,7 +1170,7 @@ describe("DecisionQuestionDialog", () => {
     }
   });
 
-  it("offers Dismiss only while the question waits, and withdraws a pane's through its pane when it can't be dismissed", async () => {
+  it("offers Decline only while the question waits, and withdraws a pane's through its pane when it can't be declined", async () => {
     openView(["qa"], "qa");
     await screen.findByTestId("decision-question-content");
     expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
@@ -1182,7 +1182,7 @@ describe("DecisionQuestionDialog", () => {
       fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       expect(confirm.textContent).toMatch(/hasn't been sent to your phones yet/);
       const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
@@ -1211,14 +1211,14 @@ describe("DecisionQuestionDialog", () => {
       fireEvent.click(screen.getByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 
       const status = screen.getByTestId("decision-question-dismiss-status");
-      expect(status.textContent).toMatch(/Dismissal queued/);
+      expect(status.textContent).toMatch(/Decline queued/);
       expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
-      // Nothing is answered from here while it's being dismissed.
+      // Nothing is answered from here while it's being declined.
       expect(screen.queryByTestId("decision-answer-send")).toBeNull();
 
       const declineId = declineQuestion.mock.calls[0]![0].declineId;
@@ -1261,7 +1261,7 @@ describe("DecisionQuestionDialog", () => {
       fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       const reads = getQuestionContent.mock.calls.length;
@@ -1276,9 +1276,9 @@ describe("DecisionQuestionDialog", () => {
         () => screen.getByTestId("decision-question-dismiss-outcome"),
         { timeout: 9000 }
       );
-      expect(outcome.textContent).toContain("The relay refused the dismissal of q-11 (conflict)");
+      expect(outcome.textContent).toContain("The relay refused the decline for q-11 (conflict)");
       expect(getQuestionContent.mock.calls.length).toBeGreaterThan(reads);
-      // Dismiss is offered again, under a new id.
+      // Decline is offered again, under a new id.
       expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
     } finally {
       delete QUESTIONS.qw;
@@ -1293,7 +1293,7 @@ describe("DecisionQuestionDialog", () => {
     ["cancelled", false],
     ["expired", false],
     ["publish-failed", false],
-  ] as const)("offers Dismiss for a %s question: %s", async (status, offered) => {
+  ] as const)("offers Decline for a %s question: %s", async (status, offered) => {
     QUESTIONS.qw = content("qw", 11, { status, thread: [] });
     try {
       openView(["qw"], "qw");
@@ -1314,7 +1314,7 @@ describe("DecisionQuestionDialog", () => {
       QUESTIONS.qw = content("qw", 11, { status: "human-answered" });
       act(() => pushPane("t1"));
       await waitFor(() => expect(confirm.textContent).toMatch(/isn't waiting for an answer/));
-      const send = within(confirm).getByRole("button", { name: "Dismiss question" });
+      const send = within(confirm).getByRole("button", { name: "Decline question" });
       expect(send.getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         fireEvent.click(send);

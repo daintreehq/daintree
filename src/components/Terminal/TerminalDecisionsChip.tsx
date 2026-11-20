@@ -195,7 +195,7 @@ function DecisionRow({
   /** The line that says it once, when the row doesn't. */
   sharedStatusId: string;
   onOpen: () => void;
-  /** Null for a question that can't be dismissed now. */
+  /** Null for a question that can't be declined now. */
   onDismiss: (() => void) | null;
 }) {
   const attention = ATTENTION_KINDS.has(item.kind);
@@ -209,7 +209,7 @@ function DecisionRow({
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
-    // question, and Dismiss asks before declining it.
+    // question, and Decline asks before declining it.
     <li className="flex items-start hover:bg-overlay-subtle">
       <button
         type="button"
@@ -283,7 +283,7 @@ function DecisionRow({
           variant="ghost"
           size="xs"
           className="mt-1.5 mr-2 shrink-0"
-          aria-label={`Dismiss question ${item.label}…`}
+          aria-label={`Decline question ${item.label}…`}
           onClick={() => {
             // The confirmation takes focus; the popover mustn't take it back.
             focusRestore?.expectHandoff();
@@ -291,7 +291,7 @@ function DecisionRow({
           }}
           data-testid="terminal-decisions-dismiss"
         >
-          Dismiss…
+          Decline question…
         </Button>
       )}
     </li>
@@ -507,9 +507,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                               question: paneQuestion(terminalId, item.questionId),
                               label: item.label,
                               line: lines.get(item.questionId) ?? null,
-                              // Named by alias alone: dismissed as it is open when confirmed.
+                              // Named by alias alone: declined as it is open when confirmed.
                               revision: null,
-                              setAside: setAsideOf(item) !== null,
                             },
                             open: true,
                           });

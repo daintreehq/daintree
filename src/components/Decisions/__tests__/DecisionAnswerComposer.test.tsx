@@ -345,7 +345,7 @@ describe("answering a question from the view (#17102)", () => {
 
   it.each([
     ["human-answered", /answered elsewhere/],
-    ["cancelled", /cancelled/],
+    ["cancelled", /^This question closed, so your answer wasn't sent/],
     ["expired", /expired/],
   ] as const)(
     "says a question %s while composing has nothing sent",
@@ -366,7 +366,7 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since the last read, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
@@ -718,7 +718,7 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
-    await waitFor(() => expect(status()).toMatch(/was cancelled, so your answer wasn't sent/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledTimes(2);
   });
 
@@ -754,7 +754,7 @@ describe("answering a question from the view (#17102)", () => {
       return { result: "not-found" };
     });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledOnce();
   });
 
@@ -816,7 +816,9 @@ describe("a timed question in the view (#17943)", () => {
     // The consequence is said before anything is signed.
     fireEvent.click(screen.getByTestId("decision-question-dismiss"));
     const confirm = await screen.findByRole("alertdialog");
-    expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with any plan it stated/);
+    expect(confirm.textContent).toMatch(
+      /declining doesn't let the agent go ahead with any plan it stated/
+    );
   });
 
   it("lists the options, with no form, for a question opened untouched after its deadline", async () => {

@@ -856,7 +856,7 @@ describe("TerminalDecisionsChip", () => {
       await waitFor(() =>
         expect(screen.getAllByTestId("terminal-decisions-row-line").length).toBeGreaterThan(0)
       );
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss question q-42…" }));
+      fireEvent.click(screen.getByRole("button", { name: "Decline question q-42…" }));
     }
 
     function dialogButton(name: string): HTMLElement {
@@ -879,7 +879,7 @@ describe("TerminalDecisionsChip", () => {
       }));
     }
 
-    it("offers Dismiss only on a waiting question, and says why an answered one has none", async () => {
+    it("offers Decline only on a waiting question, and says why an answered one has none", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(openAndAnswered);
       render(<TerminalDecisionsChip terminalId="t1" />);
@@ -888,10 +888,12 @@ describe("TerminalDecisionsChip", () => {
 
       const dismisses = screen.getAllByTestId("terminal-decisions-dismiss");
       expect(dismisses.map((button) => button.getAttribute("aria-label"))).toEqual([
-        "Dismiss question q-42…",
+        "Decline question q-42…",
       ]);
+      // What it says to the eye is the same verb and noun as its name.
+      expect(dismisses.map((button) => button.textContent)).toEqual(["Decline question…"]);
       expect(screen.getByTestId("popover-content").textContent).toContain(
-        "Answered questions can't be dismissed"
+        "Answered questions can't be declined"
       );
     });
 
@@ -902,10 +904,14 @@ describe("TerminalDecisionsChip", () => {
 
       expect(screen.queryByTestId("popover-content")).toBeNull();
       const dialog = await screen.findByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).toContain("Opening line of q42");
-      expect(dialog.textContent).toContain("it's told you chose not to answer");
-      expect(dialog.textContent).toContain("nothing is decided or approved");
+      expect(dialog.textContent).toContain("your phones show it declined");
+      expect(dialog.textContent).toContain("is told you chose not to answer");
+      // A row reads no round's mode, so the plan is never left out.
+      expect(dialog.textContent).toContain(
+        "declining doesn't let the agent go ahead with any plan it stated"
+      );
 
       fireEvent.click(dialogButton("Keep question"));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -913,13 +919,13 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("declines it on confirm at the revision it's open at, never withdrawing it, and shows it dismissing until the pane's state drops it", async () => {
+    it("declines it on confirm at the revision it's open at, never withdrawing it, and shows it declining until the pane's state drops it", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(getQuestionContent).toHaveBeenCalledWith({ terminalId: "t1", questionId: "q42" });
       expect(declineQuestion).toHaveBeenCalledOnce();
       const payload = declineQuestion.mock.calls[0]![0];
@@ -932,12 +938,15 @@ describe("TerminalDecisionsChip", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 
       const chip = screen.getByTestId("terminal-decisions-chip");
-      expect(chip.textContent).toContain("q-42 dismissing");
+      expect(chip.textContent).toContain("q-42 declining");
+      expect(chip.getAttribute("aria-label")).toBe(
+        "Question q-42 is being declined from this computer"
+      );
       fireEvent.click(chip);
       await screen.findAllByTestId("terminal-decisions-row");
       expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
       expect(screen.getByTestId("popover-content").textContent).toContain(
-        "Dismissed here, waiting for it to close"
+        "Declining from this computer"
       );
 
       // The asking computer records the decline, and the question goes.
@@ -945,30 +954,33 @@ describe("TerminalDecisionsChip", () => {
       expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
     });
 
-    it("says a relay too old for it can't take a dismissal, and withdraws only after a second confirmation", async () => {
+    it("says a relay too old for it can't take a decline, and withdraws only after a second confirmation", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       declinedOnce({ status: "unsupported", by: "relay" });
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      // The person pressed Dismiss itself, so focus was on it.
+      // The person pressed Decline itself, so focus was on it.
       await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
-      act(() => dialogButton("Dismiss question").focus());
+      act(() => dialogButton("Decline question").focus());
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain(
-        "Your relay needs an update before it takes a dismissal from this computer, so q-42 wasn't dismissed."
+        "Your relay needs an update before it takes a decline from this computer, so q-42 wasn't declined."
       );
       expect(dialog.textContent).toContain("Nothing is typed into this terminal");
       // The press that got the refusal never withdraws: focus moves to Keep question, and a
-      // second press where Dismiss was does nothing yet.
+      // second press where Decline was does nothing yet.
       await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
       await confirm("Withdraw question");
       expect(cancelQuestion).not.toHaveBeenCalled();
-      // Not dismissing: the chip still shows it waiting.
-      expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("dismissing");
+      // Not declining: the chip still shows it waiting, to the eye and the ear.
+      expect(screen.getByTestId("terminal-decisions-chip").getAttribute("aria-label")).toMatch(
+        /^Question q-42 is waiting for an answer/
+      );
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("declining");
 
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
@@ -981,7 +993,7 @@ describe("TerminalDecisionsChip", () => {
       expect(declineQuestion).toHaveBeenCalledOnce();
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
-        "q-42 cancelling"
+        "q-42 withdrawing"
       );
     });
 
@@ -992,7 +1004,7 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain(
@@ -1001,7 +1013,7 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("stops offering withdrawal once a question the relay didn't hold yet has been sent, asking to dismiss it again", async () => {
+    it("stops offering withdrawal once a question the relay didn't hold yet has been sent, asking to decline it again", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       const unsent = paneState({
         openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }],
@@ -1015,19 +1027,19 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain("Withdraw question q-42?");
 
-      // The Host sends it: the relay holds it now, so it can be dismissed after all.
+      // The Host sends it: the relay holds it now, so it can be declined after all.
       act(() => paneListeners[0]!(paneState({ revision: 2 })));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).not.toContain("doesn't hold");
       expect(screen.queryByRole("button", { name: "Withdraw question" })).toBeNull();
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("never shows a withdrawal's refusal under the Dismiss it gives way to", async () => {
+    it("never shows a withdrawal's refusal under the Decline it gives way to", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(
         paneState({ openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }] })
@@ -1041,7 +1053,7 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
       );
@@ -1050,12 +1062,12 @@ describe("TerminalDecisionsChip", () => {
         "q-42 is no longer one of this terminal's questions."
       );
 
-      // Sent meanwhile: Dismiss again, free of the withdrawal's refusal.
+      // Sent meanwhile: Decline again, free of the withdrawal's refusal.
       act(() => paneListeners[0]!(paneState({ revision: 2 })));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).not.toContain("no longer one of this terminal's questions");
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
     });
 
     it("offers withdrawing when this computer doesn't sign for the person, as on a Remote Host", async () => {
@@ -1065,13 +1077,13 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain("This computer doesn't sign for you");
     });
 
-    it("shows a dismissal from the question view as dismissing too, and waiting again once it can't be taken", async () => {
+    it("shows a decline from the question view as declining too, and waiting again once it can't be taken", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       render(<TerminalDecisionsChip terminalId="t1" />);
       const chip = await screen.findByTestId("terminal-decisions-chip");
@@ -1094,12 +1106,15 @@ describe("TerminalDecisionsChip", () => {
         );
 
       queued({ status: "queued" });
-      expect(chip.textContent).toContain("q-42 dismissing");
+      expect(chip.textContent).toContain("q-42 declining");
+      // Under way, not yet taken: never said as declined while it's only queued.
+      expect(chip.getAttribute("aria-label")).toMatch(/^Question q-42 is being declined/);
       // Another pane's chip isn't told about it.
       expect(dismissingQuestionIds(useDecisionsAnswerStore.getState().records, "t2")).toBe("");
 
       queued({ status: "unsupported", by: "relay" });
-      expect(chip.textContent).not.toContain("dismissing");
+      expect(chip.getAttribute("aria-label")).toMatch(/^Question q-42 is waiting for an answer/);
+      expect(chip.textContent).not.toContain("declining");
       fireEvent.click(chip);
       await screen.findAllByTestId("terminal-decisions-row");
       expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
@@ -1112,7 +1127,7 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
       );
@@ -1133,11 +1148,11 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
 
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't dismissed.");
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't declined.");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       fireEvent.click(dialogButton("Close"));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     });
@@ -1149,7 +1164,7 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
 
       expect(getDeclineResult).toHaveBeenCalledOnce();
       expect(declineQuestion).toHaveBeenCalledTimes(2);
@@ -1166,11 +1181,11 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain(
-        "Couldn't confirm whether q-42 was dismissed."
+        "Couldn't confirm whether q-42 was declined."
       );
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
       const declineId = declineQuestion.mock.calls[0]![0].declineId;
 
       getDeclineResult.mockResolvedValueOnce({
@@ -1179,13 +1194,11 @@ describe("TerminalDecisionsChip", () => {
         expectedRevision: 3,
         outcome: { status: "declined" },
       });
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(getDeclineResult).toHaveBeenLastCalledWith({ declineId });
       expect(declineQuestion).toHaveBeenCalledTimes(2);
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
-        "q-42 dismissing"
-      );
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 declining");
     });
 
     it("gives a failed call's retry way to an answer that arrived meanwhile, leaving only Close", async () => {
@@ -1204,9 +1217,9 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain(
-        "q-42 couldn't be read again, so it wasn't dismissed."
+        "q-42 couldn't be read again, so it wasn't declined."
       );
 
       // Answered on a phone while the dialog stayed open; the other question keeps the chip.
@@ -1223,10 +1236,10 @@ describe("TerminalDecisionsChip", () => {
       );
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain(
-        "q-42 isn't waiting for an answer any more, so there's nothing to dismiss."
+        "q-42 isn't waiting for an answer any more, so there's nothing to decline."
       );
       expect(dialog.textContent).not.toContain("couldn't be read again");
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       expect(dialogButton("Close")).toBeTruthy();
       expect(declineQuestion).not.toHaveBeenCalled();
     });
@@ -1245,10 +1258,10 @@ describe("TerminalDecisionsChip", () => {
       await screen.findByRole("alertdialog");
 
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
       // The asking computer can record the decline before main's answer reaches the dialog.
@@ -1284,7 +1297,7 @@ describe("TerminalDecisionsChip", () => {
       await screen.findByRole("alertdialog");
 
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
       // Answered on a phone: the pane drops it before main's refusal arrives.
@@ -1298,7 +1311,7 @@ describe("TerminalDecisionsChip", () => {
       });
 
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't dismissed.");
+      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't declined.");
       expect(dialog.textContent).not.toContain("isn't waiting");
       expect(dialogButton("Close")).toBeTruthy();
     });
@@ -1315,14 +1328,14 @@ describe("TerminalDecisionsChip", () => {
       );
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      fireEvent.click(await screen.findByRole("button", { name: "Dismiss question q-42…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Decline question q-42…" }));
       await screen.findByRole("alertdialog");
 
       expect(getQuestionSummaries).toHaveBeenLastCalledWith({
         terminalId: "t1",
         questionIds: ["q42"],
       });
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         answerRow({
           result: "read",
@@ -1330,7 +1343,7 @@ describe("TerminalDecisionsChip", () => {
         });
       });
       expect(screen.getByRole("alertdialog").textContent).toContain("Merge the release branch?");
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
     });
   });
 });
@@ -1495,9 +1508,9 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
     expect(ink(rows[1]!)).toContain("text-text-secondary");
     expect(ink(rows[0]!)).toContain("text-text-primary");
 
-    // Dismissing it says nothing of taking it out of Needs you, where it no longer is.
-    expect(screen.getAllByRole("button", { name: /^Dismiss question/ })).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss question q-42…" }));
+    // Declining it says nothing of taking it out of Needs you, where it no longer is.
+    expect(screen.getAllByRole("button", { name: /^Decline question/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Decline question q-42…" }));
     expect(screen.getByRole("alertdialog").textContent).not.toContain("Needs you");
   });
 
