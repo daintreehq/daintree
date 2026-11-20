@@ -64,6 +64,7 @@ function fakeDocument(fileName = "users.csv", draft: string | null = null): Fake
     read,
     save,
     getDraft: () => draft,
+    getDraftBaseRevision: () => null,
     setDraft,
     setConflict: vi.fn(),
     onDidChange: (listener) => {

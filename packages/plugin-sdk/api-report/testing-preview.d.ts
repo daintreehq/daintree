@@ -93,14 +93,21 @@ interface PluginFileDocument {
      */
     getDraft(): string | null;
     /**
+     * The revision the host's draft is based on, or null when clean or when the
+     * draft started without one. A restored draft is saved against this, not
+     * against a fresh read.
+     */
+    getDraftBaseRevision(): string | null;
+    /**
      * Report the unsaved text (null when clean). The host derives "dirty" from
      * it. When a draft starts (the first text after clean), pass `baseRevision`:
      * the `revision` of the read or save your text came from. The close prompt's
      * Save writes the draft only if the file is still at that revision, and a
      * draft started without one stays dirty but can't be saved from the prompt.
-     * Later calls keep the base the draft started with; after the host saves the
-     * draft (`onDidChange` with `"saved"`), the next draft starts from that
-     * change's revision.
+     * Later calls keep the base the draft started with, and a save of the draft
+     * moves it to the revision that save wrote. To rebase a draft onto a newer
+     * revision, clear it and start it again: `setDraft(null)`, then
+     * `setDraft(text, { baseRevision })`.
      */
     setDraft(text: string | null, options?: {
         baseRevision?: string;

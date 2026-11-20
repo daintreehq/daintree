@@ -100,6 +100,10 @@ function recordKey(panelId: string, filePath: string): string {
 }
 
 function publish(record: DocumentRecord): void {
+  const owner = records.get(record.key);
+  // Released and replaced: a late call from a view that has gone (a debounced
+  // setDraft, say) never speaks over the record a newer view holds.
+  if (owner !== undefined && owner !== record) return;
   const store = useFileDocumentStore.getState();
   if (record.mounts === 0 && record.draft === null && record.pending === 0) {
     // No draft and nobody editing: the document is released. Only this
@@ -122,6 +126,9 @@ function publish(record: DocumentRecord): void {
     discard: async () => discardDraft(record),
   };
   record.projection = projection;
+  // A draft reported after its view released the record keeps the record, so
+  // the next view for this panel and file restores it.
+  if (owner === undefined) records.set(record.key, record);
   store.setFileDocument(record.panelId, projection);
 }
 
@@ -223,6 +230,7 @@ async function save(
 ): Promise<PluginFileDocumentSaveResult> {
   let result: PluginFileDocumentSaveResult;
   const gen = record.draftGen;
+  const ofDraft = record.draft === text;
   record.pending += 1;
   try {
     result = await window.electron.fileDocument.save({
@@ -241,24 +249,31 @@ async function save(
   }
   if (result.status === "saved") {
     record.observedState = result.revision;
-    // A draft started after this save began has its own base, even with the
-    // same text: the reply neither clears nor rebases it.
+    // Only a save of the standing draft speaks for it. A draft started after
+    // the save began has its own base, even with the same text, and a save of
+    // other text (a merge, a queued save of a discarded draft) leaves the
+    // draft on the base its editor reported.
     if (record.draftGen === gen) {
       if (record.draft === text) {
         record.draft = null;
         record.revision = null;
-      } else if (record.draft !== null) {
+      } else if (record.draft !== null && ofDraft) {
         // Typing that landed while the save was in flight stays a draft, now
         // on top of what the save wrote.
         record.revision = result.revision;
       }
-      record.hostConflict = false;
-      record.viewConflict = false;
+      if (record.draft === null || ofDraft) {
+        record.hostConflict = false;
+        record.viewConflict = false;
+      }
     }
     publish(record);
   } else if (result.status === "conflict") {
     record.observedState = result.revision;
-    record.hostConflict = true;
+    // A draft started since keeps its own base: it conflicts only if the disk
+    // is off that base.
+    if (record.draftGen === gen) record.hostConflict = true;
+    else reconcileDraft(record, result.revision ?? "status:unavailable");
     publish(record);
   } else {
     publish(record);
@@ -295,13 +310,28 @@ async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcom
       reason: "The editor didn't say which version of the file these edits are based on",
     };
   }
+  const gen = record.draftGen;
   const result = await save(record, draft, record.revision);
   switch (result.status) {
-    case "saved":
+    case "saved": {
+      const unsaved = {
+        status: "refused",
+        reason: "Edits made during the save are still unsaved",
+      } as const;
+      if (record.draftGen !== gen) {
+        // The draft it saved was replaced meanwhile, and the file moved under
+        // the new one. "saved" would tell its editor the new draft is clean.
+        reconcileDraft(record, result.revision);
+        emit(record, { reason: "disk", revision: result.revision });
+        return unsaved;
+      }
+      // Settled before anyone hears of it, so a listener's reaction can't
+      // turn edits the save didn't cover into a clean close.
+      const outcome: FileDocumentSaveOutcome =
+        record.draft === null ? { status: "saved" } : unsaved;
       emit(record, { reason: "saved", revision: result.revision });
-      return record.draft === null
-        ? { status: "saved" }
-        : { status: "refused", reason: "Edits made during the save are still unsaved" };
+      return outcome;
+    }
     case "conflict":
       return { status: "conflict", reason: "The file changed on disk" };
     case "refused":
@@ -342,15 +372,19 @@ function createDocument(
       return save(record, text, options.expectedRevision);
     },
     getDraft: () => record.draft,
+    getDraftBaseRevision: () => (record.draft === null ? null : record.revision),
     setDraft: (text: string | null, options?: { baseRevision?: string }) => {
       if (readOnly) return;
       const next = typeof text === "string" ? text : null;
       if (next === record.draft) return;
       if (next === null) {
+        // The conflicts were the draft's.
         record.revision = null;
+        record.hostConflict = false;
+        record.viewConflict = false;
       } else if (record.draft === null) {
-        // The base binds when the draft starts. A remounted editor restoring
-        // the draft with getDraft never saw it, so later calls can't move it.
+        // The base binds when the draft starts. A remounted editor that read
+        // the file again can't move it by naming what it just read.
         record.draftGen += 1;
         const base = options?.baseRevision;
         record.revision = typeof base === "string" && base.length > 0 ? base : null;
