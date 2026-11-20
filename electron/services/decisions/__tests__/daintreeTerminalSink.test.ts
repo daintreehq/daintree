@@ -728,18 +728,21 @@ describe("DaintreeTerminalSink", () => {
         const result = track(h.sink.inject(SESSIONLESS_TARGET, notice(), I1));
         await flushLine();
         expect(h.client.submitted).toHaveLength(1);
+        // The host is held to the agent it detected, not to the plugin's own id.
+        expect(h.client.submitted[0].guard).toMatchObject({ agentId: "claude" });
         expect(result.value).toMatchObject({ outcome: "delivered" });
       });
 
-      it("hands a batch back to be rebuilt when another kind took the pane for only some of its questions", async () => {
+      it("never types a batch into a pane another kind took from one of its askers, a plugin asker credited to that agent with it", async () => {
         const h = sessionless();
+        // The plugin's process was detected as the claude that left, so its run is gone too.
         h.origins.set(Q2, { ...SESSIONLESS, agent_kind: "acme-agent" });
         const batch = () => notice({}, { questionId: Q2, injectionId: I2 });
 
         h.patch({ detectedAgentId: "codex" });
         await expect(h.sink.inject(SESSIONLESS_TARGET, batch(), I1)).resolves.toEqual({
-          outcome: "held",
-          reason: "asker-changed",
+          outcome: "unavailable",
+          reason: "relaunched",
         });
         expect(h.queued).toHaveLength(0);
 
@@ -753,7 +756,21 @@ describe("DaintreeTerminalSink", () => {
         h.drafts.clear();
         await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
         await flushLine();
-        expect(queued.value).toEqual({ outcome: "held", reason: "asker-changed" });
+        expect(queued.value).toEqual({ outcome: "unavailable", reason: "relaunched" });
+        expect(h.client.submitted).toEqual([]);
+      });
+
+      it("never types a plugin asker's answer into another plugin agent that took its pane", async () => {
+        const h = sessionless();
+        h.origins.set(Q1, { ...SESSIONLESS, agent_kind: "acme-agent" });
+        h.patch({ launchAgentId: "acme-agent", detectedAgentId: "other-agent" });
+        await expect(h.sink.locate({ ...SESSIONLESS, agent_kind: "acme-agent" })).resolves.toEqual({
+          state: "relaunched",
+        });
+        await expect(h.sink.inject(SESSIONLESS_TARGET, notice(), I1)).resolves.toEqual({
+          outcome: "unavailable",
+          reason: "relaunched",
+        });
         expect(h.client.submitted).toEqual([]);
       });
     });
@@ -951,9 +968,10 @@ describe("DaintreeTerminalSink", () => {
       await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
       expect(result.value).toEqual({ outcome: "held", reason: "expired" });
 
-      // The pane frees up afterwards: nothing of that attempt is left to type.
+      // The pane frees up afterwards, its asker at its prompt: nothing of that attempt is left to type.
       h.drafts.clear();
-      h.client.terminals.set(PANE, atPrompt());
+      const asker = h.origins.get(Q1) as QuestionOrigin;
+      h.client.terminals.set(PANE, { ...atPrompt(), detectedAgentId: asker.agent_kind });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(h.client.submitted).toEqual([]);
     });

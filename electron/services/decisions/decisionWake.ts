@@ -47,14 +47,6 @@ export interface DecisionWakeSources extends DecisionIdentitySources {
 export const DECISION_SUPERSEDED = "superseded";
 
 /**
- * Why a wake ends untyped when another agent kind now holds the pane, but
- * not for every question it carries (#18116): never a library
- * `UnavailableReason`, so the sink hands the chunk back to be rebuilt and
- * each question is located on its own.
- */
-export const DECISION_ASKER_CHANGED = "asker-changed";
-
-/**
  * The longest a closure notice waits in the wake queue for its pane (#17941):
  * past the line's coalescing, its spacing after another line and the settle
  * grace, with room to spare. The queue can otherwise hold a line for minutes
@@ -119,16 +111,18 @@ export function incarnationOf(info: Pick<NotifyTerminalInfo, "agentIncarnation">
 /**
  * Whether another agent holds the pane than `askerKind`, the kind that asked
  * (#18116): detection can hand a live PTY to another agent without a respawn,
- * so its incarnation stays the same. A plugin agent's own id can name a
- * process detection credits to a built-in, so only a built-in asker is
- * compared, and a pane whose agent isn't known yet is no evidence of a swap.
+ * so its incarnation stays the same. A pane whose agent isn't known yet is no
+ * evidence of a swap. A built-in's executable names win over a plugin's, so
+ * a plugin agent can be detected as a built-in; that is the one difference a
+ * plugin asker's own run can show, and another plugin agent there is not it.
  */
 export function askerReplaced(
   askerKind: string,
   info: Pick<NotifyTerminalInfo, "detectedAgentId" | "launchAgentId">
 ): boolean {
   const agent = info.detectedAgentId ?? info.launchAgentId;
-  return agent !== undefined && agent !== askerKind && Object.hasOwn(AGENT_REGISTRY, askerKind);
+  if (agent === undefined || agent === askerKind) return false;
+  return Object.hasOwn(AGENT_REGISTRY, askerKind) || !Object.hasOwn(AGENT_REGISTRY, agent);
 }
 
 /**
@@ -136,9 +130,9 @@ export function askerReplaced(
  * only what main holds synchronously is checked (host, ownership principal,
  * live generation); with it, the record's own run identity too. A changed
  * principal or incarnation is a relaunch, checked before the generation that
- * a relaunch also changes, and so is another agent kind in place of every
- * one of `askerKinds` (`askerReplaced`). `unreadable`: there is no pty client
- * to ask.
+ * a relaunch also changes, and so is another agent kind in place of any of
+ * `askerKinds` (`askerReplaced`). `unreadable`: there is no pty client to
+ * ask.
  */
 export function identityMismatch(
   sources: DecisionIdentitySources,
@@ -159,13 +153,6 @@ export function identityMismatch(
   }
   if (sources.principalFor(target.paneId) !== target.ownershipPrincipal) return "relaunched";
   if (info !== undefined && incarnationOf(info) !== target.agentIncarnation) return "relaunched";
-  if (
-    info !== undefined &&
-    askerKinds.length > 0 &&
-    askerKinds.every((kind) => askerReplaced(kind, info))
-  ) {
-    return "relaunched";
-  }
   const client = sources.getPtyClient();
   if (client === null) return "unreadable";
   const generation = target.terminalGeneration;
@@ -180,6 +167,9 @@ export function identityMismatch(
   if (info.launchGeneration !== undefined && info.launchGeneration !== generation) {
     return "generation-mismatch";
   }
+  // One question asked by an agent that left takes the whole line with it: an asker whose kind
+  // could stay was running as the agent that left, so its run is gone too.
+  if (askerKinds.some((kind) => askerReplaced(kind, info))) return "relaunched";
   // A session learned since the question was asked is that run's; one that
   // changed, or went unknown, is not.
   if (target.agentSessionId !== null && info.agentSessionId !== target.agentSessionId) {
@@ -226,9 +216,6 @@ export function createDecisionWake(
     if (mismatch === "unreadable") return { kind: "held", reason: "unreadable" };
     if (mismatch !== null) return { kind: "unavailable", reason: mismatch };
     if (info === undefined) return { kind: "ready" };
-    if (askerKinds.some((kind) => askerReplaced(kind, info))) {
-      return { kind: "unavailable", reason: DECISION_ASKER_CHANGED };
-    }
     const hold = decisionHold(
       info,
       sources.hasComposerDraft?.(target.paneId) === true,

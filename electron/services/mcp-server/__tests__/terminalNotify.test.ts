@@ -3109,6 +3109,27 @@ describe("decision wakes (#16015)", () => {
     expect(decision.records.at(-1)).toMatchObject({ agentState: "waiting", hasPty: true });
   });
 
+  it("holds the host to the agent the record it was checked against detected (#18116)", async () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      detectedAgentId: "codex",
+      agentIncarnation: 4,
+    });
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toHaveLength(1);
+    expect(h.client.submitted[0].guard).toMatchObject({
+      kind: "settled-prompt-exact",
+      agentIncarnation: 4,
+      agentId: "codex",
+    });
+    expect(decision.records.at(-1)).toMatchObject({ detectedAgentId: "codex" });
+  });
+
   it("leaves the rest of the line on the ordinary guard while a decision holds", async () => {
     const h = setup({ enabled: false });
     const scope = h.service.openWakeScope();

@@ -976,6 +976,7 @@ describe("AnswerDelivery", () => {
       h.delivery.start();
       await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
       expect(h.client.submitted).toEqual([]);
+      expect((await h.question(Q1))?.delivery_status).not.toBe("needs-attention");
 
       h.patch({ detectedAgentId: "claude" });
       h.drafts.delete(PANE);
@@ -1000,6 +1001,53 @@ describe("AnswerDelivery", () => {
       await until(() => h.client.submitted.length === 1);
       expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
       await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+      await stopped(h.delivery);
+    });
+
+    it("takes no marker read while another kind of agent took the pane as proof, and leaves the crashed answer uncertain", async () => {
+      const h = setup();
+      h.patch(asCodex);
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      await h.store.putIntent(intent(CRASHED, Q1));
+      h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n❯ \r\n`);
+      // Claude takes the pane while recovery reads its screen.
+      const read = h.client.getSerializedStateAsync.bind(h.client);
+      h.client.getSerializedStateAsync = async (id: string) => {
+        h.patch({ detectedAgentId: "claude" });
+        return read(id);
+      };
+
+      h.delivery.start();
+      // The read proved nothing, so recovery tries again on the next check, and finds Claude there.
+      await until(
+        async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain",
+        3 * DELIVERY_CHECK_INTERVAL_MS
+      );
+      expect((await h.question(Q1))?.error_code).toBe("crash_unreconciled");
+      expect(h.terminalReports()).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    it("reads each crashed injection's marker against its own asker, though both share every other run field", async () => {
+      const h = setup();
+      // Codex asked Q1, then Claude took the same run and asked Q2.
+      h.patch({ ...asCodex, detectedAgentId: "claude" });
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      await answered(h.store, Q2, 2, "second", {
+        origin: { ...SESSIONLESS, agent_kind: "claude" },
+      });
+      const CRASHED_2 = "0190f0aa11112222333344445555cc02";
+      // Codex's injection is read first, so a reading shared across askers would hide Claude's marker.
+      await h.store.putIntent(intent(CRASHED, Q1, { created_at: Date.now() - 1_000 }));
+      await h.store.putIntent(intent(CRASHED_2, Q2));
+      h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n${markerFor(CRASHED_2)}\r\n❯ \r\n`);
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q2))?.delivery_status === "terminal-delivered");
+      await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+      expect((await h.store.getIntent(CRASHED))?.state).toBe("uncertain");
+      expect(h.client.submitted).toEqual([]);
       await stopped(h.delivery);
     });
 

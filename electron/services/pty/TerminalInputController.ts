@@ -565,12 +565,7 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
-      if (
-        run.agentId !== undefined &&
-        (terminal.detectedAgentId ?? terminal.launchAgentId) !== run.agentId
-      ) {
-        return false;
-      }
+      if (run.agentId !== undefined && terminal.detectedAgentId !== run.agentId) return false;
       if (run.updateObservedAt !== undefined && !this.stillOffersUpdate(run.updateObservedAt)) {
         return false;
       }

@@ -845,7 +845,8 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
    */
   async function queuedAcrossKinds(
     before: Partial<Internals["terminalInfo"]>,
-    after: Partial<Internals["terminalInfo"]>
+    after: Partial<Internals["terminalInfo"]>,
+    guard: Partial<ExactPromptGuard> = {}
   ) {
     ptyWriteMock = vi.fn<(data: string) => void>();
     const terminal = createTerminal();
@@ -856,6 +857,7 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
       ...EXACT,
       agentIncarnation: 0,
       agentId: "claude",
+      ...guard,
     });
     Object.assign(info(terminal), after, {
       agentState: "waiting",
@@ -869,6 +871,22 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
   it("refuses an answer once another agent kind holds the PTY, though nothing respawned (#18116)", async () => {
     await expect(queuedAcrossKinds({}, { detectedAgentId: "codex" })).resolves.toBe("cancelled");
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("answer");
+    // As main sends a Decisions answer: mid-turn and at a prose question too.
+    await expect(
+      queuedAcrossKinds(
+        {},
+        { detectedAgentId: "codex" },
+        { acceptWorking: true, acceptQuestion: true }
+      )
+    ).resolves.toBe("cancelled");
+    await expect(
+      queuedAcrossKinds(
+        { detectedAgentId: "codex" },
+        { detectedAgentId: "claude" },
+        { agentId: "codex", acceptWorking: true }
+      )
+    ).resolves.toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("answer");
     await expect(
       queuedAcrossKinds(
         { launchAgentId: "claude", detectedAgentId: undefined },
@@ -879,6 +897,9 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
 
   it("types an answer for the same agent kind, and for a launched agent first detected as that kind (#18116)", async () => {
     await expect(queuedAcrossKinds({}, {})).resolves.toBe("pty_written");
+    await expect(
+      queuedAcrossKinds({ detectedAgentId: "codex" }, {}, { agentId: "codex", acceptWorking: true })
+    ).resolves.toBe("pty_written");
     await expect(
       queuedAcrossKinds(
         { launchAgentId: "claude", detectedAgentId: undefined },

@@ -132,7 +132,7 @@ describe("identityMismatch", () => {
     expect(identityMismatch(value, TARGET)).toBe("unreadable");
   });
 
-  it("calls another agent kind in place of every built-in asker a relaunch, though nothing respawned (#18116)", () => {
+  it("calls another agent kind in place of any built-in asker a relaunch, though nothing respawned (#18116)", () => {
     const { value } = sources();
     const codex = record({ detectedAgentId: "codex", agentSessionId: undefined });
     const sessionless = { ...TARGET, agentSessionId: null };
@@ -145,8 +145,10 @@ describe("identityMismatch", () => {
         ["claude"]
       )
     ).toBe("relaunched");
-    // Not every asker was replaced: that is the wake's to hand back, not a changed run.
-    expect(identityMismatch(value, sessionless, codex, ["claude", "codex"])).toBeNull();
+    // One asker gone takes the line: a plugin asker beside it ran as the claude that left.
+    expect(identityMismatch(value, sessionless, codex, ["claude", "acme-agent"])).toBe(
+      "relaunched"
+    );
     // Without the record, or without an asker, there is nothing to compare.
     expect(identityMismatch(value, sessionless, undefined, ["claude"])).toBeNull();
     expect(identityMismatch(value, sessionless, codex)).toBeNull();
@@ -169,6 +171,26 @@ describe("identityMismatch", () => {
     expect(
       identityMismatch(value, TARGET, record({ launchAgentId: "acme-agent" }), ["acme-agent"])
     ).toBeNull();
+  });
+
+  it("calls another plugin agent in a plugin asker's pane a relaunch (#18116)", () => {
+    const { value } = sources();
+    expect(
+      identityMismatch(
+        value,
+        TARGET,
+        record({ launchAgentId: "acme-agent", detectedAgentId: "other-agent" }),
+        ["acme-agent"]
+      )
+    ).toBe("relaunched");
+  });
+
+  it("calls a pane with no pty client to ask unreadable before comparing its agent (#18116)", () => {
+    const { state, value } = sources();
+    state.client = false;
+    expect(identityMismatch(value, TARGET, record({ detectedAgentId: "codex" }), ["claude"])).toBe(
+      "unreadable"
+    );
   });
 });
 
@@ -201,7 +223,7 @@ describe("createDecisionWake", () => {
     expect(report).not.toHaveBeenCalled();
   });
 
-  it("ends untyped once another agent kind holds the pane, by how many of its askers that replaced (#18116)", () => {
+  it("ends untyped once another agent kind took the pane from any of its askers (#18116)", () => {
     const { value } = sources();
     const codex = record({ detectedAgentId: "codex" });
     const one = createDecisionWake(value, TARGET, { ...section, askerKinds: ["claude"] }, vi.fn());
@@ -215,7 +237,7 @@ describe("createDecisionWake", () => {
       vi.fn()
     );
     expect(mixed.recheck(record())).toEqual({ kind: "ready" });
-    expect(mixed.recheck(codex)).toEqual({ kind: "unavailable", reason: "asker-changed" });
+    expect(mixed.recheck(codex)).toEqual({ kind: "unavailable", reason: "relaunched" });
   });
 
   it.each([

@@ -136,6 +136,7 @@ describe("submit guards (#16015)", () => {
     send({ kind: "settled-prompt-exact", updateObservedAt: Number.NEGATIVE_INFINITY });
     // The agent kind main read (#18116) crosses only as a non-empty string.
     send({ kind: "settled-prompt-exact", agentIncarnation: 2, agentId: "claude" });
+    send({ kind: "settled-prompt-exact", agentId: "acme-agent" });
     send({ kind: "settled-prompt-exact", agentId: "" });
     send({ kind: "settled-prompt-exact", agentId: 7 });
 
@@ -157,6 +158,7 @@ describe("submit guards (#16015)", () => {
       refusing,
       refusing,
       { kind: "settled-prompt-exact", agentIncarnation: 2, agentId: "claude" },
+      { kind: "settled-prompt-exact", agentId: "acme-agent" },
       refusing,
       refusing,
     ]);

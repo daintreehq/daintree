@@ -1707,8 +1707,8 @@ export interface ExactPromptGuard {
   /** The agent session main read, when known. One learned since is still that run. */
   agentSessionId?: string;
   /**
-   * The kind of agent main read (`detectedAgentId ?? launchAgentId`, #18116):
-   * another kind in the PTY is another run, though nothing respawned it.
+   * The agent main read as detected in the PTY (#18116): another one detected
+   * there since, or none, is another run, though nothing respawned it.
    */
   agentId?: string;
   /**

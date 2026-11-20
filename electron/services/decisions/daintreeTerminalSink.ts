@@ -27,7 +27,6 @@ import {
   type DecisionBlock,
 } from "./answerNotice.js";
 import {
-  DECISION_ASKER_CHANGED,
   DECISION_SUPERSEDED,
   askerReplaced,
   createDecisionWake,
@@ -94,7 +93,6 @@ const WRAP_NOISE = /[\s─-▟⎿⏺|>›❯•●◦·]/gu;
 
 const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" };
 const SUPERSEDED: InjectResult = { outcome: "held", reason: DECISION_SUPERSEDED };
-const ASKER_CHANGED: InjectResult = { outcome: "held", reason: DECISION_ASKER_CHANGED };
 const ORIGIN_MOVED: InjectResult = { outcome: "held", reason: "origin-moved" };
 
 /** The questions whose block in a notice closed a round without an answer: what a reopen waits on. */
@@ -168,13 +166,9 @@ export class DaintreeTerminalSink implements TerminalSink {
     // A question moved to another run since the engine read it: it builds the chunk again.
     if (askerKinds === null) return ORIGIN_MOVED;
     if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
-    // Another agent kind took the pane (#18116). When it did for only some of
-    // the questions, each is located on its own.
-    const replaced = askerKinds.filter((kind) => askerReplaced(kind, observed.info)).length;
-    if (replaced > 0) {
-      return replaced === askerKinds.length
-        ? { outcome: "unavailable", reason: "relaunched" }
-        : ASKER_CHANGED;
+    // Another agent kind took the pane from one of the askers (#18116).
+    if (askerKinds.some((kind) => askerReplaced(kind, observed.info))) {
+      return { outcome: "unavailable", reason: "relaunched" };
     }
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
@@ -341,8 +335,7 @@ export class DaintreeTerminalSink implements TerminalSink {
           return { outcome: "unavailable", reason: outcome.reason as UnavailableReason };
         }
         // Ended untyped for the engine's own reasons (stopped, expired, the
-        // server or the hold gone), or for another agent kind in place of
-        // only some of its askers: the pane as it is now says where it goes.
+        // server or the hold gone): the pane as it is now says where it goes.
         const observed = await this.observe(target, askerKinds);
         return observed.state === "alive"
           ? { outcome: "held", reason: outcome.reason }
