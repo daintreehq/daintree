@@ -672,7 +672,8 @@ describe("AgentStateService", () => {
       });
 
       expect(terminal.promptUnseen).toBeUndefined();
-      expect(terminal.lastStateChange).toBe(titleAt + 1);
+      // Left where the title report put it: never ahead of the clock.
+      expect(terminal.lastStateChange).toBe(titleAt);
       expect(gateAtEvent.at(-1)).toEqual({ kind: "ready" });
     });
 

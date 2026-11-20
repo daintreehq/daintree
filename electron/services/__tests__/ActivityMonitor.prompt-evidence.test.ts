@@ -11,7 +11,14 @@ const monitors: ActivityMonitor[] = [];
 /** A freshly launched agent's monitor, from its boot, over whatever `show` puts on screen. */
 function launch(agentId: string, initial: string[]) {
   const emittedAt: number[] = [];
-  const onStateChange = vi.fn(() => {
+  const onStateChange = vi.fn<
+    (
+      id: string,
+      spawnedAt: number,
+      state: "busy" | "idle" | "completed",
+      metadata?: ActivityStateMetadata
+    ) => void
+  >(() => {
     emittedAt.push(Date.now());
   });
   let visible = initial;
@@ -27,7 +34,7 @@ function launch(agentId: string, initial: string[]) {
   monitors.push(monitor);
   monitor.startPolling();
   const idleSettles = (): ActivityStateMetadata[] =>
-    onStateChange.mock.calls.filter((call) => call[2] === "idle").map((call) => call[3]);
+    onStateChange.mock.calls.filter((call) => call[2] === "idle").map((call) => call[3]!);
   return {
     monitor,
     idleSettles,
@@ -118,6 +125,18 @@ describe("ActivityMonitor prompt evidence on a settle (#18018)", () => {
     pane.redraw([RULE, "❯ my draft", RULE, "  ? for shortcuts"]);
 
     expect(pane.idleSettles()).toHaveLength(1);
+  });
+
+  it("sends the first sight once a draft it settled on is cleared, without going busy", () => {
+    const pane = launch("claude", [RULE, "❯ my draft", RULE, "  ? for shortcuts"]);
+    vi.advanceTimersByTime(25_000);
+    expect(pane.idleSettles()[0]!.inputRowEmpty).toBeUndefined();
+
+    pane.redraw(CLAUDE_PROMPT);
+
+    const settles = pane.idleSettles();
+    expect(settles).toHaveLength(2);
+    expect(settles[1]).toMatchObject({ waitingReason: "prompt", inputRowEmpty: true });
   });
 
   it("sends another agent's first sight after it takes over, though the reason is the same", () => {

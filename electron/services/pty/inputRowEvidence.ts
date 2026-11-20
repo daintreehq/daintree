@@ -10,18 +10,18 @@ export interface InputRowShape {
   hintPatterns: readonly RegExp[];
   /** Text its empty input row shows in place of a draft (`inputSuggestion.placeholderPatterns`). */
   placeholderPatterns: readonly RegExp[];
+  /** The agent declares its prompt; otherwise only the bare glyphs any prompt opens with are known. */
+  declared: boolean;
 }
 
 const UNDECLARED_SHAPE: InputRowShape = {
   promptPatterns: DEFAULT_PROMPT_PATTERNS,
   hintPatterns: [],
   placeholderPatterns: [],
+  declared: false,
 };
 
-/**
- * The agent's input row as its registry entry declares it. An agent that
- * declares no prompt is read by the bare glyphs any prompt opens with.
- */
+/** The agent's input row as its registry entry declares it. */
 export function inputRowShapeFor(agentId: string | undefined): InputRowShape {
   if (agentId === undefined) return UNDECLARED_SHAPE;
   const config = getEffectiveAgentConfig(agentId);
@@ -36,11 +36,14 @@ export function inputRowShapeFor(agentId: string | undefined): InputRowShape {
       agentId,
       "input placeholder"
     ),
+    declared: true,
   };
 }
 
 const LEFT_BOX_EDGE = /^\s*[│┃]/;
 const RIGHT_BOX_EDGE = /[│┃]\s*$/;
+/** A shell prompt's glyph with a command typed after it, wherever on the row the prompt ends. */
+const SHELL_LINE = /(?:^|\s)[$%#❯›>]\s+\S/;
 
 interface PromptRow {
   /** The row from where its prompt starts. */
@@ -75,26 +78,24 @@ function promptRow(row: string, patterns: readonly RegExp[]): PromptRow | undefi
   return undefined;
 }
 
-/** Nothing but blank space or box edges: what ends an input row's block. */
-function isOpenRow(row: string | undefined): boolean {
-  return (
-    row === undefined || row.replace(/[│┃]/g, "").trim() === "" || COMPOSER_FRAME_ROW.test(row)
-  );
+/** Nothing but blank space or box edges. */
+function isBlankRow(row: string | undefined): boolean {
+  return row === undefined || row.replace(/[│┃]/g, "").trim() === "";
 }
 
 /**
  * How plainly a settled screen shows the agent's own input row (#18018), the
  * evidence that a run has drawn its prompt: `"empty"` when the row holds
  * nothing typed, or only its placeholder (declared, or the agent's own hint
- * opening it), with nothing under it a draft could run on to; `"drawn"` when
- * it is there with something in it (a draft, a suggestion) between the
- * agent's rules, or with the agent's own hint on its boxed row or under it;
- * null when nothing on screen is the agent's. A CLI that has drawn nothing
- * yet leaves a blank screen, or the shell line that started it as the lowest
- * prompt-like row, the command typed after the glyph, so neither is evidence.
- * Only the lowest prompt-like row is read, so an empty one higher up, such as
- * a bare shell prompt in the history above that line, isn't either, and nor
- * is a frame with that line drawn under it.
+ * taking up the whole row), with nothing under it a draft could run on to;
+ * `"drawn"` when it is there with something in it (a draft, a suggestion)
+ * between the agent's rules, or with the agent's own hint on its boxed row or
+ * in the chrome under it; null when nothing on screen is the agent's. A CLI
+ * that has drawn nothing yet leaves a blank screen, or the shell line that
+ * started it under everything else, so neither is evidence, and nothing above
+ * that line is read: a bare shell prompt in the history, or a frame the last
+ * agent left. An agent that declares no prompt is taken at anything else it
+ * draws, as a prompt it can't be read for.
  */
 export function readInputRow(
   lines: readonly string[],
@@ -105,13 +106,18 @@ export function readInputRow(
   while (end > 0 && clean[end - 1]!.trim() === "") end--;
   if (end === 0) return null;
 
-  const hintAt = (text: string) =>
-    shape.hintPatterns.some((pattern) => text.match(pattern)?.index === 0);
+  const isWholeHint = (text: string) =>
+    text !== "" &&
+    shape.hintPatterns.some((pattern) => {
+      const match = text.match(pattern);
+      return match?.index === 0 && match[0].length === text.length;
+    });
   const holdsNothing = (prompt: PromptRow) =>
     prompt.typed === "" ||
     shape.placeholderPatterns.some((pattern) => pattern.test(prompt.typed)) ||
-    hintAt(prompt.typed) ||
-    hintAt(prompt.fromPrompt);
+    isWholeHint(prompt.typed) ||
+    isWholeHint(prompt.fromPrompt);
+  const hasHint = (text: string) => shape.hintPatterns.some((pattern) => pattern.test(text));
 
   // The agent's own rules above and below a single row: no shell line is framed.
   let framed: "empty" | "drawn" | null = null;
@@ -124,17 +130,24 @@ export function readInputRow(
 
   for (let row = end - 1; row >= 0; row--) {
     if (framed !== null && row === bottom - 1) return framed;
-    const prompt = promptRow(clean[row]!, shape.promptPatterns);
-    if (prompt === undefined) continue;
-    if (holdsNothing(prompt)) return isOpenRow(clean[row + 1]) ? "empty" : "drawn";
-    // Its own hint on its boxed row, or in the chrome under it. A typed row
-    // below a frame is the line that started the run, or a selector.
+    const text = clean[row]!;
+    const prompt = promptRow(text, shape.promptPatterns);
+    if (prompt === undefined) {
+      if (SHELL_LINE.test(text.replace(LEFT_BOX_EDGE, ""))) return null;
+      continue;
+    }
+    if (holdsNothing(prompt)) {
+      const below = clean[row + 1];
+      return isBlankRow(below) || COMPOSER_FRAME_ROW.test(below!) ? "empty" : "drawn";
+    }
+    if (!shape.declared) return null;
+    // Its own hint on its boxed row, or in its chrome past a blank row under
+    // it: a launch line that wraps runs straight on.
+    let chrome = row + 1;
+    while (chrome < end && !isBlankRow(clean[chrome])) chrome++;
     const hinted =
-      (prompt.boxed && shape.hintPatterns.some((pattern) => pattern.test(clean[row]!))) ||
-      clean
-        .slice(row + 1, end)
-        .some((text) => shape.hintPatterns.some((pattern) => pattern.test(text)));
+      (prompt.boxed && hasHint(text)) || clean.slice(chrome, end).some((under) => hasHint(under));
     return hinted ? "drawn" : null;
   }
-  return framed;
+  return framed ?? (shape.declared ? null : "drawn");
 }

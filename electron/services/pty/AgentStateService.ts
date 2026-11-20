@@ -537,7 +537,8 @@ export class AgentStateService {
    * row (#18018), read at `promptDrawnAt`: the settle before it gave its
    * reason off a screen the CLI hadn't drawn yet. One read before a later
    * settle that agreed with it, or carried no reason, landed is still that
-   * sight, unless anything was typed since it was read.
+   * sight, unless anything was typed since it was read, and leaves that
+   * settle where it is.
    */
   updateWaitingReason(
     terminal: TerminalInfo,
@@ -556,7 +557,8 @@ export class AgentStateService {
         promptDrawnAt !== undefined &&
         terminal.lastTypedInputAt >= promptDrawnAt;
       if (!firstSight || !agreed || typedSince) return false;
-      observedAt = terminal.lastStateChange + 1;
+      // Never ahead of the clock: a keystroke in the same millisecond still holds.
+      observedAt = terminal.lastStateChange;
     }
 
     const confidence = this.normalizeConfidence(0.9);

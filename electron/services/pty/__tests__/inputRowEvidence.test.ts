@@ -56,13 +56,13 @@ describe("readInputRow (#18018)", () => {
         "│ >   Type your message or @path/to/file   │",
         "╰──────────────────────────────────────────╯",
       ],
-      "empty",
+      "drawn",
     ],
     [
-      "OpenCode's input row opening on its own hint",
+      "OpenCode's boxed input row and its hint",
       "opencode",
       ['┃  Ask anything... "Fix a TODO in the codebase"', "┃", "  enter send"],
-      "empty",
+      "drawn",
     ],
     [
       "Kimi Code's boxed input row, matched with its edge",
@@ -103,6 +103,8 @@ describe("readInputRow (#18018)", () => {
     ],
     ["an agent with no declared prompt, at a bare glyph", "grok", ["READY", "❯"], "empty"],
     ["an agent with no declared prompt, its glyph alone", "grok", ["❯"], "empty"],
+    ["an agent with no declared prompt, at a prompt it can't read", "grok", ["  λ "], "drawn"],
+    ["an agent with no declared prompt, drawing its own text", "grok", ["Starting up…"], "drawn"],
   ])("reads %s", (_label, agentId, screen, expected) => {
     expect(read(agentId, screen)).toBe(expected);
   });
@@ -150,9 +152,31 @@ describe("readInputRow (#18018)", () => {
     ["a blank screen, for an agent with no declared prompt", "grok", ["", ""]],
     ["its shell line under a plain prompt", "grok", ["~/repo $ grok", ""]],
     ["its shell line under a glyph", "grok", ["$ grok", ""]],
-    ["its startup text", "grok", ["Starting up…"]],
+    [
+      "a frame the last agent left, with this run's shell line under a plain prompt",
+      "cursor",
+      [RULE, "❯ ", RULE, "  ? for shortcuts", "~/repo $ cursor-agent", ""],
+    ],
+    [
+      "a shell line whose wrapped command runs on into the agent's own hint",
+      "codex",
+      ['❯ codex "explain the', 'context left thing"', ""],
+    ],
+    ["a bare glyph in the history above a shell line", "claude", ["❯", "~/repo $ claude", ""]],
   ])("finds no input row on %s", (_label, agentId, screen) => {
     expect(read(agentId, screen)).toBeNull();
+  });
+
+  it.each<[string, string, string[]]>([
+    ["a Goose draft, whose prompt is its own hint", "goose", ["🪿 fix the tests", ""]],
+    [
+      "a Codex draft opening with its own hint",
+      "codex",
+      ["› context left is wrong", "", "  ⏎ send"],
+    ],
+    ["a Gemini draft", "gemini", ["╭────╮", "│ > type your message here please │", "╰────╯"]],
+  ])("never reads %s as an empty input row", (_label, agentId, screen) => {
+    expect(read(agentId, screen)).not.toBe("empty");
   });
 
   it("reads its own hints only, never the universal approval hints beside them", () => {
