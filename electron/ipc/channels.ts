@@ -1685,6 +1685,8 @@ export const CHANNELS = {
   // Whether the phone may show the asking pane's title, state and last lines (#16228).
   DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
   DECISIONS_SET_HOLD_PHONE_PUSHES: "decisions:set-hold-phone-pushes",
+  // Whether the phone is told when one of this computer's agents stops while the person is away (#17319).
+  DECISIONS_SET_AGENT_STOPPED_PUSHES: "decisions:set-agent-stopped-pushes",
   // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
   DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).

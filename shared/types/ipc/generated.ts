@@ -1092,6 +1092,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").SetDecisionsAgentAskHumanPayload];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:set-agent-stopped-pushes": {
+    args: [enabled: boolean];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "decisions:set-auto-enroll-hosts": {
     args: [enabled: boolean];
     result: import("../decisionsHosts.js").DecisionsHostsResult;

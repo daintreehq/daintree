@@ -1075,6 +1075,17 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.setDecisionsHoldPhonePushes(enabled);
       }
     ),
+    // Telling the phone when one of this computer's agents stops while the person is away (#17319).
+    setAgentStoppedPushes: opValidated(
+      CHANNELS.DECISIONS_SET_AGENT_STOPPED_PUSHES,
+      z.boolean(),
+      async (enabled: boolean): Promise<DecisionsStatus> => {
+        refuseWhileOff("change when your phone is notified");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsAgentStoppedPushes(enabled);
+      }
+    ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to
     // the window that asked; the kit is made and written in main, and the
     // passphrase goes no further than locking it.

@@ -316,6 +316,7 @@ const connections = vi.hoisted(
       stopped: number;
       snapshotsChanged: number;
       presenceChanged: number;
+      agentStoppedPushesChanged: number;
       keyFileAtStop?: boolean;
     }>
 );
@@ -420,6 +421,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             stopped: 0,
             snapshotsChanged: 0,
             presenceChanged: 0,
+            agentStoppedPushesChanged: 0,
           };
           connections.push(made);
           return {
@@ -431,6 +433,9 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             },
             presenceChanged: () => {
               made.presenceChanged += 1;
+            },
+            agentStoppedPushesChanged: () => {
+              made.agentStoppedPushesChanged += 1;
             },
             stop: () => {
               made.stopped += 1;
@@ -487,7 +492,9 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
-import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
+import { setDecisionsHostsPort, setRunAttentionServiceRef } from "../../../window/serviceRefs.js";
+import { events } from "../../events.js";
+import { readUserPresence } from "../../userPresence.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
 import type {
   DecisionsHostLink,
@@ -566,6 +573,7 @@ import {
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
   setDecisionsHoldPhonePushes,
+  setDecisionsAgentStoppedPushes,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -2327,6 +2335,198 @@ describe("Decisions entry", () => {
       await expect(setDecisionsHoldPhonePushes(true)).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
       expect(loads.constructed).toBe(constructed);
+    });
+  });
+
+  describe("agent-stopped pushes (#17319)", () => {
+    afterEach(async () => {
+      setRunAttentionServiceRef(null);
+      await peekDecisionsService()?.stop();
+    });
+
+    it("asks only while Decisions and the switch are on, whatever desktop notifications say, telling the connection of each turn", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const connection = connections[0]!;
+      const stopped = connection.options.agentStopped!;
+      // Off by default.
+      expect(stopped.allowed()).toBe(false);
+      expect((await getDecisionsStatus()).agentStoppedPushes).toBeUndefined();
+
+      const on = await setDecisionsAgentStoppedPushes(true);
+      expect(on.agentStoppedPushes).toBe(true);
+      expect(stopped.allowed()).toBe(true);
+      expect(connection.agentStoppedPushesChanged).toBe(1);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        agentStoppedPushes: true,
+      });
+      expect(peekDecisionsService()!.getSettings()!.agentStoppedPushes).toBe(true);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ agentStoppedPushes: true })
+      );
+
+      // The switch stands alone: desktop notifications and their completion banners don't gate it.
+      savedNotifications.value = { enabled: false, completedEnabled: false };
+      notificationSettingsWritten();
+      expect(stopped.allowed()).toBe(true);
+
+      // Off reaches the connection before the queue gets to it.
+      const off = setDecisionsAgentStoppedPushes(false);
+      expect(stopped.allowed()).toBe(false);
+      expect(connection.agentStoppedPushesChanged).toBe(2);
+      expect((await off).agentStoppedPushes).toBeUndefined();
+      expect(saved.value).toMatchObject({ agentStoppedPushes: false });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).not.toHaveProperty("agentStoppedPushes")
+      );
+
+      await setDecisionsAgentStoppedPushes(true);
+      await setDecisionsEnabled(false);
+      expect(stopped.allowed()).toBe(false);
+    });
+
+    it("holds every push back while a turn off of Decisions waits its turn", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const service = peekDecisionsService()!;
+      const connection = connections[0]!;
+      const stopped = connection.options.agentStopped!;
+      expect(stopped.allowed()).toBe(true);
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const disabling = setDecisionsEnabled(false);
+      // Still saved on, but no push may go out after the click.
+      expect(saved.value).toMatchObject({ enabled: true });
+      expect(stopped.allowed()).toBe(false);
+      closed();
+      await Promise.all([stopping, enabling, disabling]);
+      expect(stopped.allowed()).toBe(false);
+
+      // Back on: it asks again, with the switch kept as it was.
+      await setDecisionsEnabled(true);
+      expect(stopped.allowed()).toBe(true);
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const turningOn = setDecisionsAgentStoppedPushes(true);
+      const turningOff = setDecisionsAgentStoppedPushes(false);
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { agentStoppedPushes?: boolean } | undefined)
+              ?.agentStoppedPushes === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.agentStoppedPushes).toBeUndefined();
+      expect(off.agentStoppedPushes).toBeUndefined();
+      expect(saved.value).toMatchObject({ agentStoppedPushes: false });
+    });
+
+    it("refuses to turn on while Decisions is off, without loading it", async () => {
+      saved.value = { enabled: false };
+      const constructed = loads.constructed;
+      await expect(setDecisionsAgentStoppedPushes(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
+    });
+
+    it("reads this computer's quiet hours, its runs put aside and its agents' transitions", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+
+      expect(stopped.quiet()).toBe(false);
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      savedNotifications.value = {
+        enabled: false,
+        quietHoursEnabled: true,
+        quietHoursStartMin: nowMin,
+        quietHoursEndMin: (nowMin + 60) % 1440,
+        quietHoursWeekdays: [],
+      };
+      expect(stopped.quiet()).toBe(true);
+
+      expect(stopped.putAside("t-parked")).toBe(false);
+      setRunAttentionServiceRef({
+        getParkRecord: (id: string) => (id === "t-parked" ? { parkedAt: 1 } : undefined),
+        isSnoozed: (id: string) => id === "t-snoozed",
+      } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
+      expect(stopped.putAside("t-parked")).toBe(true);
+      expect(stopped.putAside("t-snoozed")).toBe(true);
+      expect(stopped.putAside("t-other")).toBe(false);
+
+      const heard: unknown[] = [];
+      const off = stopped.watchTransitions((transition) => heard.push(transition));
+      events.emit("agent:state-changed", {
+        terminalId: "t-1",
+        state: "exited",
+        previousState: "working",
+        trigger: "exit",
+        confidence: 1,
+        terminalClosing: true,
+        timestamp: Date.now(),
+      });
+      events.emit("agent:state-changed", {
+        terminalId: "t-2",
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+      off();
+      events.emit("agent:state-changed", {
+        terminalId: "t-3",
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+      expect(heard).toEqual([
+        { terminalId: "t-1", state: "exited", previousState: "working", terminalClosing: true },
+        { terminalId: "t-2", state: "completed", previousState: "working", terminalClosing: false },
+      ]);
+
+      // Parking or snoozing a run is heard; taking it back isn't.
+      const putAside: string[] = [];
+      const offPutAside = stopped.watchPutAside((terminalId) => putAside.push(terminalId));
+      events.emit("terminal:park-changed", { id: "t-p", parked: true, timestamp: Date.now() });
+      events.emit("terminal:park-changed", { id: "t-p", parked: false, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: true, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: false, timestamp: Date.now() });
+      offPutAside();
+      events.emit("terminal:park-changed", { id: "t-late", parked: true, timestamp: Date.now() });
+      expect(putAside).toEqual(["t-p", "t-s"]);
+
+      // Only away counts as away, as the shared reading says it.
+      expect(stopped.presence).toBe(readUserPresence);
     });
   });
 

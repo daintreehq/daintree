@@ -31,6 +31,11 @@ import {
 } from "@daintreehq/decisions-crypto";
 import { pendingRotationOf } from "../keyRotation.js";
 import { PRESENCE_TICK_MS, type PresenceWatchers } from "../desktopPresence.js";
+import {
+  AGENT_STOPPED_BATCH_MS,
+  AGENT_STOPPED_COOLDOWN_MS,
+  type AgentTransition,
+} from "../agentStoppedPushes.js";
 import type { UserPresence } from "../../userPresence.js";
 import {
   EventData,
@@ -2527,5 +2532,244 @@ describe("presence over a connection (#17240)", () => {
     await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 3);
     h.connection.presenceChanged();
     expect(read).toHaveBeenCalledTimes(reads);
+  });
+});
+
+describe("agent-stopped pushes over a connection (#17319)", () => {
+  const teardown: Array<() => unknown> = [];
+
+  afterEach(async () => {
+    for (const step of teardown.splice(0)) await step();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  /** A relay advertising `features` in `/info`, keeping the body of each agent-stopped request. */
+  function stoppedRelay(features: string[]) {
+    const bodies: unknown[] = [];
+    const requests: string[] = [];
+    /** While set, `/info` answers only once it resolves. */
+    let infoHeld: Promise<void> | null = null;
+    const wrapFetch =
+      (fetchImpl: RelayFetch): RelayFetch =>
+      async (url, init) => {
+        const { pathname } = new URL(url);
+        requests.push(`${init.method ?? "GET"} ${pathname}`);
+        if (pathname === "/api/v1/info") {
+          if (infoHeld) await infoHeld;
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.9.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features,
+          });
+        }
+        if (pathname === "/api/v1/push/agent-stopped" && init.method === "POST") {
+          bodies.push(JSON.parse(String(init.body)));
+          return json({ outcome: "sent" });
+        }
+        return fetchImpl(url, init);
+      };
+    return {
+      wrapFetch,
+      bodies,
+      posts: () => requests.filter((r) => r === "POST /api/v1/push/agent-stopped").length,
+      infoReads: () => requests.filter((r) => r === "GET /api/v1/info").length,
+      /** Holds every `/info` from now until the returned function is called. */
+      holdInfo: () => {
+        let release!: () => void;
+        infoHeld = new Promise<void>((resolve) => (release = resolve));
+        return () => {
+          infoHeld = null;
+          release();
+        };
+      },
+    };
+  }
+
+  /** An owner away from the computer, outside quiet hours, with the switch on; no Electron watchers. */
+  function stoppedState() {
+    const state = { allowed: true, presence: "away" as UserPresence };
+    const listeners = new Set<(t: AgentTransition) => void>();
+    const agentStopped: NonNullable<RelayConnectionOptions["agentStopped"]> = {
+      allowed: () => state.allowed,
+      presence: () => state.presence,
+      quiet: () => false,
+      putAside: () => false,
+      watchTransitions: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      watchPutAside: () => () => {},
+      watch: { onSuspend: () => () => {}, onResume: () => () => {}, onChange: () => () => {} },
+      now: () => Date.now(),
+    };
+    const stop = (terminalId: string) =>
+      listeners.forEach((l) => l({ terminalId, state: "completed", previousState: "working" }));
+    return { state, agentStopped, stop, listening: () => listeners.size };
+  }
+
+  async function connected(
+    relay: ReturnType<typeof stoppedRelay>,
+    agentStopped: NonNullable<RelayConnectionOptions["agentStopped"]>,
+    store?: MemoryLocalStore
+  ): Promise<Harness> {
+    const h = await harness({ store, wrapFetch: relay.wrapFetch, overrides: { agentStopped } });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    return h;
+  }
+
+  it("asks a relay that serves them once for stops that land together, sending nothing but the protocol version", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { agentStopped, stop } = stoppedState();
+    await connected(relay, agentStopped);
+
+    stop("pane-a");
+    stop("pane-b");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.bodies).toHaveLength(1));
+    expect(relay.bodies[0]).toEqual({ protocol_version: 1 });
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+    expect(relay.posts()).toBe(1);
+  });
+
+  it("sends nothing when the switch is turned off while the relay's features are being read", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { state, agentStopped, stop } = stoppedState();
+    const h = await connected(relay, agentStopped);
+    const before = relay.infoReads();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const release = relay.holdInfo();
+    stop("pane-a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.infoReads()).toBe(before + 1));
+    state.allowed = false;
+    h.connection.agentStoppedPushesChanged();
+    release();
+    // The request settles as dropped, never having been sent.
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("dropped"));
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("sends nothing when the person is back while the relay's features are being read", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { state, agentStopped, stop } = stoppedState();
+    await connected(relay, agentStopped);
+    const before = relay.infoReads();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const release = relay.holdInfo();
+    stop("pane-a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.infoReads()).toBe(before + 1));
+    state.presence = "present";
+    release();
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("dropped"));
+    expect(relay.posts()).toBe(0);
+
+    // Away again, a fresh stop is asked for as before.
+    state.presence = "away";
+    stop("pane-b");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+    await vi.waitFor(() => expect(relay.posts()).toBe(1));
+  });
+
+  it("sends a relay that doesn't serve them nothing", async () => {
+    const relay = stoppedRelay(["presence-v1"]);
+    const { agentStopped, stop } = stoppedState();
+    await connected(relay, agentStopped);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    stop("pane-a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    // Asked, and found the relay without the feature.
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("unsupported"));
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("listens to no agent while they aren't allowed, and starts and stops as that changes", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { state, agentStopped, stop, listening } = stoppedState();
+    state.allowed = false;
+    const h = await connected(relay, agentStopped);
+    expect(listening()).toBe(0);
+
+    state.allowed = true;
+    h.connection.agentStoppedPushesChanged();
+    expect(listening()).toBe(1);
+    stop("pane-a");
+
+    // Turned off with a stop gathering: it goes, and nothing more is heard.
+    state.allowed = false;
+    h.connection.agentStoppedPushesChanged();
+    expect(listening()).toBe(0);
+    state.allowed = true;
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS * 2);
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("sends a stop gathered before an attempt gave way through the attempt live when it goes", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { agentStopped, stop } = stoppedState();
+    const h = await connected(relay, agentStopped);
+
+    stop("pane-a");
+    expect(h.connection.refresh()).toBe(true);
+    await connectLive(h, 1);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.posts()).toBe(1));
+  });
+
+  it("drops a batch when no bridge is live as it goes, and sends nothing for it once one is", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { agentStopped, stop } = stoppedState();
+    const h = await connected(relay, agentStopped);
+
+    stop("pane-a");
+    // Replaced by another connection: the next attempt waits minutes, well past the batch.
+    const socket = await h.relay.socket(0);
+    socket.drop(4409);
+    await h.status("replaced");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    expect(relay.posts()).toBe(0);
+    await vi.advanceTimersByTimeAsync(REPLACED_MAX_MS);
+    await connectLive(h, 1);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("asks nothing once the store stops writing", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { agentStopped, stop } = stoppedState();
+    let faulted = false;
+    const store = Object.assign(new MemoryLocalStore(), { isFaulted: () => faulted });
+    await connected(relay, agentStopped, store);
+
+    stop("pane-a");
+    faulted = true;
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS * 2);
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("stops listening when the connection stops", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { agentStopped, listening } = stoppedState();
+    const h = await connected(relay, agentStopped);
+    expect(listening()).toBe(1);
+    await h.connection.stop();
+    expect(listening()).toBe(0);
+    h.connection.agentStoppedPushesChanged();
+    expect(listening()).toBe(0);
   });
 });

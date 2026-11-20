@@ -68,6 +68,7 @@ import { projectDecisionQuestions, questionAsks } from "./questionList.js";
 import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
+import type { AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
 import {
   RelayConnection,
   type QuestionSource,
@@ -130,6 +131,8 @@ export interface DecisionsRelayConnection {
   snapshotsChanged?(): void;
   /** Whether presence may be reported may have changed (#17240). */
   presenceChanged?(): void;
+  /** Whether agent-stopped pushes may be asked for may have changed (#17319). */
+  agentStoppedPushesChanged?(): void;
 }
 
 /**
@@ -137,6 +140,13 @@ export interface DecisionsRelayConnection {
  * may be reported now. Only an owner's lifetime reports it.
  */
 export type DecisionsPresenceDeps = Omit<DesktopPresenceOptions, "report">;
+
+/**
+ * What telling the phone that an agent stopped needs from main (#17319): the
+ * switch, presence, quiet hours, runs put aside and this computer's agent
+ * transitions. Only an owner's lifetime asks for one.
+ */
+export type DecisionsAgentStoppedDeps = Omit<AgentStoppedPushesOptions, "send">;
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
 export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
@@ -248,6 +258,8 @@ export interface DecisionsServiceOptions {
   snapshots?: DecisionsSnapshotDeps;
   /** Tells the relay while the person is at this computer, for an owner (#17240); without it nothing does. */
   presence?: DecisionsPresenceDeps;
+  /** Tells the phone when an agent here stops while the person is away, for an owner (#17319); without it nothing does. */
+  agentStopped?: DecisionsAgentStoppedDeps;
   /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
   diagnostics?: SetupDiagnostics;
   /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
@@ -310,6 +322,7 @@ export class DecisionsService {
   private readonly delivery: DecisionsDeliveryDeps | null;
   private readonly snapshots: DecisionsSnapshotDeps | null;
   private readonly presence: DecisionsPresenceDeps | null;
+  private readonly agentStopped: DecisionsAgentStoppedDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -412,6 +425,7 @@ export class DecisionsService {
     this.delivery = options.delivery ?? null;
     this.snapshots = options.snapshots ?? null;
     this.presence = options.presence ?? null;
+    this.agentStopped = options.agentStopped ?? null;
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
@@ -856,6 +870,15 @@ export class DecisionsService {
   }
 
   /**
+   * Whether agent-stopped pushes may be asked for may have changed (#17319):
+   * the switch, or Decisions being turned off. Out of turn, like `presenceChanged`.
+   */
+  agentStoppedPushesChanged(): void {
+    if (this.disposed) return;
+    this.connection?.agentStoppedPushesChanged?.();
+  }
+
+  /**
    * Disk space is no longer critical (#16605): a store that stopped for disk
    * space is replaced. Resolves true when it was.
    */
@@ -1246,6 +1269,7 @@ export class DecisionsService {
       ...(this.phoneImages ? { phoneImages: this.phoneImages } : {}),
       // A Host is never at its owner's desk: only the owner says whether the person is here.
       ...(role === "owner" && this.presence ? { presence: this.presence } : {}),
+      ...(role === "owner" && this.agentStopped ? { agentStopped: this.agentStopped } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.

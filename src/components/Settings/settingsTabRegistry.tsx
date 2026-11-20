@@ -2406,6 +2406,25 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-agent-stopped-pushes",
+        section: "Questions",
+        title: "Notify my phone when an agent stops",
+        description:
+          "While you're away and outside quiet hours, your relay tells your phone only that an agent on this computer stopped, never which one",
+        keywords: [
+          "phone",
+          "push",
+          "notification",
+          "finished",
+          "completed",
+          "stopped",
+          "done",
+          "away",
+          "mobile",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-policy",
         section: "Policy",
         title: "Workflow gates",

@@ -122,6 +122,15 @@ export interface DecisionsSettings {
    * existed reads as on.
    */
   holdPhonePushes: boolean;
+  /**
+   * Whether this computer, as the owner, asks the relay to tell the person's
+   * phone that an agent stopped (#17319): one of its own agents settled as
+   * completed or exited while the person was away and outside quiet hours.
+   * The push carries nothing about which agent, where or how many. Off unless
+   * the person turns it on, so a setting saved before the field existed reads
+   * as off. Standalone: it doesn't need desktop notifications on.
+   */
+  agentStoppedPushes: boolean;
 }
 
 /**
@@ -211,6 +220,8 @@ export interface DecisionsStatus {
   terminalSnapshots?: true;
   /** Holding phone pushes while the person is here is turned off (#17240); absent while on. */
   holdPhonePushes?: false;
+  /** Telling the phone when an agent stops is turned on (#17319); absent while off. */
+  agentStoppedPushes?: true;
   /**
    * This computer's Decisions key file exists. Read only while on, from the
    * file's presence alone, so it never asks the keychain. With no relay set

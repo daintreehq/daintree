@@ -44,6 +44,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   setAgentAskHuman: "decisions:set-agent-ask-human",
   setTerminalSnapshots: "decisions:set-terminal-snapshots",
   setHoldPhonePushes: "decisions:set-hold-phone-pushes",
+  setAgentStoppedPushes: "decisions:set-agent-stopped-pushes",
   reportComposerDrafts: "decisions:report-composer-drafts",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",

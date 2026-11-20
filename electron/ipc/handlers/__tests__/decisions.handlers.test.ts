@@ -271,6 +271,11 @@ const decisionsEntry = vi.hoisted(() => ({
       ? { state: "connected", revision: 1 }
       : { state: "connected", holdPhonePushes: false, revision: 1 }
   ),
+  setDecisionsAgentStoppedPushes: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> =>
+    enabled
+      ? { state: "connected", agentStoppedPushes: true, revision: 1 }
+      : { state: "connected", revision: 1 }
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -375,6 +380,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
     setDecisionsHoldPhonePushes: decisionsEntry.setDecisionsHoldPhonePushes,
+    setDecisionsAgentStoppedPushes: decisionsEntry.setDecisionsAgentStoppedPushes,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -524,6 +530,9 @@ const setTerminalSnapshots = decisionsNamespace.ops.setTerminalSnapshots.handler
 const setHoldPhonePushes = decisionsNamespace.ops.setHoldPhonePushes.handler as unknown as (
   enabled: boolean
 ) => Promise<DecisionsStatus>;
+const setAgentStoppedPushes = decisionsNamespace.ops.setAgentStoppedPushes.handler as unknown as (
+  enabled: boolean
+) => Promise<DecisionsStatus>;
 
 const listHosts = decisionsNamespace.ops.listHosts
   .handler as unknown as () => Promise<DecisionsHostsResult>;
@@ -662,6 +671,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
   CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
+  CHANNELS.DECISIONS_SET_AGENT_STOPPED_PUSHES,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -723,6 +733,7 @@ describe("decisions IPC", () => {
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
     decisionsEntry.setDecisionsHoldPhonePushes.mockClear();
+    decisionsEntry.setDecisionsAgentStoppedPushes.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -1207,6 +1218,8 @@ describe("decisions IPC", () => {
         code: "PERMISSION",
       });
       await expect(setHoldPhonePushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentStoppedPushes(true)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentStoppedPushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -2252,6 +2265,22 @@ describe("decisions IPC", () => {
     expect(schema.safeParse(true).success).toBe(true);
     expect(schema.safeParse(false).success).toBe(true);
     for (const value of [undefined, "false", 0, { enabled: false }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("changes agent-stopped pushes through Decisions itself once on, and takes only a boolean (#17319)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setAgentStoppedPushes(true)).resolves.toMatchObject({ agentStoppedPushes: true });
+    await expect(setAgentStoppedPushes(false)).resolves.not.toHaveProperty("agentStoppedPushes");
+    expect(decisionsEntry.setDecisionsAgentStoppedPushes.mock.calls).toEqual([[true], [false]]);
+    expect(store.set).not.toHaveBeenCalled();
+
+    const schema = decisionsNamespace.ops.setAgentStoppedPushes.schema as SafeParse;
+    expect(schema.safeParse(true).success).toBe(true);
+    expect(schema.safeParse(false).success).toBe(true);
+    for (const value of [undefined, "true", 1, { enabled: true }]) {
       expect(schema.safeParse(value).success).toBe(false);
     }
   });
