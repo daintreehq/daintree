@@ -161,6 +161,8 @@ function harness(options: {
           };
     },
     getLiveGeneration: (id) => generations.get(id) ?? null,
+    // Claude Code at its prompt with an empty input box.
+    serializedState: async () => ({ data: "⏺ Done.\r\n────────\r\n❯ \r\n────────" }),
     submit: (id, text, token, guard, inputOwner) => pty.submit(id, text, token, guard, inputOwner),
     withdraw: () => {},
     sleep: async () => {},
