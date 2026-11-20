@@ -515,8 +515,10 @@ export class TerminalInputController {
             ? this.admitExact(guard)
             : undefined;
     // A Claude Code update's `/restart` (#17908) waits a submit delay between
-    // its body and its Enter: a footer seen anew or a dialog drawn then must
-    // not get the Enter the person approved for an empty prompt.
+    // its body and its Enter: a footer re-observed or a choice dialog the
+    // terminal reports by then holds back the Enter the person approved for
+    // an empty prompt. A dialog drawn in the delay itself isn't reported yet,
+    // as for every guarded line (#17984).
     const holdsAtEnter =
       typeof guard === "object" && guard.updateObservedAt !== undefined
         ? () => this.stillOffersUpdate(guard.updateObservedAt!)
@@ -563,7 +565,8 @@ export class TerminalInputController {
 
   /**
    * The terminal still reports the update observation main read, naming
-   * `/restart`, and no choice dialog has taken the prompt's place.
+   * `/restart`, and its published state shows no choice dialog. That state
+   * trails the screen: a waiting reason is reread only after a quiet spell.
    */
   private stillOffersUpdate(observedAt: number): boolean {
     const terminal = this.host.terminalInfo;

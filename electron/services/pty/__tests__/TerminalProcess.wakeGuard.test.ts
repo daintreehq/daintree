@@ -988,11 +988,14 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
   });
 
   it.each([
-    ["seen anew", { updateInstalled: { observedAt: 1_234, namesRestart: true } }],
-    ["no longer naming /restart", { updateInstalled: { observedAt: 900, namesRestart: false } }],
-    ["replaced by a choice dialog", { agentState: "waiting", waitingReason: "approval" }],
+    ["the observation seen anew", { updateInstalled: { observedAt: 1_234, namesRestart: true } }],
+    [
+      "the observation no longer naming /restart",
+      { updateInstalled: { observedAt: 900, namesRestart: false } },
+    ],
+    ["a choice dialog reported", { agentState: "waiting", waitingReason: "approval" }],
   ])(
-    "holds back the Enter when the observation is %s between the line and its Enter",
+    "holds back the Enter when the terminal publishes %s between the line and its Enter",
     async (_label, patch) => {
       const terminal = createTerminal();
       settleAtPrompt(terminal, Date.now() - 5_000);
