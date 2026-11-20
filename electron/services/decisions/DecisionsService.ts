@@ -1681,7 +1681,13 @@ export class DecisionsService {
             },
             () => {
               if (this.feed !== feed || this.askers !== presence || listed === null) return;
-              this.listQuestions(listed.rows, listed.handled, listed.marks, listed.closings, presence);
+              this.listQuestions(
+                listed.rows,
+                listed.handled,
+                listed.marks,
+                listed.closings,
+                presence
+              );
             }
           )
         : null;

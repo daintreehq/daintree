@@ -1692,11 +1692,42 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
     );
   });
 
+  it("lists a follow-up beside its open question, and keeps the question's row as the follow-up goes in", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ waitingFollowUps: [{ questionId: "q42", alias: 42 }] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).toContain("q-42 delivering");
+    fireEvent.click(chip);
+    const rows = await screen.findAllByTestId("terminal-decisions-row");
+    expect(rows.map((row) => row.getAttribute("data-question-id"))).toEqual(["q42", "q42"]);
+    const asking = rows.find((row) => row.textContent?.includes("Waiting for an answer"));
+    expect(asking).toBeDefined();
+    expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
+
+    act(() => paneListeners[0]!(paneState({ revision: 2 })));
+    // The same row, so focus on it isn't lost to a remount.
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+
+    // Withdrawn from another view: the row says so in place, with no Decline.
+    const [question] = paneState().openQuestions;
+    act(() =>
+      paneListeners[0]!(
+        paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 3 })
+      )
+    );
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+    expect(asking!.textContent).toContain("Withdrawing");
+    expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
+  });
+
   it("shows a withdrawal the pane's state names, with no dialog of its own", async () => {
     getStatus.mockResolvedValue({ state: "connected", revision: 1 });
     render(<TerminalDecisionsChip terminalId="t1" />);
     const chip = await screen.findByTestId("terminal-decisions-chip");
-    expect(chip.textContent).not.toContain("cancelling");
+    expect(chip.textContent).not.toContain("withdrawing");
 
     const [question] = paneState().openQuestions;
     act(() =>
@@ -1704,12 +1735,12 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
         paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 2 })
       )
     );
-    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 cancelling");
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(cancelQuestion).not.toHaveBeenCalled();
     // Refused by the relay: the question waits again.
     act(() => paneListeners[0]!(paneState({ revision: 3 })));
-    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("cancelling");
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("withdrawing");
   });
 
   it("shows a decline or withdrawal this computer queued from any window, from its list of questions", async () => {
@@ -1720,21 +1751,21 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
     });
     render(<TerminalDecisionsChip terminalId="t1" />);
     await waitFor(() =>
-      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 dismissing")
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 declining")
     );
     expect(listQuestions).toHaveBeenCalledTimes(1);
 
     act(() =>
       listListeners[0]!({ revision: 2, questions: [listed("q42", { closing: "withdrawing" })] })
     );
-    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 cancelling");
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
 
     // Another question's decline names nothing here; this one's going lets the chip wait again.
     act(() =>
       listListeners[0]!({ revision: 3, questions: [listed("q43", { closing: "declining" })] })
     );
     expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toMatch(
-      /dismissing|cancelling/
+      /declining|withdrawing/
     );
 
     // Nothing left out for an answer: the list is no longer watched.
@@ -1754,7 +1785,7 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await waitFor(() =>
         expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
-          "q-42 dismissing"
+          "q-42 declining"
         )
       );
     } finally {
@@ -1766,6 +1797,6 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
     render(<TerminalDecisionsChip terminalId="t1" />);
     await waitFor(() => expect(listQuestions).toHaveBeenCalledTimes(2));
     await act(async () => {});
-    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("dismissing");
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("declining");
   });
 });

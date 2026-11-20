@@ -83,6 +83,25 @@ export function usePaneDecisionState(terminalId: string, on: boolean): PaneDecis
 
 const ATTENTION_KINDS = new Set<DecisionItem["kind"]>(["attention", "uncertain"]);
 
+/** Rows that can sit beside a question's own row: a follow-up typing in, or a stall. */
+const BESIDE_KINDS = new Set<DecisionItem["kind"]>(["follow-up", "attention", "uncertain"]);
+
+/**
+ * Each row's key: its question's, so a focused row survives its status
+ * changing, and for a follow-up or stall beside the question's own row
+ * (#18052), its question's with its kind.
+ */
+function rowKeys(items: readonly DecisionItem[]): string[] {
+  const own = new Set(
+    items.filter((item) => !BESIDE_KINDS.has(item.kind)).map((item) => item.questionId)
+  );
+  return items.map((item) =>
+    BESIDE_KINDS.has(item.kind) && own.has(item.questionId)
+      ? `${item.questionId}:${item.kind}`
+      : item.questionId
+  );
+}
+
 /** The IPC read takes at most this many ids at once. */
 const SUMMARY_BATCH = 64;
 
@@ -367,6 +386,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const items =
     state === null ? [] : decisionItems(state, wait, withdrawing, dismissing, { nowMs, cleared });
   const questionIds = items.map((item) => item.questionId);
+  const keys = rowKeys(items);
   const lines = useQuestionLines(terminalId, questionIds, open);
 
   // Outside the popover and the chip, so neither closing nor the last row going takes it away.
@@ -499,10 +519,9 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
               className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
               aria-label="Questions"
             >
-              {items.map((item) => (
+              {items.map((item, index) => (
                 <DecisionRow
-                  // One question can have a row of each kind: open, and a follow-up or stall beside it.
-                  key={`${item.kind}:${item.questionId}`}
+                  key={keys[index]}
                   item={item}
                   line={lines.get(item.questionId) ?? null}
                   nowMs={nowMs}

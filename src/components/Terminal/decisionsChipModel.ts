@@ -237,7 +237,19 @@ export function decisionItems(
       advisory: false,
     });
   }
+  // A withdrawal or decline drops whatever of the thread isn't typed yet, so a closing question's follow-up isn't promised.
+  const closing = new Set(
+    state.openQuestions
+      .filter(
+        (question) =>
+          question.closing !== undefined ||
+          cancelling.has(question.questionId) ||
+          dismissing.has(question.questionId)
+      )
+      .map((question) => question.questionId)
+  );
   for (const entry of state.waitingFollowUps ?? []) {
+    if (closing.has(entry.questionId)) continue;
     items.push({
       questionId: entry.questionId,
       label: aliasLabel(entry.alias),
@@ -384,6 +396,11 @@ export function chipLabel(items: readonly DecisionItem[]): ChipLabel {
   const live = items.filter((item) => setAsideOf(item) === null);
   if (live.length === 0) return setAsideLabel(items);
   if (live.length === 1) return itemLabel(live[0]!);
+  // One question with a follow-up typing in beside it (#18052): named as delivering, as a lone answer is.
+  const followUp = live.find((item) => item.kind === "follow-up");
+  if (followUp !== undefined && questionCount(live) === 1 && !live.some(isAttention)) {
+    return itemLabel(followUp);
+  }
   const text = pluralize(questionCount(live), "question");
   const delivering = live.filter(isDelivering).length;
   if (delivering === 0) return { text, detail: null };

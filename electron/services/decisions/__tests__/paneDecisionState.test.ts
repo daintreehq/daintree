@@ -358,13 +358,14 @@ describe("projectPaneDecisionStates", () => {
     expect(
       state?.openQuestions.map((question) => [
         question.questionId,
+        question.status,
         "closing" in question,
         question.closing,
       ])
     ).toEqual([
-      [qid(1), true, "withdrawing"],
-      [qid(2), true, "declining"],
-      [qid(3), false, undefined],
+      [qid(1), "open", true, "withdrawing"],
+      [qid(2), "queued", true, "declining"],
+      [qid(3), "open", false, undefined],
     ]);
     expect(state?.waitingAnswers).toEqual([
       { questionId: qid(4), alias: 4, kind: "answer", deliveryStatus: "desktop-received" },
@@ -421,6 +422,13 @@ describe("projectPaneDecisionStates", () => {
       .map((r) => r.question_id);
     expect(expected).toEqual([qid(1), qid(2), qid(3), qid(6)]);
     expect(waiting.map((entry) => entry.questionId).sort()).toEqual([...expected].sort());
+    // An open or queued question as open, a request for a reply as one.
+    expect(content?.openQuestions.map((entry) => entry.questionId)).toEqual([
+      qid(1),
+      qid(2),
+      qid(6),
+    ]);
+    expect(content?.replyRequests?.map((entry) => entry.questionId)).toEqual([qid(3)]);
   });
 
   it("lists an answer marked for delivery and not yet delivered as waiting, with its status", () => {

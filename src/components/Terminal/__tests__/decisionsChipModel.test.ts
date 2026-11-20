@@ -735,7 +735,7 @@ function following(...aliases: number[]): PaneDecisionState {
 }
 
 describe("a question waiting on the person's reply (#18052)", () => {
-  it("shows as waiting on the person, with when the agent asked and no Dismiss", () => {
+  it("shows as waiting on the person, with when the agent asked and no Decline", () => {
     const [item] = decisionItems(replying(7));
     expect(item).toMatchObject({
       label: "q-7",
@@ -750,8 +750,8 @@ describe("a question waiting on the person's reply (#18052)", () => {
       "Question q-7 is waiting for your reply, here or on your phone"
     );
     expect(isCancellable(item!)).toBe(false);
-    // Answered once already, so it can't be dismissed, and its row opens the thread to reply.
-    expect(cancelNote([item!])).toBe("Answered questions can't be dismissed");
+    // Answered once already, so it can't be declined, and its row opens the thread to reply.
+    expect(cancelNote([item!])).toBe("Answered questions can't be declined");
     expect(answerNote([item!])).toBe("Open a question to reply here");
     expect(deadlineNote(item!, Date.parse("2026-11-02T11:00:00.000Z"))).toBeNull();
     expect(needsAttention([item!])).toBe(false);
@@ -819,7 +819,7 @@ describe("the person's follow-up waiting to be typed (#18052)", () => {
       });
       expect(chipLabel([item!])).toEqual({ text: "q-4 delivering", detail: null });
       expect(itemSentence(item!)).toBe(`${expected[wait]} (q-4)`);
-      expect(cancelNote([item!])).toBe("Answered questions can't be dismissed");
+      expect(cancelNote([item!])).toBe("Answered questions can't be declined");
       expect(isCancellable(item!)).toBe(false);
     }
     expect(readsPaneWait(following(4))).toBe(true);
@@ -840,16 +840,50 @@ describe("the person's follow-up waiting to be typed (#18052)", () => {
     ]);
   });
 
-  it("can stand beside a question still open, counted once", () => {
+  it("can stand beside a question still open, counted once and named as delivering", () => {
     const items = decisionItems({ ...following(1), openQuestions: [open(1)] });
     expect(items.map((item) => item.kind)).toEqual(["follow-up", "open"]);
     expect(questionCount(items)).toBe(1);
-    expect(chipLabel(items)).toEqual({ text: "1 question", detail: "· 1 delivering" });
+    expect(chipLabel(items)).toEqual({ text: "q-1 delivering", detail: null });
+    // Beside a stall, the stall is what the chip warns of.
+    const stalled = decisionItems({
+      ...following(1),
+      openQuestions: [open(1)],
+      needsAttention: [stopped(2)],
+    });
+    expect(chipLabel(stalled).text).toBe("2 questions");
+  });
+
+  it("promises nothing for a question being withdrawn or declined, which drops it untyped", () => {
+    for (const closing of ["withdrawing", "declining"] as const) {
+      const items = decisionItems({ ...following(1), openQuestions: [{ ...open(1), closing }] });
+      expect(items.map((item) => item.kind)).toEqual([
+        closing === "withdrawing" ? "cancelling" : "dismissing",
+      ]);
+      expect(chipLabel(items).text).toBe(
+        closing === "withdrawing" ? "q-1 withdrawing" : "q-1 declining"
+      );
+    }
+    const local = decisionItems(
+      { ...following(1), openQuestions: [open(1)] },
+      "composer",
+      new Set(["q1"])
+    );
+    expect(local.map((item) => item.kind)).toEqual(["cancelling"]);
+    // Another question's follow-up still goes in.
+    const other = decisionItems({
+      ...following(2),
+      openQuestions: [{ ...open(1), closing: "withdrawing" }],
+    });
+    expect(other.map((item) => [item.label, item.kind])).toEqual([
+      ["q-2", "follow-up"],
+      ["q-1", "cancelling"],
+    ]);
   });
 });
 
 describe("a withdrawal or decline started from another view (#18052)", () => {
-  it("shows what the pane's state names, with no Dismiss and no answer coming", () => {
+  it("shows what the pane's state names, with no Decline and no answer coming", () => {
     const items = decisionItems(
       pane({
         open: [
@@ -868,7 +902,7 @@ describe("a withdrawal or decline started from another view (#18052)", () => {
     for (const closing of ["withdrawing", "declining"] as const) {
       const [only] = decisionItems(pane({ open: [{ ...open(1), closing }] }));
       expect(chipLabel([only!]).text).toBe(
-        closing === "withdrawing" ? "q-1 cancelling" : "q-1 dismissing"
+        closing === "withdrawing" ? "q-1 withdrawing" : "q-1 declining"
       );
       expect(deliveryNotes([only!])).toEqual([]);
     }
@@ -894,13 +928,26 @@ describe("a withdrawal or decline started from another view (#18052)", () => {
     ]);
   });
 
-  it("lets a withdrawal from this view outrank a decline the state names", () => {
-    const items = decisionItems(
+  it("lets a withdrawal outrank a decline, wherever either was started", () => {
+    const local = decisionItems(
       pane({ open: [{ ...open(1), closing: "declining" }] }),
       "composer",
       new Set(["q1"])
     );
-    expect(items.map((item) => item.kind)).toEqual(["cancelling"]);
+    expect(local.map((item) => item.kind)).toEqual(["cancelling"]);
+    const named = decisionItems(
+      pane({ open: [{ ...open(1), closing: "withdrawing" }] }),
+      "composer",
+      undefined,
+      new Set(["q1"])
+    );
+    expect(named.map((item) => item.kind)).toEqual(["cancelling"]);
+    // Neither says when to reply by any more.
+    const expiring = { ...open(1), expiresAt: "2026-11-02T12:00:00.000Z" };
+    for (const closing of ["withdrawing", "declining"] as const) {
+      const [row] = decisionItems(pane({ open: [{ ...expiring, closing }] }));
+      expect(deadlineNote(row!, Date.parse("2026-11-02T11:00:00.000Z"))).toBeNull();
+    }
   });
 
   it("reads a state from a Host from before it the way it always did", () => {
