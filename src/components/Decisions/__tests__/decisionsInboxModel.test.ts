@@ -26,6 +26,9 @@ import {
   markedText,
   originFacts,
   referenceKey,
+  replyLine,
+  replyLineKey,
+  replyToShow,
   resolveSelection,
   seeableAsk,
   staleNote,
@@ -755,5 +758,74 @@ describe("attentionText (#18054)", () => {
     expect(attentionText(UNCERTAIN, { closedReason: "declined" })).toContain(
       "The notice that you declined it, or a follow-up,"
     );
+  });
+});
+
+describe("a request for a reply on its row (#18040)", () => {
+  const REPLY: DecisionQuestionStanding = { kind: "waiting", reason: "reply" };
+
+  function said(
+    messageId: string,
+    text: string | null,
+    over: Partial<DecisionThreadMessage> = {}
+  ): DecisionThreadMessage {
+    return {
+      type: "message",
+      messageId,
+      from: "agent",
+      text,
+      images: [],
+      expectsReply: true,
+      sentAt: "2026-11-02T10:05:00.000Z",
+      deliveryStatus: null,
+      unreadable: false,
+      ...over,
+    };
+  }
+
+  it("names the request only while the question waits on the person for a reply", () => {
+    const asking = item("q1", REPLY, { replyRequest: "ask-1" });
+    expect(replyToShow(asking)).toBe("ask-1");
+    expect(replyLineKey(asking)).toBe(`${referenceKey(asking.reference)}\u0000ask-1`);
+    expect(replyLineKey({ ...asking, replyRequest: "ask-2" })).not.toBe(replyLineKey(asking));
+
+    // A delivery that stopped leads with that, whatever the agent asked; an open one asks its question.
+    for (const standing of [
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "waiting", reason: "open" },
+      { kind: "to-type" },
+      { kind: "settled", outcome: "answered", handled: false },
+    ] as const) {
+      const other = item("q1", standing, { replyRequest: "ask-1" });
+      expect(replyToShow(other)).toBeNull();
+      expect(replyLineKey(other)).toBeNull();
+    }
+  });
+
+  it("reads the request's first line with words, escape sequences and controls gone", () => {
+    const shown = {
+      thread: [
+        said("ask-0", "An older ask"),
+        said("ask-1", "\u001b[0m\r\n \u200b \n  Which \u001b[1mregion\u001b[0m?\u0007\nEU or US."),
+        // A window title whose sequence spans a line break.
+        said("ask-2", "\u001b]0;build\nlog\u0007Which zone?\nOr both."),
+      ],
+    };
+    expect(replyLine(shown, "ask-1")).toBe("Which region?");
+    expect(replyLine(shown, "ask-2")).toBe("Which zone?");
+    expect(replyLine(shown, "ask-0")).toBe("An older ask");
+  });
+
+  it("has no line for a request it can't read, one without words, or a message that isn't the agent's", () => {
+    const shown = {
+      thread: [
+        said("unreadable", "Words it couldn't check", { unreadable: true }),
+        said("wordless", " \n\u001b[0m\n "),
+        said("person", "Keep going", { from: "person" }),
+      ] satisfies DecisionThreadEntry[],
+    };
+    for (const id of ["unreadable", "wordless", "person", "absent"]) {
+      expect(replyLine(shown, id)).toBeNull();
+    }
   });
 });

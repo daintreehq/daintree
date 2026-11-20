@@ -83,6 +83,9 @@ import {
   isClosed,
   markedText,
   referenceKey,
+  replyLine,
+  replyLineKey,
+  replyToShow,
   resolveSelection,
   staleNote,
   standingText,
@@ -97,8 +100,10 @@ import {
   useDecisionQuestionReader,
   useDecisionsReaderRetention,
   useQuestionCancel,
+  type TaggedRead,
 } from "./useDecisionQuestionReader";
 import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
+import { replyRequest } from "./decisionFollowUpModel";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -114,6 +119,7 @@ type ListRead =
 
 const LOADING: ListRead = { state: "loading" };
 const NO_LINES: ReadonlyMap<string, string | null> = new Map();
+const NO_QUESTIONS: readonly DecisionQuestionListItem[] = [];
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
 
 /**
@@ -220,6 +226,78 @@ function useQuestionLines(
       }
     })();
   }, [active, items, forget]);
+
+  const release = useCallback(() => setLines(NO_LINES), []);
+  return { lines, release };
+}
+
+/**
+ * The opening line of each listed request for a reply (#18040), while its
+ * question waits on the person for one: read from that question's own thread
+ * by reference, once per request per opening (`replyLineKey`), and held only
+ * in memory. Only these rows, so everywhere else a question is named by its
+ * own words. A read that fails, or doesn't hold the request yet, is tried
+ * again with the next change to the list; a request it holds without words
+ * that can be read leaves the question's line.
+ */
+function useReplyLines(
+  items: readonly DecisionQuestionListItem[],
+  active: boolean
+): { lines: ReadonlyMap<string, string | null>; release: () => void } {
+  const [lines, setLines] = useState(NO_LINES);
+  const asked = useRef(new Set<string>());
+  const opening = useRef(0);
+  // Each new list, never a retry: a read that fails after a newer list came asks again at once,
+  // and only once for that list, so reads that keep failing never keep each other going.
+  const lists = useRef<{ items: readonly DecisionQuestionListItem[] | null; count: number }>({
+    items: null,
+    count: 0,
+  });
+  const [retries, setRetries] = useState(0);
+
+  const forget = useCallback(() => {
+    opening.current += 1;
+    asked.current = new Set();
+  }, []);
+  useEffect(() => forget, [forget]);
+
+  useEffect(() => {
+    if (!active) {
+      forget();
+      return;
+    }
+    if (lists.current.items !== items) lists.current = { items, count: lists.current.count + 1 };
+    const thisList = lists.current.count;
+    const missing = items.flatMap((item) => {
+      const key = replyLineKey(item);
+      const ask = replyToShow(item);
+      return key === null || ask === null || asked.current.has(key)
+        ? []
+        : [{ key, ask, reference: item.reference }];
+    });
+    const thisOpening = opening.current;
+    // Each on its own, so one slow Host holds up no other row.
+    for (const { key, ask, reference } of missing) {
+      asked.current.add(key);
+      void (async () => {
+        const read = await decisionsClient
+          .getQuestionContentByReference(reference)
+          .catch(() => null);
+        if (thisOpening !== opening.current) return;
+        // Not read, or read before it held the request: asked again with the list's next change.
+        const holds =
+          read?.result === "read" &&
+          read.question.thread.some((entry) => entry.type === "message" && entry.messageId === ask);
+        if (!holds) {
+          asked.current.delete(key);
+          if (lists.current.count !== thisList) setRetries((count) => count + 1);
+          return;
+        }
+        const line = replyLine(read.question, ask);
+        setLines((previous) => new Map(previous).set(key, line));
+      })();
+    }
+  }, [active, items, forget, retries]);
 
   const release = useCallback(() => setLines(NO_LINES), []);
   return { lines, release };
@@ -537,6 +615,7 @@ function InboxList({
   lead,
   groups,
   lines,
+  replyLines,
   partsOf,
   selectedKey,
   onSelect,
@@ -547,6 +626,8 @@ function InboxList({
   lead: ReactNode;
   groups: readonly InboxGroup[];
   lines: ReadonlyMap<string, string | null>;
+  /** A request for a reply's line, by `replyLineKey`, in place of its question's. */
+  replyLines: ReadonlyMap<string, string | null>;
   partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
   selectedKey: string | null;
   onSelect: (key: string, index: number) => void;
@@ -677,12 +758,18 @@ function InboxList({
               {group.items.map((item) => {
                 const key = referenceKey(item.reference);
                 const parts = partsOf(item);
+                const replyKey = replyLineKey(item);
                 return (
                   <InboxRow
                     key={key}
                     item={item}
                     rowKey={key}
-                    line={lines.get(key) ?? null}
+                    // The question's line until its request's is read, and where that can't be.
+                    line={
+                      (replyKey === null ? null : replyLines.get(replyKey)) ??
+                      lines.get(key) ??
+                      null
+                    }
                     agent={parts.agent}
                     where={parts.where}
                     selected={key === selectedKey}
@@ -733,6 +820,11 @@ export function DecisionsInboxDialog() {
   const groups = questions === null ? [] : inboxGroups(questions, nowMs);
   const ordered = groups.flatMap((group) => group.items);
   const { lines, release: releaseLines } = useQuestionLines(ordered, active);
+  // The list as it came, so its next change, not every render, is what asks again.
+  const { lines: replyLines, release: releaseReplyLines } = useReplyLines(
+    questions ?? NO_QUESTIONS,
+    active
+  );
 
   const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
@@ -902,6 +994,66 @@ export function DecisionsInboxDialog() {
     if (detailRef.current !== null) detailRef.current.scrollTop = 0;
   }, [selectedKey]);
 
+  // Except one waiting on a reply, which opens at the agent's request for it (#18040): once per
+  // choice, so a read again or a request that comes while it's being read leaves it where it is.
+  // A read already on screen can predate the request: without it there, a read made for this
+  // choice opens, once, at the request it holds itself, else at the thread, until one holds it.
+  const replyScroll = useRef<{
+    seq: number;
+    key: string;
+    messageId: string | null;
+    stale: TaggedRead | null;
+    interim: boolean;
+  } | null>(null);
+  const replyId = selected === null ? null : replyToShow(selected);
+  const { shownRead: taggedRead } = reader;
+  useEffect(() => {
+    if (!isOpen || selectedKey === null) {
+      replyScroll.current = null;
+      return;
+    }
+    let pending = replyScroll.current;
+    if (pending === null || pending.seq !== request.seq || pending.key !== selectedKey) {
+      pending = {
+        seq: request.seq,
+        key: selectedKey,
+        messageId: replyId,
+        stale: taggedRead,
+        interim: false,
+      };
+      replyScroll.current = pending;
+    } else if (pending.messageId !== null && pending.messageId !== replyId) {
+      // Superseded, or answered, before it was scrolled to: the newest request, or none.
+      pending = { ...pending, messageId: replyId };
+      replyScroll.current = pending;
+    }
+    const { messageId } = pending;
+    const read = taggedRead?.read;
+    if (messageId === null || read?.result !== "read") return;
+    const detail = detailRef.current;
+    const entryOf = (id: string) =>
+      detail?.querySelector(`[data-message-id="${CSS.escape(id)}"]`) ?? null;
+    // What the read itself shows still waiting: the list can lag it either way.
+    const own = replyRequest(read.question)?.messageId ?? null;
+    const entry = entryOf(messageId);
+    if (entry !== null) {
+      replyScroll.current = { ...pending, messageId: null, stale: null };
+      // Replied to in the read already, it no longer waits, so it stays at its top.
+      (own === messageId ? entry : own === null ? null : entryOf(own))?.scrollIntoView({
+        block: "nearest",
+      });
+      return;
+    }
+    if (taggedRead === pending.stale || pending.interim) return;
+    replyScroll.current = { ...pending, interim: true };
+    (
+      (own === null ? null : entryOf(own)) ??
+      detail?.querySelector('[data-testid="decision-question-thread"]')
+    )?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [isOpen, request.seq, selectedKey, replyId, taggedRead]);
+
   // Where the person went from this opening: the close hands focus to the
   // terminal, and nothing of it outlives the opening it was asked in.
   const [handoff, setHandoff] = useState<{
@@ -958,6 +1110,7 @@ export function DecisionsInboxDialog() {
     // Content is never kept past the close.
     reader.release();
     releaseLines();
+    releaseReplyLines();
     releaseList();
     setHandoff(null);
     if (going === null) return;
@@ -1094,6 +1247,7 @@ export function DecisionsInboxDialog() {
                   }
                   groups={groups}
                   lines={lines}
+                  replyLines={replyLines}
                   partsOf={partsOf}
                   nowMs={nowMs}
                   selectedKey={selectedKey}
@@ -1128,7 +1282,8 @@ export function DecisionsInboxDialog() {
               tabIndex={selected !== null ? 0 : -1}
               aria-labelledby={selected !== null ? detailHeadingId : undefined}
               aria-label={selected === null ? "Question details" : undefined}
-              className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              // Room for the sticky bar, so whatever is scrolled to opens below it rather than under it.
+              className="flex min-w-0 flex-1 scroll-pt-16 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               data-testid="decisions-inbox-detail"
             >
               {/* Nothing opened by itself (#18022): a quiet word in the pane, never a blank one. */}

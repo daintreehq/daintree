@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -59,7 +59,11 @@ const PAUSED_TEXT =
 export interface DecisionFollowUpComposerProps {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
-  /** The view's main action: nothing else on it takes an answer now. */
+  /**
+   * The view's main action: nothing else on it takes an answer now. Otherwise
+   * the answer leads (#18040), and an untouched follow-up waits behind a
+   * compact control.
+   */
   primary: boolean;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
@@ -136,6 +140,13 @@ export function DecisionFollowUpComposer({
   const statusRef = useRef<HTMLDivElement>(null);
   // Once the person has been in here, the section stays to say the question closed, and to hold focus.
   const [engaged, setEngaged] = useState(false);
+  // Opened from its compact control, or its own controls used, so it stays open even once emptied.
+  const [opened, setOpened] = useState(false);
+  // Its compact control had focus: passing it is no one writing here.
+  const [passedControl, setPassedControl] = useState(false);
+  const unfoldRef = useRef<HTMLButtonElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const focusField = useRef(false);
 
   // A follow-up not yet confirmed (lost, or queued with a missed receipt), now in the question's
   // thread: the relay took it.
@@ -195,12 +206,26 @@ export function DecisionFollowUpComposer({
   // A draft past the deadline stays in its field, read-only, so focus and words stay put. While
   // paused, the field stays only for what is already in it: words, one on its way, or a person
   // writing.
+  // A person writing: one who opened it or used its controls, or was in it, but never one who
+  // only passed its compact control.
+  const writing = opened || (engaged && !passedControl);
   const keepField =
-    (available && (!paused || record.draft !== "" || inFlight || engaged)) ||
-    (elapsed && closed !== null);
+    (available && (!paused || record.draft !== "" || inFlight || writing)) ||
+    (elapsed && closed !== null && (record.draft.trim() !== "" || writing));
   const notice = attempt ?? hold ?? closed;
   // Apart from the notice, so neither hides the other: a failed attempt still says nothing was sent.
   const pausedNote = paused ? PAUSED_TEXT : null;
+  // While the answer leads, a follow-up nobody has started waits behind one control; words,
+  // a send on its way or one that stopped keep the field out, and a pause says why there's none.
+  const folded =
+    !primary &&
+    available &&
+    !paused &&
+    !opened &&
+    record.draft === "" &&
+    !inFlight &&
+    record.hold === null &&
+    attempt === null;
 
   // Each said once as it changes, never for what was already so when the view opened. All
   // count: a closed question never keeps where the last follow-up got to from being heard, and
@@ -229,6 +254,11 @@ export function DecisionFollowUpComposer({
       if (!event.currentTarget.contains(event.target)) return;
       focusedInside.current = true;
       if (!engaged) setEngaged(true);
+      if (event.target === unfoldRef.current) {
+        if (!passedControl) setPassedControl(true);
+      } else if (event.target !== statusRef.current && !opened) {
+        setOpened(true);
+      }
     },
     onBlur: (event: React.FocusEvent<HTMLElement>) => {
       const next = event.relatedTarget;
@@ -237,6 +267,25 @@ export function DecisionFollowUpComposer({
       }
     },
   };
+  // Before the effect below: the control that opened the field, or one that went with focus on it
+  // as the field came out, hands focus to the field rather than to the status.
+  const wasFolded = useRef(folded);
+  useLayoutEffect(() => {
+    const unfolded = wasFolded.current && !folded;
+    wasFolded.current = folded;
+    const field = fieldRef.current;
+    if (field === null) {
+      // Pressed as the field went: nothing to hand focus to, now or on some later render.
+      focusField.current = false;
+      return;
+    }
+    const active = document.activeElement;
+    const dropped = focusedInside.current && (active === null || active === document.body);
+    // Only into a field that takes a follow-up; otherwise the status says why, and holds focus.
+    if (!focusField.current && !(unfolded && dropped && available && !paused)) return;
+    focusField.current = false;
+    field.focus();
+  });
   useEffect(() => {
     const active = document.activeElement;
     if (focusedInside.current && (active === null || active === document.body)) {
@@ -278,7 +327,7 @@ export function DecisionFollowUpComposer({
       data-testid="decision-follow-up-composer"
       {...trackFocus}
     >
-      <h3 className="text-xs font-medium text-text-secondary">{heading}</h3>
+      {!folded && <h3 className="text-xs font-medium text-text-secondary">{heading}</h3>}
       <div ref={statusRef} tabIndex={-1} className={cn("flex flex-col gap-2", FOCUS_TARGET)}>
         {progress !== null && (
           <Callout
@@ -316,7 +365,22 @@ export function DecisionFollowUpComposer({
           </Callout>
         )}
       </div>
-      {keepField && (
+      {folded && (
+        <Button
+          ref={unfoldRef}
+          variant="ghost"
+          size="xs"
+          className="self-start"
+          onClick={() => {
+            focusField.current = true;
+            setOpened(true);
+          }}
+          data-testid="decision-follow-up-open"
+        >
+          {asked ? "Reply without answering" : "Follow up without answering"}
+        </Button>
+      )}
+      {keepField && !folded && (
         <>
           <Field>
             <FieldLabel className="sr-only">{asked ? "Your reply" : "Your follow-up"}</FieldLabel>
@@ -328,6 +392,7 @@ export function DecisionFollowUpComposer({
               </FieldDescription>
             )}
             <Textarea
+              ref={fieldRef}
               rows={2}
               value={record.draft}
               // Kept while it is on its way, so focus stays here and the words can't change under it.

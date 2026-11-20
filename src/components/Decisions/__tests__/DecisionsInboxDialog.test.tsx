@@ -888,8 +888,10 @@ describe("DecisionsInboxDialog", () => {
       expect(said.filter((message) => message.includes("new follow-up"))).toEqual([]);
 
       // The other row's question takes a follow-up as ever: the stall is only the one it names.
+      // Still open, its answer leads and the follow-up waits behind its control (#18040).
       fireEvent.click(rowNamed("q-2"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decision-follow-up-open"));
       await waitFor(() => expect(screen.queryByTestId("decision-follow-up-send")).not.toBeNull());
       expect(pausedText()).toBeNull();
 
@@ -1916,5 +1918,341 @@ describe("DecisionsInboxDialog", () => {
       for (const listener of [...onListeners]) listener();
     });
     expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+  });
+
+  describe("a question waiting on a reply (#18040)", () => {
+    const REPLY: DecisionQuestionStanding = { kind: "waiting", reason: "reply" };
+
+    function agentSaid(messageId: string, text: string, expectsReply: boolean) {
+      return {
+        type: "message" as const,
+        messageId,
+        from: "agent" as const,
+        text,
+        images: [],
+        expectsReply,
+        sentAt: "2026-11-02T10:05:00.000Z",
+        deliveryStatus: null,
+        unreadable: false,
+      };
+    }
+
+    /** `LIST` with question-5 answered and back in Needs you, its agent asking `ask` for a reply. */
+    function withReply(
+      ask: string | null,
+      revision = 1,
+      over: Partial<DecisionQuestionListItem> = {}
+    ): DecisionQuestionList {
+      return {
+        revision,
+        questions: [
+          ...LIST.questions,
+          item("question-5", 5, ask === null ? { kind: "to-type" } : REPLY, {
+            replyRequest: ask,
+            ...over,
+          }),
+        ],
+      };
+    }
+
+    function answeredWith(...thread: ReturnType<typeof agentSaid>[]) {
+      return content("question-5", 5, { status: "human-answered", thread });
+    }
+
+    function line(alias: string) {
+      return within(rowNamed(alias)).getByTestId("decisions-inbox-row-line").textContent;
+    }
+
+    function summariesOf(questionId: string) {
+      return getQuestionSummariesByReference.mock.calls.filter(([payload]) =>
+        payload.references.some((ref) => ref.questionId === questionId)
+      ).length;
+    }
+
+    /** What the question pane scrolled to, as it was scrolled: the list scrolls its own rows. */
+    let scrolled: Element[];
+    let scrollSpy: { mockRestore: () => void };
+
+    beforeEach(() => {
+      scrolled = [];
+      scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
+        this: Element
+      ) {
+        const detail = document.querySelector('[data-testid="decisions-inbox-detail"]');
+        if (detail?.contains(this)) scrolled.push(this);
+      });
+      CONTENT["question-5"] = answeredWith(agentSaid("ask-1", "Which region?", true));
+    });
+
+    afterEach(() => {
+      scrollSpy.mockRestore();
+      delete CONTENT["question-5"];
+    });
+
+    it("names its row by its request's opening line, read again for each new one, whatever an older read brings late", async () => {
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(line("q-5")).toBe("Which region?"));
+      // The question's own line still comes from main; only the reply's is read from the thread.
+      expect(summariesOf("question-5")).toBe(1);
+
+      const held: Array<(question: DecisionQuestionContent) => void> = [];
+      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => {
+        if (ref.questionId !== "question-5") {
+          return { result: "read", question: CONTENT[ref.questionId]! };
+        }
+        const question = await new Promise<DecisionQuestionContent>((land) => held.push(land));
+        return { result: "read", question };
+      });
+      push(withReply("ask-2", 2));
+      await waitFor(() => expect(held).toHaveLength(1));
+      // Until the new request is read, the question's own line.
+      expect(line("q-5")).toBe("Line of question-5");
+      push(withReply("ask-3", 3));
+      await waitFor(() => expect(held).toHaveLength(2));
+
+      // The newest request's read lands first, its first line with words once controls are gone.
+      await act(async () =>
+        held[1]!(
+          answeredWith(
+            agentSaid("ask-2", "Which datacenter?", true),
+            agentSaid("ask-3", "\u001b[0m\n  Which \u001b[1mzone\u001b[0m?\nOr both.", true)
+          )
+        )
+      );
+      await waitFor(() => expect(line("q-5")).toBe("Which zone?"));
+      // The one it replaced lands late, and names only its own request.
+      await act(async () => held[0]!(answeredWith(agentSaid("ask-2", "Which datacenter?", true))));
+      await act(async () => {});
+      expect(line("q-5")).toBe("Which zone?");
+
+      // Replied to: the question's own line again, and back to the same request reads nothing.
+      push(withReply(null, 4));
+      await waitFor(() => expect(line("q-5")).toBe("Line of question-5"));
+      push(withReply("ask-3", 5, { inbox: { ask: "ask-3", seen: true, cleared: false } }));
+      await waitFor(() => expect(line("q-5")).toBe("Which zone?"));
+      await act(async () => {});
+      expect(held).toHaveLength(2);
+      expect(summariesOf("question-5")).toBe(1);
+    });
+
+    it("keeps the question's line for a row whose delivery stopped, whatever it asks, and reads no thread for it", async () => {
+      listQuestions.mockResolvedValue(
+        withReply("ask-1", 1, {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        })
+      );
+      open();
+      await waitFor(() => expect(line("q-5")).toBe("Line of question-5"));
+      await act(async () => {});
+      expect(readsOf("question-5")).toBe(0);
+    });
+
+    it("opens at the request once per choice, and a read again keeps the person's place", async () => {
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      // An open question opens at its top.
+      expect(scrolled).toHaveLength(0);
+
+      act(() => rowNamed("q-5").focus());
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(scrolled).toHaveLength(1));
+      expect(scrolled[0]!.getAttribute("data-message-id")).toBe("ask-1");
+      // Choosing it never takes the keyboard from the list.
+      expect(document.activeElement).toBe(rowNamed("q-5"));
+
+      // The list moves and the question is read again, still asking the same.
+      CONTENT["question-5"] = answeredWith(
+        agentSaid("note-0", "An earlier note.", false),
+        agentSaid("ask-1", "Which region?", true)
+      );
+      push(withReply("ask-1", 2));
+      await waitFor(() => expect(shownBody()).toContain("An earlier note."));
+      expect(scrolled).toHaveLength(1);
+
+      // Chosen again, it opens at the request again.
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(scrolled).toHaveLength(2));
+      expect(scrolled[1]!.getAttribute("data-message-id")).toBe("ask-1");
+    });
+
+    it("shows the thread when the read for this choice doesn't hold the request yet", async () => {
+      CONTENT["question-5"] = answeredWith(agentSaid("note-0", "Working on it.", false));
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(scrolled).toHaveLength(1));
+      expect(scrolled[0]!.getAttribute("data-testid")).toBe("decision-question-thread");
+
+      // Read again, still without it: the person's place is left alone.
+      CONTENT["question-5"] = answeredWith(
+        agentSaid("note-0", "Working on it.", false),
+        agentSaid("note-1", "Nearly there.", false)
+      );
+      push(withReply("ask-1", 2));
+      await waitFor(() => expect(shownBody()).toContain("Nearly there."));
+      expect(scrolled).toHaveLength(1);
+    });
+
+    it("leaves a request the read shows replied to at its top, whatever the list still says", async () => {
+      const asked = answeredWith(agentSaid("ask-1", "Which region?", true));
+      const reply = { ...agentSaid("reply-1", "EU.", false), from: "person" as const };
+      CONTENT["question-5"] = { ...asked, thread: [...asked.thread, reply] };
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(shownBody()).toContain("EU."));
+      await act(async () => {});
+      expect(scrolled).toHaveLength(0);
+    });
+
+    it("asks each failing row again once per list, so rows that keep failing never keep each other going", async () => {
+      const held: Array<{ id: string; land: (read: DecisionQuestionContentResult) => void }> = [];
+      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => {
+        if (ref.questionId !== "question-5" && ref.questionId !== "question-6") {
+          return { result: "read", question: CONTENT[ref.questionId]! };
+        }
+        return new Promise<DecisionQuestionContentResult>((land) =>
+          held.push({ id: ref.questionId, land })
+        );
+      });
+      const twoAsking = (revision: number): DecisionQuestionList => {
+        const list = withReply("ask-1", revision);
+        return {
+          revision,
+          questions: [...list.questions, item("question-6", 6, REPLY, { replyRequest: "ask-6" })],
+        };
+      };
+      listQuestions.mockResolvedValue(twoAsking(1));
+      open();
+      await waitFor(() => expect(held).toHaveLength(2));
+      push(twoAsking(2));
+      await act(async () => {});
+
+      // A Host away: each read fails, one after the other, and so does each retry.
+      for (let round = 0; round < 3; round += 1) {
+        for (const { land } of held.splice(0)) {
+          await act(async () => land({ result: "host-not-connected" }));
+        }
+        await act(async () => {});
+      }
+      // One retry each for the list that came while they were out, then nothing more.
+      expect(held).toHaveLength(0);
+      expect(readsOf("question-5")).toBe(2);
+      expect(readsOf("question-6")).toBe(2);
+    });
+
+    it("asks for a row's line again at once when its read fails after the list moved under it", async () => {
+      const held: Array<(read: DecisionQuestionContentResult) => void> = [];
+      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => {
+        if (ref.questionId !== "question-5") {
+          return { result: "read", question: CONTENT[ref.questionId]! };
+        }
+        return new Promise<DecisionQuestionContentResult>((land) => held.push(land));
+      });
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(held).toHaveLength(1));
+      // The list moves while the read is out, still asking the same.
+      push(withReply("ask-1", 2));
+      await act(async () => {});
+      expect(held).toHaveLength(1);
+
+      await act(async () => held[0]!({ result: "not-running" }));
+      await waitFor(() => expect(held).toHaveLength(2));
+      await act(async () =>
+        held[1]!({
+          result: "read",
+          question: answeredWith(agentSaid("ask-1", "Which region?", true)),
+        })
+      );
+      await waitFor(() => expect(line("q-5")).toBe("Which region?"));
+    });
+
+    it("opens at the request a read made before the list named a newer one still shows, then at the newer one once read", async () => {
+      listQuestions.mockResolvedValue(withReply("ask-1"));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      const held: Array<(question: DecisionQuestionContent) => void> = [];
+      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => {
+        if (ref.questionId !== "question-5") {
+          return { result: "read", question: CONTENT[ref.questionId]! };
+        }
+        const question = await new Promise<DecisionQuestionContent>((land) => held.push(land));
+        return { result: "read", question };
+      });
+
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(held.length).toBeGreaterThan(0));
+      // A newer request comes while the first read is out.
+      push(withReply("ask-2", 2));
+      const earlier = agentSaid("note-0", "An earlier note.", false);
+      await act(async () => {
+        for (const land of held.splice(0)) {
+          land(answeredWith(earlier, agentSaid("ask-1", "Which region?", true)));
+        }
+      });
+      await waitFor(() => expect(scrolled).toHaveLength(1));
+      expect(scrolled[0]!.getAttribute("data-message-id")).toBe("ask-1");
+
+      // The read that holds the newer request opens at it, once.
+      const both = answeredWith(
+        earlier,
+        agentSaid("ask-1", "Which region?", true),
+        agentSaid("ask-2", "Which zone?", true)
+      );
+      await waitFor(() => expect(held.length).toBeGreaterThan(0));
+      await act(async () => {
+        for (const land of held.splice(0)) land(both);
+      });
+      await waitFor(() => expect(scrolled).toHaveLength(2));
+      expect(scrolled[1]!.getAttribute("data-message-id")).toBe("ask-2");
+      push(withReply("ask-2", 3));
+      await waitFor(() => expect(held.length).toBeGreaterThan(0));
+      await act(async () => {
+        for (const land of held.splice(0)) land(both);
+      });
+      await act(async () => {});
+      expect(scrolled).toHaveLength(2);
+    });
+
+    it("opens one whose delivery stopped at its top, where that's said, whatever it asks", async () => {
+      listQuestions.mockResolvedValue(
+        withReply("ask-1", 1, {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        })
+      );
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      fireEvent.click(rowNamed("q-5"));
+      await waitFor(() => expect(shownBody()).toContain("Which region?"));
+      await act(async () => {});
+      expect(scrolled).toHaveLength(0);
+    });
+
+    it("folds an open question's follow-up again for the next question, whichever was opened", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [...LIST.questions, item("question-4", 4, OPEN)],
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decision-follow-up-open"));
+      expect(screen.getByTestId("decision-follow-up-text")).toBeTruthy();
+
+      fireEvent.click(rowNamed("q-4"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+      expect(screen.getByTestId("decision-follow-up-open")).toBeTruthy();
+    });
   });
 });
