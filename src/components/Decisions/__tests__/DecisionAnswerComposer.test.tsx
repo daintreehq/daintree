@@ -11,6 +11,7 @@ import type {
   DecisionQuestionContentResult,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
@@ -328,7 +329,13 @@ describe("answering a question from the view (#17102)", () => {
     expect(option("Ship it").checked).toBe(true);
     expect(send().getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(send());
-    fireEvent.keyDown(option("Ship it"), { key: "Enter", ctrlKey: true, metaKey: true });
+    // The platform's own shortcut, from the form: the keyboard can't send it either.
+    const mac = isMac();
+    fireEvent.keyDown(option("Ship it"), { key: "Enter", metaKey: mac, ctrlKey: !mac });
+    // A choice can't be changed past the deadline, though the options stay focusable.
+    expect(option("Hold").disabled).toBe(false);
+    fireEvent.click(option("Hold"));
+    expect(option("Ship it").checked).toBe(true);
     expect(answerQuestion).not.toHaveBeenCalled();
 
     // Once the store records the expiry, the form goes and says so.
@@ -719,6 +726,9 @@ describe("answering a question from the view (#17102)", () => {
   });
 });
 
+/** Long enough after a deadline crossing for any re-render or re-read it starts to land. */
+const SETTLE_AFTER_CROSSING_MS = 200;
+
 describe("a timed question in the view (#17943)", () => {
   const PHONE_ANSWER = {
     type: "answer" as const,
@@ -754,11 +764,30 @@ describe("a timed question in the view (#17943)", () => {
     // The consequence is said before anything is signed.
     fireEvent.click(screen.getByTestId("decision-question-dismiss"));
     const confirm = await screen.findByRole("alertdialog");
-    expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with the plan/);
+    expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with any plan it stated/);
+  });
+
+  it("keeps the form for a question whose deadline passed before anything was written, and hides Clear choice once locked", async () => {
+    questions.q1 = question("q1", {
+      kind: "mixed",
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 400).toISOString(),
+    });
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    expect(screen.queryByRole("button", { name: "Clear choice" })).not.toBeNull();
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(screen.queryByRole("button", { name: "Clear choice" })).toBeNull();
+    expect(option("Ship it").checked).toBe(true);
   });
 
   it("names no mode or plan for a question that never expires", async () => {
-    questions.q1 = question("q1", { replyMode: "blocking", plannedFallback: null });
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      // A blocking question's stray plan is never one.
+      plannedFallback: "use the existing fixture",
+    });
     await openOn("q1");
     expect(screen.queryByTestId("decision-question-deadline")).toBeNull();
     expect(screen.queryByTestId("decision-question-plan")).toBeNull();
@@ -788,9 +817,9 @@ describe("a timed question in the view (#17943)", () => {
     const deadline = screen.getByTestId("decision-question-deadline").textContent ?? "";
     expect(deadline).toMatch(/Deadline passed/);
     expect(deadline).toMatch(/Awaiting an update/);
-    // Said once as it changes, never again while nothing does.
+    // Said once as it changes, never again while nothing does: past one more read of the question.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_AFTER_CROSSING_MS));
     });
     const said = announce.mock.calls.filter(([words]) => /deadline has passed/.test(String(words)));
     expect(said).toHaveLength(1);

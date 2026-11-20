@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -50,7 +50,7 @@ const STALE_TEXT = "This question changed. Review the update before sending.";
  * how the question closed (or a reopen takes it again).
  */
 const ELAPSED_TEXT =
-  "The deadline has passed, so this can't be sent. Your draft stays here while Daintree waits to hear how the question closed.";
+  "The deadline has passed, so this can't be sent. Anything written here stays while Daintree waits to hear how the question closed.";
 
 /**
  * What the view shows of the person's answer to this question:
@@ -81,10 +81,10 @@ export function answerComposerMode(
   // Dismissed from here, or being dismissed: nothing to answer unless that falls through.
   if (isDeclineCommitted(record)) return "none";
   if (isAnswerable(question, nowMs)) return "form";
+  // Only the clock says it passed (#17943): the form stays, locked, rather than vanish from under
+  // the person and their focus, until the store records how the question closed.
+  if (question.status === "open" || question.status === "queued") return "form";
   const writing = record.draft !== null || record.hold !== null || submission !== null;
-  // Only the clock says it passed (#17943): a draft stays in its form, unsendable, rather than
-  // vanish from under the person, until the store records how the question closed.
-  if (writing && (question.status === "open" || question.status === "queued")) return "form";
   return writing ? "closed" : "none";
 }
 
@@ -232,7 +232,9 @@ export function DecisionAnswerComposer({
     }
   });
 
-  const edit = (change: Partial<Omit<AnswerDraft, "revision">>) =>
+  const edit = (change: Partial<Omit<AnswerDraft, "revision">>) => {
+    // Locked past the deadline: what was written stays as it was.
+    if (elapsed) return;
     update(key, (current) => {
       if (current.preparing) return current;
       const base = current.draft ?? draft;
@@ -245,6 +247,7 @@ export function DecisionAnswerComposer({
         submission: keepAttempt ? current.submission : null,
       };
     });
+  };
 
   const reviewUpdate = () => {
     update(key, (current) => ({
@@ -364,13 +367,14 @@ export function DecisionAnswerComposer({
                   ) : undefined
                 }
                 // An approval decides on its images, so its choices wait until each is opened.
-                disabled={imagesFirst || locked}
+                // Past the deadline they stay focusable, and edits are refused instead.
+                disabled={imagesFirst || stale}
                 testId="decision-answer-option"
               />
             ))}
           </RadioChoiceGroup>
         )}
-        {shape.mixed && chosen !== null && (
+        {shape.mixed && chosen !== null && !locked && (
           <Button
             variant="ghost"
             size="xs"

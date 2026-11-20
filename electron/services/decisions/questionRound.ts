@@ -88,6 +88,9 @@ export function replyModeOfRow(
   return row.question_revision <= answered ? "advisory" : "blocking";
 }
 
+/** Advisory content the protocol refuses, apart from any plan's own words. */
+export const PLAN_REFUSED: unique symbol = Symbol("plan-refused");
+
 /**
  * The plan an advisory round states, from content just opened for this row:
  * only for an envelope published as advisory at the advisory round, whose
@@ -101,12 +104,12 @@ export function verifiedPlan(
   row: Pick<RoundRow, "content_sealed" | "question_revision">,
   entries: readonly AnswerEntry[],
   content: Pick<DecisionContentV1, "kind" | "planned_fallback">
-): string | null | "refused" {
+): string | null | typeof PLAN_REFUSED {
   const envelope = envelopeOf(row);
   if (envelope === null || publishedMode(row) !== "advisory") return null;
   const aad = envelope.aad as { revision?: unknown };
   if (aad.revision !== ADVISORY_ROUND_REVISION) return null;
-  if (advisoryContentIssue({ envelope: envelope as never }, content) !== null) return "refused";
+  if (advisoryContentIssue({ envelope: envelope as never }, content) !== null) return PLAN_REFUSED;
   if (replyModeOfRow(row, entries) !== "advisory") return null;
   return content.planned_fallback ?? null;
 }
@@ -126,12 +129,24 @@ export function closedReasonOfRow(
   return closedReasonOf(row);
 }
 
+/** The last entry `matches` takes, or undefined. */
+function lastOf(
+  entries: readonly AnswerEntry[],
+  matches: (entry: AnswerEntry) => boolean
+): AnswerEntry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (matches(entries[index]!)) return entries[index];
+  }
+  return undefined;
+}
+
 /** The notice that closed the current round without an answer; undefined for none. */
 function closureEntry(row: RoundRow, entries: readonly AnswerEntry[]): AnswerEntry | undefined {
   if (row.local_status === "publish-failed") {
-    return entries.findLast((entry) => entry.kind === "unpublished");
+    return lastOf(entries, (entry) => entry.kind === "unpublished");
   }
-  return entries.findLast(
+  return lastOf(
+    entries,
     (entry) =>
       (entry.kind === "expired" || entry.kind === "declined") &&
       unsupportedEntry(entry) === null &&
@@ -139,11 +154,16 @@ function closureEntry(row: RoundRow, entries: readonly AnswerEntry[]): AnswerEnt
   );
 }
 
+/**
+ * How far the notice got. A write that may have reached the terminal stays
+ * uncertain whatever happened since: marking it handled stops it being typed
+ * again, but can't say what the first write typed.
+ */
 function noticeDelivery(entry: AnswerEntry, row: RoundRow): DecisionClosureNotice["delivery"] {
   if (entry.delivered) return "delivered";
   if (entry.uncertain_injection_id !== undefined) return "uncertain";
-  if (!entry.deliver) return "stopped";
   if (row.delivery_status === "delivery-uncertain") return "uncertain";
+  if (!entry.deliver) return "stopped";
   if (row.delivery_status === "needs-attention") return "needs-attention";
   return "pending";
 }
@@ -162,6 +182,9 @@ function noticeDisposition(
   if (mode !== "advisory" || entry.kind === "declined") return null;
   const said = delivery === "delivered" || delivery === "uncertain";
   if (entry.kind === "unpublished") {
+    // Untyped, a notice whose plan was due may still have an uncertain write the row doesn't
+    // show (the bridge reads the store's intents for it): what it says is unknown, not withheld.
+    if (!said && entry.fallback_due === true) return null;
     return unpublishedPlanDue(entry, said, ADVISORY_HOST) ? "fallback-due" : "fallback-withheld";
   }
   const recorded = entry.advisory_disposition;
@@ -176,16 +199,14 @@ function noticeDisposition(
  */
 export function closureNoticeOf(
   row: RoundRow,
-  entries: readonly AnswerEntry[]
+  entries: readonly AnswerEntry[],
+  mode: DecisionReplyMode = replyModeOfRow(row, entries)
 ): DecisionClosureNotice | null {
   if (row.history_only) return null;
   const entry = closureEntry(row, entries);
   if (entry === undefined) return null;
   const delivery = noticeDelivery(entry, row);
-  return {
-    delivery,
-    disposition: noticeDisposition(entry, delivery, replyModeOfRow(row, entries)),
-  };
+  return { delivery, disposition: noticeDisposition(entry, delivery, mode) };
 }
 
 /** The round facts a list item and a read both carry. */
@@ -196,9 +217,11 @@ export interface QuestionRound {
 }
 
 export function roundOf(row: RoundRow, entries = parseAnswers(row.answers_json)): QuestionRound {
+  // Read once: the envelope is parsed for its mode only when it can be advisory.
+  const replyMode = replyModeOfRow(row, entries);
   return {
-    replyMode: replyModeOfRow(row, entries),
+    replyMode,
     closedReason: closedReasonOfRow(row, entries),
-    closureNotice: closureNoticeOf(row, entries),
+    closureNotice: closureNoticeOf(row, entries, replyMode),
   };
 }

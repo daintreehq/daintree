@@ -56,7 +56,8 @@ function ExpiredAt({ expiresAt, nowMs }: { expiresAt: string; nowMs: number }) {
       className="inline-flex items-center gap-1"
     >
       <Clock className="size-3 shrink-0" aria-hidden="true" />
-      {`Expired ${formatRelativeTime(ms, nowMs)}`}
+      {/* When, not how long ago: nothing moves the clock once a deadline is past. */}
+      {`Expired at ${clockText(ms, nowMs)}`}
     </time>
   );
 }

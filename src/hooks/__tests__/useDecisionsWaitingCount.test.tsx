@@ -211,17 +211,26 @@ describe("useDecisionsWaitingCount, as deadlines pass (#17943)", () => {
         questions: [
           timed(0, soon, { kind: "waiting", reason: "open" }),
           timed(1, null, { kind: "waiting", reason: "open" }),
-          // A reply asked for isn't bound by the question's deadline.
-          timed(2, soon, { kind: "waiting", reason: "reply" }),
+          // A reply asked for isn't bound by the question's deadline, even a later one.
+          timed(2, new Date(START + 5 * 60_000).toISOString(), {
+            kind: "waiting",
+            reason: "reply",
+          }),
         ],
       })
     );
     expect(seen.at(-1)).toBe(3);
     const renders = seen.length;
-    act(() => vi.advanceTimersByTime(30_000));
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
     expect(seen.length).toBe(renders);
-    act(() => vi.advanceTimersByTime(30_000));
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
     expect(seen.at(-1)).toBe(2);
+    // Nothing left to wait for: the reply's deadline arms nothing.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("counts again when the machine wakes, though no timer fired while it slept", () => {
@@ -235,7 +244,9 @@ describe("useDecisionsWaitingCount, as deadlines pass (#17943)", () => {
     );
     expect(seen.at(-1)).toBe(1);
     vi.setSystemTime(START + 60 * 60_000);
-    act(() => wake?.());
+    act(() => {
+      wake?.();
+    });
     expect(seen.at(-1)).toBe(0);
   });
 

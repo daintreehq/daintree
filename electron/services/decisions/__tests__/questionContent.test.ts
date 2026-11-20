@@ -369,6 +369,8 @@ describe("readQuestionContent", () => {
       ],
       sentAt: corrected.created_at,
       unreadable: false,
+      // Its own delivery, apart from the question's (#17943).
+      delivered: corrected.delivered,
     });
     expect(thread[5]).toMatchObject({
       type: "message",
@@ -430,6 +432,34 @@ describe("readQuestionContent", () => {
       ...over,
     });
   }
+
+  it("says of each answer whether typing it in was confirmed, apart from a later correction (#17943)", async () => {
+    const first = await answer({ entry_id: "entry-a", revision: 1, delivered: true, event_seq: 2 });
+    const correction = await answer({
+      entry_id: "entry-b",
+      revision: 2,
+      correction: true,
+      delivered: false,
+      event_seq: 3,
+    });
+    const row = await question(CONTENT, {
+      local_status: "human-answered",
+      delivery_status: "desktop-received",
+      answers_json: serializeAnswers([first, correction]),
+    });
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(
+      read.question.thread.map((entry) => (entry.type === "answer" ? entry.delivered : null))
+    ).toEqual([true, false]);
+  });
+
+  it("names no reason or notice for a question the relay refused (#17943)", async () => {
+    const row = await question(CONTENT, { local_status: "publish-failed", error_code: "invalid" });
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({ closedReason: null, closureNotice: null });
+  });
 
   it("reads an advisory round's mode and the plan its content states (#17943)", async () => {
     const row = await advisory({ ...CONTENT, planned_fallback: "Use the existing fixture" });

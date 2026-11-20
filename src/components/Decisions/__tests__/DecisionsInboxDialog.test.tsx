@@ -516,8 +516,12 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
         /Deadline passed/
       );
-      // Nothing there to set aside: it no longer waits on the person.
-      expect(screen.queryByTestId("decisions-inbox-clear")).toBeNull();
+      // Nothing there to set aside: it no longer waits on the person. The button stays, unavailable,
+      // so a keyboard on it isn't dropped.
+      expect(screen.getByTestId("decisions-inbox-clear").getAttribute("aria-disabled")).toBe(
+        "true"
+      );
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
       expect(markQuestions).not.toHaveBeenCalledWith(expect.objectContaining({ action: "clear" }));
     } finally {
       CONTENT["question-2"] = shown;

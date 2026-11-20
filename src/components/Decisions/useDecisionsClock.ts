@@ -28,11 +28,12 @@ export function useDecisionsClock(
   deadlines: readonly (string | null | undefined)[],
   active = true
 ): number {
-  const key = deadlines
+  // Coming back into use is a new observation too: a deadline may have passed while idle.
+  const key = `${active ? "on" : "off"}:${deadlines
     .map(deadlineMs)
     .filter((at): at is number => at !== null)
     .sort((a, b) => a - b)
-    .join(",");
+    .join(",")}`;
   const [reading, setReading] = useState(() => ({ key, now: Date.now() }));
   if (reading.key !== key) {
     // New deadlines are a new observation; read in the updater, never in render.
@@ -43,7 +44,8 @@ export function useDecisionsClock(
   useEffect(() => {
     if (!active) return;
     const refresh = () => setReading({ key, now: Date.now() });
-    const at = key === "" ? [] : key.split(",").map(Number);
+    const list = key.slice(key.indexOf(":") + 1);
+    const at = list === "" ? [] : list.split(",").map(Number);
     const delay = nextDeadlineChange(at, now);
     const offFlip = delay === null ? null : scheduleFlip(delay, refresh);
     const offJump = onClockJump(refresh);

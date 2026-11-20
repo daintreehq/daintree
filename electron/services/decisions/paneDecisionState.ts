@@ -121,8 +121,12 @@ export function projectPaneDecisionStates(
       pane.content.waitingAnswers.push({
         questionId,
         alias,
-        // A notice that the question never reached the relay (0.9.0) is no answer either.
-        kind: pending.some((entry) => entry.kind === "answer") ? "answer" : "expired",
+        // A notice that the question never reached the relay (0.9.0) is no answer, nor an expiry.
+        kind: pending.some((entry) => entry.kind === "answer")
+          ? "answer"
+          : pending.some((entry) => entry.kind === "unpublished")
+            ? "never-published"
+            : "expired",
         deliveryStatus,
       });
     }

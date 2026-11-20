@@ -2265,6 +2265,136 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(items.map((raw) => HostQuestionItemSchema.parse(raw))).toEqual([item(1)]);
   });
 
+  it("never takes a refused content read for an older Host, so later reads keep their round (#17943)", async () => {
+    const { host, client } = await pair();
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [roundItem(1)],
+      asks: [],
+      seq: 1,
+    }));
+    // A Host that knows the method but refuses this payload answers VALIDATION.
+    host.registerCallHandler(
+      DecisionsLinkMethod.QUESTION_CONTENT_V2,
+      z.object({ never: z.string() }).strict(),
+      () => null
+    );
+    const legacy = vi.fn(() => ({ result: "read", question: content(item(1).reference) }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTIONS, z.unknown(), legacy);
+    const calls = vi.spyOn(client, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    for (let i = 0; i < 2; i += 1) {
+      const read = await shell.client.readHostQuestion(QHOST, {
+        read: "content",
+        reference: item(1).reference,
+      });
+      expect(read).toEqual({ ok: false, failure: "needs-update" });
+    }
+    expect(
+      calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTION_CONTENT_V2)
+    ).toHaveLength(2);
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it("refuses an advisory read with no plan, and strips each answer's delivery for an older Shell (#17943)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1)] });
+    const answered: DecisionQuestionContent = {
+      ...roundContent(item(1).reference),
+      status: "cancelled",
+      closedReason: "declined",
+      plannedFallback: null,
+      thread: [
+        {
+          type: "answer",
+          entryId: "entry-1",
+          revision: 0,
+          from: "person",
+          onComputer: false,
+          correction: false,
+          confirmsModel: false,
+          choices: [],
+          text: "Hold",
+          reason: null,
+          images: [],
+          sentAt: "2026-11-02T10:02:00.000Z",
+          unreadable: false,
+          delivered: true,
+        },
+      ],
+    };
+    decisions.answerWith((read) =>
+      read.read === "content" ? { result: "read", question: answered } : null
+    );
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    // Advisory with no plan: never shown as optional with a plan it dropped.
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    expect(read).toEqual({ ok: false, failure: "unexpected-answer" });
+
+    // An older Shell's strict read takes it, its decline kept and the answer's delivery gone.
+    const legacy = HostQuestionContentResultSchema.parse(
+      await client.call(DecisionsLinkMethod.QUESTIONS, {
+        read: "content",
+        reference: item(1).reference,
+      })
+    );
+    expect(legacy.result === "read" ? legacy.question.closedReason : legacy).toBe("declined");
+    expect(
+      legacy.result === "read" && legacy.question.thread[0]?.type === "answer"
+        ? "delivered" in legacy.question.thread[0]
+        : legacy
+    ).toBe(false);
+  });
+
+  it("takes a v2 push the Host sends after a refused v3 push, by the session's count (#17943)", async () => {
+    const { host, client } = await pair();
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [roundItem(1)],
+      asks: [],
+      seq: 2,
+    }));
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([roundItem(1)])
+    );
+
+    const v2 = (seq: number, questions: Item[]) => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions,
+      asks: [],
+      seq,
+    });
+    // One sent before the read is older by the count, and changes nothing.
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED_V2, v2(1, [item(1), item(2)]));
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([roundItem(1)]);
+    // One sent after, the Host telling it without rounds, is taken.
+    const answered = item(1, { kind: "settled", outcome: "answered", handled: false });
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED_V2, v2(3, [answered]));
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([answered]);
+  });
+
   it("reads a Host from before #17943 without rounds, asking for them once per link", async () => {
     const { host, client } = await pair();
     host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({

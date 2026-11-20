@@ -398,3 +398,15 @@ describe("deadlineNote (#17943)", () => {
     expect(deadlineNote(answer!, NOW)).toBeNull();
   });
 });
+
+describe("a question that never reached the relay (#17943)", () => {
+  it("is named apart from an expiry in the chip, its sentence and the summary", () => {
+    const [unsent] = decisionItems(pane({ waiting: [{ ...waiting(3), kind: "never-published" }] }));
+    const [expired] = decisionItems(pane({ waiting: [waiting(3, "expired")] }));
+    expect(chipLabel([unsent!]).text).toBe("q-3 never sent");
+    expect(itemSentence(unsent!)).toMatch(/before it reached the relay/);
+    expect(itemSentence(unsent!)).not.toBe(itemSentence(expired!));
+    expect(chipSummary([unsent!, expired!])).toMatch(/before it reached the relay/);
+    expect(cancelNote([unsent!])).toBe(cancelNote([expired!]));
+  });
+});

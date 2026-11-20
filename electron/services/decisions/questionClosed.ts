@@ -1,11 +1,17 @@
-import { parseAnswers, type AnswerEntry, type QuestionRow } from "@daintreehq/decisions-client";
+import {
+  parseAnswers,
+  unsupportedEntry,
+  type AnswerEntry,
+  type QuestionRow,
+} from "@daintreehq/decisions-client";
 import type { DecisionQuestionClosedReason } from "../../../shared/types/decisionsQuestion.js";
 
 /**
  * The person's decline from their phone or tablet (#17234) that closed the
  * question, as the library's bridge reads one: a cancelled question with a
  * decline at its revision, since only a reopen changes a cancelled question
- * and it moves the revision on. Undefined for a question withdrawn from the
+ * and it moves the revision on, from a source the library knows (#17943): one
+ * it doesn't is no one's decline. Undefined for a question withdrawn from the
  * desktop, or not closed.
  */
 export function declineOf(
@@ -13,7 +19,10 @@ export function declineOf(
 ): AnswerEntry | undefined {
   if (row.local_status !== "cancelled") return undefined;
   return parseAnswers(row.answers_json).find(
-    (entry) => entry.kind === "declined" && entry.revision === row.question_revision
+    (entry) =>
+      entry.kind === "declined" &&
+      entry.revision === row.question_revision &&
+      unsupportedEntry(entry) === null
   );
 }
 

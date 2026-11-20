@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DecisionQuestionStanding } from "@shared/types/decisionsQuestion";
 import {
-  EXPIRY_SOON_MS,
   clockText,
   contentDeadlineElapsed,
   deadlineElapsed,
@@ -40,8 +39,8 @@ describe("deadlineElapsed (#17943)", () => {
 
   it("names a deadline within a day only while it is still ahead", () => {
     const soon = (ms: number) => expiresSoon({ expiresAt: at(ms), standing: OPEN }, NOW);
-    expect(soon(NOW + EXPIRY_SOON_MS)).toBe(true);
-    expect(soon(NOW + EXPIRY_SOON_MS + 1)).toBe(false);
+    expect(soon(NOW + 24 * HOUR)).toBe(true);
+    expect(soon(NOW + 24 * HOUR + 1)).toBe(false);
     expect(soon(NOW)).toBe(false);
   });
 
@@ -67,6 +66,7 @@ describe("remainingText (#17943)", () => {
     expect(remainingText(NOW + 8 * MINUTE + 30_000, NOW)).toBe("8 minutes left");
     expect(remainingText(NOW + MINUTE, NOW)).toBe("1 minute left");
     expect(remainingText(NOW + 2 * HOUR + 5 * MINUTE, NOW)).toBe("2 hours left");
+    expect(remainingText(NOW + 2 * HOUR + 45 * MINUTE, NOW)).toBe("2 hours left");
     expect(remainingText(NOW + 3 * 24 * HOUR, NOW)).toBe("3 days left");
   });
 });
@@ -96,7 +96,7 @@ describe("nextDeadlineChange (#17943)", () => {
   });
 
   it("waits for the row to come within a day, or the next whole hour, whichever is first", () => {
-    const deadline = NOW + EXPIRY_SOON_MS + 10 * MINUTE;
+    const deadline = NOW + 24 * HOUR + 10 * MINUTE;
     expect(nextDeadlineChange([deadline], NOW)).toBe(10 * MINUTE);
     expect(nextDeadlineChange([NOW + 5 * HOUR + 20 * MINUTE], NOW)).toBe(20 * MINUTE + 1);
   });
@@ -105,6 +105,13 @@ describe("nextDeadlineChange (#17943)", () => {
     expect(nextDeadlineChange([NOW + 20_000], NOW)).toBe(20_000);
     expect(nextDeadlineChange([NOW - 1, NOW], NOW)).toBeNull();
     expect(nextDeadlineChange([], NOW)).toBeNull();
+  });
+
+  it("turns a moment after a deadline sits exactly on a boundary, never a whole unit later", () => {
+    // Exactly a day out: "1 day left" becomes "23 hours left" at once, not at the deadline.
+    expect(nextDeadlineChange([NOW + 24 * HOUR], NOW)).toBe(1);
+    // Exactly an hour out: the minutes start counting at once.
+    expect(nextDeadlineChange([NOW + HOUR], NOW)).toBe(1);
   });
 
   it("takes the soonest change across several deadlines", () => {

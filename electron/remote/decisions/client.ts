@@ -347,11 +347,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered the list with rounds UNSUPPORTED: from before #17943. */
   private readonly beforeRounds = new WeakSet<DecisionsHostSession>();
-  /**
-   * Sessions whose Host lists rounds to this Shell (#17943): from then on it
-   * pushes only v3, so a v2 push that arrives later was sent before and is stale.
-   */
-  private readonly listsRounds = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered content with rounds UNSUPPORTED: from before #17943. */
   private readonly beforeContentRounds = new WeakSet<DecisionsHostSession>();
   /**
@@ -523,15 +518,23 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   ): Promise<HostCallOutcome<unknown>> {
     const session = this.deps.sessionFor(hostId);
     if (read.read === "content" && session !== null && !this.beforeContentRounds.has(session)) {
+      // Only the method itself going unknown says the Host is older: a refused step of a
+      // method it knows reads as `needs-update` too, and must never cost later reads their round.
+      let unsupported = false;
       const answered = await this.callHost(
         hostId,
         DecisionsLinkMethod.QUESTION_CONTENT_V2,
         { reference: read.reference },
-        HostQuestionContentV2ResultSchema
+        HostQuestionContentV2ResultSchema,
+        () => {
+          unsupported = true;
+        }
       );
-      if (answered.ok || answered.failure !== "needs-update") return answered;
-      // A Host from before #17943 reads content only as `QUESTIONS` does.
+      if (!unsupported) return answered;
+      // A Host from before #17943 reads content only as `QUESTIONS` does. Asked again from the
+      // top, so a link that replaced this one meanwhile is asked for the round in its own right.
       this.beforeContentRounds.add(session);
+      return this.callQuestionRead(hostId, read);
     }
     return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read));
   }
@@ -645,7 +648,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     method: string,
     payload: unknown,
-    schema: S
+    schema: S,
+    onUnsupported?: () => void
   ): Promise<HostCallOutcome<z.infer<S>>> {
     const session = this.deps.sessionFor(hostId);
     if (!session?.isOpen) return { ok: false, failure: "disconnected" };
@@ -654,6 +658,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     try {
       raw = await session.call(method, payload, { timeoutMs: HOST_QUESTION_TIMEOUT_MS });
     } catch (error) {
+      if (codeOf(error) === "UNSUPPORTED") onUnsupported?.();
       return failureOf(error);
     } finally {
       release();
@@ -733,7 +738,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       );
       if (!parsed.success) return;
       this.listsAsks.add(session);
-      if (withRounds) this.listsRounds.add(session);
       if (this.listCounts(hostId, session, parsed.data)) {
         this.hearQuestions(hostId, session, parsed.data, parsed.data.asks, withRounds);
       }
@@ -867,8 +871,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       HostQuestionsChangedV2PayloadSchema,
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
-        // Sent before the Host knew this Shell reads rounds: what it listed since is newer.
-        if (this.listsRounds.has(session)) return null;
+        // One sent before the Host knew this Shell reads rounds is older than what it listed
+        // since by the session's count; one after is the Host telling it without them.
         this.listsAsks.add(session);
         if (!this.listCounts(hostId, session, payload)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks);
@@ -881,7 +885,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
         this.listsAsks.add(session);
-        this.listsRounds.add(session);
         if (!this.listCounts(hostId, session, payload)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks, true);
         return null;

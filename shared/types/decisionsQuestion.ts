@@ -139,6 +139,12 @@ export interface DecisionThreadAnswer {
   images: DecisionThreadImage[];
   sentAt: string;
   unreadable: boolean;
+  /**
+   * Whether typing this answer into the asking terminal was confirmed
+   * (#17943), apart from a later correction's delivery, which the question's
+   * own `deliveryStatus` follows. Absent from a Remote Host from before it.
+   */
+  delivered?: boolean;
 }
 
 /** The question expired unanswered. */

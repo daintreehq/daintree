@@ -49,13 +49,17 @@ describe("decisionCancelModel", () => {
   it("says a decline doesn't let an advisory round's plan go ahead, and points to Clear for local (#17943)", () => {
     const advisory = dismissBody({ ...TARGET, replyMode: "advisory" });
     const blocking = dismissBody({ ...TARGET, replyMode: "blocking" });
-    expect(advisory).toMatch(/doesn't let the agent go ahead with the plan/);
+    expect(advisory).toMatch(/doesn't let the agent go ahead with any plan it stated/);
     expect(blocking).not.toMatch(/plan/);
-    // A mode not known for the revision being signed says nothing of a plan.
-    expect(dismissBody({ ...TARGET, replyMode: null })).toBe(blocking);
+    // A mode not read for the revision being signed (a row's Dismiss) never leaves it out.
+    expect(dismissBody({ ...TARGET, replyMode: null })).toBe(advisory);
+    expect(dismissBody(TARGET)).toBe(advisory);
+    expect(dismissBody({ ...TARGET, lastReadAt: 1 })).toMatch(
+      /doesn't let the agent go ahead with any plan it stated/
+    );
     for (const body of [advisory, blocking]) {
       expect(body).toMatch(/nothing is decided or approved/);
-      expect(body).toMatch(/this computer only, and tells no one/);
+      expect(body).toMatch(/Clearing it from Needs you in the inbox.*this computer only/);
     }
   });
 

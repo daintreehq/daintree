@@ -1438,7 +1438,13 @@ describe("NotificationService", () => {
         expect(win2.setTitle).toHaveBeenLastCalledWith("Daintree");
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
 
+        // Disposed with a deadline still armed: the timer goes with it.
+        setDecisionQuestions([
+          { ...question("shared", "terminal-a"), expiresAt: at(2 * 60 * 60_000) },
+        ]);
+        const armed = vi.getTimerCount();
         notificationService.dispose();
+        expect(vi.getTimerCount()).toBeLessThan(armed);
         expect(wake).toBeNull();
       } finally {
         onWake.mockRestore();

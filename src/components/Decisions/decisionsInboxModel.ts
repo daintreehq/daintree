@@ -148,8 +148,8 @@ export const CLEARED_NOTE = "Cleared on this computer";
  */
 export function clearText(cleared: boolean): string {
   return cleared
-    ? "Puts it back in Needs you on this computer. Nothing is sent to the agent or your phones."
-    : "Moves it to Cleared on this computer only. Nothing is declined or sent: the agent still waits, and you can still answer it here or on your phone.";
+    ? "Takes it out of Cleared on this computer. Nothing is sent to the agent or your phones."
+    : "Moves it to Cleared on this computer only. Nothing is declined or sent, and while it's open it can still be answered here or on your phone.";
 }
 
 /**
@@ -333,10 +333,37 @@ export function staleNote(item: Pick<DecisionQuestionListItem, "remoteHost">): s
  * what was recorded, since the list can't say whether an answer or a
  * follow-up stopped, nor who sent it.
  */
-export function attentionText(standing: DecisionQuestionStanding): string {
-  return standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain"
+export function attentionText(
+  standing: DecisionQuestionStanding,
+  round: Pick<ItemRound, "closedReason"> = {}
+): string {
+  const uncertain =
+    standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
+  // Closed without an answer (#17943): what stopped is the notice saying so, unless a
+  // follow-up's delivery did, which the list can't tell apart, so both are named.
+  const closing = closingNotice(round.closedReason ?? null);
+  if (closing !== null) {
+    return uncertain
+      ? `The notice that ${closing}, or a follow-up, may or may not have been typed into the terminal. Check it there before anything is sent again.`
+      : `The notice that ${closing}, or a follow-up, was recorded, but typing it into the terminal stopped. Choose what happens to it.`;
+  }
+  return uncertain
     ? "An answer or follow-up may or may not have been typed into the terminal. Check it there before anything is sent again."
     : "An answer or follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it.";
+}
+
+/** What a closing notice tells the agent, as the attention callout names it. */
+function closingNotice(reason: ItemRound["closedReason"] | null): string | null {
+  switch (reason) {
+    case "expired":
+      return "the question expired unanswered";
+    case "declined":
+      return "you declined it";
+    case "never-published":
+      return "it never reached the relay";
+    default:
+      return null;
+  }
 }
 
 /** A question that is over: its row steps down a tone so the live ones lead. */

@@ -730,6 +730,8 @@ export function DecisionsInboxDialog() {
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
   const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
+  // Kept with the footer: a press on Clear that the last deadline overtook keeps its place.
+  const awaiting = groups.find((group) => group.id === "awaiting")?.items ?? [];
   const nextUp =
     selected !== null && inboxGroupOf(selected, nowMs) !== "needs-you"
       ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
@@ -970,7 +972,7 @@ export function DecisionsInboxDialog() {
               {/* Below the list rather than on its heading, so the dialog's first focus stays on the
                 question list. Kept while anything is cleared, so a press that empties Needs you
                 leaves the keyboard here rather than nowhere. */}
-              {(waiting.length > 0 || cleared.length > 0) && (
+              {(waiting.length > 0 || cleared.length > 0 || awaiting.length > 0) && (
                 <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
                   <Button
                     variant="ghost"
@@ -1033,16 +1035,21 @@ export function DecisionsInboxDialog() {
                         {/* One button that turns into its inverse, so the keyboard stays on it as the
                             question moves between groups. Needs only the list: it works whether or
                             not the question can be read or its terminal reached. */}
-                        {(selectedGroup === "needs-you" || selectedGroup === "cleared") && (
+                        {/* Kept, unavailable, once its deadline passes under it, so focus on it stays. */}
+                        {(selectedGroup === "needs-you" ||
+                          selectedGroup === "cleared" ||
+                          selectedGroup === "awaiting") && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
                                 variant="ghost"
                                 size="xs"
-                                aria-disabled={clearWaits || undefined}
+                                aria-disabled={
+                                  clearWaits || selectedGroup === "awaiting" || undefined
+                                }
                                 aria-describedby={clearHintId}
                                 onClick={() => {
-                                  if (clearWaits) return;
+                                  if (clearWaits || selectedGroup === "awaiting") return;
                                   markShown(selectedGroup === "cleared" ? "restore" : "clear", [
                                     selected,
                                   ]);
@@ -1140,7 +1147,7 @@ export function DecisionsInboxDialog() {
                         }
                         data-testid="decisions-inbox-attention"
                       >
-                        {attentionText(selected.standing)}
+                        {attentionText(selected.standing, selected)}
                       </Callout>
                     )}
                     <DecisionQuestionReadView

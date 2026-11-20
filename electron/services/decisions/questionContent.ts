@@ -24,7 +24,7 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
-import { roundOf, verifiedPlan } from "./questionRound.js";
+import { PLAN_REFUSED, roundOf, verifiedPlan } from "./questionRound.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
@@ -71,7 +71,7 @@ export async function readQuestionContent(
   const entries = parseAnswers(row.answers_json);
   const plannedFallback = verifiedPlan(row, entries, content);
   // Advisory content the protocol refuses is malformed: never shown, as a phone never offers it.
-  if (plannedFallback === "refused") return { result: "unreadable" };
+  if (plannedFallback === PLAN_REFUSED) return { result: "unreadable" };
   const round = roundOf(row, entries);
   const question: DecisionQuestionContent = {
     questionId: row.question_id,
@@ -325,6 +325,7 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
         images: (opened?.images ?? []).map(threadImage),
         sentAt: entry.created_at,
         unreadable: opened === null,
+        delivered: entry.delivered,
       },
     });
   }

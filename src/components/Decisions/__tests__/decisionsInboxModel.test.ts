@@ -176,7 +176,7 @@ describe("decisionsInboxModel", () => {
       { kind: "settled", outcome: "expired" },
       { kind: "settled", outcome: "declined" },
     ];
-    const texts = standings.map(standingText);
+    const texts = standings.map((standing) => standingText(standing));
     expect(new Set(texts).size).toBe(standings.length);
     for (const text of texts) {
       expect(text.length).toBeGreaterThan(0);

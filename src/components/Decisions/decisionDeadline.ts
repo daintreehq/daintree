@@ -94,8 +94,8 @@ export function nextDeadlineChange(deadlines: readonly number[], nowMs: number):
     consider(left);
     if (left > EXPIRY_SOON_MS) consider(left - EXPIRY_SOON_MS);
     const unit = left < HOUR ? MINUTE : left < DAY ? HOUR : DAY;
-    // Just past the boundary: at it exactly, the whole units left are still the same.
-    consider((left % unit || unit) + 1);
+    // Just past the next boundary: at one exactly, the label turns a moment later.
+    consider((left % unit) + 1);
   }
   return next;
 }

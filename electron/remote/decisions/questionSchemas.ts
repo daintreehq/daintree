@@ -254,44 +254,62 @@ const ThreadImageSchema = z
   .object({ attachmentId: AttachmentId, alt: Words.nullable(), mime: Mime, size: Count })
   .strict();
 
+const ThreadAnswerSchema = z
+  .object({
+    type: z.literal("answer"),
+    entryId: Id,
+    revision: Count,
+    from: z.enum(["person", "model"]),
+    onComputer: z.boolean(),
+    correction: z.boolean(),
+    confirmsModel: z.boolean(),
+    choices: z.array(z.object({ id: Id, label: Words.nullable() }).strict()).max(64),
+    text: Words.nullable(),
+    reason: Words.nullable(),
+    images: z.array(ThreadImageSchema).max(32),
+    sentAt: Time,
+    unreadable: z.boolean(),
+  })
+  .strict();
+
+const ThreadExpirySchema = z
+  .object({ type: z.literal("expired"), entryId: Id, sentAt: Time })
+  .strict();
+const ThreadDeclineSchema = z
+  .object({ type: z.literal("declined"), entryId: Id, sentAt: Time })
+  .strict();
+const ThreadMessageSchema = z
+  .object({
+    type: z.literal("message"),
+    messageId: Id,
+    from: z.enum(["person", "agent"]),
+    text: Words.nullable(),
+    images: z.array(ThreadImageSchema).max(32),
+    expectsReply: z.boolean(),
+    // Optional: absent from a Host from before #17238, as the type has it.
+    onComputer: z.boolean().optional(),
+    sentAt: Time,
+    deliveryStatus: z
+      .enum(["received", "terminal-delivered", "needs-attention", "delivery-uncertain"])
+      .nullable(),
+    deliveryStopped: z.boolean().optional(),
+    unreadable: z.boolean(),
+  })
+  .strict();
+
 const ThreadEntrySchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("answer"),
-      entryId: Id,
-      revision: Count,
-      from: z.enum(["person", "model"]),
-      onComputer: z.boolean(),
-      correction: z.boolean(),
-      confirmsModel: z.boolean(),
-      choices: z.array(z.object({ id: Id, label: Words.nullable() }).strict()).max(64),
-      text: Words.nullable(),
-      reason: Words.nullable(),
-      images: z.array(ThreadImageSchema).max(32),
-      sentAt: Time,
-      unreadable: z.boolean(),
-    })
-    .strict(),
-  z.object({ type: z.literal("expired"), entryId: Id, sentAt: Time }).strict(),
-  z.object({ type: z.literal("declined"), entryId: Id, sentAt: Time }).strict(),
-  z
-    .object({
-      type: z.literal("message"),
-      messageId: Id,
-      from: z.enum(["person", "agent"]),
-      text: Words.nullable(),
-      images: z.array(ThreadImageSchema).max(32),
-      expectsReply: z.boolean(),
-      // Optional: absent from a Host from before #17238, as the type has it.
-      onComputer: z.boolean().optional(),
-      sentAt: Time,
-      deliveryStatus: z
-        .enum(["received", "terminal-delivered", "needs-attention", "delivery-uncertain"])
-        .nullable(),
-      deliveryStopped: z.boolean().optional(),
-      unreadable: z.boolean(),
-    })
-    .strict(),
+  ThreadAnswerSchema,
+  ThreadExpirySchema,
+  ThreadDeclineSchema,
+  ThreadMessageSchema,
+]);
+
+/** A v2 read's thread (#17943): each answer may say whether typing it in was confirmed. */
+const ThreadEntryV2Schema = z.discriminatedUnion("type", [
+  ThreadAnswerSchema.extend({ delivered: z.boolean().optional() }).strict(),
+  ThreadExpirySchema,
+  ThreadDeclineSchema,
+  ThreadMessageSchema,
 ]);
 
 const QuestionContentSchema = z
@@ -355,7 +373,16 @@ const QuestionContentV2Schema = QuestionContentSchema.extend({
   replyMode: ReplyModeSchema.optional(),
   plannedFallback: z.string().max(LIMITS.plannedFallbackChars).nullable().optional(),
   closureNotice: ClosureNoticeSchema.nullable().optional(),
-}).strict() satisfies z.ZodType<DecisionQuestionContent>;
+  thread: z.array(ThreadEntryV2Schema).max(100_000),
+})
+  .strict()
+  // An advisory round always states its plan: one without is never shown as optional.
+  .refine(
+    (question) =>
+      question.replyMode !== "advisory" ||
+      (typeof question.plannedFallback === "string" && question.plannedFallback.trim() !== ""),
+    { message: "an advisory round states its plan" }
+  ) satisfies z.ZodType<DecisionQuestionContent>;
 
 /**
  * Content as a Shell from before #17943 reads it over `QUESTIONS`: without
@@ -367,6 +394,11 @@ export function legacyContent(question: DecisionQuestionContent): DecisionQuesti
   return {
     ...rest,
     closedReason: question.closedReason === "never-published" ? null : question.closedReason,
+    thread: question.thread.map((entry) => {
+      if (entry.type !== "answer") return entry;
+      const { delivered: _delivered, ...answer } = entry;
+      return answer;
+    }),
   };
 }
 
