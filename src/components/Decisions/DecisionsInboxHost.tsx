@@ -14,7 +14,7 @@ const LazyDecisionsInboxDialog = lazy(() =>
  * inbox has to outlive it. Nothing loads until it is first opened. The
  * Canopy window mounts it too (#18048), with its own way to a terminal.
  */
-export function DecisionsInboxHost({ goToTerminal }: DecisionsInboxDialogProps = {}) {
+export function DecisionsInboxHost({ navigateToTerminal }: DecisionsInboxDialogProps = {}) {
   const isOpen = useDecisionsInboxStore((state) => state.isOpen);
   const shouldMount = useKeepMounted(isOpen);
   return (
@@ -25,7 +25,7 @@ export function DecisionsInboxHost({ goToTerminal }: DecisionsInboxDialogProps =
     >
       {shouldMount && (
         <Suspense fallback={null}>
-          <LazyDecisionsInboxDialog goToTerminal={goToTerminal} />
+          <LazyDecisionsInboxDialog navigateToTerminal={navigateToTerminal} />
         </Suspense>
       )}
     </ErrorBoundary>

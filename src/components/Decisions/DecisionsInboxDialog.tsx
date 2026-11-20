@@ -1428,7 +1428,7 @@ export interface DecisionsInboxDialogProps {
    * with no project of its own (the Canopy window, #18048), where the
    * project's actions aren't registered. Absent, the view's own actions do.
    */
-  goToTerminal?: (terminal: InboxTerminal) => void;
+  navigateToTerminal?: (terminal: InboxTerminal) => void;
 }
 
 /**
@@ -1440,7 +1440,7 @@ export interface DecisionsInboxDialogProps {
  * a way to the terminal that asked while it is still open. The words are
  * read on demand by reference and held in memory only while it is open.
  */
-export function DecisionsInboxDialog({ goToTerminal }: DecisionsInboxDialogProps = {}) {
+export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialogProps = {}) {
   const isOpen = useDecisionsInboxStore((state) => state.isOpen);
   const request = useDecisionsInboxStore((state) => state.request);
   const close = useDecisionsInboxStore((state) => state.close);
@@ -2231,8 +2231,8 @@ export function DecisionsInboxDialog({ goToTerminal }: DecisionsInboxDialogProps
     releaseList();
     setHandoff(null);
     if (going === null) return;
-    if (goToTerminal !== undefined) {
-      goToTerminal({ terminalId: going.terminalId, projectId: going.projectId });
+    if (navigateToTerminal !== undefined) {
+      navigateToTerminal({ terminalId: going.terminalId, projectId: going.projectId });
       return;
     }
     const landed =

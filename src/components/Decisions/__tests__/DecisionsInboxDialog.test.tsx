@@ -2626,10 +2626,10 @@ describe("DecisionsInboxDialog", () => {
 
     it("goes through the window's own way to a terminal where it has one, as in the Canopy window (#18048)", async () => {
       cleanup();
-      const goToTerminal = vi.fn();
+      const navigateToTerminal = vi.fn();
       render(
         <TooltipProvider>
-          <DecisionsInboxDialog goToTerminal={goToTerminal} />
+          <DecisionsInboxDialog navigateToTerminal={navigateToTerminal} />
         </TooltipProvider>
       );
       getAllTerminals.mockResolvedValue([
@@ -2638,7 +2638,7 @@ describe("DecisionsInboxDialog", () => {
       open({ terminalId: "t9" });
       fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
       await waitFor(() =>
-        expect(goToTerminal).toHaveBeenCalledExactlyOnceWith({
+        expect(navigateToTerminal).toHaveBeenCalledExactlyOnceWith({
           terminalId: "t9",
           projectId: "project-b",
         })

@@ -3,6 +3,9 @@
  * Daintree couldn't type in on its own (#16020), reached from a pane's
  * Decisions chip and from Settings → Decisions → Questions, with Copy answer,
  * Try resume, Choose destination (and its confirmation) and Mark handled.
+ * Since #18048 a stopped delivery the inbox lists is reviewed in the inbox;
+ * this harness's question list holds none of these answers, so every way in
+ * reaches the standalone list, as it does for an answer the inbox can't list.
  *
  * Two fake Claude panes share one worktree. Decisions itself never loads: the
  * harness answers the Decisions ops in main from a table it fills, and pushes
@@ -352,6 +355,8 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     handle("decisions:get-status", () => t().status);
     handle("decisions:get-pane-state", (id: string) => t().panes[id] ?? null);
     handle("decisions:list-attention", () => ({ result: "listed", items: t().items }));
+    // The inbox's list holds none of them, so Review answers opens this list (#18048).
+    handle("decisions:list-questions", () => ({ revision: 1, questions: [] }));
     handle("decisions:list-answer-destinations", (questionId: string) => {
       const asker = t().items.find((i) => i.questionId === questionId)?.origin.paneId;
       return {
@@ -913,9 +918,12 @@ async function daintreeStates(run: Run): Promise<void> {
     }
     // Resolving the last answer closes the list rather than leave it empty (#18027).
     await expect(page.locator(DIALOG)).toHaveCount(0, { timeout: 8000 });
-    // Opened with nothing left, as a notification click can after another window
-    // handled the answer, it says so.
-    await pushEvent(run.app, "decisions:open-attention", { terminalId: panes.asker });
+    // Opened with nothing left, as Review answers can after another window handled
+    // the answer while the chip still showed it, it says so.
+    await reseed(run.app, panes, run.featureId);
+    await openPopover(page, panes.asker);
+    await setTable(run.app, { items: [] });
+    await page.locator('[data-testid="terminal-decisions-review"]').click();
     await page.locator(DIALOG).waitFor({ state: "visible", timeout: 10_000 });
     await expect(page.locator(DIALOG)).toContainText("Nothing needs attention");
     await parkPointer(page);
@@ -929,8 +937,11 @@ async function daintreeStates(run: Run): Promise<void> {
       );
     });
     await page.locator(SETTINGS).waitFor({ state: "visible", timeout: 20_000 });
-    const row = page.locator(`${SETTINGS_PANEL} #decisions-questions`);
-    await expect(row).toContainText("4 answers", { timeout: 10_000 });
+    const row = page.locator(`${SETTINGS_PANEL} #decisions-questions-inbox`);
+    // Answers the inbox can't list are offered beside it (#18048).
+    await expect(row.getByRole("button", { name: "Review other answers" })).toBeVisible({
+      timeout: 10_000,
+    });
     await page.evaluate((sel) => {
       const el = document.querySelector<HTMLElement>(sel);
       let scroller = el?.parentElement ?? null;

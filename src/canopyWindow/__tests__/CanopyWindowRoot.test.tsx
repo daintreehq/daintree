@@ -35,7 +35,9 @@ const openAssistantFromCanopyWindow = vi.hoisted(() =>
 
 const inboxHosts = vi.hoisted(
   () =>
-    [] as Array<{ goToTerminal?: (terminal: { terminalId: string; projectId: string }) => void }>
+    [] as Array<{
+      navigateToTerminal?: (terminal: { terminalId: string; projectId: string }) => void;
+    }>
 );
 vi.mock("@/components/Decisions/DecisionsInboxHost", () => ({
   DecisionsInboxHost: (props: (typeof inboxHosts)[number]) => {
@@ -171,9 +173,9 @@ describe("CanopyWindowRoot", () => {
     render(<CanopyWindowRoot />);
     await act(async () => {});
 
-    const goToTerminal = inboxHosts.at(-1)?.goToTerminal;
-    expect(goToTerminal).toBeTypeOf("function");
-    goToTerminal!({ terminalId: "agent-1", projectId: "project-a" });
+    const navigateToTerminal = inboxHosts.at(-1)?.navigateToTerminal;
+    expect(navigateToTerminal).toBeTypeOf("function");
+    navigateToTerminal!({ terminalId: "agent-1", projectId: "project-a" });
     expect(goToRun).toHaveBeenCalledExactlyOnceWith({ workspaceId: "project-a", runId: "agent-1" });
   });
 

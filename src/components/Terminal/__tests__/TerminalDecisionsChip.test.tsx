@@ -468,7 +468,8 @@ describe("TerminalDecisionsChip", () => {
     };
   }
 
-  async function reviewAnswers(calls: string[]): Promise<void> {
+  /** Presses Review answers, answering the questions in the order the popover listed them. */
+  async function reviewAnswers(calls: string[]): Promise<string[]> {
     render(
       <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
         <TerminalDecisionsChip terminalId="t1" />
@@ -476,12 +477,16 @@ describe("TerminalDecisionsChip", () => {
     );
     fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
     expect(calls).toEqual([]);
+    const shown = screen
+      .getAllByTestId("terminal-decisions-row")
+      .map((row) => row.getAttribute("data-question-id") ?? "");
     fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
     expect(calls).toEqual(["handoff"]);
     expect(screen.queryByTestId("popover-content")).toBeNull();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    return shown;
   }
 
   it("hands focus over, then opens the inbox at the pane's stopped question in the chip's order (#18048)", async () => {
@@ -500,30 +505,29 @@ describe("TerminalDecisionsChip", () => {
         ],
       })
     );
-    // The list holds both, oldest first; the chip lists q44 first.
+    // The inbox's list holds both, in the other order from the popover's.
     const listedQ43 = stalledItem("q43", 43);
     const listedQ44 = stalledItem("q44", 44);
-    listQuestions.mockResolvedValue({ revision: 1, questions: [listedQ43, listedQ44] });
+    listQuestions.mockResolvedValue({ revision: 1, questions: [listedQ44, listedQ43] });
     const calls: string[] = [];
     const attentionOpen = vi.fn();
     const original = useDecisionsAttentionStore.getState().open;
     useDecisionsAttentionStore.setState({ open: attentionOpen });
+    let shown: string[];
     try {
-      await reviewAnswers(calls);
+      shown = await reviewAnswers(calls);
     } finally {
       useDecisionsAttentionStore.setState({ open: original });
     }
 
+    expect(shown).toEqual(["q43", "q44"]);
     expect(attentionOpen).not.toHaveBeenCalled();
     expect(useDecisionsInboxStore.getState()).toMatchObject({
       isOpen: true,
-      request: {
-        terminalId: "t1",
-        question: { terminalId: "t1", questionId: listedQ44.reference.questionId },
-      },
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q43" } },
     });
     expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(
-      listedQ44.reference
+      listedQ43.reference
     );
   });
 

@@ -85,7 +85,7 @@ export function CanopyWindowRoot() {
       {/* A run's notice opens the answers that need a person here, in the
           inbox (#18048) or, for one it can't list, the attention list, rather
           than sending the user to find its pane's chip in a project window. */}
-      <DecisionsInboxHost goToTerminal={goToInboxTerminal} />
+      <DecisionsInboxHost navigateToTerminal={goToInboxTerminal} />
       <DecisionsAttentionHost />
       <DecisionQuestionHost />
       <Toaster standalone />
