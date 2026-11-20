@@ -1186,6 +1186,8 @@ export function DecisionsInboxDialog() {
                       headingId={questionHeadingId}
                       // As the question view does, so a reply in progress never unmounts as it moves on.
                       followUps
+                      // So the follow-up waits on the same stall the warning above names.
+                      listed={selected}
                       eyebrow={
                         <p className="flex items-center gap-1.5 text-xs">
                           <span

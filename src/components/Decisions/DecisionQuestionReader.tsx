@@ -5,10 +5,15 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { cn } from "@/lib/utils";
 import { Check, Clock } from "lucide-react";
-import type { DecisionQuestionContent, DecisionThreadEntry } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionQuestionContent,
+  DecisionQuestionListItem,
+  DecisionThreadEntry,
+} from "@shared/types/decisionsQuestion";
 import { DecisionAnswerComposer, type AnswerComposerMode } from "./DecisionAnswerComposer";
 import { hostAwayNote } from "./decisionCancelModel";
 import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
+import { deliveryStalled } from "./decisionFollowUpModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -325,6 +330,7 @@ function QuestionBody({
   active,
   answerMode,
   followUps,
+  stalled,
   onMoved,
   headingId,
   sendNote,
@@ -335,6 +341,7 @@ function QuestionBody({
   active: boolean;
   answerMode: AnswerComposerMode;
   followUps: boolean;
+  stalled: boolean;
   onMoved: () => void;
   headingId: string | undefined;
   sendNote: string | null;
@@ -417,6 +424,8 @@ function QuestionBody({
           target={target}
           primary={answerMode !== "form"}
           onMoved={onMoved}
+          stalled={stalled}
+          active={active}
         />
       )}
       {/* While it takes an answer here, the composer offers the options instead. */}
@@ -450,6 +459,7 @@ export function DecisionQuestionReadView({
   target,
   active,
   followUps = false,
+  listed = null,
   headingId,
   sendNote = null,
   eyebrow = null,
@@ -460,6 +470,11 @@ export function DecisionQuestionReadView({
   active: boolean;
   /** Whether the person can add to the question's thread from here (#17238). */
   followUps?: boolean;
+  /**
+   * The question as this computer's list names it, when the surface has it:
+   * where its delivery stands, which its content alone can't say (#18028).
+   */
+  listed?: Pick<DecisionQuestionListItem, "reference" | "standing"> | null;
   /** Given to the question's own words, so a surface can send the keyboard to them. */
   headingId?: string;
   /** What happens to an answer sent now, when that isn't simply "it goes": shown beside Send. */
@@ -478,6 +493,7 @@ export function DecisionQuestionReadView({
           active={active}
           answerMode={reader.answerMode}
           followUps={followUps}
+          stalled={deliveryStalled(current.question, listed)}
           onMoved={reader.reread}
           headingId={headingId}
           sendNote={sendNote}

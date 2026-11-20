@@ -45,6 +45,10 @@ const CLOSED_TEXT = "This question no longer takes follow-ups.";
 const ELAPSED_TEXT =
   "The deadline has passed, so this can't be sent. Your words stay here while Daintree waits to hear how the question closed.";
 
+/** Said while typing into the asking terminal stopped and nobody has resolved it (#18028). */
+const PAUSED_TEXT =
+  "Delivery to the terminal that asked needs attention. You can't send a new follow-up until it's resolved.";
+
 export interface DecisionFollowUpComposerProps {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
@@ -52,6 +56,16 @@ export interface DecisionFollowUpComposerProps {
   primary: boolean;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
+  /**
+   * Typing into the asking terminal stopped on this question and nobody has
+   * resolved it (#18028): a new follow-up would only wait behind it.
+   */
+  stalled: boolean;
+  /**
+   * Whether the surface is open. One closing starts nothing: as it closes it
+   * no longer hears of the stall, but its field still has the keyboard.
+   */
+  active: boolean;
 }
 
 /**
@@ -65,6 +79,8 @@ export function DecisionFollowUpComposer({
   target,
   primary,
   onMoved,
+  stalled,
+  active,
 }: DecisionFollowUpComposerProps) {
   const key = answerKey(question.reference);
   const record = useFollowUpRecord(key);
@@ -74,15 +90,19 @@ export function DecisionFollowUpComposer({
   const available = takesFollowUp(question, now);
   // Open by the store, past its deadline by the clock: nothing has said how it closed yet.
   const elapsed = contentDeadlineElapsed(question, now) && question.status === "open";
+  // It would take one, but no new one starts until the stall is resolved. One already on its
+  // way, and its Retry, go on: only `takesFollowUp` lets one go.
+  const paused = available && stalled;
   const inFlight = isFollowUpInFlight(record);
   const verdict = followUpVerdict(record.draft);
-  const ready = available && verdict.canSend && !inFlight;
+  const ready = active && available && !paused && verdict.canSend && !inFlight;
   const submission = record.submission;
   const messageId = submission?.messageId ?? null;
   const queued =
     submission?.phase.kind === "settled" && submission.phase.outcome.status === "queued";
   const asked = replyRequest(question) !== null;
   const hintId = useId();
+  const pausedId = useId();
   const statusRef = useRef<HTMLDivElement>(null);
   // Once the person has been in here, the section stays to say the question closed, and to hold focus.
   const [engaged, setEngaged] = useState(false);
@@ -142,24 +162,33 @@ export function DecisionFollowUpComposer({
         ? ELAPSED_TEXT
         : CLOSED_TEXT
       : null;
-  // A draft past the deadline stays in its field, read-only, so focus and words stay put.
-  const keepField = available || (elapsed && closed !== null);
+  // A draft past the deadline stays in its field, read-only, so focus and words stay put. While
+  // paused, the field stays only for what is already in it: words, one on its way, or a person
+  // writing.
+  const keepField =
+    (available && (!paused || record.draft !== "" || inFlight || engaged)) ||
+    (elapsed && closed !== null);
   const notice = attempt ?? hold ?? closed;
+  // Apart from the notice, so neither hides the other: a failed attempt still says nothing was sent.
+  const pausedNote = paused ? PAUSED_TEXT : null;
 
-  // Each said once as it changes, never for what was already so when the view opened. Both
+  // Each said once as it changes, never for what was already so when the view opened. All
   // count: a closed question never keeps where the last follow-up got to from being heard, and
-  // two that change together go in one announcement, which the live region keeps whole.
-  const saidRef = useRef({ notice, progress });
+  // those that change together go in one announcement, which the live region keeps whole.
+  const saidRef = useRef({ notice, progress, pausedNote });
   useEffect(() => {
     const said = saidRef.current;
-    if (notice === said.notice && progress === said.progress) return;
+    if (notice === said.notice && progress === said.progress && pausedNote === said.pausedNote) {
+      return;
+    }
     const changed = [
       notice !== said.notice ? notice : null,
       progress !== said.progress ? progress : null,
+      pausedNote !== said.pausedNote ? pausedNote : null,
     ].filter((text): text is string => text !== null);
-    saidRef.current = { notice, progress };
+    saidRef.current = { notice, progress, pausedNote };
     if (changed.length > 0) announce(changed.join(" "));
-  }, [notice, progress, announce]);
+  }, [notice, progress, pausedNote, announce]);
 
   // Send and Retry go as the follow-up moves on; focus that was on one goes
   // to where it stands rather than to the page.
@@ -228,15 +257,28 @@ export function DecisionFollowUpComposer({
             {notice}
           </Callout>
         )}
+        {pausedNote !== null && (
+          <Callout
+            id={pausedId}
+            severity="neutral"
+            size="compact"
+            data-testid="decision-follow-up-paused"
+          >
+            {pausedNote}
+          </Callout>
+        )}
       </div>
       {keepField && (
         <>
           <Field>
             <FieldLabel className="sr-only">{asked ? "Your reply" : "Your follow-up"}</FieldLabel>
-            <FieldDescription>
-              Typed into the terminal that asked, as sent from this computer. It never changes the
-              answer.
-            </FieldDescription>
+            {/* Never promised while what was typed in last stopped there, deadline or not. */}
+            {!stalled && (
+              <FieldDescription>
+                Typed into the terminal that asked, as sent from this computer. It never changes the
+                answer.
+              </FieldDescription>
+            )}
             <Textarea
               rows={2}
               value={record.draft}
@@ -274,10 +316,14 @@ export function DecisionFollowUpComposer({
               </p>
             )}
             <Button
-              variant={primary ? "contrast" : "outline"}
+              variant={primary && !paused ? "contrast" : "outline"}
               aria-disabled={!ready || undefined}
               loading={record.preparing}
-              aria-describedby={verdict.hint !== null ? hintId : undefined}
+              aria-describedby={
+                [paused ? pausedId : null, verdict.hint !== null ? hintId : null]
+                  .filter((id) => id !== null)
+                  .join(" ") || undefined
+              }
               onClick={send}
               className="shrink-0"
               data-testid="decision-follow-up-send"
