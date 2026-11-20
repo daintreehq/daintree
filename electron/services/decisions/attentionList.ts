@@ -272,12 +272,53 @@ export function pendingEntries(row: QuestionRow): AnswerEntry[] {
 const PREVIEW_TEXT_CHARS = 4_000;
 const QUESTION_CHARS = 240;
 
-/** One line of a question, as data: controls gone, cut to fit a row. */
+const GENERIC_HEADINGS = new Set([
+  "context",
+  "question",
+  "questions",
+  "summary",
+  "background",
+  "overview",
+  "details",
+  "decision",
+  "decision needed",
+  "problem",
+  "issue",
+  "situation",
+  "options",
+  "tl;dr",
+  "tldr",
+]);
+
+/** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
+function stripMarkdown(line: string): string {
+  return line
+    .replace(/^\s{0,3}(?:>\s*)+/, "")
+    .replace(/^\s*#{1,6}(?:\s+|$)/, "")
+    .replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "")
+    .replace(/^\s*(?:`{3,}|~{3,})\S*\s*$/, "")
+    .replace(/^\s*(?:[-*_]\s*){3,}$/, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<(https?:\/\/[^>\s]+)>/g, "$1")
+    .replace(/(\*\*|__|~~)(.+?)\1/g, "$2")
+    .replace(/(^|[^\w*])([*_])(?=\S)(.+?)(?<=\S)\2(?![\w*])/g, "$1$3")
+    .replace(/`+([^`]*)`+/g, "$1")
+    .replace(/\s+#+\s*$/, "")
+    .trim();
+}
+
+function isGenericHeading(text: string): boolean {
+  return GENERIC_HEADINGS.has(text.replace(/[\s:：.\-–—]+$/, "").toLowerCase());
+}
+
+/** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
-  const first = question.split(/\r\n?|\n|\u2028|\u2029/).find((line) => line.trim() !== "");
-  if (first === undefined) return null;
-  const line = sanitizeAnswerText(first, QUESTION_CHARS);
-  return line === "" ? null : line;
+  const lines = question
+    .split(/\r\n?|\n|\u2028|\u2029/)
+    .map((raw) => sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS))
+    .filter((line) => line !== "");
+  const line = lines.find((text) => !isGenericHeading(text)) ?? lines[0];
+  return line === undefined ? null : line;
 }
 
 /**

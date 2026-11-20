@@ -529,6 +529,23 @@ describe("questionLine", () => {
     expect(questionLine("Use \u001b[31mred\u001b[0m?")).toBe("Use red?");
     expect(questionLine("   \n  ")).toBeNull();
   });
+
+  it("drops Markdown syntax and keeps the text", () => {
+    expect(questionLine("**Decision needed:** drop the index?")).toBe(
+      "Decision needed: drop the index?"
+    );
+    expect(questionLine("## Drop `idx_users`?")).toBe("Drop idx_users?");
+    expect(questionLine("- [the plan](https://x.test/p) is _ready_?")).toBe("the plan is ready?");
+    expect(questionLine("snake_case_name stays")).toBe("snake_case_name stays");
+  });
+
+  it("gives way from a generic heading to the first substantive line", () => {
+    expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
+      "Should the cache be cleared?"
+    );
+    expect(questionLine("**Summary:**\n```\nWhich branch?")).toBe("Which branch?");
+    expect(questionLine("## Context\n---")).toBe("Context");
+  });
 });
 
 describe("answerPreviewOf", () => {
