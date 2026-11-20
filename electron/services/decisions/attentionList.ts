@@ -327,13 +327,20 @@ function unquote(line: string): string {
 }
 
 /** The fence a line opens or closes, when it is one: a fence closed on its own line is inline code. */
-function fenceOf(raw: string): { char: string; length: number; bare: boolean } | null {
+function fenceOf(
+  raw: string
+): { char: string; length: number; bare: boolean; quoted: boolean } | null {
   const line = unquote(raw.slice(0, LINE_SCAN_CHARS)).trim();
   const marker = /^(?:`{3,}|~{3,})/.exec(line)?.[0];
   if (marker === undefined) return null;
   const rest = line.slice(marker.length);
   if (marker[0] === "`" && rest.includes(marker)) return null;
-  return { char: marker[0]!, length: marker.length, bare: rest.trim() === "" };
+  return {
+    char: marker[0]!,
+    length: marker.length,
+    bare: rest.trim() === "",
+    quoted: unquote(raw) !== raw,
+  };
 }
 
 function isGenericHeading(text: string): boolean {
@@ -345,7 +352,7 @@ export function questionLine(question: string): string | null {
   const lines = question.split(/\r\n?|\n|\u2028|\u2029/);
   // A fence that never closes is not a block: its text counts as the question's.
   const inside: boolean[] = [];
-  let open: { char: string; length: number } | null = null;
+  let open: { char: string; length: number; quoted: boolean } | null = null;
   let opened = 0;
   for (const raw of lines) {
     const fence = fenceOf(raw);
@@ -357,7 +364,13 @@ export function questionLine(question: string): string | null {
       }
     } else {
       inside.push(true);
-      if (fence !== null && fence.bare && fence.char === open.char && fence.length >= open.length) {
+      if (
+        fence !== null &&
+        fence.bare &&
+        fence.char === open.char &&
+        fence.quoted === open.quoted &&
+        fence.length >= open.length
+      ) {
         open = null;
       }
     }

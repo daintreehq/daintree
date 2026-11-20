@@ -580,6 +580,12 @@ describe("questionLine", () => {
     expect(Date.now() - start).toBeLessThan(100);
   });
 
+  it("does not close a fence with a quoted fence line", () => {
+    expect(questionLine("Summary\n```md\n> ```\nnot this\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+  });
+
   it("gives way from a generic heading to the first substantive line", () => {
     expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
       "Should the cache be cleared?"
