@@ -21,6 +21,11 @@ import type {
   DecisionQuestionReference,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
+import type {
+  AnswerRecord,
+  AnswerSubmission,
+  DeclineSubmission,
+} from "@/store/decisionsAnswerStore";
 import { deadlineElapsed, expiresSoon } from "./decisionDeadline";
 
 export { EXPIRY_SOON_MS, expiresSoon } from "./decisionDeadline";
@@ -1174,6 +1179,131 @@ export function resolveSelection(
     ?.items.find((item) => inWindowProject(item, windowProject));
   if (waitingHere !== undefined) return waitingHere;
   return groups.find((group) => AUTO_OPEN.has(group.id))?.items[0] ?? null;
+}
+
+/**
+ * The question to go on to from the one keyed `from`: the first in Needs you
+ * the person hasn't seen, else the first there, never `from` itself. Null
+ * when nothing else waits.
+ */
+export function nextWaiting(
+  groups: readonly InboxGroup[],
+  from: string | null
+): DecisionQuestionListItem | null {
+  const waiting = (groups.find((group) => group.id === "needs-you")?.items ?? []).filter(
+    (item) => referenceKey(item.reference) !== from
+  );
+  return waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null;
+}
+
+/** What the person did from the inbox to a question in Needs you (#18035). */
+export type InboxAction = "answer" | "clear" | "dismiss" | "withdraw";
+
+/** Where what the person did stands by its own record: taken, refused or over, or not yet known. */
+export type InboxActionFate = "taken" | "failed" | "open";
+
+/**
+ * Whether the question is listed where the person's action takes it: an
+ * answer into delivery or past it, a clear to Cleared, a dismissal or
+ * withdrawal to History as such. Anywhere else, something other than that
+ * action moved it, as a phone's answer moves one the person was dismissing.
+ */
+export function landedBy(
+  action: InboxAction,
+  item: Pick<DecisionQuestionListItem, "standing">,
+  group: InboxGroupId
+): boolean {
+  const { standing } = item;
+  switch (action) {
+    case "answer":
+      return (
+        group === "delivering" ||
+        group === "attention" ||
+        (standing.kind === "settled" && standing.outcome === "answered")
+      );
+    case "clear":
+      return group === "cleared";
+    case "dismiss":
+      return standing.kind === "settled" && standing.outcome === "declined";
+    case "withdraw":
+      return standing.kind === "settled" && standing.outcome === "withdrawn";
+  }
+}
+
+/**
+ * Where the answer the inbox's Send started stands: the submission that
+ * Send made is any but `prior`, the one the record held as it was pressed.
+ * Taken once the relay took it; a queued one may still be turned away, as
+ * one the phone beat to it is. Failed once it was refused or settled any
+ * other way, or Send stopped before signing anything.
+ */
+export function answerFate(
+  record: Pick<AnswerRecord, "preparing" | "hold"> & {
+    submission: Pick<AnswerSubmission, "answerId" | "phase"> | null;
+  },
+  prior: string | null
+): InboxActionFate {
+  const submission = record.submission;
+  if (submission === null || submission.answerId === prior) {
+    return !record.preparing && record.hold !== null ? "failed" : "open";
+  }
+  const phase = submission.phase;
+  if (phase.kind === "refused") return "failed";
+  if (phase.kind !== "settled") return "open";
+  if (phase.outcome.status === "sent") return "taken";
+  return phase.outcome.status === "queued" ? "open" : "failed";
+}
+
+/**
+ * Where a dismissal confirmed from the inbox stands: taken once declined. A
+ * queued one is read again until it settles, and meanwhile a phone's
+ * dismissal of the same question would list it declined just the same.
+ */
+export function dismissFate(decline: Pick<DeclineSubmission, "phase"> | null): InboxActionFate {
+  const phase = decline?.phase ?? null;
+  if (phase === null) return "open";
+  if (phase.kind === "refused") return "failed";
+  if (phase.kind !== "settled") return "open";
+  if (phase.outcome.status === "declined") return "taken";
+  return phase.outcome.status === "queued" ? "open" : "failed";
+}
+
+/**
+ * What the question asks of the person now, as the list names it: the
+ * agent's request for a reply and the ask it was shown with. One that
+ * changes while it waits is something new, not what the person acted on.
+ */
+export function askKey(item: Pick<DecisionQuestionListItem, "replyRequest" | "inbox">): string {
+  return [item.replyRequest ?? "", item.inbox?.ask ?? ""].join("\u0000");
+}
+
+const ACTED: Record<InboxAction, (label: string) => string> = {
+  answer: (label) => `Answer sent for question ${label}`,
+  clear: (label) => `Question ${label} cleared on this computer`,
+  dismiss: (label) => `Question ${label} declined`,
+  withdraw: (label) => `Question ${label} withdrawn`,
+};
+
+function sentence(text: string): string {
+  return text.endsWith(".") ? text : `${text}.`;
+}
+
+/**
+ * What the inbox says once the person's action has moved a question out of
+ * Needs you (#18035), for the ear: the question by name and the group it's
+ * in now, then the question shown in its place, or else what the line above
+ * the list says now that nothing else waits.
+ */
+export function movedText(
+  action: InboxAction,
+  label: string,
+  group: string,
+  next: string | null,
+  waiting: string | null
+): string {
+  const moved = `${ACTED[action](label)}. It's in ${group} now.`;
+  if (next !== null) return `${moved} Showing ${next}.`;
+  return waiting === null ? moved : `${moved} ${sentence(waiting)}`;
 }
 
 export interface ConnectionNotice {

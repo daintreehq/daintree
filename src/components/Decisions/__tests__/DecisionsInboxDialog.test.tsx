@@ -4,9 +4,12 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
+  AnswerDecisionQuestionPayload,
+  DecisionAnswerResultRead,
   DecisionDeclineResultRead,
   DecisionQuestionAttachment,
   DecisionQuestionImagePartResult,
+  DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
@@ -2846,6 +2849,7 @@ describe("DecisionsInboxDialog", () => {
 
     it("marks a follow-up seen only once it's scrolled into view", async () => {
       const observed: Array<{ target: Element; fire: (visible: boolean) => void }> = [];
+      const original: unknown = Reflect.get(globalThis, "IntersectionObserver");
       vi.stubGlobal(
         "IntersectionObserver",
         class implements IntersectionObserver {
@@ -2912,7 +2916,9 @@ describe("DecisionsInboxDialog", () => {
           expect(seenCalls().map(([payload]) => payload.questions[0]?.ask)).toEqual(["note-1"])
         );
       } finally {
-        vi.unstubAllGlobals();
+        // Only this test's stub: the setup's own (ResizeObserver, rAF) stay for the tests after it.
+        if (original === undefined) Reflect.deleteProperty(globalThis, "IntersectionObserver");
+        else Reflect.set(globalThis, "IntersectionObserver", original);
       }
     });
 
@@ -4092,6 +4098,514 @@ describe("DecisionsInboxDialog", () => {
       } finally {
         delete CONTENT["question-8"];
       }
+    });
+  });
+
+  describe("moving on once the person's own action takes a question out of Needs you (#18035)", () => {
+    const answerQuestion =
+      vi.fn<(payload: AnswerDecisionQuestionPayload) => Promise<DecisionQuestionAnswerResult>>();
+    const getAnswerResult = vi.fn<() => Promise<DecisionAnswerResultRead>>();
+    const unmarked = { ask: null, seen: false, cleared: false };
+    const asked = item("question-2", 2, OPEN, {
+      askedAt: "2026-11-02T09:00:00.000Z",
+      inbox: unmarked,
+    });
+    const waiting = item("question-4", 4, OPEN, {
+      askedAt: "2026-11-02T09:30:00.000Z",
+      inbox: unmarked,
+    });
+    const delivering = LIST.questions[2]!;
+    /** q-2 and q-4 both waiting on the person, q-3 being delivered. */
+    function listed(shown: DecisionQuestionListItem = asked, revision = 1, extra = [waiting]) {
+      return { revision, questions: [shown, ...extra, delivering] };
+    }
+    let said: string[] = [];
+    const moved = () => said.filter((message) => / It's in /.test(message));
+
+    function deferred<T>() {
+      let resolve: (value: T) => void = () => {};
+      const promise = new Promise<T>((settle) => {
+        resolve = settle;
+      });
+      return { promise, resolve };
+    }
+
+    /** The question shown: by its row, or by its words once it moves under a shut group (#18023). */
+    function selectedAlias() {
+      const row = rows().find((candidate) => candidate.getAttribute("aria-current") === "true");
+      if (row !== undefined) return aliasOf(row);
+      const shown = screen.queryByTestId("decision-question-content")?.textContent ?? "";
+      const number = /Body of question (\d+)/.exec(shown)?.[1];
+      return number === undefined ? null : `q-${number}`;
+    }
+
+    /** What a folding group holds while shut (#18023), as its bar counts it: q-2 alone, here. */
+    function heldIn(id: "cleared" | "history") {
+      return bar(id).textContent ?? "";
+    }
+
+    async function answerShown() {
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByRole("radio", { name: "Ship it" }));
+      await act(async () => fireEvent.click(screen.getByTestId("decision-answer-send")));
+      await waitFor(() => expect(answerQuestion).toHaveBeenCalledOnce());
+    }
+
+    beforeEach(() => {
+      said = [];
+      const announce = useAnnouncerStore.getState().announce;
+      useAnnouncerStore.setState({ announce: (message: string) => said.push(message) });
+      onTestFinished(() => useAnnouncerStore.setState({ announce }));
+      answerQuestion.mockReset().mockImplementation(async ({ answerId }) => ({
+        result: "submitted",
+        answerId,
+        outcome: { status: "sent" },
+      }));
+      getAnswerResult.mockReset().mockResolvedValue({ result: "not-found" });
+      const decisions = Reflect.get(window, "electron").decisions;
+      Object.assign(decisions, { answerQuestion, getAnswerResult });
+      listQuestions.mockResolvedValue(listed());
+    });
+
+    it("goes on to the next question waiting once an answer sent here is taken, its row taking the keyboard", async () => {
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      onTestFinished(() => scrolled.mockRestore());
+      open();
+      await answerShown();
+      // Taken, but still listed as waiting: nothing moves yet.
+      await waitFor(() =>
+        expect(
+          useDecisionsAnswerStore.getState().records[answerKey(reference("question-2"))]?.submission
+            ?.phase
+        ).toEqual({ kind: "settled", outcome: { status: "sent" } })
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      const next = rowNamed("q-4");
+      expect(document.activeElement).toBe(next);
+      expect(next.getAttribute("tabindex")).toBe("0");
+      expect(scrolled.mock.contexts).toContain(next);
+      // What was done stays findable, and is said once, by name.
+      expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(document.activeElement).toBe(rowNamed("q-4"));
+      expect(moved()).toEqual([
+        "Answer sent for question q-2. It's in Being delivered now. Showing q-4.",
+      ]);
+    });
+
+    it("moves on whichever comes first, the list's move or the answer's taking", async () => {
+      const reply = deferred<DecisionQuestionAnswerResult>();
+      answerQuestion.mockImplementation(() => reply.promise);
+      open();
+      await answerShown();
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+
+      const answerId = answerQuestion.mock.calls[0]![0].answerId;
+      await act(async () =>
+        reply.resolve({ result: "submitted", answerId, outcome: { status: "sent" } })
+      );
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      expect(document.activeElement).toBe(rowNamed("q-4"));
+      expect(moved()).toEqual([
+        "Answer sent for question q-2. It's in Being delivered now. Showing q-4.",
+      ]);
+    });
+
+    it("stays on a question that asks for a reply before the list ever showed the answer land", async () => {
+      open();
+      await answerShown();
+      await waitFor(() =>
+        expect(
+          useDecisionsAnswerStore.getState().records[answerKey(reference("question-2"))]?.submission
+            ?.phase.kind
+        ).toBe("settled")
+      );
+      // A lagging list: the next snapshot already has the agent asking for a reply.
+      push(
+        listed(
+          { ...asked, standing: { kind: "waiting", reason: "reply" }, replyRequest: "ask-2" },
+          2
+        )
+      );
+      await act(async () => {});
+      push(listed({ ...asked, standing: { kind: "to-type" }, replyRequest: null }, 3));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+    });
+
+    it("stays on a question the phone answered first, its answer from here turned away", async () => {
+      answerQuestion.mockImplementation(async ({ answerId }) => ({
+        result: "submitted",
+        answerId,
+        outcome: { status: "already-answered" },
+      }));
+      open();
+      await answerShown();
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(document.activeElement).not.toBe(rowNamed("q-4"));
+      expect(moved()).toEqual([]);
+    });
+
+    it("never moves for a question the phone or the relay moved with nothing done here", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 3));
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+      // The way on is in the pane's bar, above the question rather than under its thread.
+      const nextButton = screen.getByTestId("decisions-inbox-next");
+      expect(
+        nextButton.compareDocumentPosition(screen.getByTestId("decision-question-content")) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      fireEvent.click(nextButton);
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+    });
+
+    it("stays on the question once another row was picked while the answer was going", async () => {
+      const reply = deferred<DecisionQuestionAnswerResult>();
+      answerQuestion.mockImplementation(() => reply.promise);
+      open();
+      await answerShown();
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(selectedAlias()).toBe("q-3"));
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(selectedAlias()).toBe("q-2"));
+
+      const answerId = answerQuestion.mock.calls[0]![0].answerId;
+      await act(async () =>
+        reply.resolve({ result: "submitted", answerId, outcome: { status: "sent" } })
+      );
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+    });
+
+    it("says what happened but stays on the question while the person writes a follow-up to it", async () => {
+      const reply = deferred<DecisionQuestionAnswerResult>();
+      answerQuestion.mockImplementation(() => reply.promise);
+      open();
+      await answerShown();
+      const field = screen.getByTestId("decision-follow-up-text");
+      act(() => field.focus());
+      fireEvent.change(field, { target: { value: "Also run the migrations" } });
+
+      const answerId = answerQuestion.mock.calls[0]![0].answerId;
+      await act(async () =>
+        reply.resolve({ result: "submitted", answerId, outcome: { status: "sent" } })
+      );
+      push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      await waitFor(() =>
+        expect(moved()).toEqual(["Answer sent for question q-2. It's in Being delivered now."])
+      );
+      expect(selectedAlias()).toBe("q-2");
+      expect(document.activeElement).toBe(field);
+      expect(field instanceof HTMLTextAreaElement && field.value).toBe("Also run the migrations");
+    });
+
+    it("stays on a cleared question whose answer the person went on to choose", async () => {
+      const cleared = deferred<DecisionQuestionMarkResult>();
+      markQuestions.mockImplementation(({ action, questions }) =>
+        action === "clear"
+          ? cleared.promise
+          : Promise.resolve({ result: "marked", marked: questions.length })
+      );
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      fireEvent.click(await screen.findByRole("radio", { name: "Ship it" }));
+      await act(async () => cleared.resolve({ result: "marked", marked: 1 }));
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() =>
+        expect(moved()).toEqual(["Question q-2 cleared on this computer. It's in Cleared now."])
+      );
+      expect(selectedAlias()).toBe("q-2");
+    });
+
+    it("goes on once a clear from here lands in Cleared, saying so once", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: reference("question-2"), ask: null }],
+        })
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      expect(document.activeElement).toBe(rowNamed("q-4"));
+      expect(heldIn("cleared")).toContain("1 question");
+      expect(said).toEqual([
+        "Question q-2 cleared on this computer. It's in Cleared now. Showing q-4.",
+      ]);
+    });
+
+    it("goes on from a question asked for (#18047) once a clear from here lands, leaving Cleared shut (#18023)", async () => {
+      const ref = reference("question-4");
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: { terminalId: ref.terminalId, questionId: ref.questionId, reference: ref },
+        })
+      );
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      push({
+        revision: 2,
+        questions: [
+          asked,
+          { ...waiting, inbox: { ...unmarked, seen: true, cleared: true } },
+          delivering,
+        ],
+      });
+      await waitFor(() => expect(selectedAlias()).toBe("q-2"));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(selectedAlias()).toBe("q-2");
+      expect(said).toEqual([
+        "Question q-4 cleared on this computer. It's in Cleared now. Showing q-2.",
+      ]);
+    });
+
+    it("goes on from a clear pressed twice before the list moved", async () => {
+      let first = true;
+      markQuestions.mockImplementation(async ({ action, questions }) => {
+        if (action !== "clear") return { result: "marked", marked: questions.length };
+        const marked = first ? 1 : 0;
+        first = false;
+        return { result: "marked", marked };
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      const button = screen.getByTestId("decisions-inbox-clear");
+      fireEvent.click(button);
+      fireEvent.click(button);
+      await act(async () => {});
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      expect(
+        markQuestions.mock.calls.filter(([payload]) => payload.action === "clear")
+      ).toHaveLength(1);
+    });
+
+    it("still says a clear landed once the person picked another row before the list moved", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      fireEvent.click(rowNamed("q-3"));
+      // Beside the line the inbox says of the question now shown.
+      const cleared = () => said.filter((message) => message.includes("cleared"));
+      await waitFor(() => expect(cleared()).toEqual(["1 question cleared on this computer"]));
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() => expect(heldIn("cleared")).toContain("1 question"));
+      expect(selectedAlias()).toBe("q-3");
+      expect(cleared()).toEqual(["1 question cleared on this computer"]);
+    });
+
+    it("still says a clear landed once an answer from here takes its place before the list moved", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      expect(said).toEqual([]);
+      await answerShown();
+      expect(said.filter((message) => message.includes("cleared"))).toEqual([
+        "1 question cleared on this computer",
+      ]);
+    });
+
+    it("stays on a clear that changed nothing, as when the question asked something new", async () => {
+      markQuestions.mockImplementation(async ({ action, questions }) =>
+        action === "clear"
+          ? { result: "marked", marked: 0 }
+          : { result: "marked", marked: questions.length }
+      );
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      // Another window's clear lands later: not this opening's to move on from.
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() => expect(heldIn("cleared")).toContain("1 question"));
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+      expect(said.filter((message) => message.includes("cleared on this computer"))).toEqual([]);
+    });
+
+    it("stays on the last question waiting once it's cleared, and the list says nothing else waits", async () => {
+      listQuestions.mockResolvedValue(listed(asked, 1, []));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      const button = screen.getByTestId("decisions-inbox-clear");
+      act(() => button.focus());
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2, []));
+      await waitFor(() =>
+        expect(moved()).toEqual([
+          "Question q-2 cleared on this computer. It's in Cleared now. No questions waiting on you.",
+        ])
+      );
+      expect(selectedAlias()).toBe("q-2");
+      expect(screen.getByTestId("decisions-inbox-waiting").textContent).toBe(
+        "No questions waiting on you"
+      );
+      expect(document.activeElement).toBe(button);
+
+      // A question asked later is no reason to move.
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 3, [waiting]));
+      await waitFor(() => expect(rowNamed("q-4")).toBeTruthy());
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(document.activeElement).toBe(button);
+    });
+
+    it("goes on once a confirmed dismissal lands in History, after the confirmation hands focus back", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      const declined = deferred<DecisionQuestionDeclineResult>();
+      declineQuestion.mockImplementationOnce(() => declined.promise);
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+      });
+      // The list moves while the dismissal is with main, before the confirmation closes.
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
+      const declineId = declineQuestion.mock.calls[0]![0].declineId;
+      await act(async () =>
+        declined.resolve({ result: "submitted", declineId, outcome: { status: "declined" } })
+      );
+      // Still on its way out: nothing moves or is said until it hands focus back.
+      expect(screen.queryByRole("alertdialog")).not.toBeNull();
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
+      expect(heldIn("history")).toContain("1 question");
+      expect(moved()).toEqual(["Question q-2 declined. It's in History now. Showing q-4."]);
+    });
+
+    it("goes on once a withdrawal confirmed here lands in History", async () => {
+      declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "relay" },
+      }));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+      });
+      // Offered a withdrawal instead: not yet anything done.
+      expect(confirm.textContent).toContain("Withdraw question q-2?");
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+      const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+      await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+      await act(async () => {
+        fireEvent.click(withdraw);
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(cancelQuestionByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: reference("question-2"),
+      });
+      expect(selectedAlias()).toBe("q-2");
+
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "withdrawn" } }, 2));
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
+      expect(moved()).toEqual(["Question q-2 withdrawn. It's in History now. Showing q-4."]);
+    });
+
+    it("stays on a question queued to be dismissed here that the phone dismissed first", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "queued" },
+      }));
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+    });
+
+    it("stays on a question listed as closed some other way than the dismissal taken here", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "expired" } }, 2));
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
     });
   });
 

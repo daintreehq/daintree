@@ -9,12 +9,15 @@ import type {
   DecisionThreadEntry,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
+import type { AnswerPhase, DeclinePhase } from "@/store/decisionsAnswerStore";
 import {
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
   ELAPSED_NOTE,
   agentName,
   askerNotes,
+  answerFate,
+  askKey,
   askShownIn,
   askedOnHost,
   attentionNotice,
@@ -28,6 +31,7 @@ import {
   findAsked,
   folds,
   goneAsks,
+  dismissFate,
   groupOf,
   headerFacts,
   hiddenIn,
@@ -36,7 +40,10 @@ import {
   inboxRowNote,
   inWindowProject,
   isAttention,
+  landedBy,
   markedText,
+  movedText,
+  nextWaiting,
   originFacts,
   paneTitle,
   referenceKey,
@@ -1690,5 +1697,223 @@ describe("goneAsks (#18029)", () => {
   it("counts them in its label", () => {
     expect(clearGoneText(1)).toBe("Clear 1 question with no agent detected");
     expect(clearGoneText(3)).toBe("Clear 3 questions with no agent detected");
+  });
+});
+
+describe("moving on once the person's action takes a question out of Needs you (#18035)", () => {
+  const at = (questionId: string) => ({
+    hostId: "h1",
+    projectId: "p1",
+    terminalId: "t1",
+    questionId,
+  });
+
+  describe("nextWaiting", () => {
+    it("goes to the first question in Needs you the person hasn't seen, never the one it came from", () => {
+      const seen = { ask: null, seen: true, cleared: false };
+      const unseen = { ask: null, seen: false, cleared: false };
+      const first = item("q1", OPEN, { inbox: seen });
+      const second = item("q2", OPEN, { inbox: unseen });
+      const third = item("q3", OPEN, { inbox: unseen });
+      const groups = inboxGroups([first, second, third]);
+      expect(nextWaiting(groups, referenceKey(at("q1")))).toBe(second);
+      expect(nextWaiting(groups, referenceKey(at("q2")))).toBe(third);
+      // From the middle of the group, the first unseen leads, not the one after it; one this
+      // computer never marked counts as unseen.
+      const unmarkedFirst = item("q1", OPEN);
+      const middle = inboxGroups([unmarkedFirst, second, third]);
+      expect(nextWaiting(middle, referenceKey(at("q2")))).toBe(unmarkedFirst);
+      // With every one seen, the first other than where it came from.
+      const allSeen = inboxGroups([first, { ...second, inbox: seen }]);
+      expect(nextWaiting(allSeen, referenceKey(at("q2")))).toBe(first);
+      expect(nextWaiting(allSeen, referenceKey(at("q1")))?.reference.questionId).toBe("q2");
+    });
+
+    it("finds nothing once the question it came from was the only one waiting", () => {
+      const only = item("q1", OPEN);
+      const groups = inboxGroups([only, item("q2", { kind: "to-type" })]);
+      expect(nextWaiting(groups, referenceKey(at("q1")))).toBeNull();
+      expect(nextWaiting(inboxGroups([]), null)).toBeNull();
+    });
+  });
+
+  describe("landedBy", () => {
+    const standings: Record<string, DecisionQuestionStanding> = {
+      typing: { kind: "to-type" },
+      stopped: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      uncertain: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+      answered: { kind: "settled", outcome: "answered", handled: false },
+      handled: { kind: "settled", outcome: "answered", handled: true },
+      declined: { kind: "settled", outcome: "declined" },
+      withdrawn: { kind: "settled", outcome: "withdrawn" },
+      expired: { kind: "settled", outcome: "expired" },
+      unsent: { kind: "send-failed" },
+      waiting: OPEN,
+      reply: { kind: "waiting", reason: "reply" },
+      queued: { kind: "queued" },
+    };
+    const where = (name: string) => {
+      const listed = item("q1", standings[name]!);
+      return [listed, inboxGroupOf(listed)] as const;
+    };
+
+    it("takes an answer into delivery or past it, and nothing else", () => {
+      for (const name of ["typing", "stopped", "uncertain", "answered", "handled"]) {
+        expect(landedBy("answer", ...where(name))).toBe(true);
+      }
+      for (const name of ["declined", "withdrawn", "expired", "unsent", "waiting", "reply"]) {
+        expect(landedBy("answer", ...where(name))).toBe(false);
+      }
+    });
+
+    it("takes a dismissal or withdrawal to History as such, never one the phone answered or the deadline closed", () => {
+      expect(landedBy("dismiss", ...where("declined"))).toBe(true);
+      expect(landedBy("withdraw", ...where("withdrawn"))).toBe(true);
+      const elsewhere = [
+        "typing",
+        "stopped",
+        "uncertain",
+        "answered",
+        "expired",
+        "unsent",
+        "waiting",
+      ];
+      for (const name of [...elsewhere, "withdrawn"]) {
+        expect(landedBy("dismiss", ...where(name))).toBe(false);
+      }
+      for (const name of [...elsewhere, "declined"]) {
+        expect(landedBy("withdraw", ...where(name))).toBe(false);
+      }
+    });
+
+    it("takes a clear to Cleared, never to Awaiting update by the clock", () => {
+      const cleared = item("q1", OPEN, { inbox: { ask: null, seen: true, cleared: true } });
+      expect(landedBy("clear", cleared, inboxGroupOf(cleared))).toBe(true);
+      for (const name of ["typing", "declined", "withdrawn", "waiting", "queued"]) {
+        expect(landedBy("clear", ...where(name))).toBe(false);
+      }
+      const nowMs = Date.parse("2026-11-02T12:00:00.000Z");
+      const elapsed = item("q1", OPEN, { expiresAt: "2026-11-02T11:00:00.000Z" });
+      expect(inboxGroupOf(elapsed, nowMs)).toBe("awaiting");
+      expect(landedBy("clear", elapsed, inboxGroupOf(elapsed, nowMs))).toBe(false);
+      expect(landedBy("answer", elapsed, inboxGroupOf(elapsed, nowMs))).toBe(false);
+    });
+  });
+
+  describe("answerFate", () => {
+    const record = (over: Partial<Parameters<typeof answerFate>[0]> = {}) => ({
+      submission: null,
+      preparing: false,
+      hold: null,
+      ...over,
+    });
+    const submission = (answerId: string, phase: AnswerPhase) => ({ answerId, phase });
+    const sent: AnswerPhase = { kind: "settled", outcome: { status: "sent" } };
+
+    it("is taken only once the relay took the submission this Send made", () => {
+      expect(answerFate(record(), null)).toBe("open");
+      expect(answerFate(record({ submission: submission("new", sent) }), null)).toBe("taken");
+      expect(answerFate(record({ submission: submission("new", sent) }), "old")).toBe("taken");
+      // The record's earlier answer, taken before this Send, says nothing of it.
+      expect(answerFate(record({ submission: submission("old", sent) }), "old")).toBe("open");
+    });
+
+    it("waits while it is being read, sent, followed or queued", () => {
+      expect(answerFate(record({ preparing: true }), null)).toBe("open");
+      for (const phase of [
+        { kind: "sending" },
+        { kind: "checking" },
+        { kind: "lost" },
+        { kind: "settled", outcome: { status: "queued" } },
+      ] satisfies AnswerPhase[]) {
+        expect(answerFate(record({ submission: submission("new", phase) }), null)).toBe("open");
+      }
+    });
+
+    it("fails once refused, turned away, or held before anything was signed", () => {
+      for (const phase of [
+        { kind: "refused", reason: "not-found" },
+        { kind: "settled", outcome: { status: "already-answered" } },
+        { kind: "settled", outcome: { status: "closed", reason: "expired" } },
+        { kind: "settled", outcome: { status: "closed", reason: "cancelled" } },
+        { kind: "settled", outcome: { status: "changed" } },
+        { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+        { kind: "settled", outcome: { status: "rejected", code: "bad_signature" } },
+      ] satisfies AnswerPhase[]) {
+        expect(answerFate(record({ submission: submission("new", phase) }), null)).toBe("failed");
+      }
+      expect(answerFate(record({ hold: "closed" }), null)).toBe("failed");
+      expect(
+        answerFate(record({ hold: "changed", submission: submission("old", sent) }), "old")
+      ).toBe("failed");
+    });
+  });
+
+  describe("dismissFate", () => {
+    const decline = (phase: DeclinePhase) => ({ phase });
+
+    it("is taken only once declined, waits while queued, and fails once refused or settled otherwise", () => {
+      expect(dismissFate(decline({ kind: "settled", outcome: { status: "declined" } }))).toBe(
+        "taken"
+      );
+      // A phone's dismissal lists it declined just the same while this one waits.
+      for (const phase of [
+        { kind: "settled", outcome: { status: "queued" } },
+        { kind: "sending" },
+        { kind: "checking" },
+        { kind: "lost" },
+      ] satisfies DeclinePhase[]) {
+        expect(dismissFate(decline(phase))).toBe("open");
+      }
+      expect(dismissFate(null)).toBe("open");
+      for (const phase of [
+        { kind: "refused", reason: "not-owner" },
+        { kind: "settled", outcome: { status: "already-answered" } },
+        { kind: "settled", outcome: { status: "changed" } },
+        { kind: "settled", outcome: { status: "closed", reason: "cancelled" } },
+        { kind: "settled", outcome: { status: "unsupported", by: "asking-desktop" } },
+        { kind: "settled", outcome: { status: "rejected", code: "bad_signature" } },
+      ] satisfies DeclinePhase[]) {
+        expect(dismissFate(decline(phase))).toBe("failed");
+      }
+    });
+  });
+
+  describe("askKey", () => {
+    it("changes when the agent asks for a reply or something new, and not otherwise", () => {
+      const asking = item("q1", OPEN, { inbox: { ask: null, seen: true, cleared: false } });
+      const same = askKey(asking);
+      const delivered = item("q1", { kind: "to-type" }, { inbox: asking.inbox });
+      expect(askKey(delivered)).toBe(same);
+      expect(askKey({ ...asking, replyRequest: "msg-2" })).not.toBe(same);
+      expect(askKey({ ...asking, inbox: { ask: "msg-3", seen: false, cleared: false } })).not.toBe(
+        same
+      );
+    });
+  });
+
+  describe("movedText", () => {
+    it("names the question, the group it's in now, and the one shown in its place", () => {
+      expect(movedText("answer", "q-2", "Being delivered", "q-4", null)).toBe(
+        "Answer sent for question q-2. It's in Being delivered now. Showing q-4."
+      );
+      expect(movedText("dismiss", "q-2", "History", "q-4", "ignored")).toBe(
+        "Question q-2 declined. It's in History now. Showing q-4."
+      );
+    });
+
+    it("says what the line above the list says once nothing else waits, its own sentences kept", () => {
+      expect(movedText("clear", "q-2", "Cleared", null, "No questions waiting on you")).toBe(
+        "Question q-2 cleared on this computer. It's in Cleared now. No questions waiting on you."
+      );
+      const away =
+        "None of the questions here wait on you. Studio Mac is away, so its questions are as last reported.";
+      expect(movedText("withdraw", "q-2", "History", null, away)).toBe(
+        `Question q-2 withdrawn. It's in History now. ${away}`
+      );
+      expect(movedText("withdraw", "q-2", "History", null, null)).toBe(
+        "Question q-2 withdrawn. It's in History now."
+      );
+    });
   });
 });

@@ -45,7 +45,11 @@ interface DecisionCancelDialogProps {
   onCancelling: (questionId: string) => void;
   /** The dismissal was taken or queued: the question closes once its asking computer records it. */
   onDismissing?: (questionId: string, key: string) => void;
+  /** The withdrawal was taken: closed at once, or committed and waiting for the relay. */
+  onWithdrawn?: () => void;
   restoreFocusTo: () => HTMLElement | null;
+  /** Once the confirmation has finished closing and handed focus back. */
+  onCloseComplete?: () => void;
 }
 
 /** What one opening has come to: the step it asks now, why, and what main last said. */
@@ -79,7 +83,9 @@ export function DecisionCancelDialog({
   onClose,
   onCancelling,
   onDismissing,
+  onWithdrawn,
   restoreFocusTo,
+  onCloseComplete,
 }: DecisionCancelDialogProps) {
   // The opening whose confirm is with main: it alone is locked, and only it closes when main answers.
   const [busyFor, setBusyFor] = useState<DecisionCancelTarget | null>(null);
@@ -192,6 +198,7 @@ export function DecisionCancelDialog({
         return;
       }
       if (outcome.result === "cancelling") onCancelling(questionOf(subject.question).questionId);
+      onWithdrawn?.();
       close();
     };
     setBusyFor(subject);
@@ -250,6 +257,7 @@ export function DecisionCancelDialog({
       isConfirmLoading={showSpinner}
       isBusy={pending}
       restoreFocusTo={restoreFocusTo}
+      onCloseComplete={onCloseComplete}
     >
       {target !== null && line !== null && (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">

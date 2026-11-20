@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   answerKey,
+  readAnswerRecord,
   useAnswerRecord,
   useDecisionsAnswerStore,
   type AnswerRecord,
@@ -106,6 +107,8 @@ export interface DecisionAnswerComposerProps {
    * written; the form stays usable, since an answer is still recorded.
    */
   deliveryNotice?: string | null;
+  /** Send started an answer; `prior` is the submission the record held before it, if any. */
+  onSend?: (prior: string | null) => void;
 }
 
 /** Whether this question shows its composer rather than the plain list of its options. */
@@ -129,6 +132,7 @@ export function DecisionAnswerComposer({
   onMoved,
   sendNote = null,
   deliveryNotice = null,
+  onSend,
 }: DecisionAnswerComposerProps) {
   const key = answerKey(question.reference);
   const record = useAnswerRecord(key);
@@ -285,7 +289,10 @@ export function DecisionAnswerComposer({
 
   const send = () => {
     if (!ready) return;
-    void sendAnswer(key, target, unshown).finally(onMoved);
+    const prior = readAnswerRecord(key).submission?.answerId ?? null;
+    const sending = sendAnswer(key, target, unshown);
+    onSend?.(prior);
+    void sending.finally(onMoved);
   };
 
   if (mode === "none") return null;

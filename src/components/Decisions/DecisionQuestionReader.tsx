@@ -437,6 +437,7 @@ function QuestionBody({
   headingId,
   sendNote,
   deliveryNotice,
+  onSend,
   eyebrow,
 }: {
   question: DecisionQuestionContent;
@@ -450,6 +451,7 @@ function QuestionBody({
   headingId: string | undefined;
   sendNote: string | null;
   deliveryNotice: string | null;
+  onSend: ((prior: string | null) => void) | undefined;
   eyebrow: React.ReactNode;
 }) {
   // Moved on only when the deadline line would read differently, or the clock jumped.
@@ -529,6 +531,7 @@ function QuestionBody({
         onMoved={onMoved}
         sendNote={sendNote}
         deliveryNotice={deliveryNotice}
+        onSend={onSend}
       />
       {/* After the thread, which it adds to; folded away while the answer form leads. */}
       {followUps && (
@@ -577,6 +580,7 @@ export function DecisionQuestionReadView({
   headingId,
   sendNote = null,
   deliveryNotice = null,
+  onSend,
   eyebrow = null,
 }: {
   reader: DecisionQuestionReader;
@@ -601,6 +605,8 @@ export function DecisionQuestionReadView({
   sendNote?: string | null;
   /** Why nothing can take an answer now (#18029), said before one is written. */
   deliveryNotice?: string | null;
+  /** Send started an answer from here; `prior` is the submission its record held before. */
+  onSend?: (prior: string | null) => void;
   /** Who asked, over the question, when the surface knows it. */
   eyebrow?: React.ReactNode;
 }) {
@@ -622,6 +628,7 @@ export function DecisionQuestionReadView({
           headingId={headingId}
           sendNote={sendNote}
           deliveryNotice={deliveryNotice}
+          onSend={onSend}
           eyebrow={eyebrow}
         />
       )}
