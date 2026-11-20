@@ -2336,12 +2336,12 @@ export const SETTINGS_REGISTRY = [
       {
         id: "decisions-agents",
         section: "Agents",
-        title: "Agents that can ask you",
+        // Not "Agents …": a title holding "agent" outranks Agents → Default agent for "agent".
+        title: "Who can ask you",
         description:
           "Which installed agents get ask_human when they launch, each switched on one at a time. Every agent is off until you switch it on",
         keywords: [
           "agents",
-          "agent",
           "ask_human",
           "ask human",
           "mcp",
