@@ -53,11 +53,16 @@ interface DocumentRecord {
   /** The ceiling a save is held to: the editor that owns the draft's, never a viewer's. */
   maxBytes: number;
   /**
-   * The revision the draft is based on: the last one read or saved while
-   * clean. A read while a draft stands does not move it — otherwise the close
-   * prompt's Save would quietly write the draft over a change it never saw.
+   * The revision the standing draft is based on: the one its editor reported
+   * when the draft started, or the one a save of that draft wrote. No read
+   * moves it. Reads overlap and land in any order, and an editor can keep
+   * showing older text, so only the editor knows which answer its buffer came
+   * from; a guess lets the close prompt's Save write the draft over a change
+   * it never saw. Null when clean, or when the editor didn't say.
    */
   revision: string | null;
+  /** Moves each time a draft starts, so a save's reply only touches the draft it saved. */
+  draftGen: number;
   /**
    * The latest disk state a read or a disk-change check saw: a revision, or
    * `status:<refusal>`, so a move from one to another is reported once and a
@@ -68,8 +73,7 @@ interface DocumentRecord {
   reading: number;
   /**
    * The latest read started. A read that lands after a later one started is
-   * superseded: the view holds the later one, so the older answer moves
-   * nothing, least of all the revision a draft would be saved against.
+   * superseded and records nothing the later one will.
    */
   readSeq: number;
   /** The disk-change check in flight, whether another was asked for, and with what ceiling. */
@@ -177,12 +181,9 @@ async function read(
   // A refused read is an observation too, so the next disk change that makes
   // the file readable again reaches a view still showing the refusal.
   record.observedState = stateOf(result);
-  if (result.status === "ok" && record.draft === null) {
-    record.revision = result.revision;
-    if (record.hostConflict) {
-      record.hostConflict = false;
-      publish(record);
-    }
+  if (result.status === "ok" && record.draft === null && record.hostConflict) {
+    record.hostConflict = false;
+    publish(record);
   }
   return result;
 }
@@ -221,6 +222,7 @@ async function save(
   expectedRevision: string
 ): Promise<PluginFileDocumentSaveResult> {
   let result: PluginFileDocumentSaveResult;
+  const gen = record.draftGen;
   record.pending += 1;
   try {
     result = await window.electron.fileDocument.save({
@@ -238,12 +240,21 @@ async function save(
     record.pending -= 1;
   }
   if (result.status === "saved") {
-    record.revision = result.revision;
     record.observedState = result.revision;
-    // Typing that landed while the save was in flight stays a draft.
-    if (record.draft === text) record.draft = null;
-    record.hostConflict = false;
-    record.viewConflict = false;
+    // A draft started after this save began has its own base, even with the
+    // same text: the reply neither clears nor rebases it.
+    if (record.draftGen === gen) {
+      if (record.draft === text) {
+        record.draft = null;
+        record.revision = null;
+      } else if (record.draft !== null) {
+        // Typing that landed while the save was in flight stays a draft, now
+        // on top of what the save wrote.
+        record.revision = result.revision;
+      }
+      record.hostConflict = false;
+      record.viewConflict = false;
+    }
     publish(record);
   } else if (result.status === "conflict") {
     record.observedState = result.revision;
@@ -279,7 +290,10 @@ async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcom
   const draft = record.draft;
   if (draft === null) return { status: "saved" };
   if (record.revision === null) {
-    return { status: "refused", reason: "The file hasn't finished loading" };
+    return {
+      status: "refused",
+      reason: "The editor didn't say which version of the file these edits are based on",
+    };
   }
   const result = await save(record, draft, record.revision);
   switch (result.status) {
@@ -299,6 +313,7 @@ async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcom
 
 function discardDraft(record: DocumentRecord): void {
   record.draft = null;
+  record.revision = null;
   record.hostConflict = false;
   record.viewConflict = false;
   emit(record, { reason: "discarded", revision: diskRevisionOf(record) });
@@ -327,10 +342,19 @@ function createDocument(
       return save(record, text, options.expectedRevision);
     },
     getDraft: () => record.draft,
-    setDraft: (text: string | null) => {
+    setDraft: (text: string | null, options?: { baseRevision?: string }) => {
       if (readOnly) return;
       const next = typeof text === "string" ? text : null;
       if (next === record.draft) return;
+      if (next === null) {
+        record.revision = null;
+      } else if (record.draft === null) {
+        // The base binds when the draft starts. A remounted editor restoring
+        // the draft with getDraft never saw it, so later calls can't move it.
+        record.draftGen += 1;
+        const base = options?.baseRevision;
+        record.revision = typeof base === "string" && base.length > 0 ? base : null;
+      }
       record.draft = next;
       publish(record);
     },
@@ -375,6 +399,7 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       rootPath: target.rootPath,
       maxBytes: target.maxBytes,
       revision: null,
+      draftGen: 0,
       observedState: null,
       reading: 0,
       readSeq: 0,
