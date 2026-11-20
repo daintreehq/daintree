@@ -626,10 +626,13 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     await clock.advancePast(expiresAt);
 
     // Back, it takes the expiry from the relay and records it once against the run that asked,
-    // which is gone: a fake Claude has no session to resume, so the notice needs a person.
+    // which is gone: a fake Claude has no session to resume, so the notice needs a person. The
+    // Host's own list reaches the owner through the Shell's link.
     host = await launchHost();
+    await listenAsHost();
+    await reconnectShell();
     await expect
-      .poll(() => listedQuestion(host.window, id), { timeout: 120_000 })
+      .poll(() => listedQuestion(shell.window, id), { timeout: 120_000 })
       .toMatchObject({
         closedReason: "expired",
         closureNotice: { delivery: "needs-attention", disposition: "fallback-due" },
@@ -639,14 +642,9 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     for (const launch of readFakeAgentLaunchLog(binDir).slice(launches)) {
       expect(readFakeAgentStdin(binDir, launch.paneId)).not.toContain(id);
     }
-    expect(await listedQuestion(host.window, id)).toMatchObject({ closedReason: "expired" });
+    expect(await listedQuestion(shell.window, id)).toMatchObject({ closedReason: "expired" });
 
-    // The owner's computer, connected again, doesn't count it as waiting for an answer.
-    await listenAsHost();
-    await reconnectShell();
-    await expect
-      .poll(() => listedQuestion(shell.window, id), { timeout: 90_000 })
-      .toMatchObject({ closedReason: "expired" });
+    // It needs a person on the Host, and asks the owner for no answer.
     await expect(shellInbox()).toHaveAttribute("aria-label", "Decisions inbox", {
       timeout: 30_000,
     });
