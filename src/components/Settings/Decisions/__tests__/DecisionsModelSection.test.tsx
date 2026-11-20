@@ -488,6 +488,10 @@ describe("Decisions → Decision model", () => {
       evaluatedAt: EVALUATION.evaluatedAt,
     });
     expect(row("decisions-model-answering").textContent).toContain("Not answering");
+    expect(within(row("decisions-model-threshold")).getByRole("combobox").textContent).toContain(
+      "Don't answer automatically"
+    );
+    expect(screen.queryByRole("button", { name: /Reset Answer automatically/ })).toBeNull();
   });
 
   // #18062: a threshold saved while Policy's old switch was off arms nothing,
@@ -527,6 +531,9 @@ describe("Decisions → Decision model", () => {
     expect(within(row("decisions-model-threshold")).getByRole("combobox").textContent).toContain(
       "0.90 or higher"
     );
+    expect(
+      screen.getByRole("button", { name: "Reset Answer automatically to default" })
+    ).toBeTruthy();
   });
 
   it("starts an evaluation, and cancels the run it shows", async () => {

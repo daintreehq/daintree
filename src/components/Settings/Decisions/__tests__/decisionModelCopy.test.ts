@@ -74,29 +74,41 @@ describe("decision model copy", () => {
       autoAnswerThreshold: 0.8,
       thresholds: [{ threshold: 0.8, answered: 30, matched: 30 }],
     };
-    const unevaluated = answeringText({ answeringFrom: null, adapter: "claude", evaluation: null });
+    const ready = {
+      answeringFrom: null,
+      adapter: "claude" as const,
+      evaluation: report,
+      history: { state: "open" as const, count: 36 },
+      running: null,
+    };
+    const unevaluated = answeringText({ ...ready, evaluation: null });
     expect(unevaluated).toContain("doesn't answer anything");
-    expect(unevaluated).toContain("Evaluate");
+    expect(unevaluated).toMatch(/^[^.]*\. Evaluate the model/);
     // A threshold saved but not answered from reads as nothing answering, with the choice to make.
-    const saved = answeringText({ answeringFrom: null, adapter: "claude", evaluation: report });
+    const saved = answeringText(ready);
     expect(saved).toContain("doesn't answer anything");
     expect(saved).toContain("Choose a confidence under Answer automatically");
     const unsupported = answeringText({
-      answeringFrom: null,
-      adapter: "claude",
+      ...ready,
       evaluation: { ...report, autoAnswerThreshold: null, thresholds: [] },
     });
     expect(unsupported).toContain("Evaluate again");
     expect(unsupported).not.toContain("Choose a confidence");
+    // Each blocker names the step it needs, not one its control won't take yet.
+    expect(answeringText({ ...ready, adapter: null })).toContain("Choose an agent CLI");
+    const closed = answeringText({ ...ready, history: { state: "unavailable" } });
+    expect(closed).toContain("history opens");
+    expect(closed).not.toContain("Choose a confidence");
+    const run = { runId: "r", adapter: "claude" as const, startedAt: 1, historyCount: 36 };
+    expect(answeringText({ ...ready, running: run })).toContain("Once the evaluation finishes");
 
-    const on = answeringText({ answeringFrom: 0.8, adapter: "claude", evaluation: report });
-    expect(on).toContain("Claude Code");
+    const on = answeringText({ ...ready, answeringFrom: 0.8, adapter: "codex" });
+    expect(on).toContain("Codex CLI");
     expect(on).toContain("0.80 or higher");
     expect(on).toContain("labelled as a proxy's");
     expect(on).toContain("never one only you can answer");
-    expect(answeringText({ answeringFrom: 0, adapter: "claude", evaluation: report })).toContain(
-      "at any confidence"
-    );
+    expect(answeringText({ ...ready, answeringFrom: 0.5 })).toContain("0.50 or higher");
+    expect(answeringText({ ...ready, answeringFrom: 0 })).toContain("at any confidence");
   });
 
   it("puts the library's reasons in words, and shows one it doesn't know as it is", () => {

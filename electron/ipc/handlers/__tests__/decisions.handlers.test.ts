@@ -2360,6 +2360,7 @@ describe("decisions IPC", () => {
     const ops = Object.keys(decisionsNamespace.ops);
     expect(ops).toContain("setModelThreshold");
     expect(ops.filter((name) => /proxy|allowlist/i.test(name))).toEqual([]);
+    expect(Object.values(CHANNELS)).not.toContain("decisions:set-proxy-allowlisted");
   });
 
   it("revokes and rotates through Decisions itself once the setting is on", async () => {

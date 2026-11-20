@@ -2732,7 +2732,9 @@ export function setDecisionsModelThreshold(
       });
     }
     if (payload.threshold === null) {
-      // Withdrawn first, so the model stops answering even if the file can't be written.
+      // Withdrawn from the running model first, so it stops answering at once,
+      // even if neither the setting nor the file can be written.
+      model.withdrawConsent();
       try {
         saveAnswerConsent(false);
       } catch (error) {
@@ -2761,7 +2763,8 @@ export function setDecisionsModelThreshold(
         message: "The choice couldn't be saved. Try again.",
       });
     }
-    if (payload.threshold !== null) {
+    // With consent already given, the threshold just saved is the whole choice.
+    if (payload.threshold !== null && !readDecisionsSettings(store).proxyAllowlisted) {
       // After the threshold, so the model arms only at the confidence just chosen.
       if (shutDown || !readDecisionsSettings(store).enabled) throw setupRefused();
       try {

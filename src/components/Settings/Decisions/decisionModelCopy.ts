@@ -95,23 +95,43 @@ export function runText(run: DecisionsModelRun, startedAt: string): string {
 export const AUTOMATIC_ANSWER_SCOPE =
   "Only questions whose agent allows a proxy answer, never one only you can answer, and each answer is labelled as a proxy's.";
 
+const CHOOSE_CONFIDENCE =
+  "choose a confidence under Answer automatically to let it answer in your place.";
+
+/** The step that would let the model answer, given what stands in its way now. */
+function nextAnsweringStep(
+  model: Pick<DecisionsModelState, "adapter" | "evaluation" | "history" | "running">
+): string {
+  if (model.adapter === null) {
+    return `Choose an agent CLI and evaluate the model, then ${CHOOSE_CONFIDENCE}`;
+  }
+  if (model.history.state !== "open") {
+    return "It can't be evaluated or answer until its history opens again.";
+  }
+  if (model.running !== null) return `Once the evaluation finishes, ${CHOOSE_CONFIDENCE}`;
+  if (model.evaluation === null) {
+    return `Evaluate the model against your answers, then ${CHOOSE_CONFIDENCE}`;
+  }
+  if (model.evaluation.thresholds.length === 0) {
+    return "Evaluate again once you've answered more questions from your phone.";
+  }
+  return "Choose a confidence under Answer automatically to let it answer in your place.";
+}
+
 /**
  * What answers automatically now, as main observes it (#18062): main arms the
  * model only once the person has chosen a confidence under Answer
  * automatically, so a threshold saved before that choice reads as nothing
- * answering, with the choice that changes it.
+ * answering, with the step that changes it.
  */
 export function answeringText(
-  model: Pick<DecisionsModelState, "answeringFrom" | "adapter" | "evaluation">
+  model: Pick<
+    DecisionsModelState,
+    "answeringFrom" | "adapter" | "evaluation" | "history" | "running"
+  >
 ): string {
   if (model.answeringFrom === null || model.adapter === null) {
-    const next =
-      model.evaluation === null
-        ? "Evaluate the model against your answers, then choose a confidence under Answer automatically to let it answer in your place."
-        : model.evaluation.thresholds.length === 0
-          ? "Evaluate again once you've answered more questions from your phone."
-          : "Choose a confidence under Answer automatically to let it answer in your place.";
-    return `The model doesn't answer anything, so every question waits for you. ${next}`;
+    return `The model doesn't answer anything, so every question waits for you. ${nextAnsweringStep(model)}`;
   }
   const { label } = MODEL_ADAPTERS[model.adapter];
   const from =

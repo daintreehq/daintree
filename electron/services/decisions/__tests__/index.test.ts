@@ -1478,8 +1478,8 @@ describe("Decisions entry", () => {
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
     });
 
-    it("keeps answering from a threshold chosen with consent across a restart", async () => {
-      await seedChosenThreshold(0.8);
+    it("stops answering at once on Don't answer automatically, though the setting can't be written", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
       saved.value = {
         enabled: true,
         ...RELAY,
@@ -1491,8 +1491,99 @@ describe("Decisions entry", () => {
       };
       await startDecisionsIfEnabled();
       const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+      const running = service.getPolicy()!;
+      expect(model.proxy()).not.toBeNull();
+
+      // The setting's write fails, and the file's write waits its turn.
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = model.setAutoAnswerThreshold.bind(model);
+      const write = vi
+        .spyOn(model, "setAutoAnswerThreshold")
+        .mockImplementation(async (...args) => {
+          await held;
+          return original(...args);
+        });
+      try {
+        const off = setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        expect(model.proxy()).toBeNull();
+        expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+        release();
+        await expect(off).resolves.toMatchObject({ answeringFrom: null });
+      } finally {
+        write.mockRestore();
+      }
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(model.proxy()).toBeNull();
+    });
+
+    it("arms only at the confidence just chosen, never a saved one while the new one writes", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = model.setAutoAnswerThreshold.bind(model);
+      const write = vi
+        .spyOn(model, "setAutoAnswerThreshold")
+        .mockImplementation(async (...args) => {
+          await held;
+          return original(...args);
+        });
+      try {
+        const choosing = setDecisionsModelThreshold({ threshold: 0.9, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        // Consent waits for the new threshold, so the saved 0.8 never arms meanwhile.
+        expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+        expect(model.proxy()).toBeNull();
+        release();
+        await expect(choosing).resolves.toMatchObject({ answeringFrom: 0.9 });
+      } finally {
+        write.mockRestore();
+      }
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+    });
+
+    it("keeps answering from a confidence chosen in Settings across a restart", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      await peekDecisionsService()!.getDecisionModel()!.settled();
+      await setDecisionsModelThreshold({ threshold: 0.7, evaluatedAt });
+      await peekDecisionsService()!.stop();
+
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
       await service.getDecisionModel()!.settled();
-      expect(getDecisionsModel().answeringFrom).toBe(0.8);
+      expect(getDecisionsModel().answeringFrom).toBe(0.7);
       expect(service.getPolicy()!.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
   });

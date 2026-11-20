@@ -168,7 +168,9 @@ describe("Decisions policy and questions sections", () => {
     await renderSections();
 
     const section = document.getElementById("decisions-policy")!;
-    expect(section.querySelectorAll("[role='switch'], [role='combobox'], input")).toHaveLength(0);
+    expect(
+      section.querySelectorAll("button, [role='switch'], [role='combobox'], input")
+    ).toHaveLength(0);
     expect(ungatedRow()).toContain(UNGATED_QUESTION_TEXT);
     expect(ungatedRow()).toContain("Decision model");
     expect(ungatedRow()).not.toContain("Allow proxy answers");

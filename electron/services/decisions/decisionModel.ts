@@ -470,9 +470,19 @@ export class DecisionModelRuntime {
    * from before can arm it again.
    */
   update(preferences: DecisionModelPreferences): Promise<void> {
-    this.consented = preferences.proxyAllowlisted;
-    if (!this.consented) this.disarm(true);
+    if (preferences.proxyAllowlisted) this.consented = true;
+    else this.withdrawConsent();
     return this.enqueue(() => this.apply(preferences));
+  }
+
+  /**
+   * Stops answering at once, ahead of anything queued (#18062), until the
+   * setting next says the person lets it answer. Main calls it before saving
+   * a withdrawal, so a save that fails still leaves the model unarmed.
+   */
+  withdrawConsent(): void {
+    this.consented = false;
+    this.disarm(true);
   }
 
   /** Resolves once every change asked for so far has been taken, whether it worked or not. */
