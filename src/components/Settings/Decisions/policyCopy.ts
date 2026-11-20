@@ -1,6 +1,6 @@
 import { pluralize } from "@/lib/pluralize";
 import type { DecisionsPolicy, DecisionsWorkflowGate } from "@shared/types/decisions";
-import { DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
+import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -51,8 +51,8 @@ export function questionExpiryText(
       ? "A question waits for your answer until it's answered or cancelled, unless the agent that asked sets an expiry"
       : `A question waits ${questionWaitText(wait)} for your answer, unless the agent that asked sets another time`;
   const limit = max === null ? "" : `, at most ${questionWaitText(max)}`;
-  // A Host's lifetime runs on the library's defaults; the owner's choice isn't sent to it.
-  const host = `Questions asked on a Remote Host still wait ${questionWaitText(DEFAULT_QUESTION_EXPIRY_MS)} by default.`;
+  // A Host asks under its own default (#17942); the owner's choice isn't sent to it.
+  const host = `Questions asked on a Remote Host still wait ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} by default.`;
   return `${first}${limit}. ${host} An expired question authorises nothing, and the agent is told so.`;
 }
 

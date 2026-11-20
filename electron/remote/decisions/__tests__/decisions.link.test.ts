@@ -496,7 +496,16 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     enabled: true,
     terminalSnapshots: false,
   };
+  /** How a Host from #17942 on says it asks its agents' questions. */
+  const POLICY = { advisoryQuestions: true, defaultQuestionExpiryMs: 7 * 24 * 60 * 60_000 };
   const RUNNING = {
+    state: "running",
+    deviceId: "dev_host_studio_01",
+    connection: "connected",
+    questionPolicy: POLICY,
+  } as const satisfies DecisionsHostRuntime;
+  /** A running Host's report from before #17942: nothing on how it asks. */
+  const LEGACY_RUNNING = {
     state: "running",
     deviceId: "dev_host_studio_01",
     connection: "connected",
@@ -584,7 +593,9 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
   it("is served by the Host, and its reports by the Shell", () => {
     expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE]).toBe("host");
     expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE_V2]).toBe("host");
+    expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.OWNER_STATE_V3]).toBe("host");
     expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.HOST_RUNTIME]).toBe("shell");
+    expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.HOST_RUNTIME_V2]).toBe("shell");
   });
 
   it("tells the Host whether the owner's terminal snapshots are on (#16230)", async () => {
@@ -612,14 +623,14 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
         .strict(),
       (payload) => {
         told.push(payload);
-        return { runtime: RUNNING };
+        return { runtime: LEGACY_RUNNING };
       }
     );
     const calls = vi.spyOn(client, "call");
     const { client: shell } = shellOver(client, () => ({ ...OWNER, terminalSnapshots: true }));
 
     await vi.waitFor(() =>
-      expect(shell.runtimeOf(HOST)).toEqual({ runtime: RUNNING, at: 5_000, live: true })
+      expect(shell.runtimeOf(HOST)).toEqual({ runtime: LEGACY_RUNNING, at: 5_000, live: true })
     );
     const { terminalSnapshots: _snapshots, ...earlier } = OWNER;
     expect(told).toEqual([earlier]);
@@ -674,7 +685,10 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     lifetime.change(reconnecting);
     lifetime.change(reconnecting);
     await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.runtime).toEqual(reconnecting));
-    expect(pushes.mock.calls.map(([method]) => method)).toEqual([DecisionsLinkMethod.HOST_RUNTIME]);
+    // A Shell that announced with v3 hears v2 reports, with how the Host asks (#17942).
+    expect(pushes.mock.calls.map(([method]) => method)).toEqual([
+      DecisionsLinkMethod.HOST_RUNTIME_V2,
+    ]);
 
     // The switch changing here is announced again.
     const off = { ...OWNER, enabled: false };
@@ -783,7 +797,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     await vi.waitFor(() => expect(lifetime.source.load).toHaveBeenCalled());
 
     const pushed: DecisionsHostRuntime = { ...RUNNING, connection: "reconnecting" };
-    await host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: pushed });
+    await host.call(DecisionsLinkMethod.HOST_RUNTIME_V2, { runtime: pushed });
     answer({ ...RUNNING, connection: "connecting" });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -808,9 +822,134 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     stop();
     await expect(
       host.call(DecisionsLinkMethod.HOST_RUNTIME, {
+        runtime: { ...LEGACY_RUNNING, connection: "reconnecting" },
+      })
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(
+      host.call(DecisionsLinkMethod.HOST_RUNTIME_V2, {
         runtime: { ...RUNNING, connection: "reconnecting" },
       })
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+  });
+
+  it("reads how a Host asks its agents' questions from a v2 report, and pushes the Shell v2 reports from then on (#17942)", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const calls = vi.spyOn(client, "call");
+    const { client: shell } = shellOver(client, () => OWNER);
+
+    await vi.waitFor(() =>
+      expect(shell.runtimeOf(HOST)).toEqual({ runtime: RUNNING, at: 5_000, live: true })
+    );
+    expect(calls.mock.calls.map(([method]) => method)).toContain(
+      DecisionsLinkMethod.OWNER_STATE_V3
+    );
+    const blocking = { ...RUNNING, questionPolicy: { ...POLICY, advisoryQuestions: false } };
+    lifetime.change(blocking);
+    await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.runtime).toEqual(blocking));
+  });
+
+  it("reads a Host from before #17942 with ownerState.v2, once per link, as reporting no question policy", async () => {
+    const { host, client } = await pair();
+    // A Host from #16230 on but before #17942: the v2 announcement only, and its v1 report.
+    const told: unknown[] = [];
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), (payload) => {
+      told.push(payload);
+      return { runtime: LEGACY_RUNNING };
+    });
+    const calls = vi.spyOn(client, "call");
+    const { client: shell } = shellOver(client, () => OWNER);
+
+    await vi.waitFor(() =>
+      expect(shell.runtimeOf(HOST)).toEqual({ runtime: LEGACY_RUNNING, at: 5_000, live: true })
+    );
+    shell.announceOwnerState();
+    await vi.waitFor(() => expect(told).toHaveLength(2));
+    const announcements: string[] = [
+      DecisionsLinkMethod.OWNER_STATE_V3,
+      DecisionsLinkMethod.OWNER_STATE_V2,
+      DecisionsLinkMethod.OWNER_STATE,
+    ];
+    expect(
+      calls.mock.calls.map(([method]) => method).filter((method) => announcements.includes(method))
+    ).toEqual([
+      DecisionsLinkMethod.OWNER_STATE_V3,
+      DecisionsLinkMethod.OWNER_STATE_V2,
+      DecisionsLinkMethod.OWNER_STATE_V2,
+    ]);
+    // Its v1 pushes are still heard.
+    await host.call(DecisionsLinkMethod.HOST_RUNTIME, {
+      runtime: { ...LEGACY_RUNNING, connection: "reconnecting" },
+    });
+    expect(shell.runtimeOf(HOST)?.runtime).toEqual({
+      ...LEGACY_RUNNING,
+      connection: "reconnecting",
+    });
+  });
+
+  it("answers a Shell from before #17942 with a report its strict read takes, and pushes it v1 reports only", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    // A Shell from before #17942: ownerState.v2, and a v1 report handler only.
+    const pushed: unknown[] = [];
+    client.registerCallHandler(DecisionsLinkMethod.HOST_RUNTIME, z.unknown(), (payload) => {
+      pushed.push(payload);
+      return null;
+    });
+    const strictV1 = z
+      .object({
+        runtime: z
+          .object({
+            state: z.literal("running"),
+            deviceId: z.string(),
+            connection: z.string(),
+          })
+          .strict(),
+      })
+      .strict();
+
+    const answered = await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+    expect(strictV1.parse(answered)).toEqual({ runtime: LEGACY_RUNNING });
+
+    lifetime.change({ ...RUNNING, connection: "reconnecting" });
+    const reconnecting = { runtime: { ...LEGACY_RUNNING, connection: "reconnecting" } };
+    await vi.waitFor(() => expect(pushed.at(-1)).toEqual(reconnecting));
+    // Every push, the one the Host sends as its Decisions first loads included, is v1.
+    for (const push of pushed) expect(() => strictV1.parse(push)).not.toThrow();
+    // Only the policy changing tells it nothing new, so nothing more is sent.
+    const sent = pushed.length;
+    lifetime.change({
+      ...RUNNING,
+      connection: "reconnecting",
+      questionPolicy: { ...POLICY, advisoryQuestions: false },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(pushed).toHaveLength(sent);
+  });
+
+  it("pushes v1 reports to a Shell that announced with v3 but refuses a v2 push", async () => {
+    const { host, client } = await pair();
+    const lifetime = hostLifetime();
+    serveLifetime(host, lifetime);
+    const pushed: unknown[] = [];
+    client.registerCallHandler(DecisionsLinkMethod.HOST_RUNTIME, z.unknown(), (payload) => {
+      pushed.push(payload);
+      return null;
+    });
+
+    expect(await client.call(DecisionsLinkMethod.OWNER_STATE_V3, OWNER)).toEqual({
+      runtime: RUNNING,
+    });
+    lifetime.change({ ...RUNNING, connection: "reconnecting" });
+    await vi.waitFor(() =>
+      expect(pushed.at(-1)).toEqual({
+        runtime: { ...LEGACY_RUNNING, connection: "reconnecting" },
+      })
+    );
+    // None of what it was pushed carries what a v1 report can't.
+    for (const push of pushed) expect(JSON.stringify(push)).not.toContain("questionPolicy");
   });
 
   /** A Host serving `session` whose key file holds an identity, and whose lifetime loads when the test says. */
@@ -982,9 +1121,14 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     const cancels: DecisionQuestionReference[] = [];
     let answer: (read: DecisionsHostQuestionRead) => unknown = (read) =>
       read.read === "content" ? { result: "read", question: content(read.reference) } : null;
+    // A Host from #17942 on says how it asks; one reached through `answerAnnouncements` is older.
+    const report: DecisionsHostRuntime = {
+      ...RUNNING,
+      questionPolicy: { advisoryQuestions: true, defaultQuestionExpiryMs: 7 * 24 * 60 * 60_000 },
+    };
     const lifetime: DecisionsHostLifetime = {
-      apply: async () => RUNNING,
-      reportFor: () => RUNNING,
+      apply: async () => report,
+      reportFor: () => report,
       adopt: async () => {},
       onChanged: () => () => {},
       questions: () => list,

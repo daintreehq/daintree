@@ -1,6 +1,7 @@
 import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "../../../shared/config/decisionsQuestionExpiry.js";
 import type { DecisionsSettings, DecisionsStatus } from "../../../shared/types/decisions.js";
 import type {
+  DecisionsHostQuestionPolicy,
   DecisionsHostRecord,
   DecisionsHostRuntime,
 } from "../../../shared/types/decisionsHosts.js";
@@ -89,10 +90,14 @@ export function hostLifetimeSettings(record: DecisionsHostRecord): DecisionsSett
   };
 }
 
-/** What the Host reports of its own Decisions, from its record and its lifetime's status. */
+/**
+ * What the Host reports of its own Decisions, from its record, its lifetime's
+ * status and how that lifetime asks its agents' questions (#17942).
+ */
 export function hostRuntimeOf(
   record: DecisionsHostRecord | null,
-  status: DecisionsStatus | null
+  status: DecisionsStatus | null,
+  questionPolicy: DecisionsHostQuestionPolicy
 ): DecisionsHostRuntime {
   if (record === null) return { state: "not-enrolled" };
   const { deviceId } = record;
@@ -112,5 +117,6 @@ export function hostRuntimeOf(
     connection: state,
     ...(status?.nextAttemptAt !== undefined ? { nextAttemptAt: status.nextAttemptAt } : {}),
     ...(status?.problem !== undefined ? { problem: status.problem } : {}),
+    questionPolicy,
   };
 }

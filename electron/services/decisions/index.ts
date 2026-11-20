@@ -105,6 +105,7 @@ import type {
 } from "../../../shared/types/decisionsModel.js";
 import type {
   DecisionsHostEnrollResult,
+  DecisionsHostQuestionPolicy,
   DecisionsHostRecord,
   DecisionsHostRuntime,
   DecisionsHostsResult,
@@ -155,7 +156,11 @@ import type {
 } from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
+import {
+  HOST_DEFAULT_QUESTION_EXPIRY_MS,
+  isQuestionExpiryChoice,
+} from "../../../shared/config/decisionsQuestionExpiry.js";
+import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "./relayFeatures.js";
 import {
   MAX_ASK_HUMAN_AGENTS,
   isAskHumanAgentId,
@@ -3004,10 +3009,23 @@ export function decisionsHostRuntimeFor(
   ) {
     return { state: "not-enrolled" };
   }
-  const running = service;
-  const status = running !== null && running.getRole() === "host" ? running.getStatus() : null;
-  return hostRuntimeOf(record, status);
+  const running = service !== null && service.getRole() === "host" ? service : null;
+  return hostRuntimeOf(
+    record,
+    running?.getStatus() ?? null,
+    running?.getQuestionPolicy() ?? HOST_QUESTION_POLICY
+  );
 }
+
+/**
+ * How a Host's lifetime asks its agents' questions once it runs (#17942):
+ * what the Host reports while it doesn't run now, its owner having turned it
+ * on but its connection not yet started.
+ */
+const HOST_QUESTION_POLICY: DecisionsHostQuestionPolicy = {
+  advisoryQuestions: DAINTREE_DELIVERS_ADVISORY_OUTCOMES,
+  defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
+};
 
 /**
  * Runs the Host lifetime the record calls for while the owner's switch here

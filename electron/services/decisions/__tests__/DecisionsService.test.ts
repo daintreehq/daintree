@@ -1128,7 +1128,7 @@ describe("DecisionsService relay connection", () => {
     // Its sink types the advisory notice (#17941).
     ["is left to say", undefined, true],
   ])(
-    "lets an owner lifetime's agents ask for advice, signed only when Daintree %s its outcome, and keeps a Remote Host's blocking (#17940)",
+    "lets every lifetime's agents ask for advice, the owner's and a Remote Host's, signed only when Daintree %s its outcome (#17940, #17942)",
     async (_label, outcomes, expected) => {
       const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
       const service = new DecisionsService({
@@ -1159,11 +1159,17 @@ describe("DecisionsService relay connection", () => {
       expect(made).toHaveLength(2);
       expect(made[0]!.stopped).toBe(true);
       expect(host).not.toBe(owner);
-      expect(host?.advisoryQuestions).toBe(false);
+      expect(host?.advisoryQuestions).toBe(true);
       expect(made[1]!.options.role).toBe("desktop-host");
       expect(made[1]!.options.policy).toBe(host);
-      expect(made[1]!.options.advisoryDeadlines).toBe(false);
+      expect(made[1]!.options.advisoryDeadlines).toBe(expected);
+      // What the Host reports to its owner: what it was started with, until its connection says.
+      expect(service.getQuestionPolicy()).toEqual({
+        advisoryQuestions: expected,
+        defaultQuestionExpiryMs: host?.defaultQuestionExpiryMs,
+      });
       await service.stop();
+      expect(service.getQuestionPolicy()).toBeNull();
     }
   );
 
@@ -1517,6 +1523,18 @@ describe("DecisionsService relay connection", () => {
     store: {} as QuestionSource["store"],
     policy: {} as QuestionSource["policy"],
   };
+
+  it("reports a Host's advice as its connection settled it, once that's known (#17942)", async () => {
+    const { service, made } = connected();
+    await service.start(on(RELAY), "host");
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
+    // Delivery couldn't start, so the connection gave no bridge advice: the Host says it can't take it.
+    made[0]!.options.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: false });
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
+    made[0]!.options.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
+    await service.stop();
+  });
 
   it("opens agents' questions once the connection's identity is ready, and only for the current one", async () => {
     const routes = questionRoutes();

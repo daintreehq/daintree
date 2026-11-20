@@ -19,6 +19,7 @@ import {
   acceptHostEnrollment,
   createHostRequest,
   enrollHost,
+  hostRef,
   parseAnswers,
   parseMessages,
   type WebSocketLike,
@@ -68,7 +69,7 @@ import {
 } from "../../mcp-server/terminalNotify.js";
 import type { ListenerRoute } from "../../mcp-server/listenerHold.js";
 import { openDb } from "../../persistence/db.js";
-import { DecisionsService } from "../DecisionsService.js";
+import { DecisionsService, type HostServedQuestions } from "../DecisionsService.js";
 import { DECISION_FOLLOWUP_START, DECISION_THREAD_PREFACE } from "../answerNotice.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
@@ -120,6 +121,8 @@ interface FakeDevice {
   last_seen_at: string | null;
   revoked_at: string | null;
   push_enabled: boolean;
+  /** What a phone declared on its latest socket ticket, as the directory lists it. */
+  features?: string[];
 }
 
 function json(status: number, body: unknown): Response {
@@ -345,7 +348,17 @@ class FakeRelay {
     }
     // A 0.4.0 relay advertises threads; nothing is sent to a desktop that doesn't declare them.
     if (method === "GET" && pathname === "/api/v1/info") {
-      return json(200, { features: this.features });
+      // Whole, as a relay answers it: the library reads advice support only from a valid one.
+      return json(200, {
+        name: "daintree-decisions",
+        protocol_min: 1,
+        protocol_max: 1,
+        worker_version: "0.9.0",
+        claimed: true,
+        claim_configured: true,
+        voice: { xai: false, anthropic: false, openai: false },
+        features: this.features,
+      });
     }
     // The owner desktop's answer for the person (#17101), committed as the relay does: only from
     // the owner, and only to a question whose asking desktop declared it takes one.
@@ -1060,8 +1073,18 @@ class HeldOutboxStore extends DaintreeLocalStore {
   }
 }
 
-/** The Host enrolled and its owner gone, with Decisions connected to the fake relay. */
-async function startHost(options: { openStore?: () => DaintreeLocalStore } = {}) {
+/**
+ * The Host enrolled and its owner gone, with Decisions connected to the fake
+ * relay: one that advertises `relayFeatures`, and a phone that declared
+ * `phoneFeatures`, before the Host first connects.
+ */
+async function startHost(
+  options: {
+    openStore?: () => DaintreeLocalStore;
+    relayFeatures?: string[];
+    phoneFeatures?: string[];
+  } = {}
+) {
   // The owner enrolls the Host as its own device, then closes: nothing of the owner runs after this.
   const owner = await makeOwner();
   const pending = new MemoryPendingHostStore();
@@ -1101,9 +1124,11 @@ async function startHost(options: { openStore?: () => DaintreeLocalStore } = {})
       last_seen_at: null,
       revoked_at: null,
       push_enabled: true,
+      ...(options.phoneFeatures ? { features: options.phoneFeatures } : {}),
     },
   ]);
   relay.hostDeviceId = host.config.deviceId;
+  if (options.relayFeatures) relay.features = options.relayFeatures;
 
   const record = {
     relayOrigin: host.config.relayOrigin,
@@ -1161,8 +1186,11 @@ async function runDecisions(
     publish: () => {},
   });
 
+  /** Each list this machine served its owner's Shell, as a Host does (#17230). */
+  const hostLists: Array<HostServedQuestions | null> = [];
   const service: DecisionsService = new DecisionsService({
     openStore: async () => openStore(),
+    publishHostQuestions: (list) => hostLists.push(list),
     keyFilePath: () => path.join(dir, "keys.bin"),
     openQuestions: (source, previousClosed) =>
       openDecisionsMcpRoute(
@@ -1224,7 +1252,7 @@ async function runDecisions(
       }
     }
   };
-  return { terminals, listener, service, turnEnds };
+  return { terminals, listener, service, turnEnds, hostLists };
 }
 
 /** The owner computer's own Decisions connected to the fake relay, asking from its own panes. */
@@ -1764,7 +1792,12 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     ).toBe(false);
 
     // Everything the relay was asked was signed by the Host's own device: the owner signed nothing.
-    const signers = new Set(relay.requests.map((request) => request.deviceId));
+    // The relay's public `/info`, which says whether it takes advice (#17942), is read unsigned.
+    const signers = new Set(
+      relay.requests
+        .filter((request) => request.path !== "/api/v1/info")
+        .map((request) => request.deviceId)
+    );
     expect(signers).toEqual(new Set([host.config.deviceId]));
   }, 60_000);
 
@@ -1953,6 +1986,8 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     expect(tickets.length).toBeGreaterThan(0);
     for (const ticket of tickets) {
       expect(ticket.body).toHaveProperty("features", [
+        // A Host delivers advisory outcomes too (#17942).
+        "advisory-deadlines-v1",
         "involvement-v1",
         "owner-desktop-answers-v1",
         "owner-desktop-declines-v1",
@@ -2684,4 +2719,247 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     ]);
     expect(terminals.submitted).toHaveLength(0);
   }, 60_000);
+});
+
+/** A relay and a phone that can take advice (protocol section 21), as 0.9.0's both do. */
+const ADVICE = {
+  relayFeatures: ["thread-messages-v1", "advisory-deadlines-v1"],
+  phoneFeatures: ["advisory-deadlines-v1"],
+};
+
+/**
+ * An agent asking for 15 minutes of advice from `token`'s pane, once the
+ * Host's attempt has read that the relay and a phone take advice: it reads
+ * that in the background, and refuses `support-unknown` until it has.
+ */
+async function askAdvice(
+  port: number,
+  token: string,
+  question: string,
+  service: DecisionsService
+): Promise<Record<string, unknown>> {
+  await vi.waitFor(
+    async () => {
+      const live = service.getQuestionSource()?.live() ?? null;
+      // The library keeps the facts on the bridge it reads them for; nothing public says they are in.
+      const advisory = (
+        live as unknown as {
+          advisory?: { known(): Promise<{ relay: boolean | null; reader: boolean | null }> };
+        } | null
+      )?.advisory;
+      expect(await advisory?.known()).toEqual({ relay: true, reader: true });
+    },
+    { timeout: 15_000 }
+  );
+  const result = await callTool(port, token, "ask_human", {
+    question,
+    kind: "choice",
+    options: [
+      { id: "a", label: "Option A" },
+      { id: "b", label: "Option B" },
+    ],
+    expires_in: "15m",
+    planned_fallback: "Use the in-memory fixture.",
+  });
+  expect(result.isError, JSON.stringify(result)).toBeUndefined();
+  return result.structuredContent;
+}
+
+/**
+ * The relay closes `questionId` at its deadline, as its alarm does, with this
+ * machine's clock moved past it: a Host believes an expiry only once its
+ * signed deadline has passed by its own clock too. The clock is the faked
+ * `Date` each test of advice runs on from before its Host starts, since the
+ * library's bridges take `Date.now` as they're made.
+ */
+function relayExpires(relay: FakeRelay, questionId: string, deadline: string): void {
+  if (Date.now() < Date.parse(deadline) + 2_000) vi.setSystemTime(Date.parse(deadline) + 2_000);
+  relay.append({
+    event_type: "decision.expired",
+    question_id: questionId,
+    question_revision: 0,
+    origin_device_id: null,
+    data: EventData.expired.parse({
+      expired_at: new Date(Date.parse(deadline) + 1_000).toISOString(),
+      target_host_id: relay.questions.get(questionId)!.target_host_id,
+    }) as Record<string, unknown>,
+  });
+}
+
+describe("Advice on an enrolled Remote Host, with its owner's computer asleep (#17942)", () => {
+  beforeEach(() => {
+    // Only `Date`, moving with real time: the sockets, waits and wake engine keep real timers.
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    cleanups.push(() => void vi.useRealTimers());
+  });
+
+  it("signs a 15-minute deadline, records it, and types the unanswered deadline's notice into the pane that asked, never into another Host's pane with the same ids", async () => {
+    const { relay, host, record, terminals, listener, service, hostLists } =
+      await startHost(ADVICE);
+
+    const before = Date.now();
+    const receipt = await askAdvice(listener.port, "token-pane-1", "Which fixture?", service);
+    expect(receipt).toMatchObject({
+      reply_mode: "advisory",
+      planned_fallback: "Use the in-memory fixture.",
+    });
+    const questionId = receipt.question_id as string;
+    const deadline = receipt.expires_at as string;
+    // The Host's own clock set the deadline: 15 minutes, with no word from its owner.
+    expect(Date.parse(deadline) - before).toBeGreaterThanOrEqual(15 * 60_000);
+    expect(Date.parse(deadline) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
+
+    // Signed by the Host's own device as advice, with that deadline, and kept in its own store.
+    await publishedToRelay(relay, [questionId]);
+    expect(relay.questions.get(questionId)!.signer_device_id).toBe(host.config.deviceId);
+    const created = relay.events.find(
+      (event) => event.event_type === "decision.created" && event.question_id === questionId
+    )!;
+    expect((created.data.record as { expires_at: string }).expires_at).toBe(deadline);
+    expect(
+      (created.data.envelope as { aad: { reply_mode?: string } }).aad.reply_mode
+    ).toBe("advisory");
+    expect(created.data.target_host_id).toBe(await hostRef(record.hostId));
+    const store = new DaintreeLocalStore(sqlite);
+    expect(await store.getQuestion(questionId)).toMatchObject({
+      expires_at: deadline,
+      origin: { host_id: record.hostId, pane_id: "pane-1" },
+    });
+    // It declares that it delivers advisory outcomes, as only a Host that types them may.
+    const tickets = relay.requests.filter((request) => request.path === "/api/v1/socket-ticket");
+    expect(tickets.length).toBeGreaterThan(0);
+    for (const ticket of tickets) {
+      expect((ticket.body as { features: string[] }).features).toContain("advisory-deadlines-v1");
+    }
+
+    // Another Host's question, from a pane with the same project and terminal ids, in the same ledger.
+    const otherHostRef = await hostRef("host_lab_0002");
+    const lookalike = newId();
+    relay.questions.set(lookalike, {
+      target_host_id: otherHostRef,
+      signer_device_id: "dev_other_host_01",
+    });
+    relay.append({
+      event_type: "decision.created",
+      question_id: lookalike,
+      question_revision: 0,
+      origin_device_id: "dev_other_host_01",
+      data: {},
+    });
+
+    // Nobody answers: the relay closes both at their deadlines, the owner's computer nowhere.
+    relayExpires(relay, lookalike, deadline);
+    relayExpires(relay, questionId, deadline);
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    const [notice] = terminals.submitted;
+    expect(notice!.id).toBe("pane-1");
+    expect(notice!.text).toContain("status: advisory-unanswered");
+    expect(notice!.text).toContain(`deadline: ${deadline}`);
+    expect(notice!.text).toContain("disposition: fallback-due");
+    expect(notice!.text).toContain("authorised: no");
+    expect(notice!.text).not.toContain(lookalike);
+    // The other Host's question made no row here, and nothing was typed for it.
+    expect(await store.getQuestion(lookalike)).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(1);
+
+    // What the owner reads when it next connects: the closure, its plan due, typed in.
+    await vi.waitFor(
+      async () =>
+        expect(await readOnHost(service, "pane-1", questionId)).toMatchObject({
+          replyMode: "advisory",
+          plannedFallback: "Use the in-memory fixture.",
+          closedReason: "expired",
+          closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+        }),
+      { timeout: 15_000 }
+    );
+    await vi.waitFor(
+      () =>
+        expect(
+          hostLists.at(-1)?.questions.find((item) => item.reference.questionId === questionId)
+        ).toMatchObject({
+          reference: { hostId: record.hostId, terminalId: "pane-1" },
+          expiresAt: deadline,
+          replyMode: "advisory",
+          closedReason: "expired",
+          closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+        }),
+      { timeout: 15_000 }
+    );
+    // The Host signed everything it sent but the relay's public `/info`: its owner signed nothing.
+    expect(
+      new Set(
+        relay.requests
+          .filter((request) => request.path !== "/api/v1/info")
+          .map((request) => request.deviceId)
+      )
+    ).toEqual(new Set([host.config.deviceId]));
+  }, 60_000);
+
+  it("types the phone's answer given before the deadline, and no notice of the deadline after it", async () => {
+    const { owner, phone, relay, terminals, listener, service } = await startHost(ADVICE);
+    const receipt = await askAdvice(listener.port, "token-pane-1", "Which fixture?", service);
+    const questionId = receipt.question_id as string;
+    await publishedToRelay(relay, [questionId]);
+
+    await phoneAnswers(relay, owner, phone, questionId, "b");
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    expect(terminals.submitted[0]!.id).toBe("pane-1");
+    expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["b"]);
+
+    // An expiry of the round the answer closed comes too late: it decides nothing and types nothing.
+    relayExpires(relay, questionId, receipt.expires_at as string);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(terminals.submitted).toHaveLength(1);
+    expect(await readOnHost(service, "pane-1", questionId)).toMatchObject({
+      status: "human-answered",
+      closedReason: null,
+      closureNotice: null,
+    });
+  }, 60_000);
+
+  it("types a deadline that passed while the Host was away from the relay, and one that passed while its Decisions was stopped, each once", async () => {
+    const { relay, record, terminals, listener, service } = await startHost(ADVICE);
+    const away = await askAdvice(listener.port, "token-pane-1", "Which fixture?", service);
+    const restarted = await askAdvice(listener.port, "token-pane-2", "Which schema?", service);
+    const awayId = away.question_id as string;
+    const restartedId = restarted.question_id as string;
+    await publishedToRelay(relay, [awayId, restartedId]);
+
+    // Away from the relay as its deadline passes: the expiry waits in the ledger.
+    relay.down = true;
+    relay.liveSocket()!.drop();
+    await vi.waitFor(() => expect(service.getStatus().state).toBe("reconnecting"), {
+      timeout: 15_000,
+    });
+    relayExpires(relay, awayId, away.expires_at as string);
+    expect(terminals.submitted).toHaveLength(0);
+    relay.down = false;
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    expect(terminals.submitted[0]!.id).toBe("pane-1");
+    expect(terminals.submitted[0]!.text).toContain("disposition: fallback-due");
+
+    // Its Decisions stops (a restart), the other deadline passes, and it starts on the same store.
+    await service.stop();
+    relayExpires(relay, restartedId, restarted.expires_at as string);
+    await service.start(hostLifetimeSettings(record), "host");
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(2), { timeout: 20_000 });
+    expect(terminals.submitted[1]!.id).toBe("pane-2");
+    expect(terminals.submitted[1]!.text).toContain("status: advisory-unanswered");
+    expect(terminals.submitted[1]!.text).toContain("disposition: fallback-due");
+
+    // Started again, neither is typed a second time.
+    await vi.waitFor(
+      async () => expect(await new DaintreeLocalStore(sqlite).hasPendingDelivery()).toBe(false),
+      { timeout: 15_000 }
+    );
+    await service.stop();
+    await service.start(hostLifetimeSettings(record), "host");
+    await vi.waitFor(() => expect(service.getStatus().state).toBe("connected"), {
+      timeout: 15_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(terminals.submitted).toHaveLength(2);
+  }, 90_000);
 });

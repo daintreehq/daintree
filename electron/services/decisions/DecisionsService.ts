@@ -66,6 +66,7 @@ import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions, questionAsks } from "./questionList.js";
 import type { AdvisoryHost } from "./questionRound.js";
+import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
 import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
@@ -475,6 +476,22 @@ export class DecisionsService {
   /** The policy this lifetime asks questions under; null while stopped. */
   getPolicy(): PolicyRegistry | null {
     return this.policy;
+  }
+
+  /**
+   * How this lifetime asks its agents' questions, as a Host reports it to its
+   * owner (#17942): advice only while its policy allows it and its connection
+   * types the outcome (what it was started with until the connection settles
+   * that), and the default expiry its policy runs with. Null while stopped.
+   */
+  getQuestionPolicy(): DecisionsHostQuestionPolicy | null {
+    const policy = this.policy;
+    if (policy === null) return null;
+    const advisory = this.advisoryHost();
+    return {
+      advisoryQuestions: advisory.outcomes && advisory.allowed,
+      defaultQuestionExpiryMs: policy.defaultQuestionExpiryMs,
+    };
   }
 
   /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
