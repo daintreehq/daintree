@@ -570,8 +570,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return screenOnly;
   }
 
-  async serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+  async serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
+    if (this.continuityBreaks > 0 && this.continuousSince >= since) return null;
     // A hold that can't reach the worker is output the screen would miss.
     const breaks = this.continuityBreaks;
     if (!this.flushHeldFeed()) return null;

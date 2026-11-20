@@ -21,9 +21,10 @@ function frame(rows: readonly string[]): Promise<string> {
   return serializeOutput(rows.join("\r\n"), 80, 24);
 }
 
-/** Whether the whole screen, read as one block, ends on a selector. */
+/** Whether the whole screen, down to its last row drawn, ends on a selector. */
 function wholeScreenSelector(serialized: string, agentId: string): boolean {
   const { rows } = readInputBoxScreen(serialized, inputSuggestionRuleFor(agentId));
+  while (rows.length > 0 && rows.at(-1)!.trim() === "") rows.pop();
   return endsOnChoiceSelector(rows, undefined, agentId);
 }
 
@@ -45,6 +46,17 @@ describe("showsSelectorAtEnter (#17984)", () => {
       "",
       " Esc to cancel · Tab to amend",
     ]);
+    expect(readInputBoxScreen(screen, inputSuggestionRuleFor("claude")).belowBox).toBeNull();
+    expect(showsSelectorAtEnter(screen, "claude")).toBe(true);
+  });
+
+  it("sees a dialog drawn high on a screen left blank below it", async () => {
+    const dialog = [" Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"];
+    // A row painted in a background of its own at the foot of the screen, as
+    // a tinted TUI paints them, keeps the empty rows between in the read.
+    const footer = "\x1b[24;1H\x1b[48;5;236m\x1b[K\x1b[0m";
+    const screen = await serializeOutput(dialog.join("\r\n") + footer, 80, 24);
+    expect(readInputBoxScreen(screen, inputSuggestionRuleFor("claude")).rows.length).toBe(24);
     expect(showsSelectorAtEnter(screen, "claude")).toBe(true);
   });
 
@@ -96,6 +108,16 @@ describe("showsSelectorAtEnter (#17984)", () => {
     ]);
     expect(readInputBoxScreen(screen, inputSuggestionRuleFor("claude")).belowBox).toBeNull();
     expect(showsSelectorAtEnter(screen, "claude")).toBe(false);
+  });
+
+  it("passes a numbered list typed into Codex's tinted composer", async () => {
+    const captured = await serializeCastAt(CODEX_COMPOSER, "multiline");
+    // The second row is serialized with a cursor move between its words.
+    const screen = captured.replace("first line", "1. add tests").replace("second", "2. run the");
+    expect(screen).not.toBe(captured);
+    // With the tint gone, the draft's rows are a numbered list under a highlight.
+    expect(wholeScreenSelector(screen, "codex")).toBe(true);
+    expect(showsSelectorAtEnter(screen, "codex")).toBe(false);
   });
 
   it("sees Codex's captured approval and passes its captured draft", async () => {

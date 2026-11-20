@@ -642,7 +642,7 @@ export class TerminalProcess {
         return self.writeQueue;
       },
       logWriteError: (error, context) => self.logWriteError(error, context),
-      serializeScreen: () => self.analysis.serializeScreen(),
+      serializeScreen: (since) => self.analysis.serializeScreen(since),
       outputMark: () => self.emittedBytes + self.receivedChunks,
     });
     this.ptyDataPipeline = new PtyDataPipeline({

@@ -479,7 +479,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     });
   }
 
-  serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+  // This mirror never loses output, so no `since` can postdate a loss.
+  serializeScreen(_since: number): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.terminalInfo;
     const headless = terminal.headlessTerminal;
     if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {

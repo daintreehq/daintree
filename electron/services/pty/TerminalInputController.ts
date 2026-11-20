@@ -100,7 +100,7 @@ export interface TerminalInputControllerHost {
   readonly writeQueue: WriteQueue;
   logWriteError(error: unknown, context: { operation: string; traceId?: string }): void;
   /** The visible screen once all output fed so far has parsed; see `AnalysisBackend.serializeScreen`. */
-  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
+  serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null>;
   /** A count that moves whenever output reaches this terminal or goes on to its views. */
   outputMark(): number;
 }
@@ -688,6 +688,10 @@ export class TerminalInputController {
     }
     terminal.lastInputTime = Date.now();
     this.laneSubmittedAt = terminal.lastInputTime;
+    // The state a guarded line was admitted on, before this submission's own
+    // busy transition moves it: a mirror that lost output since can't vouch
+    // for the screen the line was let in at (#17984).
+    const admittedOn = terminal.lastStateChange ?? Number.NEGATIVE_INFINITY;
 
     if (terminal.isExited) {
       return;
@@ -711,6 +715,21 @@ export class TerminalInputController {
     const identityWatcher = this.host.identityWatcher;
 
     if (body.length === 0) {
+      // A bare Enter at a selector picks its highlighted option (#17984).
+      if (ctx?.abandonEnterOnInput === true) {
+        const owner = this.captureOwner();
+        const typedBefore = terminal.lastTypedInputAt;
+        const screen = await this.readScreenAtEnter(admittedOn);
+        if (
+          screen === null ||
+          !this.isStillOwnedBy(generation, owner) ||
+          this.host.terminalInfo.lastTypedInputAt !== typedBefore ||
+          ctx.isWithdrawn?.() === true ||
+          !screen.unchanged()
+        ) {
+          return;
+        }
+      }
       identityWatcher.armSuppressSignal();
       if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
       return;
@@ -725,7 +744,6 @@ export class TerminalInputController {
     const carriesImages = ctx?.imagePaths !== undefined && ctx.imagePaths.length > 0;
     const owner = this.captureOwner();
     const typedBeforeBody = terminal.lastTypedInputAt;
-    const observedBeforeBody = this.host.analysis.observedSince();
     const imageSegments = carriesImages
       ? await this.resolveImageSegments(body, ctx?.imagePaths ?? [])
       : null;
@@ -796,10 +814,14 @@ export class TerminalInputController {
     }
 
     // Read before the checks below, so they run again on everything that
-    // happened while it read.
+    // happened while it read, unless they already stop the Enter.
+    const enterStopped = () =>
+      this.host.terminalInfo.lastTypedInputAt !== typedAtBodyWrite ||
+      ctx?.isWithdrawn?.() === true ||
+      !this.isStillOwnedBy(generation, owner);
     const screen =
-      ctx?.abandonEnterOnInput === true
-        ? await this.readScreenAtEnter(observedBeforeBody)
+      ctx?.abandonEnterOnInput === true && !enterStopped()
+        ? await this.readScreenAtEnter(admittedOn)
         : undefined;
 
     if (!this.host.terminalInfo.ptyProcess) {
@@ -861,19 +883,19 @@ export class TerminalInputController {
    * Enter must be held, otherwise a check, run again right before the Enter,
    * that nothing has reached the terminal since. Held when the read shows a
    * choice selector, can't show it saw every byte that came in (a mirror
-   * that lost output since the body, a read that failed, timed out or was
-   * overtaken by output), or comes back empty. A pass says only what the
-   * screen showed: output still in the pty, or a frame the agent hasn't
-   * flushed, can't be seen from here.
+   * that lost output since the state the line was admitted on, a read that
+   * failed, timed out or was overtaken by output), or comes back empty. A
+   * pass says only what the screen showed: output still in the pty, or a
+   * frame the agent hasn't flushed, can't be seen from here.
    */
   private async readScreenAtEnter(
-    observedBeforeBody: number | null
+    admittedOn: number
   ): Promise<{ unchanged: () => boolean } | null> {
     const mark = this.host.outputMark();
+    const observedSince = this.host.analysis.observedSince();
+    if (observedSince === null) return null;
     const unchanged = () =>
-      this.host.outputMark() === mark &&
-      observedBeforeBody !== null &&
-      this.host.analysis.observedSince() === observedBeforeBody;
+      this.host.outputMark() === mark && this.host.analysis.observedSince() === observedSince;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), ENTER_SCREEN_READ_TIMEOUT_MS);
@@ -882,7 +904,7 @@ export class TerminalInputController {
     try {
       const snapshot = await Promise.race([
         Promise.resolve()
-          .then(() => this.host.serializeScreen())
+          .then(() => this.host.serializeScreen(admittedOn))
           .catch(() => null),
         timeout,
       ]);

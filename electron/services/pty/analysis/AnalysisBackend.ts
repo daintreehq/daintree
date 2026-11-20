@@ -114,10 +114,11 @@ export interface AnalysisBackend {
   /**
    * The visible screen, read once every byte fed before the call has parsed
    * (#17984), or null when that can't be shown: no live mirror, output the
-   * mirror was never handed, a mirror rebuilt during the read, or a read that
-   * failed. Host-internal; it never answers a view.
+   * mirror was never handed, a mirror that lost output at or after `since`
+   * (what it shows may have been drawn over unseen), or a read that failed.
+   * Host-internal; it never answers a view.
    */
-  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
+  serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null>;
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null>;
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
