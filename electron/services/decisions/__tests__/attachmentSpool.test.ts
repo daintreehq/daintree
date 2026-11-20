@@ -495,6 +495,92 @@ describe("asking with attachments", () => {
     expect(spooled()).toEqual([]);
   });
 
+  /** A relay that holds each image upload until released, and records what reached it. */
+  function slowRelay() {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const state = { uploading: false };
+    const client = {
+      reserveAttachment: async (body: { attachment_id: string }) => ({
+        attachment_id: body.attachment_id,
+        upload_path: `/api/v1/attachments/${body.attachment_id}/content`,
+      }),
+      uploadAttachment: async () => {
+        state.uploading = true;
+        await held;
+      },
+      completeAttachment: async () => ({}),
+      createQuestion: vi.fn(async () => ({ event_seq: 1 })),
+      postAction: vi.fn(async () => ({ event_seq: 2 })),
+    };
+    return { client, state, release };
+  }
+
+  function liveAttempt(client: object): { attempt: DecisionsBridge; asking: QuestionBridge } {
+    const attempt = new DecisionsBridge({
+      identity,
+      store,
+      policy: new PolicyRegistry(),
+      sink: holdingTerminalSink,
+      client: client as unknown as RelayClient,
+      resolver: attachments.resolver,
+      spool: attachments.spool,
+      pumpIntervalMs: 0,
+    });
+    const asking = new QuestionBridge({
+      source: {
+        identity: () => identity,
+        live: () => attempt,
+        store,
+        policy: new PolicyRegistry(),
+        attachments,
+      },
+      isCurrent: () => true,
+    });
+    return { attempt, asking };
+  }
+
+  it("drops a question a live attempt never sent, sending nothing, when it is cancelled (#17939)", async () => {
+    writeImage("shot.png");
+    const asked = await bridge().registerQuestion({
+      origin: origin(),
+      input: { question: "Ship it?", attachments: [{ local_resource_id: "shot.png" }] },
+    });
+    const relay = slowRelay();
+    const { asking } = liveAttempt(relay.client);
+
+    await asking.cancelQuestion(asked.questionId, paneIdentityOf(origin()));
+
+    expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
+    expect(await store.outboxFor(asked.questionId)).toEqual([]);
+    expect(relay.client.createQuestion).not.toHaveBeenCalled();
+    expect(spooled()).toEqual([]);
+  });
+
+  it("drops a create a live attempt is still uploading when it is cancelled, so it never comes back (#17939)", async () => {
+    writeImage("shot.png");
+    const asked = await bridge().registerQuestion({
+      origin: origin(),
+      input: { question: "Ship it?", attachments: [{ local_resource_id: "shot.png" }] },
+    });
+    const relay = slowRelay();
+    const { attempt, asking } = liveAttempt(relay.client);
+    const pumping = attempt.pump();
+    await vi.waitFor(() => expect(relay.state.uploading).toBe(true));
+
+    await asking.cancelQuestion(asked.questionId, paneIdentityOf(origin()));
+    relay.release();
+    await pumping;
+    await attempt.pump();
+
+    // The flush finds its create gone when it next writes it, and stops before sending it.
+    expect(relay.client.createQuestion).not.toHaveBeenCalled();
+    expect(relay.client.postAction).not.toHaveBeenCalled();
+    expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
+    expect(await store.outboxFor(asked.questionId)).toEqual([]);
+    expect(spooled()).toEqual([]);
+  });
+
   it("drops the spool with a question cancelled before it was ever published", async () => {
     writeImage("shot.png");
     const b = bridge();

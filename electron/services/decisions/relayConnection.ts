@@ -69,8 +69,6 @@ export type RelayConnectionStatus =
 export type RelayConnectionStore = LocalStore & {
   isFaulted?(): boolean;
   hasPendingDelivery?(): Promise<boolean>;
-  /** Marks a question's pending create as possibly published, atomically, if it has one (#16014). */
-  markCreateMaybePublished?(questionId: string): Promise<boolean>;
 };
 
 /**

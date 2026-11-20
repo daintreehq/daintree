@@ -565,42 +565,20 @@ describe("QuestionBridge", () => {
     expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
   });
 
-  it("keeps a question's create for a live attempt's flush to send, and has a real cancel follow it", async () => {
+  it("leaves a question's create to the live attempt's cancel, which settles it under the shared lock", async () => {
     const b = bridge();
     const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Cancel me?" } });
     live = liveBridge();
     const pane = paneIdentityOf(ORIGIN);
+    const putOutbox = vi.spyOn(store, "putOutbox");
 
     await b.cancelQuestion(asked.questionId, pane);
 
-    const [create] = await store.outboxFor(asked.questionId);
-    expect(create?.kind).toBe("create");
-    expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBe(true);
-    expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId, pane);
-  });
-
-  it("marks the create in place when the store can, never writing back a copy it read", async () => {
-    const marks: string[] = [];
-    const putOutbox = vi.spyOn(store, "putOutbox");
-    source = {
-      ...source,
-      store: Object.assign(store, {
-        markCreateMaybePublished: async (questionId: string) => {
-          marks.push(questionId);
-          return true;
-        },
-      }),
-    };
-    const b = bridge();
-    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Cancel me?" } });
-    live = liveBridge();
-    putOutbox.mockClear();
-
-    await b.cancelQuestion(asked.questionId, paneIdentityOf(ORIGIN));
-
-    expect(marks).toEqual([asked.questionId]);
+    // From 0.9.0 the library's publisher knows whether its flush holds the create; nothing is marked here.
     expect(putOutbox).not.toHaveBeenCalled();
-    expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
+    const [create] = await store.outboxFor(asked.questionId);
+    expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+    expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId, pane);
   });
 
   it("asks through the lifetime's attachments: its gate, and its resolver and spool when offline", async () => {
@@ -1261,7 +1239,7 @@ describe("QuestionBridge", () => {
       // The view's scope stood in for the asker, so the library is asked without a pane.
       expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId);
       const [create] = await store.outboxFor(asked.questionId);
-      expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBe(true);
+      expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
       expect(await requests()).toMatchObject([
         { question_id: asked.questionId, result: "person", detail: { status: "queued" } },
       ]);

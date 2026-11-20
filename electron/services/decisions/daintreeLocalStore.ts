@@ -365,11 +365,6 @@ function toOutboxRecord(i: OutboxItem): OutboxRecord {
   };
 }
 
-function isMarkedPublished(payload: string): boolean {
-  const parsed = JSON.parse(payload) as { maybePublished?: unknown } | null;
-  return parsed?.maybePublished === true;
-}
-
 function outboxFrom(r: OutboxRecord): OutboxItem {
   return {
     id: r.id,
@@ -720,34 +715,21 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /**
-   * A create's `maybePublished` mark, once stored, stays (#16014): the
-   * publisher rewrites the create from its own copy after each attachment it
-   * uploads, and that copy predates a mark a cancel set meanwhile. A create
-   * deleted meanwhile is refused, never put back: a cancel that dropped it as
-   * never published while a starting attempt was uploading it would otherwise
-   * see it published after all. The refusal fails that flush before it sends
-   * the create.
+   * A create deleted meanwhile is refused, never put back (#16014): a cancel
+   * that dropped it as never published while a starting attempt was uploading
+   * it would otherwise see it published after all. The refusal fails that
+   * flush before it sends the create. Otherwise a create is written as given:
+   * from 0.9.0 the publisher rewrites one only from the item as stored, under
+   * the shared lock, and withdraws its own possibly-published claim from a
+   * create the relay showed it never took.
    */
   putOutbox(item: OutboxItem): Promise<void> {
     return this.enqueueWith("write", () => {
       const record = toOutboxRecord(item);
-      return () =>
-        this.writeOutbox(record.kind === "create" ? this.keepingPublishedMark(record) : record);
-    });
-  }
-
-  /**
-   * Marks a question's pending create as possibly published, changing nothing
-   * else in it: not its upload progress, not its retry time. False when it has
-   * no create left, which is never put back.
-   */
-  markCreateMaybePublished(questionId: string): Promise<boolean> {
-    return this.enqueue("write", () => {
-      const r = this.st(
-        `UPDATE decisions_outbox SET payload = json_set(payload, '$.maybePublished', json('true'))
-         WHERE question_id = ? AND kind = 'create'`
-      ).run(questionId);
-      return r.changes > 0;
+      return () => {
+        if (record.kind === "create") this.refuseDeletedCreate(record);
+        this.writeOutbox(record);
+      };
     });
   }
 
@@ -1246,16 +1228,12 @@ export class DaintreeLocalStore implements LocalStore {
     return next;
   }
 
-  private keepingPublishedMark(record: OutboxRecord): OutboxRecord {
-    const stored = this.st("SELECT payload FROM decisions_outbox WHERE id = ?").get(record.id) as
-      { payload: string } | undefined;
-    if (stored === undefined && this.deletedCreates.has(record.id)) {
+  private refuseDeletedCreate(record: OutboxRecord): void {
+    if (!this.deletedCreates.has(record.id)) return;
+    const stored = this.st("SELECT 1 FROM decisions_outbox WHERE id = ?").get(record.id);
+    if (stored === undefined) {
       throw new Error("This question's create is no longer queued, so it isn't written back");
     }
-    if (stored === undefined || !isMarkedPublished(stored.payload)) return record;
-    if (isMarkedPublished(record.payload)) return record;
-    const payload = JSON.parse(record.payload) as Record<string, unknown>;
-    return { ...record, payload: JSON.stringify({ ...payload, maybePublished: true }) };
   }
 
   private writeOutbox(record: OutboxRecord): void {
