@@ -794,13 +794,20 @@ function recordRevocation(relay: RelayBinding): void {
   publishStatus();
 }
 
+/** After a recording of the kit's standing failed, how long reads of the same keys wait to try again. */
+const KIT_RECORD_RETRY_MS = 60_000;
+/** When reads of unchanged keys may next try a recording that failed; 0 while none has. */
+let kitRecordRetryAt = 0;
+
 /**
  * The owner's keys were read or written (#18063): a verified kit they've
  * moved past is recorded as out of date, so it stays so after a restart, and
  * Settings hears of it. Runs in the key store's turn, so a verification
- * recorded since is the one compared, and for every read, so a recording
- * that failed is made again by the next. The running lifetime reads no
- * `recoveryKit`, so it isn't told: that would reconnect one held back.
+ * recorded since is the one compared. A recording that failed is made again
+ * by a later read: at once when the keys changed, otherwise at most once a
+ * minute, since keys are read for every connection and answer. The running
+ * lifetime reads no `recoveryKit`, so it isn't told: that would reconnect one
+ * held back.
  */
 function ownerKeysSeen(from: DecisionsService, seen: OwnerKeysSeen): void {
   // No role check: a write finishing as the lifetime stops reports after its
@@ -809,16 +816,20 @@ function ownerKeysSeen(from: DecisionsService, seen: OwnerKeysSeen): void {
   const current = readDecisionsSettings(store);
   const record = reconciledKit(current.recoveryKit, seen.keys, seen.first);
   let recorded = false;
-  if (record !== current.recoveryKit) {
+  if (record !== current.recoveryKit && (seen.changed || Date.now() >= kitRecordRetryAt)) {
     try {
       writeDecisionsSettings(store, { ...current, recoveryKit: record });
       recorded = true;
+      kitRecordRetryAt = 0;
     } catch {
-      // The status compares the keys it last saw all the same, and the next read records it.
-      console.warn("[Decisions] The recovery kit's standing couldn't be recorded in settings");
+      // The status compares the keys it last saw all the same.
+      if (kitRecordRetryAt === 0) {
+        console.warn("[Decisions] The recovery kit's standing couldn't be recorded in settings");
+      }
+      kitRecordRetryAt = Date.now() + KIT_RECORD_RETRY_MS;
     }
   }
-  // Keys are read for every connection and answer; only a change is news.
+  // Only a change is news.
   if (recorded || seen.changed) publishStatus();
 }
 

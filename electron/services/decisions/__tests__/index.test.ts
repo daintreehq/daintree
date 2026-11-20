@@ -4795,8 +4795,14 @@ describe("Decisions entry", () => {
       expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
 
+      // Reads of the same keys try again only after a minute.
+      const now = Date.now();
+      keysRead(ownerKeys(2, [1, 2, 3]));
+      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
       const pushed = pushedStatuses().length;
       keysRead(ownerKeys(2, [1, 2, 3]));
+      clock.mockRestore();
       expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, outOfDate: true } });
       await vi.waitFor(() => expect(pushedStatuses().length).toBeGreaterThan(pushed));
       warn.mockRestore();
@@ -4815,7 +4821,21 @@ describe("Decisions entry", () => {
       // Still said, from the keys this run saw.
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
 
+      // A settings write that keeps failing is tried again at most once a minute, and said once.
+      const now = Date.now();
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("No space left on device");
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
       keysRead(ownerKeys(1, [1, 2]));
+      vi.mocked(store.set).mockClear();
+      keysRead(ownerKeys(1, [1, 2]));
+      expect(store.set).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledOnce();
+
+      clock.mockReturnValue(now + 122_000);
+      keysRead(ownerKeys(1, [1, 2]));
+      clock.mockRestore();
       expect(saved.value).toMatchObject({ recoveryKit: { outOfDate: true } });
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("recovery kit's standing"));
       warn.mockRestore();
