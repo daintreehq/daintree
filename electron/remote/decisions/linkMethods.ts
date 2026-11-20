@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
+import type {
+  DecisionsHostQuestionPolicy,
+  DecisionsHostRuntime,
+} from "../../../shared/types/decisionsHosts.js";
 import {
   MAX_HOST_DETAIL_LENGTH,
   type HostAcceptResult,
@@ -35,11 +38,21 @@ export const DecisionsLinkMethod = {
    */
   OWNER_STATE_V2: "decisions.ownerState.v2",
   /**
+   * Shell → Host (#17942): `OWNER_STATE_V2`, answered with a v2 report, whose
+   * running Host also says how it asks its agents' questions. A Host from
+   * before it answers UNSUPPORTED, and is told `OWNER_STATE_V2` instead: that
+   * method's report is strict, so a field an older Shell doesn't know would
+   * fail it.
+   */
+  OWNER_STATE_V3: "decisions.ownerState.v3",
+  /**
    * Host → Shell (#16022): what the Host reports of its own Decisions changed,
    * sent to the Shells whose owner enrolled it. A Shell from before it
    * answers UNSUPPORTED, which changes nothing.
    */
   HOST_RUNTIME: "decisions.hostRuntime",
+  /** Host → Shell (#17942): `HOST_RUNTIME` with a v2 report, to a Shell that announced with v3. */
+  HOST_RUNTIME_V2: "decisions.hostRuntime.v2",
   /**
    * Shell → Host (#17230): the Host's own questions, as a content-free list,
    * and one of them read by reference (content, an image part, opening
@@ -96,7 +109,9 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.ENROLL_HOST]: "host",
   [DecisionsLinkMethod.OWNER_STATE]: "host",
   [DecisionsLinkMethod.OWNER_STATE_V2]: "host",
+  [DecisionsLinkMethod.OWNER_STATE_V3]: "host",
   [DecisionsLinkMethod.HOST_RUNTIME]: "shell",
+  [DecisionsLinkMethod.HOST_RUNTIME_V2]: "shell",
   [DecisionsLinkMethod.QUESTIONS]: "host",
   [DecisionsLinkMethod.CANCEL_QUESTION]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED]: "shell",
@@ -204,30 +219,65 @@ export const OwnerStateV2PayloadSchema = z
 /** A time a Host reports, as epoch ms. */
 const Time = z.number().int().nonnegative();
 
+const NotEnrolledSchema = z.object({ state: z.literal("not-enrolled") });
+const RunningSchema = z.object({
+  state: z.literal("running"),
+  deviceId: RelayId,
+  connection: z.enum([
+    "not-connected",
+    "connecting",
+    "connected",
+    "reconnecting",
+    "replaced",
+    "revoked",
+  ]),
+  nextAttemptAt: Time.optional(),
+  problem: z.enum(["keys", "storage", "other-relay"]).optional(),
+});
+const OwnerOffSchema = z.object({ state: z.literal("owner-off"), deviceId: RelayId, since: Time });
+const RevokedSchema = z.object({
+  state: z.literal("revoked"),
+  deviceId: RelayId,
+  since: Time,
+  credentialsRemoved: z.boolean(),
+});
+
 export const HostRuntimeSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("not-enrolled") }),
-  z.object({
-    state: z.literal("running"),
-    deviceId: RelayId,
-    connection: z.enum([
-      "not-connected",
-      "connecting",
-      "connected",
-      "reconnecting",
-      "replaced",
-      "revoked",
-    ]),
-    nextAttemptAt: Time.optional(),
-    problem: z.enum(["keys", "storage", "other-relay"]).optional(),
-  }),
-  z.object({ state: z.literal("owner-off"), deviceId: RelayId, since: Time }),
-  z.object({
-    state: z.literal("revoked"),
-    deviceId: RelayId,
-    since: Time,
-    credentialsRemoved: z.boolean(),
-  }),
+  NotEnrolledSchema,
+  RunningSchema,
+  OwnerOffSchema,
+  RevokedSchema,
 ]) satisfies z.ZodType<DecisionsHostRuntime>;
 
 export const HostRuntimePayloadSchema = z.object({ runtime: HostRuntimeSchema }).strict();
 export type HostRuntimePayload = z.infer<typeof HostRuntimePayloadSchema>;
+
+/** The longest default expiry a policy accepts: under the relay's 366-day limit. */
+const MAX_DEFAULT_EXPIRY_MS = 366 * 24 * 60 * 60 * 1000;
+
+const QuestionPolicySchema = z
+  .object({
+    advisoryQuestions: z.boolean(),
+    defaultQuestionExpiryMs: z.number().int().positive().max(MAX_DEFAULT_EXPIRY_MS).nullable(),
+  })
+  .strict() satisfies z.ZodType<DecisionsHostQuestionPolicy>;
+
+/**
+ * A v2 report (#17942): a running Host always says how it asks its agents'
+ * questions, so a report without it is one from before, read with v1.
+ */
+export const HostRuntimeV2Schema = z.discriminatedUnion("state", [
+  NotEnrolledSchema,
+  RunningSchema.extend({ questionPolicy: QuestionPolicySchema }),
+  OwnerOffSchema,
+  RevokedSchema,
+]) satisfies z.ZodType<DecisionsHostRuntime>;
+
+export const HostRuntimeV2PayloadSchema = z.object({ runtime: HostRuntimeV2Schema }).strict();
+
+/** A report as a Shell from before #17942 reads it: a running Host's without its question policy. */
+export function legacyRuntime(runtime: DecisionsHostRuntime): DecisionsHostRuntime {
+  if (runtime.state !== "running" || runtime.questionPolicy === undefined) return runtime;
+  const { questionPolicy: _policy, ...legacy } = runtime;
+  return legacy;
+}

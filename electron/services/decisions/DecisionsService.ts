@@ -65,6 +65,8 @@ import {
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions, questionAsks } from "./questionList.js";
+import type { AdvisoryHost } from "./questionRound.js";
+import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
 import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
@@ -194,9 +196,10 @@ export type DecisionsStoreOpener = (
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
   /**
-   * Whether this Daintree delivers advisory outcomes, given to the owner's
-   * connections as `advisoryDeadlines`: `DAINTREE_DELIVERS_ADVISORY_OUTCOMES`
-   * unless a test says otherwise.
+   * Whether this Daintree delivers advisory outcomes, given to every
+   * lifetime's connection, the owner's and a Remote Host's (#17942), as
+   * `advisoryDeadlines`: `DAINTREE_DELIVERS_ADVISORY_OUTCOMES` unless a test
+   * says otherwise.
    */
   advisoryOutcomes?: boolean;
   /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
@@ -273,6 +276,11 @@ export interface DecisionsServiceOptions {
   model?: Pick<DecisionModelRuntimeOptions, "openHistory" | "createAdapter">;
   /** Something Settings shows of the decision model changed (#16027), or the model came or went. */
   onModelChanged?: () => void;
+  /**
+   * What `getQuestionPolicy` answers changed without a status change: a
+   * connection settled whether it types advisory outcomes (#17942).
+   */
+  onQuestionPolicyChanged?: () => void;
   /** Deletes the model's files with none running; the model package's files unless a test says otherwise. */
   deleteModelFiles?: (files: DecisionModelFiles) => Promise<void>;
   /**
@@ -395,6 +403,7 @@ export class DecisionsService {
   private model: DecisionModelRuntime | null = null;
   private readonly modelOptions: DecisionsServiceOptions["model"];
   private readonly onModelChanged: () => void;
+  private readonly onQuestionPolicyChanged: () => void;
   private readonly deleteModelFiles: (files: DecisionModelFiles) => Promise<void>;
   /** The model's files are being deleted with no model running, so none may open them meanwhile. */
   private clearingModel = false;
@@ -438,6 +447,7 @@ export class DecisionsService {
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
+    this.onQuestionPolicyChanged = options.onQuestionPolicyChanged ?? (() => {});
     this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
     this.onStoreReplacing = options.onStoreReplacing ?? (() => {});
     const checkDiskSpace = options.checkDiskSpace ?? (async () => null);
@@ -473,6 +483,23 @@ export class DecisionsService {
   /** The policy this lifetime asks questions under; null while stopped. */
   getPolicy(): PolicyRegistry | null {
     return this.policy;
+  }
+
+  /**
+   * How this lifetime asks its agents' questions, as a Host reports it to its
+   * owner (#17942): advice only while its policy allows it and its running
+   * connection has settled that it types the outcome, so a lifetime whose
+   * connection hasn't got that far, or stopped, takes none; and the default
+   * expiry its policy runs with. Null while stopped.
+   */
+  getQuestionPolicy(): DecisionsHostQuestionPolicy | null {
+    const policy = this.policy;
+    if (policy === null) return null;
+    return {
+      advisoryQuestions:
+        this.questionSource?.advisoryDeadlines === true && policy.advisoryQuestions,
+      defaultQuestionExpiryMs: policy.defaultQuestionExpiryMs,
+    };
   }
 
   /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
@@ -821,11 +848,7 @@ export class DecisionsService {
   ): void {
     if (this.disposed || this.state === "off") return;
     const hostId = this.settings?.hostId ?? null;
-    // As the lifetime's delivery reads them before typing an advisory notice (#17944).
-    const questions = projectDecisionQuestions(rows, handled, hostId, {
-      outcomes: this.role === "owner" && this.advisoryOutcomes,
-      allowed: this.policy?.advisoryQuestions === true,
-    });
+    const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
     const waiting = new Set(
       questions
         .filter((item) => item.standing.kind === "waiting" || item.standing.kind === "queued")
@@ -834,6 +857,21 @@ export class DecisionsService {
     const asks = questionAsks(rows, waiting);
     if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
+  }
+
+  /**
+   * What the lifetime would type for an advisory question's untyped closing
+   * notice, as its list describes it: what its connection settled once it
+   * has, else what it was configured with, which the next connection uses.
+   */
+  private advisoryHost(): AdvisoryHost {
+    return {
+      outcomes:
+        this.questionSource !== null
+          ? this.questionSource.advisoryDeadlines === true
+          : this.advisoryOutcomes,
+      allowed: this.policy?.advisoryQuestions ?? false,
+    };
   }
 
   /** Nothing is listed while no store is read: the lifetime ended, or its store closed. */
@@ -1269,8 +1307,8 @@ export class DecisionsService {
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
-      // A Host's panes stay blocking until it settles its own deadlines (#17942).
-      advisoryDeadlines: role === "owner" && this.advisoryOutcomes,
+      // A Host settles its own panes' advisory questions, owner or no owner (#17942).
+      advisoryDeadlines: this.advisoryOutcomes,
       ...(snapshots
         ? {
             snapshots: {
@@ -1287,8 +1325,9 @@ export class DecisionsService {
       ...(role === "owner" && this.agentStopped ? { agentStopped: this.agentStopped } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
-        // Stopped for this lifetime: nothing could publish what an agent asks.
+        // Stopped for this lifetime: nothing could publish what an agent asks, nor settle advice.
         if (status.state === "not-connected" || status.state === "revoked") {
+          this.questionSource = null;
           this.closeQuestions();
           this.settleQuestions();
         }
@@ -1296,7 +1335,15 @@ export class DecisionsService {
       },
       onQuestionsReady: (source) => {
         if (this.connection !== connection) return;
+        const listed = this.advisoryHost();
+        const reported = this.getQuestionPolicy()?.advisoryQuestions;
         this.questionSource = source;
+        // Listed before the connection settled advisory delivery: again if it isn't what was assumed.
+        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh();
+        // Reported as taking no advice until settled: told again, as no status change need follow.
+        if (this.getQuestionPolicy()?.advisoryQuestions !== reported) {
+          this.onQuestionPolicyChanged();
+        }
         if (this.openQuestions !== null) {
           this.closeQuestions();
           try {
@@ -1329,7 +1376,7 @@ export class DecisionsService {
   private applyPolicy(settings: DecisionsSettings): void {
     if (!this.policy) {
       // A lifetime of the other role ends first and drops its policy, so the role never changes in place.
-      this.policy = createTrustedPolicy(settings, this.role);
+      this.policy = createTrustedPolicy(settings);
       return;
     }
     this.policy.proxyAllowlisted = settings.proxyAllowlisted;

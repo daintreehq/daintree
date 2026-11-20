@@ -105,7 +105,6 @@ import { RelayConnection, type QuestionSource } from "../relayConnection.js";
 import type { RelayFetch } from "../relayCheck.js";
 import { DecisionsAttachments, type QuestionAttachments } from "../attachmentSpool.js";
 import { DESIGN_REVIEW_FINAL_GATE_ID, createTrustedPolicy } from "../workflowGates.js";
-import type { DecisionsRole } from "../DecisionsService.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 
 const API_KEY = "orchestration-api-key";
@@ -427,7 +426,6 @@ describe("/mcp/decisions (#16011)", () => {
     options: {
       attachments?: QuestionAttachments;
       advisoryDeadlines?: boolean;
-      role?: DecisionsRole;
       defaultQuestionExpiryMs?: number | null;
       proxyAllowlisted?: boolean;
     } = {}
@@ -437,16 +435,13 @@ describe("/mcp/decisions (#16011)", () => {
       live: () => null,
       store,
       // The policy a lifetime starts with: the trusted gates, no proxy allowlist.
-      policy: createTrustedPolicy(
-        {
-          ...defaultDecisionsSettings(),
-          proxyAllowlisted: options.proxyAllowlisted ?? false,
-          ...(options.defaultQuestionExpiryMs !== undefined
-            ? { defaultQuestionExpiryMs: options.defaultQuestionExpiryMs }
-            : {}),
-        },
-        options.role ?? "owner"
-      ),
+      policy: createTrustedPolicy({
+        ...defaultDecisionsSettings(),
+        proxyAllowlisted: options.proxyAllowlisted ?? false,
+        ...(options.defaultQuestionExpiryMs !== undefined
+          ? { defaultQuestionExpiryMs: options.defaultQuestionExpiryMs }
+          : {}),
+      }),
       ...(options.attachments ? { attachments: options.attachments } : {}),
       ...(options.advisoryDeadlines ? { advisoryDeadlines: true } : {}),
     });
@@ -500,10 +495,11 @@ describe("/mcp/decisions (#16011)", () => {
       },
       store,
       keys,
-      policy: createTrustedPolicy(
-        { ...defaultDecisionsSettings(), proxyAllowlisted: false, ...settings },
-        "owner"
-      ),
+      policy: createTrustedPolicy({
+        ...defaultDecisionsSettings(),
+        proxyAllowlisted: false,
+        ...settings,
+      }),
       onStatus: () => {},
       onRevoked: () => {},
       fetchImpl: relay.fetchImpl,
@@ -1116,34 +1112,6 @@ describe("/mcp/decisions (#16011)", () => {
     const rows = await store.listQuestions();
     expect(rows).toHaveLength(1);
     expect(rows[0].expires_at).toBeNull();
-  });
-
-  it("refuses advice on a Remote Host's policy, proxy answers allowed or not, and asks the question for a decision (#17942)", async () => {
-    await boot(false);
-    add(pane("pane-a"));
-    for (const proxyAllowlisted of [false, true]) {
-      const port = await openRoute({ advisoryDeadlines: true, role: "host", proxyAllowlisted });
-
-      const refused = await call(port, "pane-token-pane-a", "ask_human", {
-        question: "Which fixture?",
-        expires_in: "15m",
-        planned_fallback: "Use the in-memory fixture.",
-        requested_requirement: "proxy-ok",
-      });
-      expect(refused.isError).toBe(true);
-      expect(refused.content[0].text.startsWith("forbidden: policy-disallowed: ")).toBe(true);
-      const asked = await call(port, "pane-token-pane-a", "ask_human", {
-        question: "Which fixture?",
-        expires_in: "15m",
-        requested_requirement: "proxy-ok",
-      });
-      expect(asked.structuredContent).toMatchObject({
-        reply_mode: "blocking",
-        enforced_requirement: proxyAllowlisted ? "proxy-ok" : "human-required",
-      });
-      await questions!.close();
-    }
-    expect(await store.listQuestions()).toHaveLength(2);
   });
 
   it("commits a follow-up on the pane's own question at once, alone or in a batch, before any network I/O", async () => {

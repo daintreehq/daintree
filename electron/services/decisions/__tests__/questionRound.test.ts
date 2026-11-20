@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseAnswers } from "@daintreehq/decisions-client";
-import { PLAN_REFUSED, roundOf, timeoutNoticeOf, verifiedPlan } from "../questionRound.js";
+import {
+  NO_ADVISORY_HOST,
+  PLAN_REFUSED,
+  roundOf,
+  timeoutNoticeOf,
+  verifiedPlan,
+} from "../questionRound.js";
 import { DECLINE, answers, row } from "./questionRows.js";
 
 /** An envelope as the publisher stores it: only its clear AAD is read here. */
@@ -138,7 +144,7 @@ describe("roundOf (#17943)", () => {
     // Recorded without one: typed as the ordinary expiry, which lets nothing go ahead.
     expect(advisoryExpiry({})).toEqual({ delivery: "pending", disposition: "fallback-withheld" });
 
-    const unpublished = (entry: object) =>
+    const unpublished = (entry: object, host = NO_ADVISORY_HOST) =>
       roundOf(
         row(1, {
           question_revision: 0,
@@ -151,7 +157,9 @@ describe("roundOf (#17943)", () => {
             revision: 0,
             ...entry,
           }),
-        })
+        }),
+        undefined,
+        host
       ).closureNotice?.disposition;
     expect(unpublished({ fallback_due: true, delivered: true })).toBe("fallback-due");
     // Possibly typed: it may have said the plan was due, so it keeps saying so.
@@ -161,7 +169,13 @@ describe("roundOf (#17943)", () => {
     // Untyped with its plan due: an uncertain write only the store's intents show could
     // have said so, so what it says is unknown rather than withheld.
     expect(unpublished({ fallback_due: true })).toBeNull();
+    expect(unpublished({ fallback_due: true }, { outcomes: true, allowed: false })).toBeNull();
+    expect(unpublished({ fallback_due: true }, { outcomes: false, allowed: true })).toBeNull();
+    // On a lifetime that lets it go ahead it says due either way, as `get_decision` does (#17942).
+    const capable = { outcomes: true, allowed: true };
+    expect(unpublished({ fallback_due: true }, capable)).toBe("fallback-due");
     expect(unpublished({})).toBe("fallback-withheld");
+    expect(unpublished({}, capable)).toBe("fallback-withheld");
   });
 
   it("reads a decline from a source the library doesn't know as no one's, as the bridge does", () => {

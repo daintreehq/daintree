@@ -12,6 +12,8 @@ import { DecisionsHostsSection, joinHostsToDevices } from "../DecisionsHostsSect
 import type { UseDecisionsDevicesResult } from "../useDecisionsDevices";
 import { hostEnrollmentText, hostFailureText } from "../hostsCopy";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 function host(overrides: Partial<DecisionsHost> = {}): DecisionsHost {
   return {
     hostId: "studio",
@@ -370,12 +372,17 @@ describe("Remote Host copy", () => {
   it("says what an enrolled Host last reported of its own Decisions, and when that was before its link closed", () => {
     const enrolled = host({ enrollment: { state: "enrolled", deviceId: "dev_x" } });
     const connected = {
-      runtime: { state: "running" as const, deviceId: "dev_x", connection: "connected" as const },
+      runtime: {
+        state: "running" as const,
+        deviceId: "dev_x",
+        connection: "connected" as const,
+        questionPolicy: { advisoryQuestions: true, defaultQuestionExpiryMs: 7 * DAY_MS },
+      },
       at: 1,
       live: true,
     };
     expect(hostEnrollmentText({ ...enrolled, runtime: connected }, true)).toMatch(
-      /It reports Decisions connected to the relay\.$/
+      /It reports Decisions connected to the relay\. It says its agents can ask for advice/
     );
     expect(
       hostEnrollmentText(
@@ -383,7 +390,7 @@ describe("Remote Host copy", () => {
         true
       )
     ).toMatch(
-      /Not connected\. Before its connection closed, it reported Decisions connected to the relay\.$/
+      /Not connected\. Before its connection closed, it reported Decisions connected to the relay\. It said its agents can ask for advice/
     );
     expect(
       hostEnrollmentText(
@@ -423,6 +430,54 @@ describe("Remote Host copy", () => {
         true
       )
     ).toBe(hostEnrollmentText(enrolled, true));
+  });
+
+  it("says how a running Host asks its agents' questions, and that one from before it can't take advice (#17942)", () => {
+    const enrolled = host({ enrollment: { state: "enrolled", deviceId: "dev_x" } });
+    const running = (questionPolicy?: {
+      advisoryQuestions: boolean;
+      defaultQuestionExpiryMs: number | null;
+    }) =>
+      hostEnrollmentText(
+        {
+          ...enrolled,
+          runtime: {
+            runtime: {
+              state: "running",
+              deviceId: "dev_x",
+              connection: "connected",
+              ...(questionPolicy ? { questionPolicy } : {}),
+            },
+            at: 1,
+            live: true,
+          },
+        },
+        true
+      );
+
+    const advisory = running({ advisoryQuestions: true, defaultQuestionExpiryMs: 3 * DAY_MS });
+    expect(advisory).toContain("its agents can ask for advice");
+    expect(advisory).toContain("even while this computer sleeps");
+    // The Host's own default, never this computer's.
+    expect(advisory).toMatch(/without a deadline waits 3 days\.$/);
+    const blocking = running({ advisoryQuestions: false, defaultQuestionExpiryMs: null });
+    expect(blocking).toContain("its agents can't ask for advice now");
+    expect(blocking).toMatch(/without a deadline waits until it's answered or withdrawn\.$/);
+    // A running Host that reports no policy runs a Daintree from before it.
+    expect(running()).toMatch(/too old for its agents to ask for advice; update it there/);
+    // Only a running Host says how it asks.
+    const off = hostEnrollmentText(
+      {
+        ...enrolled,
+        runtime: {
+          runtime: { state: "owner-off", deviceId: "dev_x", since: 1 },
+          at: 1,
+          live: true,
+        },
+      },
+      true
+    );
+    expect(off).not.toContain("advice");
   });
 
   it("carries the Host's own words as a sentence", () => {

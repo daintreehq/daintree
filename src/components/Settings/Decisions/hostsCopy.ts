@@ -6,6 +6,7 @@ import type {
   DecisionsHostRuntimeObservation,
   DecisionsHostsResult,
 } from "@shared/types/decisionsHosts";
+import { questionWaitText } from "./policyCopy";
 
 /**
  * The switch's own words: what enrolling gives a Host, how turning Decisions
@@ -101,6 +102,27 @@ function runtimeState(runtime: DecisionsHostRuntime): string | null {
 }
 
 /**
+ * How a running Host said it asks its agents' questions (#17942), to follow
+ * what it reports; empty for a Host that isn't running Decisions. A running
+ * Host from before it says nothing of advice, and its agents can't ask for it.
+ */
+function questionPolicyText(runtime: DecisionsHostRuntime, live: boolean): string {
+  if (runtime.state !== "running") return "";
+  const policy = runtime.questionPolicy;
+  if (policy === undefined) {
+    return " Its Daintree is too old for its agents to ask for advice; update it there to let them.";
+  }
+  const says = live ? "says" : "said";
+  const wait =
+    policy.defaultQuestionExpiryMs === null
+      ? "waits until it's answered or withdrawn"
+      : `waits ${questionWaitText(policy.defaultQuestionExpiryMs)}`;
+  return policy.advisoryQuestions
+    ? ` It ${says} its agents can ask for advice, closed on the Host when the deadline passes even while this computer sleeps, and a question asked there without a deadline ${wait}.`
+    : ` It ${says} its agents can't ask for advice now, and a question asked there without a deadline ${wait}.`;
+}
+
+/**
  * What the Host itself last reported of its own Decisions (#16022), in a
  * sentence to follow its row; empty when it has said nothing to show. A
  * report from before its link closed says so: it may have changed since.
@@ -109,9 +131,10 @@ export function hostRuntimeText(observation: DecisionsHostRuntimeObservation | u
   if (observation === undefined) return "";
   const state = runtimeState(observation.runtime);
   if (state === null) return "";
+  const policy = questionPolicyText(observation.runtime, observation.live);
   return observation.live
-    ? ` It reports Decisions ${state}.`
-    : ` Before its connection closed, it reported Decisions ${state}.`;
+    ? ` It reports Decisions ${state}.${policy}`
+    : ` Before its connection closed, it reported Decisions ${state}.${policy}`;
 }
 
 /** One Host's row, in words: what was last observed of it, and what it last reported. */

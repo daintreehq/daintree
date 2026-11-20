@@ -129,7 +129,7 @@ describe("DaintreeRelayClient (#16229)", () => {
       advisoryDeadlines: true,
     });
     expect(advisory).toContain("advisory-deadlines-v1");
-    // A Remote Host's bridge is never given advisoryDeadlines (#17942).
+    // A bridge whose lifetime types no advisory outcome is never given advisoryDeadlines.
     const host = bridgeFeatures({ followUps: true, snapshots: { onRefresh: () => {} } });
 
     await daintree.events(5, 10, advisory);

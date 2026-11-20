@@ -105,6 +105,7 @@ import type {
 } from "../../../shared/types/decisionsModel.js";
 import type {
   DecisionsHostEnrollResult,
+  DecisionsHostQuestionPolicy,
   DecisionsHostRecord,
   DecisionsHostRuntime,
   DecisionsHostsResult,
@@ -155,7 +156,10 @@ import type {
 } from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
+import {
+  HOST_DEFAULT_QUESTION_EXPIRY_MS,
+  isQuestionExpiryChoice,
+} from "../../../shared/config/decisionsQuestionExpiry.js";
 import {
   MAX_ASK_HUMAN_AGENTS,
   isAskHumanAgentId,
@@ -1069,6 +1073,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
+        onQuestionPolicyChanged: publishHostRuntime,
         checkDiskSpace,
         onStoreReplacing: cancelSetupCheckForStore,
       });
@@ -3004,10 +3009,22 @@ export function decisionsHostRuntimeFor(
   ) {
     return { state: "not-enrolled" };
   }
-  const running = service;
-  const status = running !== null && running.getRole() === "host" ? running.getStatus() : null;
-  return hostRuntimeOf(record, status);
+  const running = service !== null && service.getRole() === "host" ? service : null;
+  return hostRuntimeOf(
+    record,
+    running?.getStatus() ?? null,
+    running?.getQuestionPolicy() ?? IDLE_HOST_QUESTION_POLICY
+  );
 }
+
+/**
+ * What a Host reports of how it asks while no Host lifetime runs (#17942):
+ * nothing settles an advisory question then, so its agents can't ask one.
+ */
+const IDLE_HOST_QUESTION_POLICY: DecisionsHostQuestionPolicy = {
+  advisoryQuestions: false,
+  defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
+};
 
 /**
  * Runs the Host lifetime the record calls for while the owner's switch here

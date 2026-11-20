@@ -21,11 +21,12 @@ import {
   HostAcceptResultSchema,
   HostRequestResultSchema,
   HostRuntimeSchema,
+  HostRuntimeV2Schema,
   HostStatusResultSchema,
+  legacyRuntime,
   OwnerStatePayloadSchema,
   OwnerStateV2PayloadSchema,
   type EnrollHostPayload,
-  type HostRuntimePayload,
   type HostStatusResult,
 } from "./linkMethods.js";
 import {
@@ -239,6 +240,15 @@ export function installDecisionsHostWith(
   const owners = new Map<LinkSession, OwnerStateAnnouncement>();
   /** What each session was last told, so a report it already has isn't sent again. */
   const told = new Map<LinkSession, string>();
+  /**
+   * Sessions pushed v2 reports (#17942): those whose Shell last announced
+   * with `OWNER_STATE_V3`, until one refuses a v2 push. A reply goes as the
+   * method it answers asks, whatever this says by then.
+   */
+  const runtimeV2 = new WeakSet<LinkSession>();
+  /** `report` as v2, or without its policy as a Shell from before #17942 reads it. */
+  const reportAs = (v2: boolean, report: DecisionsHostRuntime): DecisionsHostRuntime =>
+    v2 ? HostRuntimeV2Schema.parse(report) : HostRuntimeSchema.parse(legacyRuntime(report));
   /** What each owner's Shells last said, by owner: an enrollment taken up later starts as it says. */
   const latestByOwner = new Map<string, OwnerStateAnnouncement>();
   const ownerKey = (owner: OwnerOf) => `${owner.installationId}\n${owner.ownerDeviceId}`;
@@ -329,12 +339,27 @@ export function installDecisionsHostWith(
   };
 
   const tell = (session: LinkSession, report: DecisionsHostRuntime): void => {
-    const key = JSON.stringify(report);
-    if (told.get(session) === key || !session.isOpen) return;
+    if (!session.isOpen) return;
+    const v2 = runtimeV2.has(session);
+    const sent = reportAs(v2, report);
+    const key = JSON.stringify(sent);
+    if (told.get(session) === key) return;
     told.set(session, key);
-    const payload: HostRuntimePayload = { runtime: HostRuntimeSchema.parse(report) };
-    // A Shell from before reports were pushed answers UNSUPPORTED; its next announcement reads it.
-    session.call(DecisionsLinkMethod.HOST_RUNTIME, payload).catch(() => {});
+    const method = v2 ? DecisionsLinkMethod.HOST_RUNTIME_V2 : DecisionsLinkMethod.HOST_RUNTIME;
+    session.call(method, { runtime: sent }).catch((error: unknown) => {
+      const unsupported = (error as { code?: unknown } | null)?.code === "UNSUPPORTED";
+      // A Shell from before reports were pushed answers UNSUPPORTED; its next announcement reads it.
+      if (!v2 && unsupported) return;
+      // Anything else wasn't taken, so the same report is told again when it next changes.
+      if (told.get(session) === key) told.delete(session);
+      if (!unsupported) return;
+      // One that announced with v3 reads v2 pushes; should it not, it hears v1 from now on: what
+      // the Host reports to its owner now, never the report that was refused, which may be stale.
+      runtimeV2.delete(session);
+      const owner = owners.get(session);
+      if (disposed || owner === undefined || loadedLifetime === null) return;
+      tell(session, loadedLifetime.reportFor(owner));
+    });
   };
 
   const tellOwners = (made: DecisionsHostLifetime): void => {
@@ -367,9 +392,13 @@ export function installDecisionsHostWith(
 
   const announced = async (
     session: LinkSession,
-    state: OwnerStateAnnouncement
+    state: OwnerStateAnnouncement,
+    v2 = false
   ): Promise<{ runtime: DecisionsHostRuntime }> => {
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    // The method it announced with says how it reads reports, its pushes included, from now on.
+    if (v2) runtimeV2.add(session);
+    else runtimeV2.delete(session);
     owners.set(session, state);
     latestByOwner.set(ownerKey(state), state);
     // An owner that never enrolled this Host loads nothing of Decisions here.
@@ -381,11 +410,12 @@ export function installDecisionsHostWith(
     const made = await followLifetime();
     if (!made) throw new Error("This Host stopped serving Shells");
     const report = await made.apply(state);
-    // A session that closed, or announced again, meanwhile keeps no record of this answer.
+    // A session that closed, or announced again, meanwhile keeps no record of this answer: one
+    // that keeps it has been told the report as its pushes would carry it, whatever the reply.
     if (!disposed && session.isOpen && owners.get(session) === state) {
-      told.set(session, JSON.stringify(report));
+      told.set(session, JSON.stringify(reportAs(runtimeV2.has(session), report)));
     }
-    return { runtime: HostRuntimeSchema.parse(report) };
+    return { runtime: reportAs(v2, report) };
   };
 
   /** Adoptions still running: stopping waits for them, so none outlives this installer. */
@@ -554,6 +584,13 @@ export function installDecisionsHostWith(
           (payload) => announced(session, { ...payload, terminalSnapshots: false })
         )
       : () => {};
+    const offOwnerStateV3 = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.OWNER_STATE_V3,
+          OwnerStateV2PayloadSchema,
+          (payload) => announced(session, payload, true)
+        )
+      : () => {};
     const offOwnerStateV2 = runtime
       ? session.registerCallHandler(
           DecisionsLinkMethod.OWNER_STATE_V2,
@@ -601,6 +638,7 @@ export function installDecisionsHostWith(
       offCall();
       offOwnerState();
       offOwnerStateV2();
+      offOwnerStateV3();
       offQuestionReads();
       offQuestionListV2();
       offQuestionListV3();
