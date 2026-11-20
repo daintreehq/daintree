@@ -20,6 +20,15 @@ const OBSERVATIONS: { [S in DecisionsSetupCheckStep]: DecisionsSetupCheckObserva
         diverges: false,
       },
     },
+    {
+      result: "unclaimed",
+      origin: ORIGIN,
+      compatibility: {
+        relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+        daintree: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+        diverges: false,
+      },
+    },
     { result: "unreachable", origin: ORIGIN, endpoint: "health", reason: "dns" },
     { result: "unexpected" },
   ],
@@ -115,6 +124,7 @@ describe("describeSetupStep", () => {
     const relay = detail("relay", OBSERVATIONS.relay[0]!);
     expect(relay).toMatch(/the relay this computer is set up with/);
     expect(relay).not.toMatch(/already has an owner/);
+    expect(detail("relay", OBSERVATIONS.relay[1]!)).toMatch(/reports no owner/);
     expect(detail("socket", { result: "replaced" })).toMatch(/Another connection/);
     expect(detail("socket", { result: "not-connected", problem: "storage" })).toMatch(/database/);
     expect(detail("push", { result: "no-phone" })).toMatch(/No phone is paired/);

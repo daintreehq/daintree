@@ -181,6 +181,7 @@ describe("relay check copy", () => {
 
     // This computer's own relay: its claim isn't news, and no owner is a discrepancy.
     const own = describeRelayCheck(claimed, true)!;
+    expect(own.severity).toBe("success");
     expect(own.label).toBe("relay.example.com answered as a Decisions relay");
     expect(`${own.label} ${own.detail}`).not.toMatch(/already has an owner|is claimed/);
     const ownless = describeRelayCheck(unclaimed, true)!;

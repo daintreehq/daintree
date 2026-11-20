@@ -246,7 +246,10 @@ describe("Decisions relay update", () => {
     await renderSection();
 
     expect(document.getElementById("decisions-relay-update")).toBeNull();
-    expect(screen.getByText(/Daintree on the Host, where it's set up, can update it/)).toBeTruthy();
+    const versions = document.getElementById("decisions-relay-versions")!;
+    expect(
+      within(versions).getByText(/Daintree on the Host, where it's set up, can update it/)
+    ).toBeTruthy();
   });
 
   it("waits for a check that reads the relay's version", async () => {
@@ -280,6 +283,35 @@ describe("Decisions relay update", () => {
     // The versions match and the relay answered as itself: nothing to add for that.
     expect(document.getElementById("decisions-relay-check")).toBeNull();
     expect(document.getElementById("decisions-relay-versions")).toBeNull();
+  });
+
+  it("keeps the same line about where the update runs before and after the check made on opening", async () => {
+    view.project = false;
+    let answer!: (check: DecisionsRelayCheck) => void;
+    checkRelay.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await renderSection();
+
+    const row = () => document.getElementById("decisions-relay-update")!;
+    expect(
+      within(row()).getByText("Open a project to watch the update in a terminal")
+    ).toBeTruthy();
+
+    await act(async () => {
+      answer(claimedAt("0.2.0"));
+    });
+
+    expect(
+      within(row()).getByText("Open a project to watch the update in a terminal")
+    ).toBeTruthy();
+    expect(updateButton().disabled).toBe(true);
+  });
+
+  it("says it needs a check once the check made on opening couldn't run", async () => {
+    checkRelay.mockRejectedValue(new Error("Turn on Decisions to check a relay"));
+    await renderSection();
+
+    expect(updateButton().disabled).toBe(true);
+    expect(screen.getByText("Needs a check that reads the relay's version first")).toBeTruthy();
   });
 
   it("says it needs a check once the one made on opening couldn't read a version", async () => {

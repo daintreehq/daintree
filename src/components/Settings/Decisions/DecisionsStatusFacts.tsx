@@ -15,7 +15,7 @@ export type LatestDecisionQuestion =
   | { state: "reading" }
   | { state: "failed" }
   /** `askedAt` in epoch ms; null when the list holds no question with a readable time. */
-  | { state: "read"; askedAt: number | null };
+  | { state: "read"; empty: boolean; askedAt: number | null };
 
 function newestAskedAt(questions: readonly DecisionQuestionListItem[]): number | null {
   let newest: number | null = null;
@@ -35,7 +35,12 @@ export function useLatestDecisionQuestion(): LatestDecisionQuestion {
   useEffect(
     () =>
       decisionsClient.watchQuestions(
-        (list) => setLatest({ state: "read", askedAt: newestAskedAt(list.questions) }),
+        (list) =>
+          setLatest({
+            state: "read",
+            empty: list.questions.length === 0,
+            askedAt: newestAskedAt(list.questions),
+          }),
         () => setLatest({ state: "failed" })
       ),
     []
@@ -74,11 +79,10 @@ function questionFact(latest: LatestDecisionQuestion): ReactNode {
     case "failed":
       return "Questions couldn't be read";
     case "read":
-      return latest.askedAt === null ? (
-        "No questions yet"
-      ) : (
-        <TimeAgo timestamp={latest.askedAt} verbose prefix="Last question " />
-      );
+      if (latest.askedAt !== null) {
+        return <TimeAgo timestamp={latest.askedAt} prefix="Last question " />;
+      }
+      return latest.empty ? "No questions yet" : "Last question time unknown";
   }
 }
 
@@ -86,8 +90,8 @@ function questionFact(latest: LatestDecisionQuestion): ReactNode {
  * One line of what was observed about the rest of Decisions while the relay
  * is connected (#18059): phones the relay can notify, agents switched on to
  * ask, and when the last question came in. Every fact holds its place from
- * the first render, so the line doesn't appear late and push the page down.
- * A remote window's agents are the Host's, so it names none.
+ * the first render, and the line never wraps, so the page doesn't move as
+ * the facts arrive. A remote window's agents are the Host's, so it names none.
  */
 export function DecisionsStatusFacts({
   devices,
@@ -106,7 +110,7 @@ export function DecisionsStatusFacts({
   if (!remote) facts.push(agentsFact(policy, supported, installedRead, installedError));
   facts.push(questionFact(latest));
   return (
-    <span data-testid="decisions-status-facts">
+    <span className="block truncate" data-testid="decisions-status-facts">
       <FactRun facts={facts} />
     </span>
   );

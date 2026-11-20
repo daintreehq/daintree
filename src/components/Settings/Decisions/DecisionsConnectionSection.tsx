@@ -328,7 +328,10 @@ export function DecisionsConnectionSection({
                 ? `${updateOutcome.label}. ${updateOutcome.detail}`
                 : observation
                   ? `${observation.label}. ${observation.detail}`
-                  : (rowError ?? "")));
+                  : // A check made on opening that found only versions apart says that much.
+                    versions
+                    ? `${versions.label}. ${versions.detail}`
+                    : (rowError ?? "")));
   const setupCheck = savedOrigin === null && relay.checkedUrl !== null ? check : null;
   // The relay set up here, whatever state it's in, or else one a check found
   // answering as a relay (claimed by someone else, or never claimed) (#16202).

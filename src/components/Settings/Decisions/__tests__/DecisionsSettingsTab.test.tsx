@@ -392,6 +392,52 @@ describe("DecisionsSettingsTab", () => {
     expect(listDevices).toHaveBeenCalledOnce();
   });
 
+  it("never shows one relay's phones for another, and reads none while off (#18059)", async () => {
+    getStatus.mockResolvedValue({
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      revision: 1,
+    });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    listDevices
+      .mockResolvedValueOnce({
+        result: "listed",
+        devices: [
+          {
+            deviceId: "dev_pixel",
+            label: "Pixel 9",
+            role: "phone",
+            pairedAt: "2026-10-30T00:00:00.000Z",
+            lastSeenAt: null,
+            pushEnabled: true,
+          },
+        ],
+      })
+      .mockReturnValueOnce(new Promise(() => {}));
+    await renderTab();
+    const facts = () => screen.getByTestId("decisions-status-facts").textContent ?? "";
+    expect(facts()).toMatch(/^1 phone with notifications · /);
+
+    await act(async () =>
+      pushStatus({
+        state: "connected",
+        consentedAt: 1,
+        relayOrigin: "https://other.example.workers.dev",
+        revision: 2,
+      })
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(facts()).toMatch(/^Reading phones… · /);
+    expect(screen.queryByText("Pixel 9")).toBeNull();
+
+    // Off keeps the relay recorded, but nothing is shown that would read its devices.
+    await act(async () =>
+      pushStatus({ state: "off", consentedAt: 1, relayOrigin: ORIGIN, revision: 3 })
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
+  });
+
   it("closes Settings before it opens the inbox (#17231)", async () => {
     getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
     checkRelay.mockReturnValue(new Promise(() => {}));

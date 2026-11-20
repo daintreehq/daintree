@@ -18,7 +18,7 @@ import { useDecisionsDevices } from "../useDecisionsDevices";
 function DecisionsDevicesAndHosts(
   props: Omit<ComponentProps<typeof DevicesAndHosts>, "devicesRead">
 ) {
-  const devicesRead = useDecisionsDevices(props.status.relayOrigin !== undefined);
+  const devicesRead = useDecisionsDevices(props.status.relayOrigin ?? null);
   return <DevicesAndHosts {...props} devicesRead={devicesRead} />;
 }
 

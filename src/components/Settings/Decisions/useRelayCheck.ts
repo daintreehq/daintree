@@ -64,7 +64,8 @@ export function useRelayCheck(): UseRelayCheckResult {
     const mine = ++generation.current;
     inFlight.current = { url, source: requested };
     setCheckingSource(requested);
-    setError(null);
+    // A background retry leaves the failure the person saw until it has an answer of its own.
+    if (requested === "requested") setError(null);
     const settle = () => {
       inFlight.current = null;
       const shown: RelayCheckSource =
@@ -83,6 +84,7 @@ export function useRelayCheck(): UseRelayCheckResult {
         settle();
         setCheck(next);
         setCheckedUrl(url);
+        setError(null);
       },
       (failure: unknown) => {
         if (generation.current !== mine) return;

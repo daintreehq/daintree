@@ -146,6 +146,7 @@ describe("DecisionsStatusFacts (#18059)", () => {
     view.rerender(
       <DecisionsStatusFacts devices={devicesRead([PHONE])} policy={policyRead(["claude"])} />
     );
+    expect(facts()).toBe("1 phone with notifications · 1 agent switched on · Reading questions…");
     await act(async () => {
       list.resolve({ revision: 1, questions: [asked(lastAsked)] });
     });
@@ -171,6 +172,13 @@ describe("DecisionsStatusFacts (#18059)", () => {
     expect(facts()).toMatch(/^2 phones with notifications · /);
     cleanup();
 
+    // A tablet the relay can't notify doesn't change what the notified ones are called.
+    await renderFacts(
+      devicesRead([PHONE, { ...PHONE, deviceId: "dev_ipad", role: "tablet", pushEnabled: false }])
+    );
+    expect(facts()).toMatch(/^1 phone with notifications · /);
+    cleanup();
+
     await renderFacts(devicesRead([{ ...PHONE, pushEnabled: false }]));
     expect(facts()).toMatch(/^No phones with notifications · /);
     cleanup();
@@ -180,8 +188,13 @@ describe("DecisionsStatusFacts (#18059)", () => {
   });
 
   it("counts the agents switched on that the Agents section shows a switch for", async () => {
-    // cursor has no launch-time MCP, gemini isn't installed, and the last is gone.
-    await renderFacts(undefined, policyRead(["claude", "codex", "cursor", "gemini", "removed"]));
+    // codex is supported but left off; cursor has no launch-time MCP, gemini
+    // isn't installed, and the last is gone.
+    await renderFacts(undefined, policyRead(["claude", "cursor", "gemini", "removed"]));
+    expect(facts()).toContain(" · 1 agent switched on · ");
+    cleanup();
+
+    await renderFacts(undefined, policyRead(["claude", "codex"]));
     expect(facts()).toContain(" · 2 agents switched on · ");
     cleanup();
 
@@ -200,6 +213,11 @@ describe("DecisionsStatusFacts (#18059)", () => {
 
     act(() => useCliAvailabilityStore.setState({ hasRealData: true }));
     expect(facts()).toContain(" · 1 agent switched on · ");
+    cleanup();
+
+    useCliAvailabilityStore.setState({ hasRealData: false, error: "The probe failed." });
+    await renderFacts();
+    expect(facts()).toContain(" · Agents couldn't be read · ");
   });
 
   it("names no agents in a remote window, whose agents are the Host's", async () => {
@@ -212,7 +230,7 @@ describe("DecisionsStatusFacts (#18059)", () => {
     const newest = "2026-11-20T10:00:00.000Z";
     listQuestions.mockResolvedValue({
       revision: 1,
-      questions: [asked("2026-11-19T10:00:00.000Z"), asked(newest), asked("not a time")],
+      questions: [asked(newest), asked("2026-11-19T10:00:00.000Z"), asked("not a time")],
     });
     await renderFacts();
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(newest);
@@ -229,11 +247,22 @@ describe("DecisionsStatusFacts (#18059)", () => {
 
     act(() => push({ revision: 3, questions: [] }));
     expect(facts()).toMatch(/ · No questions yet$/);
+
+    const askedAt = "2026-11-20T09:00:00.000Z";
+    act(() => push({ revision: 4, questions: [asked(askedAt)] }));
+    expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(askedAt);
+  });
+
+  it("tells a list of questions with no readable time apart from an empty one", async () => {
+    listQuestions.mockResolvedValue({ revision: 1, questions: [asked("not a time")] });
+    await renderFacts();
+    expect(facts()).toMatch(/ · Last question time unknown$/);
   });
 
   it("stops following the list once it's gone", async () => {
     const view = await renderFacts();
     expect(listeners.get("decisions:questions-changed")?.size).toBe(1);
+    expect(listQuestions).toHaveBeenCalledOnce();
 
     view.unmount();
     expect(listeners.get("decisions:questions-changed")?.size).toBe(0);

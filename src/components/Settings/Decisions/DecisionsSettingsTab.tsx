@@ -73,7 +73,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
   // One read of the relay's devices, for Devices and Remote Hosts and for Connection's facts.
-  const devicesRead = useDecisionsDevices(on && status.relayOrigin !== undefined);
+  const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 

@@ -78,7 +78,9 @@ export function DecisionsRelayUpdate({
     ? "An update is running in its terminal"
     : compatibility === null
       ? versionDue
-        ? undefined
+        ? placement.ready
+          ? undefined
+          : placement.reason
         : "Needs a check that reads the relay's version first"
       : placement.ready
         ? undefined
