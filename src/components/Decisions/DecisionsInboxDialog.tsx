@@ -1686,6 +1686,8 @@ export function DecisionsInboxDialog() {
   // itself is read. Not what an opening's list first shows, which the focus on its row says, nor
   // a regroup or a late line, which change nothing shown.
   const announced = useRef<{ seq: number; key: string | null } | null>(null);
+  /** The question the person's own action moved the inbox on to (#18035), whose move said it. */
+  const movedTo = useRef<{ seq: number; key: string } | null>(null);
   useEffect(() => {
     if (!active || listRead.state !== "listed") return;
     const last = announced.current;
@@ -1697,6 +1699,12 @@ export function DecisionsInboxDialog() {
     // Nothing shown: forgotten, so a question that comes back is said again.
     if (selected === null || selectedKey === null) {
       announced.current = { seq: request.seq, key: null };
+      return;
+    }
+    const moved = movedTo.current;
+    movedTo.current = null;
+    if (moved !== null && moved.seq === request.seq && moved.key === selectedKey) {
+      announced.current = { seq: request.seq, key: selectedKey };
       return;
     }
     const focusedRow = document.activeElement?.closest("[data-roving-row]");
@@ -2035,6 +2043,8 @@ export function DecisionsInboxDialog() {
       index: next.index,
       picked: true,
     });
+    // Said here, with what moved it: not again once it's the question shown.
+    movedTo.current = { seq: arrival.seq, key: next.key };
     announce(arrival.text);
   }, [arrival, announce]);
 

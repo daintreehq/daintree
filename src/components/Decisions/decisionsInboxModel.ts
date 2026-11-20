@@ -1280,7 +1280,7 @@ export function askKey(item: Pick<DecisionQuestionListItem, "replyRequest" | "in
 const ACTED: Record<InboxAction, (label: string) => string> = {
   answer: (label) => `Answer sent for question ${label}`,
   clear: (label) => `Question ${label} cleared on this computer`,
-  dismiss: (label) => `Question ${label} dismissed`,
+  dismiss: (label) => `Question ${label} declined`,
   withdraw: (label) => `Question ${label} withdrawn`,
 };
 

@@ -4130,9 +4130,18 @@ describe("DecisionsInboxDialog", () => {
       return { promise, resolve };
     }
 
+    /** The question shown: by its row, or by its words once it moves under a shut group (#18023). */
     function selectedAlias() {
       const row = rows().find((candidate) => candidate.getAttribute("aria-current") === "true");
-      return row === undefined ? null : aliasOf(row);
+      if (row !== undefined) return aliasOf(row);
+      const shown = screen.queryByTestId("decision-question-content")?.textContent ?? "";
+      const number = /Body of question (\d+)/.exec(shown)?.[1];
+      return number === undefined ? null : `q-${number}`;
+    }
+
+    /** What a folding group holds while shut (#18023), as its bar counts it: q-2 alone, here. */
+    function heldIn(id: "cleared" | "history") {
+      return bar(id).textContent ?? "";
     }
 
     async function answerShown() {
@@ -4263,9 +4272,7 @@ describe("DecisionsInboxDialog", () => {
         expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
       );
       push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 3));
-      await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-2")
-      );
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
       // The way on is in the pane's bar, above the question rather than under its thread.
@@ -4361,9 +4368,40 @@ describe("DecisionsInboxDialog", () => {
       push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
       await waitFor(() => expect(selectedAlias()).toBe("q-4"));
       expect(document.activeElement).toBe(rowNamed("q-4"));
-      expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2");
+      expect(heldIn("cleared")).toContain("1 question");
       expect(said).toEqual([
         "Question q-2 cleared on this computer. It's in Cleared now. Showing q-4.",
+      ]);
+    });
+
+    it("goes on from a question asked for (#18047) once a clear from here lands, leaving Cleared shut (#18023)", async () => {
+      const ref = reference("question-4");
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: { terminalId: ref.terminalId, questionId: ref.questionId, reference: ref },
+        })
+      );
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      push({
+        revision: 2,
+        questions: [
+          asked,
+          { ...waiting, inbox: { ...unmarked, seen: true, cleared: true } },
+          delivering,
+        ],
+      });
+      await waitFor(() => expect(selectedAlias()).toBe("q-2"));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(selectedAlias()).toBe("q-2");
+      expect(said).toEqual([
+        "Question q-4 cleared on this computer. It's in Cleared now. Showing q-2.",
       ]);
     });
 
@@ -4397,13 +4435,13 @@ describe("DecisionsInboxDialog", () => {
       );
       await act(async () => {});
       fireEvent.click(rowNamed("q-3"));
-      await waitFor(() => expect(said).toEqual(["1 question cleared on this computer"]));
+      // Beside the line the inbox says of the question now shown.
+      const cleared = () => said.filter((message) => message.includes("cleared"));
+      await waitFor(() => expect(cleared()).toEqual(["1 question cleared on this computer"]));
       push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
-      await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
-      );
+      await waitFor(() => expect(heldIn("cleared")).toContain("1 question"));
       expect(selectedAlias()).toBe("q-3");
-      expect(said).toEqual(["1 question cleared on this computer"]);
+      expect(cleared()).toEqual(["1 question cleared on this computer"]);
     });
 
     it("still says a clear landed once an answer from here takes its place before the list moved", async () => {
@@ -4436,9 +4474,7 @@ describe("DecisionsInboxDialog", () => {
       await act(async () => {});
       // Another window's clear lands later: not this opening's to move on from.
       push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
-      await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
-      );
+      await waitFor(() => expect(heldIn("cleared")).toContain("1 question"));
       await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
@@ -4483,7 +4519,7 @@ describe("DecisionsInboxDialog", () => {
       const declined = deferred<DecisionQuestionDeclineResult>();
       declineQuestion.mockImplementationOnce(() => declined.promise);
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       // The list moves while the dismissal is with main, before the confirmation closes.
       push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
@@ -4498,8 +4534,8 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       await waitFor(() => expect(selectedAlias()).toBe("q-4"));
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
-      expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-2");
-      expect(moved()).toEqual(["Question q-2 dismissed. It's in History now. Showing q-4."]);
+      expect(heldIn("history")).toContain("1 question");
+      expect(moved()).toEqual(["Question q-2 declined. It's in History now. Showing q-4."]);
     });
 
     it("goes on once a withdrawal confirmed here lands in History", async () => {
@@ -4513,7 +4549,7 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       // Offered a withdrawal instead: not yet anything done.
       expect(confirm.textContent).toContain("Withdraw question q-2?");
@@ -4546,13 +4582,11 @@ describe("DecisionsInboxDialog", () => {
         outcome: { status: "queued" },
       }));
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
-      await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-2")
-      );
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
       await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
@@ -4564,13 +4598,11 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
       });
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       push(listed({ ...asked, standing: { kind: "settled", outcome: "expired" } }, 2));
-      await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-2")
-      );
+      await waitFor(() => expect(heldIn("history")).toContain("1 question"));
       await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);

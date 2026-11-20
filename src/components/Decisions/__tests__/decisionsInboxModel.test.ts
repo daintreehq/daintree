@@ -1898,7 +1898,7 @@ describe("moving on once the person's action takes a question out of Needs you (
         "Answer sent for question q-2. It's in Being delivered now. Showing q-4."
       );
       expect(movedText("dismiss", "q-2", "History", "q-4", "ignored")).toBe(
-        "Question q-2 dismissed. It's in History now. Showing q-4."
+        "Question q-2 declined. It's in History now. Showing q-4."
       );
     });
 
