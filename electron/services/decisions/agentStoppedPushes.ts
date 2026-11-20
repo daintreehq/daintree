@@ -176,7 +176,10 @@ export class AgentStoppedPushes {
     try {
       request = this.o.send();
     } catch (error) {
-      console.warn("[Decisions] Agent-stopped push couldn't be asked for:", formatErrorMessage(error, "error"));
+      console.warn(
+        "[Decisions] Agent-stopped push couldn't be asked for:",
+        formatErrorMessage(error, "error")
+      );
       return;
     }
     // No bridge to ask: the batch goes, so nothing reaches the phone late.
