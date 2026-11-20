@@ -265,11 +265,19 @@ async function stopped(delivery: AnswerDelivery): Promise<void> {
   await stopping;
 }
 
-/** Moves the clock until `done` holds, failing after `maxMs`. */
-async function until(done: () => boolean | Promise<boolean>, maxMs = 30_000): Promise<void> {
-  for (let elapsed = 0; elapsed <= maxMs; elapsed += 100) {
+/**
+ * Moves the clock `step` at a time until `done` holds, failing after `maxMs`.
+ * Every step costs real turns, so a wait that crosses minutes of fake time
+ * takes coarse steps, or its real cost grows with the fake time it crosses.
+ */
+async function until(
+  done: () => boolean | Promise<boolean>,
+  maxMs = 30_000,
+  step = 100
+): Promise<void> {
+  for (let elapsed = 0; elapsed <= maxMs; elapsed += step) {
     if (await done()) return;
-    await advance(100);
+    await advance(step, step);
   }
   throw new Error("the condition never held");
 }
@@ -1071,7 +1079,7 @@ describe("AnswerDelivery", () => {
 
     // Found by the next minute's read, with nothing else asking.
     await answered(h.store, Q1, 1, "approve");
-    await until(() => h.client.submitted.length === 1, DELIVERY_CHECK_INTERVAL_MS + 10_000);
+    await until(() => h.client.submitted.length === 1, DELIVERY_CHECK_INTERVAL_MS + 10_000, 5_000);
     await stopped(h.delivery);
   });
 
@@ -1956,7 +1964,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await advisoryExpired(h.store, Q1, 1);
 
     h.delivery.start();
-    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted[0].text).toContain("status: expired\nauthorised: no\n");
     expect(h.client.submitted[0].text).not.toMatch(/carry out the plan/);
     await stopped(h.delivery);
@@ -1985,7 +1993,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     h.delivery.start();
     await advance(60_000, 5_000);
     expect(h.client.submitted).toEqual([]);
-    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
     await stopped(h.delivery);
   });
