@@ -1222,6 +1222,16 @@ describe("NotificationService", () => {
           inbox: { ...marked, seen: false, cleared: true },
         },
       ];
+
+      // Each standing on a pane of its own: it counts there exactly when the toolbar's rule says so.
+      for (const [i, standing] of standings.entries()) {
+        setDecisionQuestions([question("project-11", "terminal-solo", standing)]);
+        const solo = isWaitingOnPerson({ standing }, Date.now()) ? 1 : 0;
+        expect(win.setTitle, `${i}:${standing.kind}`).toHaveBeenLastCalledWith(
+          solo === 0 ? "Daintree" : `(${solo}) Daintree`
+        );
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(solo);
+      }
       setDecisionQuestions(list);
 
       // One pane each, so the pane count is the question count here.
@@ -1468,6 +1478,7 @@ describe("NotificationService", () => {
         // A queued question is bound by its deadline too (#18046).
         vi.advanceTimersByTime(60_000);
         expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
 
         // Only a deadline moves, on a pane already counted: the sooner one is waited for.

@@ -19,16 +19,19 @@ const STANDINGS: DecisionQuestionStanding[] = [
 
 describe("isWaitingOnPerson", () => {
   it("takes an open, replied-to or queued question and nothing else", () => {
-    expect(STANDINGS.filter(awaitsPerson).map((standing) => standing.kind)).toEqual([
-      "waiting",
-      "waiting",
-      "queued",
+    expect(STANDINGS.filter(awaitsPerson)).toEqual([
+      { kind: "waiting", reason: "open" },
+      { kind: "waiting", reason: "reply" },
+      { kind: "queued" },
     ]);
   });
 
   it("leaves out what the person has seen or cleared", () => {
     const queued: DecisionQuestionStanding = { kind: "queued" };
     expect(isWaitingOnPerson({ standing: queued })).toBe(true);
+    expect(
+      isWaitingOnPerson({ standing: queued, inbox: { ask: "m1", seen: false, cleared: false } })
+    ).toBe(true);
     expect(
       isWaitingOnPerson({ standing: queued, inbox: { ask: null, seen: true, cleared: false } })
     ).toBe(false);
@@ -48,5 +51,10 @@ describe("isWaitingOnPerson", () => {
       isWaitingOnPerson({ standing: { kind: "waiting", reason: "reply" }, expiresAt }, now)
     ).toBe(true);
     expect(isWaitingOnPerson({ standing: { kind: "queued" }, expiresAt }, null)).toBe(true);
+    const ahead = "2026-11-20T12:01:00.000Z";
+    expect(isWaitingOnPerson({ standing: { kind: "queued" }, expiresAt: ahead }, now)).toBe(true);
+    expect(
+      isWaitingOnPerson({ standing: { kind: "waiting", reason: "open" }, expiresAt: ahead }, now)
+    ).toBe(true);
   });
 });

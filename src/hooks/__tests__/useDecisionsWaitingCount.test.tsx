@@ -89,22 +89,39 @@ describe("isWaitingOnPerson", () => {
 });
 
 describe("isWaitingOnPerson against the inbox (#18046)", () => {
-  it("counts exactly the standings the inbox lists under Needs you, as main's title and Dock count does", () => {
-    const standings: DecisionQuestionStanding[] = [
+  // Keyed by kind so a new standing has to be listed here, and so judged against the inbox.
+  const BY_KIND: Record<DecisionQuestionStanding["kind"], DecisionQuestionStanding[]> = {
+    waiting: [
       { kind: "waiting", reason: "open" },
       { kind: "waiting", reason: "reply" },
-      { kind: "queued" },
-      { kind: "send-failed" },
-      { kind: "to-type" },
+    ],
+    queued: [{ kind: "queued" }],
+    "send-failed": [{ kind: "send-failed" }],
+    "to-type": [{ kind: "to-type" }],
+    "needs-attention": [
       { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+    ],
+    settled: [
       { kind: "settled", outcome: "answered", handled: false },
+      { kind: "settled", outcome: "answered", handled: true },
       { kind: "settled", outcome: "withdrawn" },
-    ];
-    for (const standing of standings) {
-      expect(isWaitingOnPerson({ standing }), standing.kind).toBe(
+      { kind: "settled", outcome: "expired" },
+      { kind: "settled", outcome: "declined" },
+    ],
+  };
+
+  it("counts exactly the standings the inbox lists under Needs you, as main's title and Dock count does", () => {
+    for (const standing of Object.values(BY_KIND).flat()) {
+      expect(isWaitingOnPerson({ standing }), JSON.stringify(standing)).toBe(
         groupOf(standing) === "needs-you"
       );
     }
+    expect(
+      Object.values(BY_KIND)
+        .flat()
+        .some((standing) => groupOf(standing) === "needs-you")
+    ).toBe(true);
   });
 });
 
