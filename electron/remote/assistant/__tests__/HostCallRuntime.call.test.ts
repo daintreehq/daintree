@@ -341,30 +341,41 @@ describe("HostCallRuntime host.call (#13493)", () => {
         expect(cancel.onCancel).toEqual(expect.any(Function));
       });
 
-      it("gives no cancel to a resend the host will refuse as another call under the id", async () => {
-        let release!: (answer: McpCallAnswer) => void;
+      it("remembers a call whose cancel went out past its answer, for that host and session only", async () => {
+        const controller = new AbortController();
+        // As the link client does once the call is out: the cancel goes, and says so.
         relayCall.mockImplementationOnce(
-          () =>
-            new Promise<McpCallAnswer>((resolve) => {
-              release = resolve;
-            })
+          async (
+            _hostId: string,
+            _payload: unknown,
+            _timeoutMs: number,
+            cancel?: { signal: AbortSignal; onCancel?: () => void }
+          ) => {
+            controller.abort();
+            cancel?.onCancel?.();
+            return { status: "cancelled", dispatch: "after" } satisfies McpCallAnswer;
+          }
         );
-        const first = runtime.call("a", CALL, { tier: "core" });
-        await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(1));
-        const signal = new AbortController().signal;
 
-        await runtime.call(
-          "a",
-          { ...CALL, args: { owned: false }, callId: ID },
-          { tier: "core", signal }
+        await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+        await runtime.call("a", { ...CALL, args: { owned: false } }, { tier: "core" });
+
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "a" })).toBe(
+          true
         );
-        await runtime.call("a", { ...CALL, callId: ID }, { tier: "core", signal });
-
-        // The other call can't stop this one; the same call sent again can.
-        expect(relayCall.mock.calls[1]![3]).toBeUndefined();
-        expect(relayCall.mock.calls[2]![3]).toMatchObject({ signal });
-        release(DONE);
-        await first;
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "other" })).toBe(
+          false
+        );
+        expect(runtime.cancelledRelayedCall("laptop", { callId: ID, helpSessionId: "a" })).toBe(
+          false
+        );
+        // A call nobody cancelled is nothing to refuse.
+        expect(
+          runtime.cancelledRelayedCall("studio", {
+            callId: "00000000-0000-4000-8000-000000000002",
+            helpSessionId: "a",
+          })
+        ).toBe(false);
       });
 
       it("says nothing ran when the host stopped it before its tool, keeping the callId", async () => {

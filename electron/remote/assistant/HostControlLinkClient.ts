@@ -399,12 +399,12 @@ export class HostControlLinkClient {
     }
     const parsed = McpCallAnswerSchema.safeParse(answer);
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
+    const taken = sent.taken === null || (await sent.taken);
     // A call can arm nothing, or have its notice answered by its own reply
     // wait, without a notice ever coming: ask, so its link need not wait on it.
+    // Asked once the call is no longer out, cancel answered or not.
     if (relayCallArmsNotice(payload.tool, payload.args)) this.followNoticesLater(hostId, session);
-    if (sent.taken !== null && !(await sent.taken)) {
-      throw new RelayCancelUnconfirmedError(parsed.data);
-    }
+    if (!taken) throw new RelayCancelUnconfirmedError(parsed.data);
     return parsed.data;
   }
 

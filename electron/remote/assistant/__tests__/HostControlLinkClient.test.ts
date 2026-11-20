@@ -935,11 +935,14 @@ describe("HostControlLinkClient.relayCall cancelled by its caller (#17985)", () 
     const { relay, calls } = client(() => DONE);
     const controller = new AbortController();
     controller.abort();
+    const onCancel = vi.fn();
 
     await expect(
-      relay.relayCall("studio", PAYLOAD, 105_000, { signal: controller.signal })
+      relay.relayCall("studio", PAYLOAD, 105_000, { signal: controller.signal, onCancel })
     ).rejects.toMatchObject({ code: "CANCELLED" });
     expect(calls).toEqual([]);
+    // Nothing went to the host, so nothing says a cancel did.
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("sends nothing of a call cancelled while its sender is being proven", async () => {
@@ -949,10 +952,13 @@ describe("HostControlLinkClient.relayCall cancelled by its caller (#17985)", () 
       return DONE;
     });
 
+    const onCancel = vi.fn();
+
     await expect(
-      relay.relayCall("studio", PAYLOAD, 105_000, { signal: controller.signal })
+      relay.relayCall("studio", PAYLOAD, 105_000, { signal: controller.signal, onCancel })
     ).rejects.toMatchObject({ code: "CANCELLED" });
     expect(calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("asks the host to stop a call already out, once, and answers what the host said", async () => {

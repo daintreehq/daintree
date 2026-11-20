@@ -379,6 +379,8 @@ const LAUNCHED_AGENTS_READ_TIMEOUT_MS = 10_000;
 const MAX_PROMPTED_TERMINALS = 512;
 /** First sends whose time a resend reports under (#16169); the oldest go first. */
 const MAX_CALL_TIMES = 512;
+/** Calls whose cancel went out, remembered past their answer for a host's dispatch still on its way. */
+const MAX_CANCELLED_CALLS = 256;
 /**
  * Prompts remembered per host terminal, newest kept: ones that ran apart from
  * ones still unanswered, so a burst of calls refused later never pushes out
@@ -1039,6 +1041,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly prompted = new Map<string, PromptMark[]>();
   /** When each call was first sent, by host, session and call, so its answer got later still dates from then. */
   private readonly callTimes = new Map<string, number>();
+  /** By host, help session and callId: calls whose cancel went to their host (#17985). */
+  private readonly cancelledCalls = new Map<string, true>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
   /** Agents this Shell's assistants launched on hosts, to hold their links while they may run (#16492). */
@@ -1274,13 +1278,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * view runs nothing more of it, asked or not. The host is the connection's.
    */
   cancelledRelayedCall(hostId: HostId, call: { callId: string; helpSessionId: string }): boolean {
-    const out = this.callsInFlight.get(call.callId);
-    return (
-      out !== undefined &&
-      out.cancelled &&
-      out.hostId === hostId &&
-      out.helpSessionId === call.helpSessionId
-    );
+    // Kept past the call's answer: a dispatch the host sent before it stopped may still come.
+    return this.cancelledCalls.has(`${hostId}\u0000${call.helpSessionId}\u0000${call.callId}`);
   }
 
   /** The call a host's dispatch runs, while it may still be answered without asking. */
@@ -1857,6 +1856,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.seenNotices.clear();
     this.prompted.clear();
     this.callTimes.clear();
+    this.cancelledCalls.clear();
     this.lastAgents.clear();
     this.agentsEpochs.clear();
     this.settingsRequests.dispose();
@@ -1986,16 +1986,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         run: caller,
       };
       const sendDone = this.trackSend(callId, record, context.noteSkipPreference);
-      // Only a send of the call out under this id may stop it on the host
-      // (#17985): one the host refuses as a conflict has nothing of its own to
-      // stop. Once its cancel goes, nothing asked about the call is approved.
+      // A cancel stops the call this help session holds under the callId on its
+      // host (#17985). Once it goes, nothing asked about that call is approved,
+      // and nothing of it a host dispatches here later runs.
       const inFlight = this.callsInFlight.get(callId);
       const cancel: RelayCallCancel | undefined =
-        context.signal !== undefined && inFlight !== undefined && sameCall(inFlight, record)
+        context.signal !== undefined
           ? {
               signal: context.signal,
               onCancel: () => {
-                inFlight.cancelled = true;
+                if (inFlight !== undefined) inFlight.cancelled = true;
+                remember(this.cancelledCalls, callKey, true, MAX_CANCELLED_CALLS);
               },
             }
           : undefined;
