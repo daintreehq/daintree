@@ -18,7 +18,7 @@ import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
 import { deliveryStalled } from "./decisionFollowUpModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
-import { targetKey, type DecisionQuestionTarget } from "./decisionQuestionTarget";
+import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
 import { imagesKey } from "./questionImageLoader";
 import {
   choiceLabels,
@@ -445,10 +445,7 @@ function QuestionBody({
         <QuestionFacts question={question} nowMs={nowMs} />
       </div>
       <PlannedFallback question={question} />
-      {question.preparation != null && (
-        // Keyed by the question, so a read again keeps it open and stepping to another closes it.
-        <Preparation key={targetKey(target)} preparation={question.preparation} />
-      )}
+      {question.preparation != null && <Preparation preparation={question.preparation} />}
       {question.context !== null && (
         <section
           className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"

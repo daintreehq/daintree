@@ -72,20 +72,18 @@ const PREPARATION_OUTCOME: Record<DecisionPreparation["outcome"], string> = {
 
 /**
  * What the agent says of its preparation (#18042), in its order: how many
- * other agents it consulted, and how that went. A consultation that never ran
- * says so alone, unless the agent still names agents it consulted.
+ * other agents it consulted, and how that went. Both always, as reported,
+ * so a count that disagrees with the outcome or the summary stays visible.
  */
 export function preparationFacts(
   preparation: Pick<DecisionPreparation, "agentsConsulted" | "outcome">
-): string[] {
-  const outcome = PREPARATION_OUTCOME[preparation.outcome];
+): [consulted: string, outcome: string] {
   const { agentsConsulted } = preparation;
-  if (preparation.outcome === "not-run" && agentsConsulted === 0) return [outcome];
   const consulted =
     agentsConsulted === 0
       ? "No other agents consulted"
       : `${pluralize(agentsConsulted, "other agent")} consulted`;
-  return [consulted, outcome];
+  return [consulted, PREPARATION_OUTCOME[preparation.outcome]];
 }
 
 /** What heads the agent's plan: what it said it would do, while that can still come (#17943). */

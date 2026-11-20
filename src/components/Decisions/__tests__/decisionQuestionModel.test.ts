@@ -168,27 +168,32 @@ describe("decisionQuestionModel", () => {
   });
 
   describe("the agent's preparation (#18042)", () => {
-    it("names how many other agents were consulted, and how it went", () => {
-      const agreed = preparationFacts({ agentsConsulted: 2, outcome: "agreed" });
-      const split = preparationFacts({ agentsConsulted: 2, outcome: "split" });
-      expect(agreed).toHaveLength(2);
-      expect(agreed[0]).toBe(split[0]);
-      expect(agreed[0]).toContain("2");
-      expect(agreed[1]).not.toBe(split[1]);
-      expect(preparationFacts({ agentsConsulted: 1, outcome: "agreed" })[0]).toContain(
-        "1 other agent "
-      );
+    const OUTCOMES = ["agreed", "split", "not-run"] as const;
+
+    it("names each outcome apart, beside the same count", () => {
+      const facts = OUTCOMES.map((outcome) => preparationFacts({ agentsConsulted: 2, outcome }));
+      expect(new Set(facts.map(([consulted]) => consulted)).size).toBe(1);
+      expect(new Set(facts.map(([, outcome]) => outcome)).size).toBe(OUTCOMES.length);
     });
 
-    it("says a consultation that never ran alone, unless the agent still names agents", () => {
-      const notRun = preparationFacts({ agentsConsulted: 0, outcome: "not-run" });
-      expect(notRun).toHaveLength(1);
-      expect(preparationFacts({ agentsConsulted: 1, outcome: "not-run" })).toEqual([
-        expect.stringContaining("1 other agent"),
-        notRun[0],
-      ]);
-      // A split with none consulted is the agent's claim, shown as it made it.
-      expect(preparationFacts({ agentsConsulted: 0, outcome: "split" })).toHaveLength(2);
+    it("counts the other agents the agent says it consulted, one apart from many", () => {
+      for (const count of [2, 5, 64]) {
+        const [consulted] = preparationFacts({ agentsConsulted: count, outcome: "agreed" });
+        expect(consulted).toMatch(new RegExp(`(^|\\D)${count} other agents\\b`));
+      }
+      const [one] = preparationFacts({ agentsConsulted: 1, outcome: "agreed" });
+      expect(one).toMatch(/(^|\D)1 other agent\b/);
+      expect(one).not.toMatch(/agents/);
+    });
+
+    it("says none were consulted without a count, whatever the outcome", () => {
+      for (const outcome of OUTCOMES) {
+        const [consulted, said] = preparationFacts({ agentsConsulted: 0, outcome });
+        expect(consulted).not.toMatch(/\d/);
+        expect(consulted).not.toBe(preparationFacts({ agentsConsulted: 2, outcome })[0]);
+        // The outcome is the agent's, kept beside a count that may disagree with it.
+        expect(said).toBe(preparationFacts({ agentsConsulted: 2, outcome })[1]);
+      }
     });
   });
 

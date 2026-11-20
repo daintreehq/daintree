@@ -415,7 +415,16 @@ describe("DecisionQuestionDialog", () => {
     const SUMMARY = "Codex preferred Redis for the cache.\nGemini held out for Postgres.";
     const split = { agentsConsulted: 2, outcome: "split" as const, summary: SUMMARY };
     const notRun = { agentsConsulted: 0, outcome: "not-run" as const, summary: null };
-    QUESTIONS.qp = content("qp", 9, { status: "open", thread: [], preparation: split });
+    const prepared = (notes: string) =>
+      content("qp", 9, {
+        status: "open",
+        thread: [],
+        context: notes,
+        replyMode: "advisory",
+        plannedFallback: "Keep the cache in Postgres",
+        preparation: split,
+      });
+    QUESTIONS.qp = prepared("Some notes");
     QUESTIONS.qq = content("qq", 10, { status: "open", thread: [], preparation: notRun });
     // jsdom lays nothing out: the summary reads as running past its clamp, everything else as fitting.
     const isSummary = (el: Element) =>
@@ -437,10 +446,12 @@ describe("DecisionQuestionDialog", () => {
       const section = shown();
       for (const fact of preparationFacts(split)) expect(section.textContent).toContain(fact);
       expect(section.textContent).toContain("Gemini held out for Postgres.");
-      const answer = screen.getByRole("region", { name: "Your answer" });
-      expect(section.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
-        0
-      );
+      // After the advisory plan, before the notes and the answer form.
+      const follows = (first: Element, second: Element) =>
+        (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      expect(follows(screen.getByRole("region", { name: "The agent's plan" }), section)).toBe(true);
+      expect(follows(section, screen.getByRole("region", { name: "Notes" }))).toBe(true);
+      expect(follows(section, screen.getByRole("region", { name: "Your answer" }))).toBe(true);
 
       const more = within(section).getByRole("button", { name: "Show more" });
       expect(more.getAttribute("aria-expanded")).toBe("false");
@@ -452,15 +463,15 @@ describe("DecisionQuestionDialog", () => {
       expect(less.getAttribute("aria-expanded")).toBe("true");
 
       // A read again keeps it open.
-      const reads = getQuestionContent.mock.calls.length;
+      QUESTIONS.qp = prepared("Notes read again");
       act(() => pushPane("t1"));
-      await waitFor(() => expect(getQuestionContent.mock.calls.length).toBeGreaterThan(reads));
+      await screen.findByText("Notes read again");
       expect(within(shown()).getByRole("button", { name: "Show less" })).toBe(less);
 
       // Another question's preparation says only what it holds: no summary, nothing to expand.
       fireEvent.click(screen.getByTestId("decision-question-next"));
       await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-10"));
-      expect(shown().textContent).toContain(preparationFacts(notRun).join(""));
+      for (const fact of preparationFacts(notRun)) expect(shown().textContent).toContain(fact);
       expect(screen.queryByTestId("decision-question-preparation-summary")).toBeNull();
       expect(within(shown()).queryByRole("button")).toBeNull();
 
