@@ -1325,8 +1325,9 @@ export class DecisionsService {
       ...(role === "owner" && this.agentStopped ? { agentStopped: this.agentStopped } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
-        // Stopped for this lifetime: nothing could publish what an agent asks.
+        // Stopped for this lifetime: nothing could publish what an agent asks, nor settle advice.
         if (status.state === "not-connected" || status.state === "revoked") {
+          this.questionSource = null;
           this.closeQuestions();
           this.settleQuestions();
         }

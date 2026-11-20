@@ -343,6 +343,20 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
    * are told `OWNER_STATE_V2` or older, and report no question policy.
    */
   private readonly beforeQuestionPolicy = new WeakSet<DecisionsHostSession>();
+  /**
+   * The latest word each owner identity announced on each session, recorded
+   * as the announcement begins: what a fallback says for that owner.
+   */
+  private readonly announcedStates = new WeakMap<
+    DecisionsHostSession,
+    Map<string, OwnerStateAnnouncement>
+  >();
+  /**
+   * The newest turn each Host's report was taken from, a push's or an
+   * announcement's: an answer to an older announcement never replaces it,
+   * while one whose newer announcement failed is still taken.
+   */
+  private readonly observedTurns = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   /** Each wired session's handler and close listener, removed on stop. */
   private readonly unwires = new Set<() => void>();
@@ -857,9 +871,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.HOST_RUNTIME,
       HostRuntimePayloadSchema,
       ({ runtime }) => {
-        // Newer than any announcement still waiting for its answer.
-        this.announced.set(hostId, (this.announced.get(hostId) ?? 0) + 1);
-        this.observe(hostId, session, runtime);
+        this.observePushed(hostId, session, runtime);
         return null;
       }
     );
@@ -867,8 +879,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.HOST_RUNTIME_V2,
       HostRuntimeV2PayloadSchema,
       ({ runtime }) => {
-        this.announced.set(hostId, (this.announced.get(hostId) ?? 0) + 1);
-        this.observe(hostId, session, runtime);
+        this.observePushed(hostId, session, runtime);
         return null;
       }
     );
@@ -937,6 +948,12 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (state === null) return;
     const turn = (this.announced.get(hostId) ?? 0) + 1;
     this.announced.set(hostId, turn);
+    let states = this.announcedStates.get(session);
+    if (states === undefined) {
+      states = new Map();
+      this.announcedStates.set(session, states);
+    }
+    states.set(ownerKey(state), state);
     let answer: { raw: unknown; v2: boolean };
     try {
       answer = await this.sendOwnerState(session, state);
@@ -946,12 +963,26 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     // Whatever the owner said, the Host's questions as they stand now (#17230).
     void this.readQuestions(hostId, session);
-    if (this.announced.get(hostId) !== turn) return;
+    if (turn <= (this.observedTurns.get(hostId) ?? 0)) return;
     // Read as the method it answered: a v2 report says how a running Host asks, a v1 one can't.
     const parsed = (answer.v2 ? HostRuntimeV2PayloadSchema : HostRuntimePayloadSchema).safeParse(
       answer.raw
     );
-    if (parsed.success) this.observe(hostId, session, parsed.data.runtime);
+    if (!parsed.success) return;
+    this.observedTurns.set(hostId, turn);
+    this.observe(hostId, session, parsed.data.runtime);
+  }
+
+  /** A report the Host pushed: newer than any announcement still waiting for its answer. */
+  private observePushed(
+    hostId: string,
+    session: DecisionsHostSession,
+    runtime: DecisionsHostRuntime
+  ): void {
+    const turn = (this.announced.get(hostId) ?? 0) + 1;
+    this.announced.set(hostId, turn);
+    this.observedTurns.set(hostId, turn);
+    this.observe(hostId, session, runtime);
   }
 
   /**
@@ -959,10 +990,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
    * (#17942): asked for one, else with terminal snapshots (#16230), or, to a
    * Host from before them, without, which it reads as off. Each method a
    * Host answers UNSUPPORTED is never tried again on that link. A fallback
-   * says what the owner says now, not what it said when this one began: a
-   * later announcement may have gone ahead while it waited on the refusal,
-   * or failed, and the Host must neither apply an older word last nor miss
-   * the latest.
+   * says the latest word its owner announced on this session, not what it
+   * said when this one began: a later announcement may have gone ahead while
+   * it waited on the refusal, or failed, and the Host must neither apply an
+   * older word last nor miss the latest. It stays that owner's word even if
+   * this computer has since disconnected or speaks as another owner.
    */
   private async sendOwnerState(
     session: DecisionsHostSession,
@@ -970,11 +1002,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   ): Promise<{ raw: unknown; v2: boolean }> {
     const options = { timeoutMs: OWNER_STATE_TIMEOUT_MS };
     let state = first;
-    const latest = (): OwnerStateAnnouncement => {
-      const now = this.deps.ownerState();
-      if (now === null) throw new Error("No owner identity to announce");
-      return now;
-    };
+    const latest = (): OwnerStateAnnouncement =>
+      this.announcedStates.get(session)?.get(ownerKey(first)) ?? first;
     if (!this.beforeQuestionPolicy.has(session) && !this.beforeSnapshots.has(session)) {
       try {
         const raw = await session.call(

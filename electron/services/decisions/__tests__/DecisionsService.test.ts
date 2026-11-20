@@ -1613,6 +1613,11 @@ describe("DecisionsService relay connection", () => {
     made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: false });
     expect(told).toEqual([true, false]);
     expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
+    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
+    // The connection stops for the lifetime (its store failed): nothing settles advice now.
+    made[0]!.onStatus({ state: "not-connected", problem: "storage" });
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
     await service.stop();
   });
 

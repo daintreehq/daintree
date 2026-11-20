@@ -1028,13 +1028,18 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
         refusals.push((code) => reject(Object.assign(new Error(code), { code })))
       );
     }) as typeof client.call);
-    let state = initial;
+    let state: OwnerStateAnnouncement | null = initial;
     const { client: shell } = shellOver(client, () => state);
     await vi.waitFor(() => expect(refusals).toHaveLength(1));
     return {
       told,
       refusals,
       shell,
+      /** This computer lets its relay identity go: it speaks as no owner now. */
+      disconnect() {
+        state = null;
+        shell.announceOwnerState();
+      },
       /** The owner's word changes, and is announced again while the first probe still waits. */
       async change(next: OwnerStateAnnouncement) {
         state = next;
@@ -1061,7 +1066,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
   });
 
   it("still tells the Host the owner's latest word when the announcement that carried it failed", async () => {
-    const { told, refusals, change } = await probesRefusedInTurn({
+    const { told, refusals, shell, change } = await probesRefusedInTurn({
       ...OWNER,
       terminalSnapshots: true,
     });
@@ -1071,6 +1076,21 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     refusals[1]!("RATE_LIMITED");
     refusals[0]!("UNSUPPORTED");
     await vi.waitFor(() => expect(told).toEqual([OWNER]));
+    // And what the Host answered it is kept: nothing newer was heard.
+    await vi.waitFor(() => expect(shell.runtimeOf(HOST)?.runtime).toEqual(LEGACY_RUNNING));
+  });
+
+  it("falls back with its owner's latest word even once this computer speaks as no owner", async () => {
+    const { told, refusals, change, disconnect } = await probesRefusedInTurn({
+      ...OWNER,
+      terminalSnapshots: true,
+    });
+    await change(OWNER);
+    // Disconnected before either refusal lands: the owner's last word still reaches the Host, last.
+    disconnect();
+    refusals[1]!("UNSUPPORTED");
+    refusals[0]!("UNSUPPORTED");
+    await vi.waitFor(() => expect(told).toEqual([OWNER, OWNER]));
   });
 
   /** A Host serving `session` whose key file holds an identity, and whose lifetime loads when the test says. */
