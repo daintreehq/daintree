@@ -358,7 +358,6 @@ export async function choosePhoneOption(device: Page, name: RegExp): Promise<voi
   await device.getByRole("radio", { name }).first().check();
 }
 
-/** Opens `question` on the phone, picks `option` and/or writes `text`, and submits. */
 /** Opens `question` from the phone's Home. */
 export async function openQuestionOnPhone(phone: Page, question: string): Promise<void> {
   await openInbox(phone);
