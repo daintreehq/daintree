@@ -300,18 +300,31 @@ export class ClaudeUpdateApply {
       if (aborted(request.signal)) {
         return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
       }
-      let check = this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null));
+      const before = await this.deps.getTerminal(terminalId).catch(() => null);
+      let check = this.check(pin, before);
       if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
       if (check.kind === "ready") {
         // The record can't show a draft from before the pane settled; the box
         // can. The record read after it answers first: a run replaced, or
         // keys typed while the box was read.
         const box = await this.inputBox(terminalId, request.signal);
-        check = this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null));
+        if (aborted(request.signal)) {
+          return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
+        }
+        const after = await this.deps.getTerminal(terminalId).catch(() => null);
+        check = this.check(pin, after);
         if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
         if (box === "draft") return this.notSent(pin, "typed", boxDraftWhy(terminalId));
-        if (box === "unread" && check.kind === "ready") {
-          check = { kind: "wait", on: "an input box that couldn't be read" };
+        if (check.kind === "ready") {
+          // As the global close reads its box: what was read holds only for a
+          // pane that neither settled nor was typed into meanwhile.
+          if (box === "unread") check = { kind: "wait", on: "an input box that couldn't be read" };
+          else if (
+            after!.lastStateChange !== before!.lastStateChange ||
+            after!.lastTypedInputAt !== before!.lastTypedInputAt
+          ) {
+            check = { kind: "wait", on: "a pane that changed while its input box was read" };
+          }
         }
         if (check.kind === "ready") break;
       }
@@ -461,8 +474,8 @@ export class ClaudeUpdateApply {
     const handedAt = this.now();
     let written: TerminalSubmissionRecord | undefined;
     while (written === undefined) {
-      const submission = (await this.deps.getTerminal(terminalId, token).catch(() => null))
-        ?.submission;
+      const record = await this.deps.getTerminal(terminalId, token).catch(() => null);
+      const submission = record?.submission;
       switch (submission?.phase) {
         case "pty_written":
           written = submission;
@@ -494,6 +507,10 @@ export class ClaudeUpdateApply {
         default:
           break;
       }
+      // A pane trashed or closing while the line waits for its Enter (a close
+      // of the same worker, #16750) takes it back; what the terminal did with
+      // it still decides the answer.
+      if (record !== null && goneWhy(terminalId, record) !== null) withdraw();
       if (this.now() - handedAt >= CLAUDE_UPDATE_DELIVERY_MS) {
         withdraw();
         return {

@@ -997,7 +997,6 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
       { updateInstalled: { observedAt: 900, namesRestart: false } },
     ],
     ["a choice dialog is reported", { agentState: "waiting", waitingReason: "approval" }],
-    ["the pane is put in the trash", { isTrashed: true }],
   ])("holds back the Enter when %s between the line and its Enter", async (_label, patch) => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);

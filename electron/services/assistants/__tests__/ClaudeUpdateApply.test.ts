@@ -665,6 +665,33 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     expect(fake.submits).toEqual([]);
   });
 
+  it("reads the box again when the pane settled while it was read", async () => {
+    const { fake, service, pin } = await pinned();
+    const reads = fake.screenReads;
+    fake.beforeScreen = (f) => {
+      // Another guarded line held at its Enter left its body, then the pane
+      // settled again: the record reads ready, and only the box shows it.
+      if (f.screenReads === reads + 1) {
+        f.record = atPrompt({ lastStateChange: 1_500, lastTypedInputAt: 1_200 });
+      }
+      if (f.screenReads === reads + 2) f.screen = claudeScreen("❯ a held line");
+    };
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "not-sent", reason: "typed" });
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("sends once a box read finds the pane unchanged", async () => {
+    const { fake, service, pin } = await pinned();
+    const reads = fake.screenReads;
+    fake.beforeScreen = (f) => {
+      if (f.screenReads === reads + 1) f.record = atPrompt({ lastStateChange: 1_500 });
+    };
+    const result = await service.apply(pin, allow);
+    expect(result.status).toBe("sent");
+    expect(fake.screenReads - reads).toBe(2);
+  });
+
   it("reports a run replaced during the box read as restarted, not as typing", async () => {
     const { fake, service, pin } = await pinned();
     fake.screen = claudeScreen("❯ /restart");
@@ -733,6 +760,37 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     const result = await service.apply(pin, { ...allow, signal: controller.signal });
     expect(fake.withdrawn).toEqual([fake.submits[0]!.token]);
     expect(result).toMatchObject({ status: "not-sent", reason: "withheld" });
+  });
+
+  it("takes the line back when the pane is put in the trash before its Enter", async () => {
+    let reads = 0;
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) => {
+        f.submissions.set(submit.token, { token: submit.token, phase: "writing", at: f.now });
+        // A close of the same worker, approved meanwhile.
+        f.record = { ...f.record!, isTrashed: true };
+      },
+      beforeRead: (f, token) => {
+        if (token === undefined || !f.withdrawn.includes(token)) return;
+        reads += 1;
+        if (reads === 1) f.submissions.set(token, { token, phase: "cancelled", at: f.now });
+      },
+    });
+    const result = await service.apply(pin, allow);
+    expect(fake.withdrawn).toEqual([fake.submits[0]!.token]);
+    expect(result).toMatchObject({ status: "not-sent", reason: "withheld" });
+  });
+
+  it("follows a line the terminal wrote before the trash reached it", async () => {
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) => {
+        written()(submit, f);
+        f.record = { ...f.record!, isTrashed: true };
+      },
+    });
+    const result = await service.apply(pin, allow);
+    expect(result.status).toBe("sent");
+    expect(fake.withdrawn).toEqual([]);
   });
 
   it("takes the line back the moment the call ends, not at its next read", async () => {
