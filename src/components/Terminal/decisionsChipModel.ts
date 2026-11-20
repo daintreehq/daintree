@@ -432,12 +432,18 @@ export function deliveryNotes(
 
 /**
  * How to answer, while any question still waits for one: its row opens the
- * composer. One the person cleared still can be; one past its deadline can't.
+ * composer. One the person cleared still can be; one past its deadline can't,
+ * and nothing invites an answer once every such deadline has passed.
  */
-export function answerNote(items: readonly DecisionItem[]): string | null {
-  return items.some((item) => isCancellable(item) && !item.elapsed)
+export function answerNote(items: readonly DecisionItem[], nowMs = 0): string | null {
+  return items.some((item) => isCancellable(item) && !item.elapsed && !deadlinePassed(item, nowMs))
     ? "Open a question to answer it here"
     : null;
+}
+
+/** An open or queued question whose deadline passed by this computer's clock. */
+export function deadlinePassed(item: DecisionItem, nowMs: number): boolean {
+  return isCancellable(item) && item.expiresAt !== null && item.expiresAt <= nowMs;
 }
 
 /**
@@ -452,7 +458,7 @@ export function deadlineNote(item: DecisionItem, nowMs: number): string | null {
   if ((item.kind !== "open" && item.kind !== "queued") || item.expiresAt === null) return null;
   // Its status already says so when that is what set it aside.
   if (setAsideOf(item) === "awaiting") return null;
-  if (item.expiresAt <= nowMs) return ELAPSED_NOTE;
+  if (deadlinePassed(item, nowMs)) return ELAPSED_NOTE;
   return withinAday(item.expiresAt, nowMs)
     ? expiryText(item.expiresAt, nowMs, item.advisory ? "advisory" : "blocking")
     : null;
@@ -471,9 +477,7 @@ export function sharedWaitingStatus(items: readonly DecisionItem[], nowMs: numbe
   const first = items[0]!;
   if (first.kind !== "open" && first.kind !== "queued") return null;
   if (items.some((item) => item.kind !== first.kind || setAsideOf(item) !== null)) return null;
-  return items.some((item) => item.expiresAt !== null && item.expiresAt <= nowMs)
-    ? null
-    : first.status;
+  return items.some((item) => deadlinePassed(item, nowMs)) ? null : first.status;
 }
 
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */

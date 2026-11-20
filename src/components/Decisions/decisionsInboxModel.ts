@@ -377,7 +377,7 @@ export function attentionText(
     const reason = deliveryReasonText(item.stall.reason, subject);
     const what = stoppedThing(subject, closing);
     const sentence = uncertain
-      ? `${capitalized(what.replace(" and ", " or "))} may or may not have been typed into the terminal. Check it there before anything is sent again.`
+      ? `${capitalized(what.replace(" and ", " or "))} may or may not have been typed into the terminal. Check the terminal before anything is sent again.`
       : `${capitalized(what)} ${plural ? "were" : "was"} recorded, but typing ${plural ? "them" : "it"} into the terminal stopped. Choose what happens to ${plural ? "them" : "it"}.`;
     return reason === null ? sentence : `${sentence} ${reason}`;
   }

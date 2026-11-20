@@ -711,7 +711,24 @@ describe("attentionText (#18054)", () => {
         stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "x.y" }),
       })
     ).toBe(
-      "The follow-ups may or may not have been typed into the terminal. Check it there before anything is sent again."
+      "The follow-ups may or may not have been typed into the terminal. Check the terminal before anything is sent again."
+    );
+  });
+
+  it("agrees with several follow-ups, and with an answer beside them, definite or not", () => {
+    expect(
+      attentionText(STOPPED, {
+        stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "unspecified" }),
+      })
+    ).toBe(
+      "The follow-ups were recorded, but typing them into the terminal stopped. Choose what happens to them."
+    );
+    expect(
+      attentionText(UNCERTAIN, {
+        stall: stall({ followUpIds: ["m1"], reason: "inject_ambiguous" }),
+      })
+    ).toBe(
+      "The answer or the follow-up may or may not have been typed into the terminal. Check the terminal before anything is sent again. Typing it in was interrupted, so it isn't typed again on its own."
     );
   });
 

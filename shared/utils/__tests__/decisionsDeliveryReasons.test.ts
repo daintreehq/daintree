@@ -112,6 +112,13 @@ describe("decisionsDeliveryReasons", () => {
     // A notice that was typed isn't what stopped; a Host from before the round reports none.
     expect(stallSubject({ stall: stall(1), ...notice("delivered") })).toBe("answer");
     expect(stallSubject({ stall: stall(1), closedReason: "never-published" })).toBe("answer");
+    expect(
+      stallSubject({
+        stall: stall(1),
+        closedReason: "never-published",
+        closureNotice: { delivery: "uncertain", disposition: null },
+      })
+    ).toBe("timeout notice");
     expect(stallSubject({ stall: stall(null, ["m1"]), ...notice("needs-attention") })).toBe(
       "follow-up"
     );
@@ -125,5 +132,9 @@ describe("decisionsDeliveryReasons", () => {
       "This terminal refused the timeout notice."
     );
     expect(deliveryReasonText("nothing_known", "answer", "here")).toBeNull();
+    // Away from the terminal, the same codes still name the terminal that asked.
+    expect(deliveryReasonText("generation_mismatch")).toBe(
+      "The terminal that asked was restarted after the question was asked."
+    );
   });
 });

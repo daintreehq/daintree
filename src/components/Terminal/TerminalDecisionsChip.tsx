@@ -46,6 +46,7 @@ import {
   chipLabel,
   chipSummary,
   deadlineNote,
+  deadlinePassed,
   decisionItems,
   deliveryNotes,
   isCancellable,
@@ -202,6 +203,9 @@ function DecisionRow({
   // No longer waiting on the person (#18053): listed, a step quieter.
   const quiet = setAsideOf(item) !== null;
   const ink = quiet ? "text-text-secondary" : "text-text-primary";
+  // Past its deadline the row says that, not that it can still be answered: a
+  // row set aside for it already says so in its status.
+  const statusShown = showStatus && !(deadlinePassed(item, nowMs) && !quiet);
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
@@ -233,7 +237,7 @@ function DecisionRow({
             </span>
           )}
           {/* The glyph marks the status's first line, however many it wraps to. */}
-          {showStatus && (
+          {statusShown && (
             <span
               className={cn(
                 "flex items-start gap-1 [text-wrap:pretty]",
@@ -394,7 +398,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const label = chipLabel(items);
   // Several questions in the same state say it once, above the list.
   const sharedStatus = sharedWaitingStatus(items, nowMs);
-  const answerable = sharedStatus === null ? answerNote(items) : null;
+  const answerable = sharedStatus === null ? answerNote(items, nowMs) : null;
   const notes = [...(answerable !== null ? [answerable] : []), ...deliveryNotes(items, wait)];
   const unavailable = cancelNote(items);
   if (unavailable !== null) notes.push(unavailable);

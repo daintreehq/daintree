@@ -669,8 +669,22 @@ describe("sharedWaitingStatus (#18054)", () => {
   it("says a uniform list's status once", () => {
     const three = decisionItems(pane({ open: [open(1), open(2), open(3)] }));
     expect(sharedWaitingStatus(three, NOW)).toBe("Waiting for an answer, here or on your phone");
-    const queued = decisionItems(pane({ open: [open(1, "queued"), open(2, "queued")] }));
+    const queued = decisionItems(
+      pane({ open: [open(1, "queued"), open(2, "queued"), open(3, "queued")] })
+    );
     expect(sharedWaitingStatus(queued, NOW)).toBe("Queued to send; you can answer it here");
+  });
+
+  it("keeps the instruction to answer only while a row can still be answered", () => {
+    const items = decisionItems(
+      pane({ open: [{ ...open(1), expiresAt: new Date(NOW - 1000).toISOString() }, open(2)] })
+    );
+    expect(answerNote(items, NOW)).not.toBeNull();
+    const lapsed = decisionItems(
+      pane({ open: [{ ...open(1), expiresAt: new Date(NOW - 1000).toISOString() }] })
+    );
+    expect(answerNote(lapsed, NOW)).toBeNull();
+    expect(answerNote(lapsed, NOW - 60_000)).not.toBeNull();
   });
 
   it("leaves a single question, a mixed list and other states to their rows", () => {

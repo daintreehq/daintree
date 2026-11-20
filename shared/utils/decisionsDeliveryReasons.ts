@@ -77,7 +77,7 @@ export function deliveryUncertainText(subject: DeliverySubject, demonstrative = 
 export function stallSubject(question: {
   stall?: DecisionQuestionStall | null;
   closedReason?: DecisionQuestionClosedReason | null;
-  closureNotice?: Pick<DecisionClosureNotice, "delivery"> | null;
+  closureNotice?: DecisionClosureNotice | null;
 }): DeliverySubject | null {
   const stall = question.stall ?? null;
   if (stall === null) return null;
