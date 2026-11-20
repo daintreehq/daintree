@@ -98,6 +98,12 @@ export const DecisionsLinkMethod = {
    * content is strict.
    */
   QUESTION_CONTENT_V2: "decisions.questionContent.v2",
+  /**
+   * Shell → Host (#18042): `QUESTION_CONTENT_V2` with the agent's account of
+   * how it prepared the question. A Host from before it answers UNSUPPORTED,
+   * and is read with `QUESTION_CONTENT_V2` instead, whose content is strict.
+   */
+  QUESTION_CONTENT_V3: "decisions.questionContent.v3",
 } as const;
 
 /**
@@ -120,6 +126,7 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.QUESTION_LIST_V3]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED_V3]: "shell",
   [DecisionsLinkMethod.QUESTION_CONTENT_V2]: "host",
+  [DecisionsLinkMethod.QUESTION_CONTENT_V3]: "host",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"

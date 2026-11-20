@@ -229,6 +229,19 @@ export interface DecisionClosureNotice {
   disposition: "fallback-due" | "fallback-withheld" | null;
 }
 
+/**
+ * The asking agent's own account of how it prepared a question (#18042), as
+ * its content states it: how many other agents it says it consulted, whether
+ * they `agreed`, `split` (no agreement, or inconclusive), or the consultation
+ * was `not-run`, and its summary, null when it gave none. Nothing checks it:
+ * it never answers, approves or changes anything.
+ */
+export interface DecisionPreparation {
+  agentsConsulted: number;
+  outcome: "agreed" | "split" | "not-run";
+  summary: string | null;
+}
+
 /** A question with its content opened, in memory, for the desktop to show. Never stored. */
 export interface DecisionQuestionContent {
   questionId: string;
@@ -270,6 +283,11 @@ export interface DecisionQuestionContent {
    * from a Remote Host from before it. Never an action taken.
    */
   plannedFallback?: string | null;
+  /**
+   * How the agent says it prepared the question (#18042); null when its
+   * content states none, and absent from a Remote Host from before it.
+   */
+  preparation?: DecisionPreparation | null;
   /**
    * The notice that closed it without an answer, on its way into the asking
    * terminal (#17943); null when there is none (open, answered, withdrawn), and

@@ -41,6 +41,7 @@ import {
   HostQuestionCancelResultSchema,
   HostQuestionContentResultSchema,
   HostQuestionContentV2ResultSchema,
+  HostQuestionContentV3ResultSchema,
   HostQuestionImagePartResultSchema,
   HostQuestionAskSchema,
   HostQuestionItemSchema,
@@ -372,6 +373,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeRounds = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered content with rounds UNSUPPORTED: from before #17943. */
   private readonly beforeContentRounds = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered content with its preparation UNSUPPORTED: from before #18042. */
+  private readonly beforePreparation = new WeakSet<DecisionsHostSession>();
   /**
    * Reads of the list with its asks out, per session. A Host answers one with
    * its list as it stands then, after any v1 push it sent before the read
@@ -536,14 +539,31 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   }
 
   /**
-   * A read over the Host's current link: content with its round (#17943)
-   * where the Host reads it, else as `QUESTIONS` reads it, as everything else is.
+   * A read over the Host's current link: content with its preparation (#18042)
+   * and round (#17943) where the Host reads them, else with its round alone,
+   * else as `QUESTIONS` reads it, as everything else is.
    */
   private async callQuestionRead(
     hostId: string,
     read: DecisionsHostQuestionRead
   ): Promise<HostCallOutcome<unknown>> {
     const session = this.deps.sessionFor(hostId);
+    if (read.read === "content" && session !== null && !this.beforePreparation.has(session)) {
+      let unsupported = false;
+      const answered = await this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_CONTENT_V3,
+        { reference: read.reference },
+        HostQuestionContentV3ResultSchema,
+        () => {
+          unsupported = true;
+        }
+      );
+      if (!unsupported) return answered;
+      // A Host from before #18042, asked again from the top as below.
+      this.beforePreparation.add(session);
+      return this.callQuestionRead(hostId, read);
+    }
     if (read.read === "content" && session !== null && !this.beforeContentRounds.has(session)) {
       // Only the method itself going unknown says the Host is older: a refused step of a
       // method it knows reads as `needs-update` too, and must never cost later reads their round.

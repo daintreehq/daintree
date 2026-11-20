@@ -15,6 +15,7 @@ import {
 import { decryptAttachment, sha256Hex, sniffImageMime } from "@daintreehq/decisions-crypto";
 import { DecisionContentV1, type PhoneImageReference } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionPreparation,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
@@ -108,6 +109,7 @@ export async function readQuestionContent(
     closedReason: round.closedReason,
     replyMode: round.replyMode,
     plannedFallback,
+    preparation: preparationOf(content),
     closureNotice: round.closureNotice,
     deliveryStatus: row.delivery_status,
     attachments: content.attachments.map((attachment) => ({
@@ -383,6 +385,17 @@ function threadImage(image: PhoneImageReference): DecisionThreadImage {
     alt: image.alt ?? null,
     mime: image.mime,
     size: image.size,
+  };
+}
+
+/** The agent's account of its preparation; the content parse has already dropped a malformed one. */
+function preparationOf(content: DecisionContentV1): DecisionPreparation | null {
+  const report = content.preparation;
+  if (report === undefined) return null;
+  return {
+    agentsConsulted: report.agents_consulted,
+    outcome: report.outcome,
+    summary: nonEmpty(report.summary),
   };
 }
 
