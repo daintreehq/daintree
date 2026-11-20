@@ -61,6 +61,11 @@ export interface DecisionFollowUpComposerProps {
    * resolved it (#18028): a new follow-up would only wait behind it.
    */
   stalled: boolean;
+  /**
+   * Whether the surface is open. One closing starts nothing: as it closes it
+   * no longer hears of the stall, but its field still has the keyboard.
+   */
+  active: boolean;
 }
 
 /**
@@ -75,6 +80,7 @@ export function DecisionFollowUpComposer({
   primary,
   onMoved,
   stalled,
+  active,
 }: DecisionFollowUpComposerProps) {
   const key = answerKey(question.reference);
   const record = useFollowUpRecord(key);
@@ -89,7 +95,7 @@ export function DecisionFollowUpComposer({
   const paused = available && stalled;
   const inFlight = isFollowUpInFlight(record);
   const verdict = followUpVerdict(record.draft);
-  const ready = available && !paused && verdict.canSend && !inFlight;
+  const ready = active && available && !paused && verdict.canSend && !inFlight;
   const submission = record.submission;
   const messageId = submission?.messageId ?? null;
   const queued =

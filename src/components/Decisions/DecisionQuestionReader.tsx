@@ -425,6 +425,7 @@ function QuestionBody({
           primary={answerMode !== "form"}
           onMoved={onMoved}
           stalled={stalled}
+          active={active}
         />
       )}
       {/* While it takes an answer here, the composer offers the options instead. */}

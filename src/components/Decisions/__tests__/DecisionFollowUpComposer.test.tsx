@@ -897,6 +897,42 @@ describe("following up while the answer's delivery is stopped (#18028)", () => {
     expect(sendButton().getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("starts nothing as the view closes over a stalled draft, though the list stops saying so", async () => {
+    questions = { q1: question("q1", { status: "human-answered" }) };
+    await openOn("q1");
+    act(() => box().focus());
+    write("Use the staging bucket.");
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+    const field = box();
+    const reads = getQuestionContent.mock.calls.length;
+
+    act(() => useDecisionsQuestionViewStore.getState().close());
+    // Still on screen as it animates away, and still holding the keyboard.
+    expect(field.isConnected).toBe(true);
+    fireEvent.keyDown(field, { key: "Enter", ...SEND_CHORD() });
+    await act(async () => {});
+    expect(getQuestionContent.mock.calls.length).toBe(reads);
+    expect(sendFollowUp).not.toHaveBeenCalled();
+  });
+
+  it("never promises typing in as a stalled open question's deadline passes under a draft", async () => {
+    questions = {
+      q1: question("q1", { expiresAt: new Date(Date.now() + 1_500).toISOString() }),
+    };
+    await openOn("q1");
+    act(() => box().focus());
+    write("Hold off on this one.");
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+
+    // Only the clock says it passed: no longer paused, as it takes nothing at all, and still stalled.
+    await waitFor(() => expect(notice()).toMatch(/deadline has passed/));
+    expect(paused()).toBeNull();
+    expect(box().value).toBe("Hold off on this one.");
+    expect(promised()).toBe(false);
+  });
+
   it("follows a queued follow-up on to the relay when the stall arrives while it waits", async () => {
     questions = { q1: question("q1", { status: "human-answered" }) };
     sendFollowUp.mockImplementationOnce(async (payload) => ({
