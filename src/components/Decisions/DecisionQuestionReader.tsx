@@ -489,14 +489,7 @@ function QuestionBody({
           active={active}
         />
       )}
-      {/* After the images: an approval waits until each has been opened. */}
-      <DecisionAnswerComposer
-        question={question}
-        target={target}
-        unshown={unshown}
-        onMoved={onMoved}
-        sendNote={sendNote}
-      />
+      {/* Before the answer (#18040): what the agent said since asking can change it. */}
       {question.thread.length > 0 && (
         <section
           className="flex flex-col gap-3"
@@ -515,7 +508,15 @@ function QuestionBody({
           </ul>
         </section>
       )}
-      {/* After the thread, which it adds to. */}
+      {/* After the images: an approval waits until each has been opened. */}
+      <DecisionAnswerComposer
+        question={question}
+        target={target}
+        unshown={unshown}
+        onMoved={onMoved}
+        sendNote={sendNote}
+      />
+      {/* After the thread, which it adds to; folded away while the answer form leads. */}
       {followUps && (
         <DecisionFollowUpComposer
           question={question}

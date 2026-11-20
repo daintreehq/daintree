@@ -9,6 +9,7 @@ import {
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
 import { pluralize } from "@shared/utils/pluralize";
+import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 import type {
   DecisionQuestionContent,
   DecisionQuestionListItem,
@@ -247,6 +248,56 @@ export function referenceKey(reference: DecisionQuestionReference): string {
   return [reference.hostId, reference.projectId, reference.terminalId, reference.questionId].join(
     "\u0000"
   );
+}
+
+/**
+ * The agent's follow-up asking for a reply, by message id, while the question
+ * waits on the person for it (#18040): what its row is named by and where it
+ * opens. Null for any other, which keeps the question's line and opens at its
+ * top: a delivery that stopped leads with that.
+ */
+export function replyToShow(
+  item: Pick<DecisionQuestionListItem, "standing" | "replyRequest">
+): string | null {
+  return item.standing.kind === "waiting" && item.standing.reason === "reply"
+    ? item.replyRequest
+    : null;
+}
+
+/**
+ * Names the request a row's reply line is read for: a new request is a new
+ * line, and an earlier one's late read never lands on it. Null for a row that
+ * isn't waiting on a reply.
+ */
+export function replyLineKey(
+  item: Pick<DecisionQuestionListItem, "reference" | "standing" | "replyRequest">
+): string | null {
+  const ask = replyToShow(item);
+  return ask === null ? null : `${referenceKey(item.reference)}\u0000${ask}`;
+}
+
+// eslint-disable-next-line no-control-regex -- stripping control characters is the point
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+/**
+ * The opening line of the agent's message `messageId` in `question`'s thread,
+ * as a row shows a line: the first with words once escape sequences and
+ * controls are gone. Null when the thread doesn't hold it readable.
+ */
+export function replyLine(
+  question: Pick<DecisionQuestionContent, "thread">,
+  messageId: string
+): string | null {
+  const entry = question.thread.find(
+    (candidate) => candidate.type === "message" && candidate.messageId === messageId
+  );
+  if (entry?.type !== "message" || entry.from !== "agent" || entry.unreadable) return null;
+  // Sequences first: one can span a line break.
+  for (const raw of stripAnsiAndOscCodes(entry.text ?? "").split(/\r\n?|\n|\u2028|\u2029/)) {
+    const line = raw.replace(CONTROLS, "").trim();
+    if (line !== "") return line;
+  }
+  return null;
 }
 
 /** What a list item says of its round, when its machine said (#17943). */

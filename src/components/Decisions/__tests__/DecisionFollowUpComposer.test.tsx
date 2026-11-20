@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
   DecisionFollowUpResultRead,
@@ -188,10 +188,19 @@ async function pushList(list: DecisionQuestionList) {
   });
 }
 
-async function openOn(...ids: string[]) {
+/** Opens the view on `ids` as it first shows: an open question's follow-up folded behind its control. */
+async function openFolded(...ids: string[]) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, ids[0]!));
   const composer = await screen.findByTestId("decision-follow-up-composer");
   await act(async () => {});
+  return composer;
+}
+
+/** Opens the view on `ids` with the follow-up's field out, pressing its control where the answer leads. */
+async function openOn(...ids: string[]) {
+  const composer = await openFolded(...ids);
+  const unfold = screen.queryByTestId("decision-follow-up-open");
+  if (unfold !== null) fireEvent.click(unfold);
   return composer;
 }
 
@@ -1208,6 +1217,226 @@ describe("declining an agent's reply request (#18030)", () => {
       messageId: sendFollowUp.mock.calls[0]![0].messageId,
     });
   });
+});
+
+describe("while the answer leads (#18040)", () => {
+  function agentMessage(
+    messageId: string,
+    over: Partial<DecisionThreadMessage> = {}
+  ): DecisionThreadMessage {
+    return personMessage(messageId, {
+      from: "agent",
+      text: "Which region?",
+      onComputer: false,
+      deliveryStatus: null,
+      ...over,
+    });
+  }
+
+  function unfold() {
+    return screen.getByTestId("decision-follow-up-open");
+  }
+
+  it("folds the follow-up behind one control while the answer form leads, and opens it on the person's word", async () => {
+    const composer = await openFolded("q1");
+    expect(screen.getByTestId("decision-answer-composer")).toBeTruthy();
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+    expect(screen.queryByTestId("decision-follow-up-send")).toBeNull();
+    expect(within(composer).queryByRole("heading")).toBeNull();
+    expect(unfold().textContent).toBe("Follow up without answering");
+
+    // Tabbing past it opens nothing.
+    act(() => unfold().focus());
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+
+    fireEvent.click(unfold());
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+    expect(within(composer).getByRole("heading", { name: "Follow up" })).toBeTruthy();
+    // Emptied again, it stays open for this question.
+    write("Is the backfill done?");
+    write("");
+    expect(document.activeElement).toBe(box());
+
+    write("Is the backfill done?");
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+    expect(sendFollowUp).toHaveBeenCalledTimes(1);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(box().value).toBe("");
+  });
+
+  it("names it a reply when the agent asked for one before any answer, and not for a note that asks nothing", async () => {
+    questions = {
+      q1: question("q1", { thread: [agentMessage("m_agent_1", { expectsReply: false })] }),
+    };
+    await openFolded("q1");
+    expect(unfold().textContent).toBe("Follow up without answering");
+
+    await move(
+      question("q1", {
+        thread: [
+          agentMessage("m_agent_1", { expectsReply: false }),
+          agentMessage("m_agent_2", { expectsReply: true }),
+        ],
+      })
+    );
+    await waitFor(() => expect(unfold().textContent).toBe("Reply without answering"));
+    // A press that left focus where it was still puts it in the field.
+    fireEvent.click(unfold());
+    expect(screen.getByRole("heading", { name: "Reply to the agent" })).toBeTruthy();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("puts the question's images, then what was said on its thread, before the answer, and the follow-up after it", async () => {
+    questions = {
+      q1: question("q1", {
+        kind: "approval",
+        attachments: [
+          {
+            attachmentId: "a1",
+            role: "after",
+            alt: "The new layout",
+            mime: "image/png",
+            size: 10,
+            sha256: "b".repeat(64),
+          },
+        ],
+        thread: [
+          agentMessage("m_agent_1", { text: "The left column moved too." }),
+          agentMessage("m_agent_2", { text: "And the footer." }),
+        ],
+      }),
+    };
+    await openFolded("q1");
+
+    const order = [
+      "decision-question-images",
+      "decision-question-thread",
+      "decision-answer-composer",
+      "decision-follow-up-composer",
+    ].map((id) => screen.getByTestId(id));
+    for (let index = 1; index < order.length; index += 1) {
+      expect(
+        order[index - 1]!.compareDocumentPosition(order[index]!) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    }
+    const entries = within(screen.getByTestId("decision-question-thread")).getAllByTestId(
+      "decision-thread-entry"
+    );
+    expect(entries.map((entry) => entry.getAttribute("data-message-id"))).toEqual([
+      "m_agent_1",
+      "m_agent_2",
+    ]);
+    expect(entries.map((entry) => entry.textContent)).toEqual([
+      expect.stringContaining("The left column moved too."),
+      expect.stringContaining("And the footer."),
+    ]);
+  });
+
+  it("keeps the field out, without taking focus, for words already written or a follow-up on its way", async () => {
+    act(() =>
+      useDecisionsFollowUpStore
+        .getState()
+        .update(recordKey("q1"), (record) => ({ ...record, draft: "Half a thought" }))
+    );
+    await openFolded("q1");
+    expect(box().value).toBe("Half a thought");
+    expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+    expect(document.activeElement).not.toBe(box());
+
+    // A Send still reading the question again, before anything was signed.
+    act(() => {
+      useDecisionsQuestionViewStore.getState().close();
+      useDecisionsFollowUpStore
+        .getState()
+        .update(recordKey("q1"), (record) => ({ ...record, draft: "", preparing: true }));
+    });
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-composer")).toBeNull());
+    await openFolded("q1");
+    expect(screen.getByTestId("decision-follow-up-text")).toBeTruthy();
+    expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+  });
+
+  it("keeps a restored draft's field, and focus, once the person empties it", async () => {
+    act(() =>
+      useDecisionsFollowUpStore
+        .getState()
+        .update(recordKey("q1"), (record) => ({ ...record, draft: "Half a thought" }))
+    );
+    await openFolded("q1");
+    act(() => box().focus());
+    write("");
+
+    expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("hands focus from its control to the field when the answer stops leading under it", async () => {
+    await openFolded("q1");
+    act(() => unfold().focus());
+
+    // Answered on the phone: nothing here takes an answer now, so the field is the view's action.
+    await move(question("q1", { status: "human-answered" }));
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-open")).toBeNull());
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("puts out no field for someone who only passed its control, as a pause starts", async () => {
+    listQuestions.mockResolvedValue(listOf({ kind: "waiting", reason: "open" }, 1));
+    const composer = await openFolded("q1");
+    act(() => unfold().focus());
+
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+    expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+    // Focus stays in the section, on what says why.
+    await waitFor(() => expect(composer.contains(document.activeElement)).toBe(true));
+    expect(document.activeElement?.tagName).not.toBe("TEXTAREA");
+
+    // Resolved: still untouched, so folded again.
+    await pushList(listOf({ kind: "waiting", reason: "open" }, 3));
+    await waitFor(() => expect(unfold()).toBeTruthy());
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+  });
+
+  it("puts out no field for someone who only passed its control, as the deadline passes (#17943)", async () => {
+    questions = { q1: question("q1", { expiresAt: new Date(Date.now() + 500).toISOString() }) };
+    const later = await openFolded("q1");
+    act(() => unfold().focus());
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-open")).toBeNull());
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+    await waitFor(() => expect(later.contains(document.activeElement)).toBe(true));
+  });
+
+  it("says where a sent follow-up stands next time, with the control back for another", async () => {
+    await openOn("q1");
+    write("Is the backfill done?");
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+    // Opened, it stays so after the send.
+    expect(box().value).toBe("");
+
+    act(() => useDecisionsQuestionViewStore.getState().close());
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-composer")).toBeNull());
+    await openFolded("q1");
+    expect(status()).toBe("Follow-up sent");
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+    expect(unfold()).toBeTruthy();
+  });
+
+  it.each(["human-answered", "proxy-answered"] as const)(
+    "shows the field at once when nothing else on the view takes an answer (%s)",
+    async (status) => {
+      questions = { q1: question("q1", { status }) };
+      await openFolded("q1");
+
+      expect(screen.queryByTestId("decision-follow-up-open")).toBeNull();
+      expect(box()).toBeTruthy();
+      expect(document.activeElement).not.toBe(box());
+    }
+  );
 });
 
 function recordKey(questionId: string): string {
