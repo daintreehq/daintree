@@ -88,7 +88,9 @@ export class KeepAwakeKeeper {
   private held: HeldUrl | null = null;
   /**
    * A URL that reached this listener and still works, kept while the one that
-   * replaced it hasn't yet: taken back if that one is dropped.
+   * replaced it hasn't yet: taken back if that one is dropped. Also a shorter
+   * one that reached it, behind the one that outlasts it, until that one
+   * reaches it again.
    */
   private fallback: HeldUrl | null = null;
   private problem: string | null = null;
@@ -200,8 +202,12 @@ export class KeepAwakeKeeper {
     const last = this.held?.verified ? this.held : this.fallback;
     const working = last && last.expiresAt > this.now() ? last : null;
     if (reached && working && working.expiresAt > candidate.expiresAt) {
-      // It reaches this listener, but the URL that already did outlasts it: that one stays.
+      // It reaches this listener, but the URL that already did outlasts it: that one stays, with
+      // this one behind it until that one reaches it again.
       if (working !== this.held) this.replace(working);
+      candidate.verified = true;
+      candidate.reachedAt = this.now();
+      this.fallback = candidate;
       this.lastSentAt = this.mono();
     } else {
       this.replace(candidate);
@@ -352,19 +358,21 @@ export class KeepAwakeKeeper {
       this.noteRetry();
       return;
     }
+    held.verified = true;
+    held.reachedAt = this.now();
+    this.lastSentAt = startedAt;
     const fallback = this.fallback;
     if (fallback && fallback.expiresAt > held.expiresAt && fallback.expiresAt > this.now()) {
-      // It reaches this listener, but the URL it replaced outlasts it: that one is taken back.
+      // It reaches this listener, but the URL it replaced outlasts it: that one is taken back,
+      // with this one behind it until that one reaches it again.
       this.replace(fallback);
+      this.fallback = held;
       this.lastSentAt = startedAt;
       return;
     }
     this.failures = 0;
     this.retryAt = Number.NEGATIVE_INFINITY;
-    held.verified = true;
-    held.reachedAt = this.now();
     this.fallback = null;
-    this.lastSentAt = startedAt;
   }
 
   /** One request through the URL, carrying a nonce only this listener knows to expect. */

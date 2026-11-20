@@ -132,6 +132,8 @@ export class CloudKeepAwakeLinks {
    * holding none is handed one without waiting out the re-mint gate.
    */
   private readonly recheckAt = new Map<string, number>();
+  /** When a recheck last handed over a link inside the re-mint gate: once per gate at most. */
+  private readonly bypassedAt = new Map<string, number>();
   /** When a link was last minted for each binding. */
   private readonly mintedAt = new Map<string, number>();
   /** The link on which the host said it doesn't know these calls: not asked again on it. */
@@ -181,6 +183,8 @@ export class CloudKeepAwakeLinks {
     // Each machine's attempt runs alongside the others': one host's slow answer holds up no other's.
     const attempts: Promise<void>[] = [];
     for (const binding of bindings) {
+      // Something told of a change may have disposed of this synchronously.
+      if (this.disposed) break;
       if (!binding.hostId || !binding.resourceId || !this.providerOf(binding)) continue;
       const stored =
         binding.keepAwake?.resourceId === binding.resourceId ? binding.keepAwake : undefined;
@@ -217,6 +221,7 @@ export class CloudKeepAwakeLinks {
       this.confirmedAt,
       this.retryAt,
       this.recheckAt,
+      this.bypassedAt,
       this.mintedAt,
       this.unsupportedOn,
     ]) {
@@ -339,16 +344,23 @@ export class CloudKeepAwakeLinks {
     }
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     this.record(bindingId, resourceId, status, status.problem);
+    const now = this.now();
     const recheck = this.recheckAt.get(bindingId);
-    const rechecking = recheck !== undefined && recheck <= this.now();
+    const rechecking = recheck !== undefined && recheck <= now;
     if (rechecking) this.recheckAt.delete(bindingId);
     // Found holding none on a link that stays up: handed a new one, now and then, outside a pause.
+    // A recheck after a failed question may hand one over sooner, once per gate.
     const lastMint = this.mintedAt.get(bindingId);
+    const gateOpen = lastMint === undefined || now - lastMint >= REMINT_AFTER_MS;
+    const lastBypass = this.bypassedAt.get(bindingId);
+    const bypass =
+      rechecking &&
+      !gateOpen &&
+      (lastBypass === undefined || now - lastBypass >= REMINT_AFTER_MS);
     const lost =
-      status.expiresAt === null &&
-      !this.retryAt.has(bindingId) &&
-      (rechecking || lastMint === undefined || this.now() - lastMint >= REMINT_AFTER_MS);
+      status.expiresAt === null && !this.retryAt.has(bindingId) && (gateOpen || bypass);
     if (!attempt.mint && !lost) return;
+    if (!attempt.mint && !gateOpen) this.bypassedAt.set(bindingId, now);
     attempt.mint = true;
     if (status.port === null) {
       // The host couldn't open its port, perhaps for a moment.
@@ -359,6 +371,8 @@ export class CloudKeepAwakeLinks {
     let credentials: ProviderCredentials;
     let grant: { url: string; expiresAt: number };
     this.mintedAt.set(bindingId, this.now());
+    // A link handed over since the failed question answers it.
+    this.recheckAt.delete(bindingId);
     try {
       credentials = await this.deps.accounts.credentials(account);
       if (!this.reaches(hostId, bindingId, resourceId, session)) return;

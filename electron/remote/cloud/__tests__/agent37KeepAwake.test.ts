@@ -144,13 +144,14 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
   const calls: Array<{ label: string; method: string; payload: unknown }> = [];
   const link = (
     answers: Record<string, (payload: unknown) => Promise<unknown>> = handlers,
-    label = "link"
+    label = "link",
+    base: Record<string, (payload: unknown) => Promise<unknown>> = handlers
   ) =>
     ({
       isOpen: true,
       call: vi.fn(async (method: string, payload: unknown) => {
         calls.push({ label, method, payload });
-        const handler = { ...handlers, ...answers }[method];
+        const handler = { ...base, ...answers }[method];
         if (!handler) throw unsupported();
         return handler(payload);
       }),
@@ -269,16 +270,16 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     loseAnswers: (meanwhile: (() => void) | null) => {
       answerLost = meanwhile;
     },
-    /** Another machine on the account, linked, its host answering as `answers` say. */
+    /** Another machine on the account, linked, its host answering only as `answers` say. */
     addHost: async (
       name: string,
       answers: Record<string, (payload: unknown) => Promise<unknown>>
     ) => {
       const other = api.seed({ auto_sleep: true, idle_timeout_seconds: 1800 });
       await lifecycle.importMachine({ accountId: account.id, resourceId: other.id, name });
-      const session = link(answers, name);
+      const session = link(answers, name, {});
       others.set(name, session);
-      return session;
+      return { session, instanceId: other.id };
     },
   };
 }
@@ -382,9 +383,9 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
 
   /**
    * A question finds the host's URL lost and mints in place of a renewal queued
-   * behind it on the same link; the host turns away its first `refusals` arms.
+   * behind it on the same link; the host's first arms fail as `failures` say.
    */
-  async function promotedMintRefused(refusals: number) {
+  async function promotedMintFails(failures: Array<"refused" | "timed out">) {
     const env = await agent37({ idle_timeout_seconds: 86_400 });
     await env.connect();
     env.api.signedUrls.splice(0, 1, { ...env.api.signedUrls[0]!, token: "revoked" });
@@ -398,13 +399,16 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
         return env.keeper.open();
       },
       [KeepAwakeLinkMethod.ARM]: async (payload) => {
-        arms += 1;
-        if (arms <= refusals) {
+        const failure = failures[arms++];
+        if (failure === "refused") {
           throw Object.assign(new Error("refused"), {
             code: "VALIDATION",
             userMessage:
               "This host's port closed while it checked that link. Ask for its port again.",
           });
+        }
+        if (failure === "timed out") {
+          throw Object.assign(new Error("Timed out"), { code: "OUTCOME_UNKNOWN" });
         }
         return env.keeper.arm(KeepAwakeArmSchema.parse(payload));
       },
@@ -414,15 +418,17 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     release();
     await asking;
     await renewal;
-    return { env, arms: () => arms };
+    // Long enough for a queued mint against the in-memory fake to have gone out.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { env, arms: () => arms, mints: () => env.api.calls("POST", /\/signed-url$/).length };
   }
 
   it("still offers the renewal queued behind a question whose own mint the host refused", async () => {
-    const { env, arms } = await promotedMintRefused(1);
+    const { env, arms, mints } = await promotedMintFails(["refused"]);
     // No hour's pause first: the renewal was asked for before the question chose to mint.
-    await vi.waitFor(() => expect(arms()).toBe(2));
     await vi.waitFor(() => expect(env.status().keepAwake).toMatchObject({ kind: "held" }));
-    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(3);
+    expect(arms()).toBe(2);
+    expect(mints()).toBe(3);
     expect(env.keeper.status()).toMatchObject({
       expiresAt: env.api.signedUrls.at(-1)!.expiresAt * 1000,
       reachedAt: env.api.now,
@@ -430,116 +436,229 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
   });
 
   it("keeps the hour's pause once the queued renewal is refused too", async () => {
-    const { env, arms } = await promotedMintRefused(2);
-    await vi.waitFor(() => expect(arms()).toBe(2));
-    await vi.waitFor(() =>
-      expect(env.status().keepAwake).toEqual({
-        kind: "none",
-        problem: "This host's port closed while it checked that link. Ask for its port again.",
-      })
-    );
+    const { env, arms, mints } = await promotedMintFails(["refused", "refused"]);
+    expect(arms()).toBe(2);
+    expect(env.status().keepAwake).toEqual({
+      kind: "none",
+      problem: "This host's port closed while it checked that link. Ask for its port again.",
+    });
     for (let i = 0; i < 59; i++) {
       env.api.advance(60);
       await env.links.tick();
     }
-    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(3);
+    expect(mints()).toBe(3);
     env.api.advance(60);
     await env.links.tick();
-    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(4);
+    expect(mints()).toBe(4);
   });
 
-  it("asks again five minutes after a question fails just as the host loses its URL, and hands it a new one", async () => {
+  it("offers nothing more at once when the question's arm timed out, since the host may hold that URL", async () => {
+    const { env, arms, mints } = await promotedMintFails(["timed out"]);
+    expect(arms()).toBe(1);
+    expect(mints()).toBe(2);
+    // Tried again after the wait for a failure that may pass.
+    for (let i = 0; i < 4; i++) {
+      env.api.advance(60);
+      await env.links.tick();
+    }
+    expect(mints()).toBe(2);
+    env.api.advance(60);
+    await env.links.tick();
+    expect(mints()).toBe(3);
+    expect(env.status().keepAwake).toMatchObject({ kind: "held" });
+  });
+
+  /** A linked host whose answers to what it holds can be made to fail, minted once on connecting. */
+  async function failingQuestions() {
     const env = await agent37({ idle_timeout_seconds: 86_400 });
     let statusFails = false;
     await env.connect({
       [KeepAwakeLinkMethod.STATUS]: async () => {
-        if (statusFails) throw Object.assign(new Error("Timed out"), { code: "TIMEOUT" });
+        if (statusFails) throw Object.assign(new Error("Timed out"), { code: "OUTCOME_UNKNOWN" });
         return env.keeper.open();
       },
     });
-    const mints = () => env.api.calls("POST", /\/signed-url$/).length;
-    // Agent 37 stops taking that URL, the busy host drops it, and the next question fails.
-    env.api.signedUrls.splice(0);
-    await env.run(60);
-    expect(env.keeper.status()).toMatchObject({ expiresAt: null });
-    statusFails = true;
-    await env.links.tick();
-    statusFails = false;
-    // The passes before then find it holding none, and wait.
-    for (let i = 0; i < 4; i++) {
-      await env.run(60);
-      await env.links.tick();
-    }
-    await env.run(30);
-    await env.links.tick();
+    return {
+      env,
+      mints: () => env.api.calls("POST", /\/signed-url$/).length,
+      /** A pass after `seconds`, its question failing as said. */
+      pass: async (seconds: number, fails = false) => {
+        await env.run(seconds, seconds);
+        statusFails = fails;
+        await env.links.tick();
+        statusFails = false;
+      },
+      /** Agent 37 stops taking the host's URL, and the busy host drops it on its next request. */
+      loseUrl: async () => {
+        env.api.signedUrls.splice(0);
+        await env.run(60);
+        expect(env.keeper.status()).toMatchObject({ expiresAt: null });
+      },
+    };
+  }
+
+  it("asks again five minutes after a question fails just as the host loses its URL, and hands it a new one", async () => {
+    const { env, mints, pass, loseUrl } = await failingQuestions();
+    await loseUrl();
+    await pass(0, true);
+    // The passes before then find it holding none and wait, one of them failing too without
+    // putting the recheck off.
+    await pass(60);
+    await pass(60, true);
+    await pass(60);
+    await pass(60);
+    await pass(50);
     expect(mints()).toBe(1);
-    // Five minutes on, not half an hour after the last, the host is handed a new one.
-    await env.run(30);
-    await env.links.tick();
+    // Five minutes after the first failure, though the host was asked ten seconds ago.
+    await pass(10);
     expect(mints()).toBe(2);
     expect(env.status().keepAwake).toMatchObject({ kind: "held" });
     expect(env.keeper.status().reachedAt).toBe(env.api.now);
-
-    // A question that fails while the host holds a URL that works mints nothing when asked again.
-    statusFails = true;
-    await env.run(60);
-    await env.links.tick();
-    statusFails = false;
-    for (let i = 0; i < 10; i++) {
-      await env.run(60);
-      await env.links.tick();
-    }
-    expect(mints()).toBe(2);
-    expect(env.status().keepAwake).toMatchObject({ kind: "held" });
   });
 
-  it("starts every linked host's attempt on a pass, whatever one of them keeps it waiting for", async () => {
+  it("hands over at most one link a half hour through rechecks, and none to a host still holding one", async () => {
+    const { env, mints, pass, loseUrl } = await failingQuestions();
+    // A question fails while the host holds a URL that works: asked again, nothing is minted.
+    await pass(60, true);
+    for (let i = 0; i < 6; i++) await pass(60);
+    expect(mints()).toBe(1);
+    // That recheck was used up: losing the URL now waits out the half hour since the last.
+    await loseUrl();
+    await pass(0);
+    for (let i = 0; i < 6; i++) await pass(60);
+    expect(mints()).toBe(1);
+
+    // A question fails just as it is lost again, and its recheck hands over a new one.
+    await env.run(30 * 60);
+    await env.links.tick();
+    expect(mints()).toBe(2);
+    await loseUrl();
+    await pass(0, true);
+    for (let i = 0; i < 5; i++) await pass(60);
+    expect(mints()).toBe(3);
+    // Lost and failed again within the half hour: no second link through a recheck.
+    await loseUrl();
+    await pass(0, true);
+    for (let i = 0; i < 10; i++) await pass(60);
+    expect(mints()).toBe(3);
+    // Then the ordinary half hour since the last one, and that link clears the recheck.
+    for (let i = 0; i < 20; i++) await pass(60, i === 15);
+    expect(mints()).toBe(4);
+    await loseUrl();
+    for (let i = 0; i < 6; i++) await pass(60);
+    expect(mints()).toBe(4);
+  });
+
+  it("starts every linked host's attempt on a pass, whatever another keeps it waiting for", async () => {
     const env = await agent37();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
+    const gates = { status: Promise.withResolvers<void>(), arm: Promise.withResolvers<void>() };
     try {
-      // The first machine's host takes its time over the URL it is handed.
+      // Both machines' hosts hold nothing yet, and take their time over every answer.
       env.attach({
+        [KeepAwakeLinkMethod.STATUS]: async () => {
+          await gates.status.promise;
+          return env.keeper.open();
+        },
         [KeepAwakeLinkMethod.ARM]: async (payload) => {
-          await gate;
+          await gates.arm.promise;
           return env.keeper.arm(KeepAwakeArmSchema.parse(payload));
         },
       });
-      // The other's holds nothing yet, and takes what it's handed at once.
-      await env.addHost("test", {
-        [KeepAwakeLinkMethod.STATUS]: async () => ({
-          port: PORT,
-          expiresAt: null,
-          reachedAt: null,
-          problem: null,
-        }),
+      let otherId = "";
+      const other = await env.addHost("test", {
+        [KeepAwakeLinkMethod.STATUS]: async () => {
+          await gates.status.promise;
+          return { port: PORT, expiresAt: null, reachedAt: null, problem: null };
+        },
         [KeepAwakeLinkMethod.ARM]: async (payload) => {
-          const { expiresAt } = KeepAwakeArmSchema.parse(payload);
-          return { port: PORT, expiresAt, reachedAt: env.api.now, problem: null };
+          const request = KeepAwakeArmSchema.parse(payload);
+          // Only this machine's own port, through a grant Agent 37 made for it.
+          expect(request.resourceId).toBe(otherId);
+          expect(new URL(request.url).hostname).toBe(`${otherId}-${PORT}.agent37.app`);
+          const token = new URL(request.url).searchParams.get("a37_token");
+          expect(env.api.signedUrls.find((grant) => grant.token === token)?.instanceId).toBe(
+            otherId
+          );
+          await gates.arm.promise;
+          return {
+            port: PORT,
+            expiresAt: request.expiresAt,
+            reachedAt: env.api.now,
+            problem: null,
+          };
         },
       });
-      const other = env.store.bindingForHost("test")!.id;
-      const pass = env.links.tick();
-      await vi.waitFor(() =>
-        expect(
-          env.calls.filter(
-            (call) => call.label === "link" && call.method === KeepAwakeLinkMethod.ARM
-          )
-        ).toHaveLength(1)
+      otherId = other.instanceId;
+      const asked = (label: string, method: string) =>
+        env.calls.filter((call) => call.label === label && call.method === method).length;
+
+      // Each host is asked what it holds while the other's answer is still out; Agent 37 can't mint.
+      env.api.fail(
+        "POST",
+        /\/signed-url$/,
+        FakeAgent37Api.error(403, "forbidden", "Not allowed"),
+        2
       );
-      // While the first host still holds its URL, the other is handed one and holds it.
-      await vi.waitFor(() =>
-        expect(env.links.statusFor(other)).toMatchObject({ kind: "held", reached: true })
-      );
-      expect(env.links.statusFor(env.bindingId)).toEqual({ kind: "none", problem: null });
-      expect(new Set(env.api.signedUrls.map((grant) => grant.instanceId)).size).toBe(2);
-      release();
-      await pass;
+      const first = env.links.tick();
+      await vi.waitFor(() => {
+        expect(asked("link", KeepAwakeLinkMethod.STATUS)).toBe(1);
+        expect(asked("test", KeepAwakeLinkMethod.STATUS)).toBe(1);
+      });
+      gates.status.resolve();
+      await first;
+      expect(env.api.signedUrls).toHaveLength(0);
+
+      // Tried again together, each host is handed its URL while the other's is still out.
+      env.api.advance(300);
+      const second = env.links.tick();
+      await vi.waitFor(() => {
+        expect(asked("link", KeepAwakeLinkMethod.ARM)).toBe(1);
+        expect(asked("test", KeepAwakeLinkMethod.ARM)).toBe(1);
+      });
+      gates.arm.resolve();
+      await second;
       expect(env.links.statusFor(env.bindingId)).toMatchObject({ kind: "held", reached: true });
-      expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
+      expect(env.links.statusFor(env.store.bindingForHost("test")!.id)).toMatchObject({
+        kind: "held",
+        reached: true,
+      });
+      expect(env.api.signedUrls.map((grant) => grant.instanceId).sort()).toEqual(
+        [env.machine.id, otherId].sort()
+      );
     } finally {
-      release();
+      gates.status.resolve();
+      gates.arm.resolve();
     }
+  });
+
+  it("goes back to a shorter URL that reached the host when the longer one it kept is turned away", async () => {
+    const env = await agent37({ idle_timeout_seconds: 86_400 });
+    await env.connect();
+    const working = env.api.signedUrls[0]!;
+    // A URL from elsewhere, an hour from its expiry, reaches the host; the one that outlasts it stays.
+    const token = "shorter".padEnd(32, "x");
+    env.api.signedUrls.push({
+      instanceId: env.machine.id,
+      port: PORT,
+      token,
+      expiresAt: env.api.now / 1000 + 3600,
+    });
+    await expect(
+      env.keeper.arm({
+        resourceId: env.machine.id,
+        url: `https://${env.machine.id}-${PORT}.agent37.app/?a37_token=${token}`,
+        expiresAt: env.api.now + 3_600_000,
+      })
+    ).resolves.toMatchObject({ expiresAt: working.expiresAt * 1000 });
+    // Agent 37 stops taking the longer one: the host goes back to the shorter, and stays awake on it.
+    env.api.signedUrls.splice(0, 1, { ...working, token: "revoked" });
+    expect(await env.run(1800)).toBe(true);
+    expect(env.keeper.status()).toMatchObject({
+      expiresAt: env.api.now - 1_800_000 + 3_600_000,
+      problem: null,
+    });
+    expect(env.api.now - env.keeper.status().reachedAt!).toBeLessThanOrEqual(60_000);
+    expect(new URL(env.edgeRequests.at(-1)!.url).searchParams.get("a37_token")).toBe(token);
   });
 
   it("never lets a URL that is about to expire take the place of one that works", async () => {

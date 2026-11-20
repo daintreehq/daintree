@@ -18,8 +18,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** How the edge answers: a status, whether the request reached the listener, and whether the answer then never comes back. */
-type Answer = { status: number; reaches: boolean; lost?: boolean };
+/**
+ * How the edge answers: a status, whether the request reached the listener,
+ * what happens once it did, and whether the answer then never comes back.
+ */
+type Answer = { status: number; reaches: boolean; after?: () => void; lost?: boolean };
 
 /**
  * A keeper over a listener and an edge the test drives: the edge answers each
@@ -60,6 +63,7 @@ function setup() {
       const nonce = url.pathname.slice(KEEP_AWAKE_PATH.length);
       if (expected.delete(nonce)) received.add(nonce);
     }
+    said.after?.();
     if (said.lost) throw new DOMException("The operation timed out.", "TimeoutError");
     return new Response(null, { status: said.status });
   });
@@ -255,6 +259,25 @@ describe("KeepAwakeKeeper (#17918)", () => {
     expect(env.tokens().at(-1)).toBe(TOKEN_A);
   });
 
+  it.each([
+    ["answered", false],
+    ["its answer lost", true],
+  ])("drops a URL that runs out after its request arrived, %s", async (_name, lost) => {
+    const env = setup();
+    await env.keeper.open();
+    env.setBusy(false);
+    await env.arm(URL_B, env.now() + 20_000);
+    env.setBusy(true);
+    // It arrives with ten seconds left; the wait for its answer ends five seconds after it expired.
+    env.answer(() => ({ status: 204, reaches: true, lost, after: () => env.advance(15_000) }));
+    await env.passes(1, 10_000);
+    expect(env.keeper.status()).toMatchObject({
+      expiresAt: null,
+      reachedAt: null,
+      problem: expect.stringContaining("expired"),
+    });
+  });
+
   it("takes back the URL that worked when the one that replaced it runs out while its answer is awaited", async () => {
     const env = setup();
     await env.keeper.open();
@@ -262,17 +285,64 @@ describe("KeepAwakeKeeper (#17918)", () => {
     env.setBusy(false);
     await env.arm(URL_B, env.now() + 20_000);
     env.setBusy(true);
-    // It arrives with ten seconds left; the edge's answer comes back five seconds after it expired.
-    env.answer((token) => {
-      if (token === TOKEN_B) env.advance(15_000);
-      return { status: 204, reaches: true };
-    });
+    env.answer((token) => ({
+      status: 204,
+      reaches: true,
+      after: token === TOKEN_B ? () => env.advance(15_000) : undefined,
+    }));
     await env.passes(1, 10_000);
     expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
-    env.answer(() => ({ status: 204, reaches: true }));
     await env.passes(1, 60_000);
     expect(env.tokens().at(-1)).toBe(TOKEN_A);
     expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, reachedAt: env.now() });
+  });
+
+  it("refuses a URL that ran out while it waited behind a pass, the host gone idle meanwhile", async () => {
+    const env = setup();
+    await env.keeper.open();
+    const first = await env.arm();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    env.answer(async () => {
+      await gate;
+      return { status: 204, reaches: true };
+    });
+    env.advance(60_000);
+    const pass = env.keeper.tick();
+    const arming = env.arm(URL_B, env.now() + 5_000);
+    // Taken in its turn, it now waits behind the pass's request.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    env.setBusy(false);
+    env.advance(10_000);
+    release();
+    await pass;
+    await expect(arming).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
+    expect(env.tokens()).not.toContain(TOKEN_B);
+  });
+
+  it("keeps a longer URL that reached it over a shorter one that does too, unless they expire together", async () => {
+    const env = setup();
+    const TOKEN_C = "tok_live_5555555555";
+    const URL_C = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=${TOKEN_C}`;
+    await env.keeper.open();
+    const first = await env.arm();
+    // An unchecked one comes between: the shorter one reaching it still leaves the longer in place.
+    env.setBusy(false);
+    await env.arm(URL_C, env.now() + 9 * DAY);
+    env.setBusy(true);
+    await expect(env.arm(URL_B, env.now() + DAY)).resolves.toMatchObject({
+      expiresAt: first.expiresAt,
+    });
+    await env.passes(1, 60_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_A);
+    // One that expires with it takes its place.
+    await expect(env.arm(URL_B, first.expiresAt!)).resolves.toMatchObject({
+      expiresAt: first.expiresAt,
+      reachedAt: env.now(),
+    });
+    await env.passes(1, 60_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_B);
   });
 
   it("keeps the URL that worked behind every unchecked one that came after it", async () => {
