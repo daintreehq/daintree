@@ -234,9 +234,10 @@ async function readAccountEmail(call: CodexAppServerCall): Promise<string | null
 }
 
 /** `codexHome` undefined means main's own env, exactly as before presets were read. */
+/** `dropIfUnwanted` throws {@link QuotaReadDropped} for a background read nobody wants any more. */
 async function fetchCodexQuota(
   codexHome: string | undefined,
-  beforeSpawn?: () => void
+  dropIfUnwanted?: () => void
 ): Promise<HomeReading> {
   // Held outside the session: if the deadline lands during the optional account
   // read, the quota that already arrived is still the answer.
@@ -258,7 +259,7 @@ async function fetchCodexQuota(
       },
       {
         ...(codexHome === undefined ? {} : { codexHome }),
-        ...(beforeSpawn ? { beforeSpawn } : {}),
+        ...(dropIfUnwanted ? { beforeSpawn: dropIfUnwanted } : {}),
       }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
@@ -278,6 +279,9 @@ async function fetchCodexQuota(
         evidence: toCodexLimitEvidence(answered.raw, requestedAt, answered.fetchedAt),
       };
     }
+    // A read nobody wants any more, that never got an answer (its slot timed
+    // out, say), is dropped rather than cached as a failure.
+    dropIfUnwanted?.();
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
@@ -287,10 +291,10 @@ async function fetchCodexQuota(
 }
 
 /**
- * `stillWanted` marks a background read: asked again just before Codex would
- * be spawned for it, after its turn in this queue and the transport's, it is
- * dropped then if false and nobody that needs the answer has joined it.
- * Absent, the caller needs the answer.
+ * `stillWanted` marks a background read: asked again when its turn in this
+ * queue comes and just before Codex would be spawned for it, it is dropped
+ * there if false and nobody that needs the answer has joined it, so it
+ * neither holds the queue nor starts Codex. Absent, the caller needs the answer.
  */
 function readHome(
   home: string,
@@ -315,12 +319,15 @@ function readHome(
   }
   const owner = entry;
   owner.needed = !stillWanted;
-  const beforeSpawn = stillWanted
+  const dropIfUnwanted = stillWanted
     ? () => {
         if (!owner.needed && !stillWanted()) throw new QuotaReadDropped();
       }
     : undefined;
-  const request = enqueue(() => fetchCodexQuota(codexHome, beforeSpawn)).then((result) => {
+  const request = enqueue(async () => {
+    dropIfUnwanted?.();
+    return fetchCodexQuota(codexHome, dropIfUnwanted);
+  }).then((result) => {
     owner.cached = result;
     return result;
   });

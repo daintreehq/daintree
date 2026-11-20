@@ -36,7 +36,7 @@ export function AgentUsageTrackingSection() {
       {unsaved !== null && (
         <SettingsLoadErrorBanner
           title="Couldn't save that change"
-          message="The switch shows what's saved now."
+          message="Your change wasn't saved."
           onRetry={() => save(unsaved)}
         />
       )}

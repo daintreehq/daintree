@@ -423,27 +423,29 @@ describe("installHostMetricsHostWith", () => {
           },
         })
       );
+      samples.seed(withUsage(0));
       const p = await pair();
       const seen = usageFrames(p.client);
       server.attach(p.host, "shell");
       samples.sample(withUsage(1));
-      await waitFor(() => seen.length === 1);
-      expect(seen).toEqual([false]);
+      await waitFor(() => seen.length === 2);
+      // The cached frame handed over on attach carries none either.
+      expect(seen).toEqual([false, false]);
       expect(watchAgentUsage).not.toHaveBeenCalled();
 
       hostOn = true;
       changed!();
       expect(watchAgentUsage).toHaveBeenCalledTimes(1);
       samples.sample(withUsage(2));
-      await waitFor(() => seen.length === 2);
-      expect(seen).toEqual([false, true]);
+      await waitFor(() => seen.length === 3);
+      expect(seen).toEqual([false, false, true]);
 
       hostOn = false;
       changed!();
       expect(release).toHaveBeenCalledTimes(1);
       samples.sample(withUsage(3));
-      await waitFor(() => seen.length === 3);
-      expect(seen).toEqual([false, true, false]);
+      await waitFor(() => seen.length === 4);
+      expect(seen).toEqual([false, false, true, false]);
       dispose();
       expect(changed).toBe(null);
     });

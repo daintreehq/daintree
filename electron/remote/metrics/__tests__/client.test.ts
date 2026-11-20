@@ -1197,6 +1197,7 @@ describe("HostMetricsClient", () => {
       resetsAt: null,
       observedAt: 1,
     };
+    h.client.record("studio-01", { ...summary(0), agentUsage: [reading] });
     h.client.record("studio-01", { ...summary(1), agentUsage: [reading] });
     const held = h.client.latest("studio-01")!;
     expect(held.agentUsage).toEqual([reading]);
@@ -1205,6 +1206,9 @@ describe("HostMetricsClient", () => {
     h.client.forgetAgentUsage();
     expect(h.client.latest("studio-01")).toBe(held);
     expect(held).not.toHaveProperty("agentUsage");
+    // Every summary held, not only the newest.
+    expect(h.client.getSnapshots()[0]!.history).toHaveLength(2);
+    expect(h.client.getSnapshots()[0]!.history.some((s) => "agentUsage" in s)).toBe(false);
     // A host from before the switch keeps sending it; none of it is kept or passed on.
     h.client.record("studio-01", { ...summary(2), agentUsage: [reading] });
     expect(h.client.latest("studio-01")).not.toHaveProperty("agentUsage");

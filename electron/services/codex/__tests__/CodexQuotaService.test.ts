@@ -344,6 +344,21 @@ describe("readCodexQuotaProfiles (#13686)", () => {
         expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
       });
 
+      it("caches nothing for a read nobody wants whose slot never came", async () => {
+        let wanted = true;
+        runSession.mockImplementationOnce(async () => {
+          // Demand went while it waited for a transport slot, which then timed out.
+          wanted = false;
+          throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");
+        });
+        await expect(readCodexQuotaForHomes(await homes(second), () => wanted)).resolves.toEqual(
+          []
+        );
+        respondPerHome(() => 21);
+        const readings = await readCodexQuotaForHomes(await homes(second));
+        expect(used(readings[0]!.result)).toBe(21);
+      });
+
       it("runs a queued background read that's still wanted by its turn", async () => {
         const queue = holdQueue();
         const background = readCodexQuotaForHomes(await homes(second), () => true);

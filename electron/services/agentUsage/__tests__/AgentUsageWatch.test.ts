@@ -296,8 +296,30 @@ describe("AgentUsageWatch", () => {
       release();
       h.watch.trackingTurnedOff();
 
-      // Well before the 70% reading's reset, so only the switch can hide it.
-      await vi.advanceTimersByTimeAsync(CADENCE);
+      // Within the cadence and well before the 70% reading's reset, so only the switch can hide it.
+      await vi.advanceTimersByTimeAsync(TICK);
+      h.codexAnswers.set("/accts/work", failing);
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
+      expect(h.watch.latest()).toEqual([]);
+      h.watch.dispose();
+    });
+
+    it("keeps nothing from a read that lands after tracking went off", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      let answer!: (value: CodexHomeQuota[]) => void;
+      h.readCodexHomes.mockImplementationOnce(
+        () => new Promise<CodexHomeQuota[]>((resolve) => (answer = resolve))
+      );
+      const release = h.watch.acquire();
+      await settle();
+      release();
+      h.watch.trackingTurnedOff();
+      answer([codexQuota("/accts/work", 70, START)]);
+      await settle();
+
       h.codexAnswers.set("/accts/work", failing);
       h.watch.acquire();
       await settle();

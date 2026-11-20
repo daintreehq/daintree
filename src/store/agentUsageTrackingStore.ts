@@ -72,7 +72,13 @@ export function initAgentUsageTrackingSync(): () => void {
   const read = () => {
     api.getTracking().then(apply, () => {
       if (disposed || useAgentUsageTrackingStore.getState().revision >= 0) return;
-      retry = setTimeout(read, Math.min(READ_RETRY_CAP_MS, READ_RETRY_BASE_MS * 2 ** attempt++));
+      retry = setTimeout(
+        () => {
+          // A push may have answered meanwhile.
+          if (useAgentUsageTrackingStore.getState().revision < 0) read();
+        },
+        Math.min(READ_RETRY_CAP_MS, READ_RETRY_BASE_MS * 2 ** attempt++)
+      );
     });
   };
   const unsubscribe = api.onTrackingChanged(apply);

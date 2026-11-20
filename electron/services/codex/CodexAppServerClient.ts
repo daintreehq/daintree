@@ -140,9 +140,9 @@ export interface CodexAppServerSessionOptions {
    */
   codexHome?: string;
   /**
-   * Asked once a slot is held, just before Codex is spawned; a throw ends the
-   * session unstarted, with that error. For a background read whose caller may
-   * stop wanting it while it waits for a slot (#17981).
+   * Asked once a slot is held and the CLI found, just before Codex is
+   * spawned; a throw ends the session unstarted, with that error. For a
+   * background read whose caller may stop wanting it meanwhile (#17981).
    */
   beforeSpawn?: () => void;
 }
@@ -190,7 +190,6 @@ export async function runCodexAppServerSession<T>(
   const deadlineAt = Date.now() + (options.timeoutMs ?? SESSION_TIMEOUT_MS);
   await acquireSessionSlot(deadlineAt);
   try {
-    options.beforeSpawn?.();
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
       throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");
@@ -215,15 +214,25 @@ async function spawnCodexAppServerSession<T>(
   // On Windows an npm-installed Codex is a `.cmd` shim, which a shell-less
   // spawn of the bare name never reaches (ENOENT): quota and subagent reads
   // silently failed there while the terminal launch worked.
-  let child: ChildProcess;
+  const env = buildAppServerEnv(options.codexHome);
+  let target: Awaited<ReturnType<typeof cliSpawnTarget>>;
   try {
-    const env = buildAppServerEnv(options.codexHome);
-    const target = await cliSpawnTarget(
+    target = await cliSpawnTarget(
       command,
       ["app-server", "--listen", "stdio://"],
       process.platform,
-      { env }
+      {
+        env,
+      }
     );
+  } catch (error) {
+    throw classifySpawnError(error as NodeJS.ErrnoException);
+  }
+  // Last, after every wait (a slot, the CLI lookup), and outside the launch's
+  // own error handling, so a caller that stopped wanting it spawns nothing.
+  options.beforeSpawn?.();
+  let child: ChildProcess;
+  try {
     child = spawn(target.command, target.args, {
       shell: target.shell,
       windowsVerbatimArguments: target.windowsVerbatimArguments,
