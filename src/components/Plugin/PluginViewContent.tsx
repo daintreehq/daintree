@@ -249,7 +249,9 @@ function MountedView({
   fileDocument,
   ...props
 }: PanelViewProps & { View: ComponentType<PanelViewProps> }) {
-  const [scope] = useState(() => (fileDocument ? scopeFileDocumentToView(fileDocument) : null));
+  const [scope] = useState(() =>
+    fileDocument ? scopeFileDocumentToView(fileDocument, props.disposeSignal) : null
+  );
   useEffect(() => scope?.retain(), [scope]);
   return <View {...props} {...(scope ? { fileDocument: scope.document } : {})} />;
 }

@@ -14,20 +14,38 @@ export interface PluginFileDocumentViewScope {
  * retired one may still have a formatter or a debounced report in flight. Its
  * late `setDraft` would replace the text of the draft the new view started,
  * under the new view's base, and the close prompt's Save would then write text
- * that base never described. So writes stop once the view has gone, settled a
- * microtask after its last release: a flush from its own unmount cleanup still
- * lands, and a remount in the same commit (StrictMode) keeps it. Its change
- * listeners go with it. Reads pass through untouched.
+ * that base never described. So the view stops writing once it has gone,
+ * settled a microtask after its last release: a flush from its own unmount
+ * cleanup still lands, and a remount in the same commit (StrictMode) keeps it.
+ * Its change listeners go with it, and a read it starts after that is answered
+ * `unavailable` rather than recorded as what the disk was last seen at.
  *
  * Kept free of the document controller so the plugin view loader doesn't pull
  * it in.
  */
-export function scopeFileDocumentToView(document: PluginFileDocument): PluginFileDocumentViewScope {
+export function scopeFileDocumentToView(
+  document: PluginFileDocument,
+  disposeSignal?: AbortSignal
+): PluginFileDocumentViewScope {
   let mounts = 0;
   let gone = false;
   const subscriptions = new Set<() => void>();
+  const retire = () => {
+    if (gone) return;
+    gone = true;
+    for (const drop of [...subscriptions]) drop();
+  };
+  // A host tearing the whole view down aborts its dispose signal from a
+  // microtask queued before this scope's own, so the view's abort listeners
+  // would run while it still looked live. Registered before any of theirs, this
+  // one retires a view already released. An abort while the view is still
+  // mounted (a new attempt replacing it) leaves its unmount flush to land.
+  disposeSignal?.addEventListener("abort", () => {
+    if (mounts === 0) retire();
+  });
   const scoped: PluginFileDocument = Object.freeze({
     ...document,
+    read: () => (gone ? Promise.resolve({ status: "unavailable" } as const) : document.read()),
     save: async (text: string, options: { expectedRevision: string }) =>
       gone && !document.readOnly
         ? ({ status: "refused", reason: "unavailable" } as const)
@@ -63,9 +81,7 @@ export function scopeFileDocumentToView(document: PluginFileDocument): PluginFil
         mounts -= 1;
         if (mounts === 0) {
           queueMicrotask(() => {
-            if (mounts !== 0) return;
-            gone = true;
-            for (const drop of [...subscriptions]) drop();
+            if (mounts === 0) retire();
           });
         }
       };

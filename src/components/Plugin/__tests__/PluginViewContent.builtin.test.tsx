@@ -210,7 +210,7 @@ describe("built-in panel views", () => {
       fileName: "users.csv",
       getDraft: () => "a,b",
     } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
-    render(
+    const { rerender } = render(
       <Content
         panelId="file-editor:panel-1"
         fileDocument={fileDocument}
@@ -219,8 +219,20 @@ describe("built-in panel views", () => {
     );
 
     await screen.findByTestId("builtin-view");
+    const renders = seen.length;
+    rerender(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+        worktreeId="wt-2"
+      />
+    );
+    expect(seen.at(-1)?.worktreeId).toBe("wt-2");
+    expect(seen.length).toBeGreaterThan(renders);
     // The view's own hold on it (#17903): one object for the mount, reading
     // through to the host's document.
+    expect(seen.at(-1)?.fileDocument).not.toBe(fileDocument);
     expect(new Set(seen.map((props) => props.fileDocument)).size).toBe(1);
     expect(seen.at(-1)?.fileDocument?.fileName).toBe("users.csv");
     expect(seen.at(-1)?.fileDocument?.getDraft()).toBe("a,b");
@@ -304,9 +316,21 @@ describe("built-in panel views", () => {
     expect(mounted).toHaveLength(2);
     const retried = mounted[1]!;
     expect(retried).not.toBe(crashed);
-    retried.setDraft("edited", { baseRevision: "rev-b" });
-    expect(setDraft).toHaveBeenCalledWith("edited", { baseRevision: "rev-b" });
+    expect(retried).not.toBe(fileDocument);
     expect(retried.fileName).toBe("a.json");
+    retried.setDraft("edited", { baseRevision: "rev-b" });
+    retried.setConflict(true);
+    await expect(retried.save("edited", { expectedRevision: "rev-b" })).resolves.toEqual({
+      status: "saved",
+      revision: "rev-c",
+    });
+    expect(setDraft).toHaveBeenCalledWith("edited", { baseRevision: "rev-b" });
+    expect(setConflict).toHaveBeenCalledWith(true);
+    expect(save).toHaveBeenCalledWith("edited", { expectedRevision: "rev-b" });
+
+    // The retry's mount never brings the crashed one back.
+    crashed.setDraft("formatted late", { baseRevision: "rev-a" });
+    expect(setDraft).toHaveBeenCalledTimes(1);
   });
 
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {

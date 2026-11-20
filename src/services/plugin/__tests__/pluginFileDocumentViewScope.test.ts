@@ -117,7 +117,7 @@ describe("scopeFileDocumentToView (#17903)", () => {
     expect(openPluginFileDocument(target()).document.getDraft()).toBeNull();
   });
 
-  it("reads through for a retired view, and keeps the document's fields", async () => {
+  it("keeps a retired view's fields and draft readable, but answers its new reads unavailable", async () => {
     const host = openPluginFileDocument(target());
     host.retain();
     host.document.setDraft("draft", { baseRevision: REV_A });
@@ -135,8 +135,101 @@ describe("scopeFileDocumentToView (#17903)", () => {
     expect(Object.isFrozen(view.document)).toBe(true);
     expect(view.document.getDraft()).toBe("draft");
     expect(view.document.getDraftBaseRevision()).toBe(REV_A);
-    bridge.read.mockResolvedValueOnce({ status: "ok", text: "a", revision: REV_A });
-    await expect(view.document.read()).resolves.toMatchObject({ revision: REV_A });
+    await expect(view.document.read()).resolves.toEqual({ status: "unavailable" });
+    expect(bridge.read).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let a retired view's read hide a disk change from its successor", async () => {
+    const host = openPluginFileDocument(target());
+    host.retain();
+    const oldView = scopeFileDocumentToView(host.document);
+    oldView.retain()();
+    await Promise.resolve();
+    const newView = scopeFileDocumentToView(host.document);
+    newView.retain();
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "b", revision: REV_B });
+    await newView.document.read();
+    const listener = vi.fn();
+    newView.document.onDidChange(listener);
+
+    // The disk moves to C; the old view's delayed refresh asks before the probe.
+    bridge.read.mockResolvedValue({ status: "ok", text: "c", revision: REV_C });
+    await expect(oldView.document.read()).resolves.toEqual({ status: "unavailable" });
+    await host.notifyDiskChange();
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_C });
+  });
+
+  it("retires a released view as its dispose signal aborts, ahead of the view's own abort listeners", () => {
+    const host = openPluginFileDocument(target());
+    host.retain();
+    const controller = new AbortController();
+    const view = scopeFileDocumentToView(host.document, controller.signal);
+    const release = view.retain();
+    // Work the view tied to its dispose signal, holding an older snapshot.
+    controller.signal.addEventListener("abort", () => {
+      view.document.setDraft("from a stale snapshot", { baseRevision: REV_A });
+    });
+    view.document.setDraft("current", { baseRevision: REV_B });
+
+    // The host's teardown releases the scope, then its queued dispose runs.
+    release();
+    view.document.setDraft("flushed on unmount", { baseRevision: REV_B });
+    controller.abort();
+    expect(host.document.getDraft()).toBe("flushed on unmount");
+    expect(host.document.getDraftBaseRevision()).toBe(REV_B);
+  });
+
+  it("keeps a view whose dispose signal aborts while it is still mounted able to flush on unmount", async () => {
+    const host = openPluginFileDocument(target());
+    host.retain();
+    const controller = new AbortController();
+    const view = scopeFileDocumentToView(host.document, controller.signal);
+    const release = view.retain();
+    // A new attempt aborts the outgoing signal before the commit unmounts it.
+    controller.abort();
+    view.document.setDraft("typed", { baseRevision: REV_A });
+    release();
+    view.document.setDraft("flushed on unmount", { baseRevision: REV_A });
+    expect(host.document.getDraft()).toBe("flushed on unmount");
+
+    await Promise.resolve();
+    view.document.setDraft("late", { baseRevision: REV_A });
+    expect(host.document.getDraft()).toBe("flushed on unmount");
+  });
+
+  it("stays live while any hold remains, a repeated release counting once", async () => {
+    const host = openPluginFileDocument(target());
+    host.retain();
+    const view = scopeFileDocumentToView(host.document);
+    const first = view.retain();
+    view.retain();
+    first();
+    first();
+    await Promise.resolve();
+    view.document.setDraft("mine", { baseRevision: REV_A });
+    expect(host.document.getDraft()).toBe("mine");
+  });
+
+  it("unsubscribes the retired view's registrations from the document, and only those", async () => {
+    const unsubscribes: ReturnType<typeof vi.fn>[] = [];
+    const delegate = Object.freeze({
+      ...openPluginFileDocument(target()).document,
+      onDidChange: () => {
+        const unsubscribe = vi.fn();
+        unsubscribes.push(unsubscribe);
+        return unsubscribe;
+      },
+    });
+    const oldView = scopeFileDocumentToView(delegate);
+    const releaseOld = oldView.retain();
+    oldView.document.onDidChange(() => {});
+    const newView = scopeFileDocumentToView(delegate);
+    newView.retain();
+    newView.document.onDidChange(() => {});
+    releaseOld();
+    await Promise.resolve();
+    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(unsubscribes[1]).not.toHaveBeenCalled();
   });
 
   it("drops a retired view's change listeners, never the same function its successor subscribed", async () => {
