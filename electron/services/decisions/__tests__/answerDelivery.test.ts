@@ -2317,10 +2317,10 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await expect(h.delivery.copiedAnswer(Q1)).resolves.toBeNull();
     expect(h.client.submitted).toEqual([]);
     // The sink refused the write it had admitted: nothing was typed, and a person decides.
-    expect((await trail(h)).map((t) => t.step)).toEqual([
-      "attempted",
-      "untyped",
-      "needs-attention",
+    expect(await trail(h)).toMatchObject([
+      { step: "attempted" },
+      { step: "untyped" },
+      { step: "needs-attention", refused: "admitted-write" },
     ]);
     await stopped(h.delivery);
   });

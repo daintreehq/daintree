@@ -82,9 +82,10 @@ describe("a timeout notice's trail (#17944)", () => {
       delivery_status: "needs-attention",
       error_code: "pane_gone",
     });
-    expect(noticeTrailOf(attempted, stopped, AT)).toMatchObject([
-      { result: "needs-attention", detail: { reason: "pane_gone", attempt: "inj-1" } },
-    ]);
+    const [stop] = noticeTrailOf(attempted, stopped, AT);
+    expect(stop).toMatchObject({ result: "needs-attention", detail: { reason: "pane_gone" } });
+    // The row's latest attempt isn't evidence of what stopped it.
+    expect(stop!.detail).not.toHaveProperty("attempt");
 
     // A person tries it again: it waits to be typed once more.
     const retried = patch(stopped, { delivery_status: "desktop-received", error_code: null });
@@ -117,6 +118,40 @@ describe("a timeout notice's trail (#17944)", () => {
     });
     const handled = patch(refused, { answers_json: answers({ ...EXPIRY, deliver: false }) });
     expect(steps(noticeTrailOf(refused, handled, AT))).toEqual(["stopped"]);
+  });
+
+  it("tells an attempt held before typing, then a pane that went, from an admitted write the sink refused", () => {
+    const pending = expired({}, { last_injection_id: "inj-1" });
+    const intent = {
+      injection_id: "inj-1",
+      message_id: null,
+      answer_revision: 0,
+      pane_id: "pane-a",
+    };
+    // Held behind a draft: nothing typed. Later the pane is gone before any new attempt.
+    const gone = patch(pending, { delivery_status: "needs-attention", error_code: "pane_gone" });
+    const heldThenGone = [
+      noticeUntypedOf(pending, intent, AT),
+      ...noticeTrailOf(pending, gone, AT),
+    ];
+    // Admitted, then refused: the notice's own entry carries the refusal.
+    const refused = patch(pending, {
+      delivery_status: "needs-attention",
+      error_code: "generation_mismatch",
+      answers_json: answers({ ...EXPIRY, write_refused: true }),
+    });
+    const refusedTrail = [
+      noticeUntypedOf(pending, intent, AT),
+      ...noticeTrailOf(pending, refused, AT),
+    ];
+
+    expect(heldThenGone.map((e) => e?.result)).toEqual(["untyped", "needs-attention"]);
+    expect(heldThenGone[1]!.detail).not.toHaveProperty("refused");
+    expect(heldThenGone[1]!.detail).not.toHaveProperty("attempt");
+    expect(refusedTrail[1]).toMatchObject({
+      result: "needs-attention",
+      detail: { reason: "generation_mismatch", refused: "admitted-write" },
+    });
   });
 
   it("records a notice a reopen replaced before it was typed, and nothing for one already typed", () => {

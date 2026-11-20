@@ -23,7 +23,10 @@ type Step = "observed" | "attempted" | "untyped" | "superseded" | TimeoutNotice[
 
 interface Facts {
   notice: TimeoutNotice;
+  /** The notice's own entry, whose marks say which attempt typed it, may have, or was refused. */
+  recorded: AnswerEntry | undefined;
   reason: string | null;
+  /** The row's latest attempt, which describes its answers: the notice's only once a write sets it after the closing. */
   attempt: string | null;
 }
 
@@ -43,9 +46,32 @@ function factsOf(row: QuestionRow | null): Facts | null {
   const stopped = notice.delivery === "needs-attention" || notice.delivery === "uncertain";
   return {
     notice,
+    recorded: parseAnswers(row.answers_json).find((e) => e.entry_id === notice.entryId),
     reason: stopped ? (row.error_code ?? "unspecified") : null,
     attempt: row.last_injection_id ?? null,
   };
+}
+
+/**
+ * What the notice's own entry proves of the attempt behind a step: the one
+ * that typed it, the one that may have, or that an admitted write was
+ * refused. A stop with neither (a pane that went away after an earlier
+ * attempt ended untyped) names no attempt, since the row's latest isn't
+ * evidence that one was refused.
+ */
+function evidenceOf(facts: Facts): Record<string, string | number | null> {
+  const { recorded, notice } = facts;
+  if (recorded === undefined) return {};
+  if (notice.delivery === "delivered" && recorded.injection_id) {
+    return { attempt: recorded.injection_id };
+  }
+  if (notice.delivery === "uncertain" && recorded.uncertain_injection_id) {
+    return { attempt: recorded.uncertain_injection_id };
+  }
+  if (notice.delivery === "needs-attention" && recorded.write_refused === true) {
+    return { refused: "admitted-write" };
+  }
+  return {};
 }
 
 /** What the notice said of the plan as recorded with it, not as any reader would say it now. */
@@ -62,8 +88,7 @@ function entry(
   step: Step,
   extra: Record<string, string | number | null> = {}
 ): AuditEntry {
-  const { notice } = facts;
-  const recorded = parseAnswers(row.answers_json).find((e) => e.entry_id === notice.entryId);
+  const { notice, recorded } = facts;
   return {
     at,
     event: NOTICE_TRAIL_EVENT,
@@ -119,7 +144,7 @@ export function noticeTrailOf(
     out.push(
       entry(at, after, now, now.notice.delivery, {
         ...(now.reason !== null ? { reason: now.reason } : {}),
-        ...(now.attempt !== null ? { attempt: now.attempt } : {}),
+        ...evidenceOf(now),
       })
     );
   }
