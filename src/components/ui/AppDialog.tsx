@@ -208,6 +208,12 @@ export interface AppDialogProps {
    * that skipped restoring focus, it is passed that restore to run instead.
    */
   onCloseComplete?: (restoreSkippedFocus?: () => void) => void;
+  /**
+   * Keys aimed anywhere in the dialog, the surface itself included, before its
+   * controls see them: for a chord that acts on the whole dialog. React bubbles
+   * a portalled child's keys through here too, so check the target is inside.
+   */
+  onKeyDownCapture?: React.KeyboardEventHandler<HTMLDivElement>;
   "data-testid"?: string;
 }
 
@@ -300,6 +306,7 @@ export function AppDialog({
   preferRestoreFocusTo = false,
   restoreFocusOnClose = true,
   onCloseComplete,
+  onKeyDownCapture,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -822,6 +829,7 @@ export function AppDialog({
             } as CSSProperties
           }
           onClick={(e) => e.stopPropagation()}
+          onKeyDownCapture={onKeyDownCapture}
         >
           {/* The tier this dialog actually painted at, so overlays opened
               inside it stack above it when a dock popover promoted it. */}

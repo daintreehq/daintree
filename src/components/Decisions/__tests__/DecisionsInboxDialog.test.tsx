@@ -5,6 +5,8 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
   DecisionDeclineResultRead,
+  DecisionQuestionAttachment,
+  DecisionQuestionImagePartResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
@@ -21,6 +23,7 @@ import type {
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
@@ -624,7 +627,7 @@ describe("DecisionsInboxDialog", () => {
     expect(hint?.textContent).toMatch(/Nothing is declined or sent/);
   });
 
-  it("moves through native buttons with one tab stop, reading only the row chosen", async () => {
+  it("moves through native buttons with one tab stop, reading none it passes", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(3));
     await waitFor(() => expect(readsOf("question-2")).toBeGreaterThan(0));
@@ -640,12 +643,13 @@ describe("DecisionsInboxDialog", () => {
     fireEvent.keyDown(rows()[2]!, { key: "Home" });
     expect(document.activeElement).toBe(rows()[0]);
     fireEvent.keyDown(rows()[0]!, { key: "End" });
-    // Moving the focus reads nothing; choosing does.
+    // Arrowing past reads nothing; choosing does, at once.
     expect(readsOf("question-1")).toBe(0);
     expect(rows()[2]!.getAttribute("aria-current")).toBeNull();
     fireEvent.click(rows()[2]!);
-    await waitFor(() => expect(readsOf("question-1")).toBe(1));
     expect(rows()[2]!.getAttribute("aria-current")).toBe("true");
+    await waitFor(() => expect(readsOf("question-1")).toBe(1));
+    expect(readsOf("question-3")).toBe(0);
     expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rows()[2]]);
   });
 
@@ -689,6 +693,439 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
     );
     expect(document.activeElement).toBe(document.body);
+  });
+
+  describe("from the keyboard (#18038)", () => {
+    const step = (key: "ArrowUp" | "ArrowDown") => ({
+      key,
+      ...(isMac() ? { metaKey: true } : { altKey: true }),
+    });
+    /** `LIST` with project A's second open question, q-4, which asks for words. */
+    const WITH_TEXT: DecisionQuestionList = {
+      revision: 1,
+      questions: [
+        ...LIST.questions,
+        item("question-4", 4, OPEN, {
+          reference: reference("question-4", { terminalId: "t4" }),
+          askedAt: "2026-11-02T09:30:00.000Z",
+        }),
+      ],
+    };
+    /** `WITH_TEXT` with a third open question, q-5, which offers a choice. */
+    const THREE_OPEN: DecisionQuestionList = {
+      revision: 1,
+      questions: [
+        ...WITH_TEXT.questions,
+        item("question-5", 5, OPEN, {
+          reference: reference("question-5", { terminalId: "t5" }),
+          askedAt: "2026-11-02T09:45:00.000Z",
+        }),
+      ],
+    };
+    const choiceOption = (name: RegExp = /Ship it/) => screen.getByRole("radio", { name });
+    const wordsField = () => screen.getByTestId("decision-answer-text");
+    const detail = () => screen.getByTestId("decisions-inbox-detail");
+    const closeButton = () => screen.getByRole("button", { name: "Close dialog" });
+    /** The question's own words, which the keyboard can be sent to. */
+    const wordsOf = (alias: number) =>
+      screen.getByText(`Body of question ${alias}`).closest<HTMLElement>('[tabindex="-1"]');
+    const said = () => useAnnouncerStore.getState().polite?.msg ?? null;
+    const seenIds = () =>
+      markQuestions.mock.calls
+        .filter(([payload]) => payload.action === "seen")
+        .flatMap(([payload]) => payload.questions.map((q) => q.reference.questionId));
+    /** Holds one question's reads until the returned call lets them through. */
+    function holdReadsOf(questionId: string) {
+      const base = getQuestionContentByReference.getMockImplementation()!;
+      let land!: () => void;
+      const held = new Promise<void>((resolve) => (land = resolve));
+      getQuestionContentByReference.mockImplementation(async (payload) => {
+        if (payload.reference.questionId === questionId) await held;
+        return base(payload);
+      });
+      return () => act(async () => land());
+    }
+    /** Time that passes only for the dwell's timers, which these tests step through. */
+    function fakeTimers() {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+    }
+    function pass(ms: number) {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    }
+    let kept: DecisionQuestionContent;
+
+    beforeEach(() => {
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+      CONTENT["question-5"] = content("question-5", 5, {
+        status: "open",
+        terminalId: "t5",
+        reference: reference("question-5", { terminalId: "t5" }),
+      });
+      kept = CONTENT["question-4"]!;
+      CONTENT["question-4"] = content("question-4", 4, {
+        status: "open",
+        kind: "text",
+        options: [],
+        allowText: true,
+        terminalId: "t4",
+        reference: reference("question-4", { terminalId: "t4" }),
+      });
+    });
+
+    afterEach(() => {
+      CONTENT["question-4"] = kept;
+      delete CONTENT["question-5"];
+    });
+
+    it("shows the row the arrows rest on only once they've stayed, reading and marking none they passed", async () => {
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      onTestFinished(() => hasFocus.mockRestore());
+      const unseen = { ask: null, seen: false, cleared: false };
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: THREE_OPEN.questions.map((question) => ({ ...question, inbox: unseen })),
+      });
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      await waitFor(() => expect(seenIds()).toEqual(["question-2"]));
+      expect(rows().map(aliasOf).slice(0, 3)).toEqual(["q-2", "q-4", "q-5"]);
+      fakeTimers();
+
+      // Down to q-4, on to q-5, and back to q-4: each press starts the rest again.
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowDown" });
+      pass(100);
+      fireEvent.keyDown(rowNamed("q-4"), { key: "ArrowDown" });
+      pass(100);
+      fireEvent.keyDown(rowNamed("q-5"), { key: "ArrowUp" });
+      expect(document.activeElement).toBe(rowNamed("q-4"));
+      pass(299);
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      pass(1);
+      expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true");
+      vi.useRealTimers();
+
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      await waitFor(() => expect(seenIds()).toEqual(["question-2", "question-4"]));
+      expect(readsOf("question-5")).toBe(0);
+      // The keyboard stays in the list, which is still a single stop.
+      expect(document.activeElement).toBe(rowNamed("q-4"));
+      expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-4")]);
+      // Its row has just been read out in full: only which question now shows.
+      expect(said()).toBe("Showing q-4");
+    });
+
+    it("shows nothing new for focus put on a row, nor once the keyboard has left and come back", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fakeTimers();
+
+      // Focus put back on a row (a regroup, a dialog closing) isn't the arrows resting there.
+      act(() => rowNamed("q-3").focus());
+      pass(1000);
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+
+      fireEvent.keyDown(rowNamed("q-3"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      pass(200);
+      act(() => closeButton().focus());
+      act(() => rowNamed("q-1").focus());
+      pass(1000);
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      vi.useRealTimers();
+      await act(async () => {});
+      expect(readsOf("question-3")).toBe(0);
+      expect(readsOf("question-1")).toBe(0);
+      expect(said()).toBeNull();
+    });
+
+    it("takes the keyboard across into the answer: its first choice, else its words field", async () => {
+      const land4 = holdReadsOf("question-4");
+      listQuestions.mockResolvedValue(WITH_TEXT);
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+
+      // Right with anything else held isn't the way across.
+      expect(fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowRight", shiftKey: true })).toBe(true);
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowRight" });
+      expect(document.activeElement).toBe(choiceOption());
+
+      // A row the arrows only just reached: shown at once, the keyboard waiting in the pane
+      // while it's read, then in its field.
+      act(() => rowNamed("q-4").focus());
+      fireEvent.keyDown(rowNamed("q-4"), { key: "ArrowRight" });
+      expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true");
+      expect(document.activeElement).toBe(detail());
+      await land4();
+      await waitFor(() => expect(document.activeElement).toBe(wordsField()));
+    });
+
+    it("lands on the choice already made, not the first, so the next arrow doesn't change it", async () => {
+      const shown = CONTENT["question-2"]!;
+      CONTENT["question-2"] = {
+        ...shown,
+        options: [
+          { id: "yes", label: "Ship it", description: null },
+          { id: "no", label: "Hold it", description: null },
+        ],
+      };
+      onTestFinished(() => {
+        CONTENT["question-2"] = shown;
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(choiceOption(/Hold it/));
+      act(() => rowNamed("q-2").focus());
+
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowRight" });
+      expect(document.activeElement).toBe(choiceOption(/Hold it/));
+    });
+
+    it("takes the keyboard to the question's words when it takes no answer here", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      act(() => rowNamed("q-3").focus());
+      fireEvent.keyDown(rowNamed("q-3"), { key: "ArrowRight" });
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      await waitFor(() => expect(document.activeElement).toBe(wordsOf(3)));
+    });
+
+    it("steps between questions from inside the answer, landing in the next one's answer", async () => {
+      listQuestions.mockResolvedValue(WITH_TEXT);
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(rows().map(aliasOf).slice(0, 2)).toEqual(["q-2", "q-4"]);
+      act(() => choiceOption().focus());
+
+      fireEvent.keyDown(choiceOption(), step("ArrowDown"));
+      expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      await waitFor(() => expect(document.activeElement).toBe(wordsField()));
+
+      fireEvent.keyDown(wordsField(), step("ArrowUp"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await waitFor(() => expect(document.activeElement).toBe(choiceOption()));
+    });
+
+    it("steps from a question's words to the next one's words, not into its answer", async () => {
+      listQuestions.mockResolvedValue(WITH_TEXT);
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      act(() => wordsOf(2)!.focus());
+
+      fireEvent.keyDown(wordsOf(2)!, step("ArrowDown"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      await waitFor(() => expect(document.activeElement).toBe(wordsOf(4)));
+    });
+
+    it("steps the list's row with the question shown, at once, from the row the keyboard is on, stopping at the ends", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+
+      expect(fireEvent.keyDown(rowNamed("q-2"), step("ArrowUp"))).toBe(false);
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+
+      // From q-3, which the arrows reached but hasn't shown yet: on to q-1, not q-3.
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowDown" });
+      fireEvent.keyDown(rowNamed("q-3"), step("ArrowDown"));
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+      fireEvent.keyDown(rowNamed("q-1"), step("ArrowDown"));
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(readsOf("question-3")).toBe(0);
+      expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-1")]);
+    });
+
+    it("steps the question shown from elsewhere in the dialog, leaving the keyboard there", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      act(() => closeButton().focus());
+
+      fireEvent.keyDown(closeButton(), step("ArrowDown"));
+      expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      expect(document.activeElement).toBe(closeButton());
+    });
+
+    it("says which question is shown when it changes away from its row, once, and not an opening's first", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(said()).toBeNull();
+      act(() => closeButton().focus());
+
+      fireEvent.keyDown(closeButton(), step("ArrowDown"));
+      await waitFor(() => expect(said()).toBe("Showing q-3: Line of question-3"));
+      // The list renewed shows nothing new and says nothing more.
+      useAnnouncerStore.setState({ polite: null });
+      push({ revision: 2, questions: LIST.questions.map((question) => ({ ...question })) });
+      await act(async () => {});
+      expect(said()).toBeNull();
+
+      // Opened again, its first question is said by the keyboard on its row.
+      act(() => useDecisionsInboxStore.getState().close());
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(said()).toBeNull();
+    });
+
+    it("waits for a question's line before saying it, from off its row", async () => {
+      const land3 = holdReadsOf("question-3");
+      let lines!: (result: DecisionQuestionSummariesResult) => void;
+      getQuestionSummariesByReference.mockImplementationOnce(
+        () => new Promise<DecisionQuestionSummariesResult>((resolve) => (lines = resolve))
+      );
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      act(() => closeButton().focus());
+
+      fireEvent.keyDown(closeButton(), step("ArrowDown"));
+      await act(async () => {});
+      expect(said()).toBeNull();
+      await act(async () =>
+        lines({
+          result: "read",
+          summaries: ["question-1", "question-2", "question-3"].map((questionId) => ({
+            questionId,
+            result: "read" as const,
+            line: `Line of ${questionId}`,
+          })),
+        })
+      );
+      expect(said()).toBe("Showing q-3: Line of question-3");
+      await land3();
+    });
+
+    it("keeps where a step was going through a second step taken before the first is read", async () => {
+      const land4 = holdReadsOf("question-4");
+      listQuestions.mockResolvedValue(THREE_OPEN);
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(rows().map(aliasOf).slice(0, 3)).toEqual(["q-2", "q-4", "q-5"]);
+      act(() => choiceOption().focus());
+
+      fireEvent.keyDown(choiceOption(), step("ArrowDown"));
+      await act(async () => {});
+      // q-4 is being read: the keyboard waits in the pane.
+      expect(readsOf("question-4")).toBeGreaterThan(0);
+      expect(screen.queryByTestId("decision-question-content")).toBeNull();
+      expect(document.activeElement).toBe(detail());
+
+      fireEvent.keyDown(detail(), step("ArrowDown"));
+      expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
+      await waitFor(() => expect(document.activeElement).toBe(choiceOption()));
+
+      // q-4's read landing late moves nothing.
+      await land4();
+      expect(shownBody()).toContain("Body of question 5");
+      expect(document.activeElement).toBe(choiceOption());
+    });
+
+    it("lands nowhere once another question is shown while the keyboard waits", async () => {
+      const land4 = holdReadsOf("question-4");
+      listQuestions.mockResolvedValue(WITH_TEXT);
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      act(() => choiceOption().focus());
+      fireEvent.keyDown(choiceOption(), step("ArrowDown"));
+      expect(document.activeElement).toBe(detail());
+
+      // A pointer picks q-3, then q-4 again, neither taking focus with it.
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      expect(document.activeElement).toBe(detail());
+      fireEvent.click(rowNamed("q-4"));
+      await land4();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(document.activeElement).toBe(detail());
+    });
+
+    it("leaves the keyboard where it went while the question it was sent to is read", async () => {
+      const land4 = holdReadsOf("question-4");
+      listQuestions.mockResolvedValue(WITH_TEXT);
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      act(() => choiceOption().focus());
+      fireEvent.keyDown(choiceOption(), step("ArrowDown"));
+      act(() => closeButton().focus());
+
+      await land4();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(document.activeElement).toBe(closeButton());
+    });
+
+    it("ignores the step with another modifier held, or while an input method composes", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      const row = rowNamed("q-2");
+      expect(fireEvent.keyDown(row, { ...step("ArrowDown"), shiftKey: true })).toBe(true);
+      expect(fireEvent.keyDown(row, { ...step("ArrowDown"), isComposing: true })).toBe(true);
+      expect(fireEvent.keyDown(row, { ...step("ArrowDown"), keyCode: 229 })).toBe(true);
+      expect(document.activeElement).toBe(row);
+      expect(row.getAttribute("aria-current")).toBe("true");
+      // And steps once nothing else is.
+      fireEvent.keyDown(row, step("ArrowDown"));
+      expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
+    });
+
+    it("leaves an image opened full size its own keys", async () => {
+      const attachments: DecisionQuestionAttachment[] = [
+        {
+          attachmentId: "attach_000a",
+          role: "reference",
+          alt: "The header",
+          mime: "image/png",
+          size: 3,
+          sha256: "a".repeat(64),
+        },
+      ];
+      const shown = CONTENT["question-2"]!;
+      CONTENT["question-2"] = { ...shown, attachments };
+      const decisions = Reflect.get(window, "electron").decisions;
+      decisions.getQuestionImageByReference = vi.fn(
+        async (): Promise<DecisionQuestionImagePartResult> => ({
+          result: "read",
+          part: {
+            attachmentId: "attach_000a",
+            mime: "image/png",
+            sha256: "a".repeat(64),
+            size: 3,
+            offset: 0,
+            bytes: new Uint8Array([1, 2, 3]),
+          },
+        })
+      );
+      const { createObjectURL, revokeObjectURL } = URL;
+      URL.createObjectURL = () => "blob:header";
+      URL.revokeObjectURL = () => {};
+      try {
+        open();
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        fireEvent.click(await screen.findByRole("button", { name: "Open Reference image 1" }));
+        const viewer = await screen.findByTestId("decision-image-viewer");
+        await waitFor(() => expect(viewer.contains(document.activeElement)).toBe(true));
+
+        fireEvent.keyDown(document.activeElement!, step("ArrowDown"));
+        expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+        expect(screen.queryByTestId("decision-image-viewer")).not.toBeNull();
+      } finally {
+        // The loader lets its URLs go as it unmounts, before the stubs are put back.
+        cleanup();
+        CONTENT["question-2"] = shown;
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+      }
+    });
   });
 
   it("says when no relay is connected, and nothing once one is", async () => {
@@ -1842,11 +2279,16 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
       for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       expect(getQuestionContentByReference).not.toHaveBeenCalled();
+      useAnnouncerStore.setState({ polite: null });
       push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
       expect(document.activeElement).toBe(rowNamed("q-5"));
       expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
+      // Shown with the keyboard elsewhere: a screen reader hears which (#18038).
+      await waitFor(() =>
+        expect(useAnnouncerStore.getState().polite?.msg).toBe("Showing q-2: Line of question-2")
+      );
     });
 
     it("keeps a question the person picked as one comes to need them", async () => {
@@ -1931,6 +2373,9 @@ describe("DecisionsInboxDialog", () => {
       expect(document.activeElement).toBe(list);
       fireEvent.keyDown(list, { key: "ArrowDown" });
       expect(document.activeElement).toBe(rowNamed("q-5"));
+      // And shows it once the keyboard has rested there, as any arrow does (#18038).
+      await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
+      expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true");
     });
 
     it("leaves the keyboard where it went when Clear Needs you goes later", async () => {
