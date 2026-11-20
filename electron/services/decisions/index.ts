@@ -188,7 +188,7 @@ import {
   thresholdSupported,
   type DecisionModelRuntime,
 } from "./decisionModel.js";
-import { decisionsKeyFilePath } from "./keyStore.js";
+import { decisionsKeyFilePath, keyFileVersion } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import { RelayDeploySessions } from "./relayDeploySession.js";
@@ -1139,6 +1139,14 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
+  // Only a verification of the keys as the file holds them now covers them (#18064).
+  const kitKeys = settings.recoveryKit?.keys;
+  const kitCurrent =
+    kitVerifiedAt !== null &&
+    owned !== null &&
+    keyFile === true &&
+    kitKeys !== undefined &&
+    (await keyFileVersion(owned.getKeyFilePath()).catch(() => null)) === kitKeys;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   const deploy = relayDeploys.snapshot();
@@ -1151,6 +1159,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
+    ...(kitCurrent ? { recoveryKitCurrent: true } : {}),
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
@@ -1851,7 +1860,8 @@ async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyS
 function recordIdentity(
   running: DecisionsService,
   config: RelayConfig,
-  kitVerified: boolean
+  kitVerified: boolean,
+  kitKeys: string | null
 ): DecisionsSettings {
   const current = readDecisionsSettings(store);
   const relayOrigin = normalizeRelayOrigin(config.relayOrigin);
@@ -1873,6 +1883,7 @@ function recordIdentity(
               relayOrigin,
               installationId: config.installationId,
               deviceId: config.deviceId,
+              ...(kitKeys !== null ? { keys: kitKeys } : {}),
             }
           : null,
     });
@@ -1893,6 +1904,17 @@ function recordIdentity(
 
 type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
+/**
+ * The running lifetime's key file version in the key store's turn, or
+ * undefined when it couldn't be read, which no verification is recorded
+ * against (#18064).
+ */
+function keyVersionOf(running: DecisionsService): Promise<string | null | undefined> {
+  return Promise.resolve()
+    .then(() => running.getKeyStore().version())
+    .catch(() => undefined);
+}
+
 /** `stillWanted`, when given, is asked as the setup's turn comes, before anything starts. */
 function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<DecisionsConnectResult> {
   return serialize(async () => {
@@ -1907,10 +1929,16 @@ function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<Decisions
     const controller = new AbortController();
     setups.add(controller);
     try {
+      const before = await keyVersionOf(running);
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
       if (shutDown) throw setupRefused();
-      recordIdentity(running, outcome.identity, outcome.kitVerified);
+      // A restore's kit holds the keys it took up unchanged, or the ones it
+      // saved to an empty file; no rotation runs before a relay is recorded.
+      const after = outcome.kitVerified ? await keyVersionOf(running) : undefined;
+      const kitKeys =
+        typeof after === "string" && (before === after || before === null) ? after : null;
+      recordIdentity(running, outcome.identity, outcome.kitVerified, kitKeys);
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
@@ -2932,6 +2960,7 @@ export function verifyRecoveryKit(
 ): Promise<DecisionsKitVerifyResult> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
+    const before = await keyVersionOf(running);
     const checked = await checkRecoveryKit(
       keys,
       readDecisionsSettings(store),
@@ -2939,13 +2968,20 @@ export function verifyRecoveryKit(
       payload.passphrase
     );
     if ("failure" in checked) return checked.failure;
+    // Equal on both sides of the check's load, so it is the version the kit
+    // was checked against; a write between leaves the kit not current.
+    const after = await keyVersionOf(running);
     if (shutDown) throw setupRefused();
     const current = readDecisionsSettings(store);
     let saved: DecisionsSettings;
     try {
       saved = writeDecisionsSettings(store, {
         ...current,
-        recoveryKit: { verifiedAt: Date.now(), ...checked.verified },
+        recoveryKit: {
+          verifiedAt: Date.now(),
+          ...checked.verified,
+          ...(typeof before === "string" && before === after ? { keys: before } : {}),
+        },
       });
     } catch {
       throw new AppError({

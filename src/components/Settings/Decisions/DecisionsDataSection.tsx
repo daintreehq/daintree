@@ -216,6 +216,7 @@ export function DecisionsDataSection({
         isOpen={open === "delete-local"}
         relayOrigin={relayOrigin}
         keysStored={keysStored}
+        kitCurrent={status.recoveryKitCurrent === true}
         deleting={data.pending === "delete-local"}
         error={errorFor("delete-local")}
         onCancel={close}

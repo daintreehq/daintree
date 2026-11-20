@@ -75,7 +75,14 @@ export function DecisionsDevicesAndHosts({
         onRevoke={askToRevoke}
         onEnrolledChange={devicesRead.reload}
       />
-      {relaySetUp && <DecisionsEncryptionSection keyActions={keyActions} locked={locked} />}
+      {status.relayOrigin !== undefined && (
+        <DecisionsEncryptionSection
+          relayOrigin={status.relayOrigin}
+          devicesRead={devicesRead}
+          keyActions={keyActions}
+          locked={locked}
+        />
+      )}
       <DecisionsRevokeDeviceDialog
         device={revokeTarget}
         revoking={keyActions.pending === "revoke"}

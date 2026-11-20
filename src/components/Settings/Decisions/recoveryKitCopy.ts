@@ -108,3 +108,26 @@ export function formatVerifiedAt(at: number): string {
     day: "numeric",
   });
 }
+
+/**
+ * What erasing this computer's keys says when no current kit holds them
+ * (#18064), and the typed gate it asks for: the relay's address, or for keys
+ * no relay is recorded for, this name.
+ */
+export const KEYS_GATE_TARGET = "Decisions keys";
+
+export const NO_CURRENT_KIT =
+  "No recovery kit verified here holds every key this computer has now.";
+
+/** Only a recorded relay can have a kit saved for it, so only then is there a first step to offer. */
+export const SAVE_KIT_FIRST = "Save and verify a recovery kit first to keep a way back.";
+
+export function onlyCopyPreamble(host: string | null): string {
+  return host
+    ? `These may be the only copy of ${host}'s owner keys.`
+    : "These may be the only copy of a relay's owner keys.";
+}
+
+/** A rotation or revocation adds a key no kit saved before it holds (#18064). */
+export const KITS_AFTER_NEW_KEY =
+  "Recovery kits saved before now won't hold the new key, so save and verify a new one afterwards.";

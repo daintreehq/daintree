@@ -42,7 +42,7 @@ export function DecisionsRemoveRelayDialog({
       onClose={onCancel}
       variant="destructive"
       title={`Remove '${host}' from Cloudflare?`}
-      description={`This deletes the relay's Worker, the questions, answers and attachments it stores, and its R2 bucket from your Cloudflare account. Every phone paired with it stops working, and this can't be undone. Continuing opens a terminal running the guided removal, which lists what it found and asks you to type the Worker's name before it deletes anything.${here}`}
+      description={`This deletes the relay's Worker, the questions, answers and attachments it stores, and its R2 bucket from your Cloudflare account. Every phone paired with it stops working, and a relay deployed again starts empty, with each phone paired to it afresh. Continuing opens a terminal running the guided removal, which lists what it found and asks you to type the Worker's name before it deletes anything.${here}`}
       confirmLabel="Open guided removal"
       onConfirm={onConfirm}
     >

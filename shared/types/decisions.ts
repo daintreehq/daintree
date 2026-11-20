@@ -162,6 +162,12 @@ export interface DecisionsRecoveryKitRecord {
   relayOrigin: string;
   installationId: string;
   deviceId: string;
+  /**
+   * The fingerprint of the stored keys the kit was checked against (#18064),
+   * dropped when the key file changes or is removed. Absent on a record from
+   * before the field, or one whose keys changed while it was checked.
+   */
+  keys?: string;
 }
 
 /** A finished setup check, recorded by the identity it checked: when, and the step that failed if one did. */
@@ -242,6 +248,14 @@ export interface DecisionsStatus {
    * identity, or its key file is known to be gone.
    */
   recoveryKitVerifiedAt?: number;
+  /**
+   * The verified kit holds every key this computer's key file holds now
+   * (#18064). A rotation, revocation or any other change to the stored keys
+   * since the verification clears it while `recoveryKitVerifiedAt` stays, so
+   * the kit row can say a new one is needed and erasing the keys asks for the
+   * stronger confirmation.
+   */
+  recoveryKitCurrent?: true;
   /**
    * The latest setup check that ran to the end for the relay set up here
    * (#16024). Absent until one has, or while its key file is known to be gone.

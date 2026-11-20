@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { app, safeStorage } from "electron";
@@ -301,6 +302,25 @@ export class KeyFileChangedError extends Error {
 }
 
 /**
+ * What the key file holds right now, as a digest of its sealed bytes: no
+ * keychain is asked and nothing is opened, and any change to what it holds
+ * changes it. Null when there is no file. A recovery kit's verification
+ * records the version it was checked against (#18064), so a rotation, a
+ * restore or any other change since reads as a kit that no longer holds every
+ * key, even if the setting was restored from an older copy.
+ */
+export async function keyFileVersion(filePath: string): Promise<string | null> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(filePath);
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
  * Every store's operations on one key file, in the order asked, shared by
  * every store on that file: two stores on the same file (a lifetime's, and a
  * Host enrollment's) never interleave one's read with the other's write.
@@ -369,6 +389,14 @@ export class SealedKeyStore implements KeyStore {
 
   save(identity: StoredIdentity): Promise<void> {
     return this.saveIf(() => null, identity);
+  }
+
+  /**
+   * {@link keyFileVersion} in its turn: two equal answers around a `load`
+   * mean the load read that version, since no write on the file ran between.
+   */
+  version(): Promise<string | null> {
+    return this.enqueue(() => keyFileVersion(this.filePath));
   }
 
   /**
