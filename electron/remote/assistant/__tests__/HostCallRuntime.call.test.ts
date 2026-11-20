@@ -7,7 +7,12 @@ import {
   type ObservedHost,
   type OpenRun,
 } from "../HostCallRuntime.js";
-import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
+import {
+  MAX_RELAY_ARGS_BYTES,
+  MAX_RELAY_RUN_MS,
+  RelayCancelUnconfirmedError,
+  type McpCallAnswer,
+} from "../linkMethods.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../../shared/types/terminalExitWait.js";
 import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../../shared/types/claudeUpdateApply.js";
 import {
@@ -164,7 +169,9 @@ describe("HostCallRuntime host.call (#13493)", () => {
         args: { owned: true },
         runMs: relayRunMs("terminal.list", { owned: true }),
       },
-      expect.any(Number)
+      expect.any(Number),
+      // No cancel to carry: the caller's context had no signal.
+      undefined
     );
     const [, payload, timeoutMs] = relayCall.mock.calls[0] as [string, { runMs: number }, number];
     expect(timeoutMs).toBeGreaterThan(payload.runMs);
@@ -274,6 +281,75 @@ describe("HostCallRuntime host.call (#13493)", () => {
           callId: "00000000-0000-4000-8000-000000000001",
           result: null,
         },
+      });
+    });
+
+    describe("a call its caller cancelled (#17985)", () => {
+      const ID = "00000000-0000-4000-8000-000000000001";
+
+      it("sends nothing and says nothing ran when cancelled before it went out", async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const settled = await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+
+        expect(relayCall).not.toHaveBeenCalled();
+        if (!settled.ok) throw new Error("refused");
+        expect(HostCallResultSchema.safeParse(settled.value).success).toBe(true);
+        expect(settled.value).toMatchObject({
+          outcome: "ok",
+          callId: null,
+          result: { isError: true, structured: { code: "CANCELLED", dispatched: false } },
+        });
+        // A resend keeps its id, which the host may hold.
+        await expect(
+          runtime.call("a", { ...CALL, callId: "earlier" }, { tier: "core", signal: controller.signal })
+        ).resolves.toMatchObject({ ok: true, value: { outcome: "ok", callId: "earlier" } });
+      });
+
+      it("hands the caller's signal to the link, and reads a cancel the link stopped short as unsent", async () => {
+        const controller = new AbortController();
+        failWith("CANCELLED");
+        await expect(
+          runtime.call("a", CALL, { tier: "core", signal: controller.signal })
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { outcome: "ok", callId: null, result: { structured: { dispatched: false } } },
+        });
+        expect(relayCall.mock.calls[0]![3]).toBe(controller.signal);
+      });
+
+      it("says nothing ran when the host stopped it before its tool, keeping the callId", async () => {
+        relayCall.mockResolvedValueOnce({ status: "cancelled", dispatch: "before" });
+        await expect(runtime.call("a", CALL, { tier: "core" })).resolves.toMatchObject({
+          ok: true,
+          value: {
+            outcome: "ok",
+            callId: ID,
+            result: { isError: true, structured: { code: "CANCELLED", dispatched: false } },
+          },
+        });
+      });
+
+      it("is ambiguous when the host stopped it after its tool had it", async () => {
+        relayCall.mockResolvedValueOnce({ status: "cancelled", dispatch: "after" });
+        const settled = await runtime.call("a", CALL, { tier: "core" });
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: ID, result: null },
+        });
+        if (!settled.ok) throw new Error("refused");
+        expect(settled.value.detail).toMatch(/may have acted/);
+      });
+
+      it("is ambiguous, saying the host didn't confirm it stopped, when the cancel wasn't taken", async () => {
+        relayCall.mockRejectedValueOnce(new RelayCancelUnconfirmedError());
+        const settled = await runtime.call("a", CALL, { tier: "core" });
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: ID, result: null },
+        });
+        if (!settled.ok) throw new Error("refused");
+        expect(settled.value.detail).toMatch(/didn't confirm/);
       });
     });
 

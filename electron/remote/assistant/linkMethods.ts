@@ -55,6 +55,15 @@ export const AssistantLinkMethod = {
    */
   CONVERSATION_MCP_CALL: "assistant.conversation-mcp-call",
   /**
+   * Shell → Host: stop one of the MCP_CALL family's calls (#17985), named by
+   * its callId and the help session that sent it, for the sender this session
+   * proved. A running call's tool is told to stop; one not yet here starts
+   * stopped once its first send arrives; a settled one keeps its answer for a
+   * resend. The call's own answer says what came of it. A host from before
+   * this answers UNSUPPORTED, and its calls run until done or out of time.
+   */
+  MCP_CANCEL: "assistant.mcp-cancel",
+  /**
    * Host → Shell: what this host saw of terminals one of the Shell's
    * assistants asked to hear about through MCP_CALL (#13500). Each names the
    * call that armed it, so the Shell types it only into the run that made
@@ -253,6 +262,22 @@ export const ConversationMcpCallPayloadSchema = McpCallPayloadSchema.extend({
  */
 export type RelayCallRequest = McpCallPayload & { global?: true; conversationId?: string };
 
+/** MCP_CANCEL's payload: the call, and the help session that sent it. */
+export const McpCancelPayloadSchema = z.object({ helpSessionId: id, callId: id }).strict();
+export type McpCancelPayload = z.infer<typeof McpCancelPayloadSchema>;
+
+/**
+ * A relayed call cancelled after it went out, whose cancel the host didn't
+ * take (#17985): too old to know it, or no answer to it. The call ran on to
+ * its own end, so what it did is unknown.
+ */
+export class RelayCancelUnconfirmedError extends Error {
+  readonly code = "CANCEL_UNCONFIRMED";
+  constructor(cause?: unknown) {
+    super("The host didn't confirm the cancel of a relayed call", { cause });
+  }
+}
+
 export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
 export type RelayRefusal = (typeof RELAY_REFUSALS)[number];
 
@@ -270,6 +295,12 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("unknown") }).strip(),
   /** That callId already named a different call. */
   z.object({ status: z.literal("conflict") }).strip(),
+  /**
+   * Its Shell cancelled it (#17985): `before` the host handed it to the tool,
+   * so nothing ran, or `after`, so the tool was told to stop and may have
+   * acted first. Only a Shell that sent MCP_CANCEL is ever answered this.
+   */
+  z.object({ status: z.literal("cancelled"), dispatch: z.enum(["before", "after"]) }).strip(),
   /** Refused before anything ran; a newer host may name a reason this Shell doesn't know. */
   z
     .object({

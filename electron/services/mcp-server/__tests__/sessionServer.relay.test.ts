@@ -821,6 +821,8 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     expect(run).toHaveBeenCalledWith("host.call", args, {
       tier: "full",
       noteSkipPreference: expect.any(Function),
+      // The request's own abort, so a cancelled host.call is cancelled on its host (#17985).
+      signal: expect.any(AbortSignal),
     });
   });
 

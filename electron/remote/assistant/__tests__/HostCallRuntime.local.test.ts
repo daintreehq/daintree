@@ -57,6 +57,8 @@ interface OpenedSession {
   spec: RelayMcpSessionSpec;
   closed: boolean;
   calls: Array<{ tool: string; args: Record<string, unknown>; callId: string }>;
+  /** Each call's own stop, which a cancel pulls (#17985). */
+  signals: Array<AbortSignal | undefined>;
 }
 
 describe("HostCallRuntime reaching this machine's other projects (#14024)", () => {
@@ -99,12 +101,13 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       machineName: () => "greg-mbp",
       hasProject: async (projectId) => projects.some((project) => project.id === projectId),
       openSession: async (spec) => {
-        const session: OpenedSession = { spec, closed: false, calls: [] };
+        const session: OpenedSession = { spec, closed: false, calls: [], signals: [] };
         opened.push(session);
         return {
           isOpen: () => !session.closed,
-          callTool: async (tool, args, { callId }) => {
+          callTool: async (tool, args, { callId, signal }) => {
             session.calls.push({ tool, args, callId });
+            session.signals.push(signal);
             return answer(session);
           },
           close: () => {
@@ -143,6 +146,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         latestSummary: () => latestSummary?.() ?? null,
         summaryReceipt: (summary) => summaryReceipt?.(summary) ?? null,
         relayCall: (payload) => local.relayCall(payload),
+        cancelCall: (helpSessionId, callId) => local.cancelCall(helpSessionId, callId),
       },
       now: () => 1000,
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
@@ -484,6 +488,38 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           callId: "00000000-0000-4000-8000-000000000001",
         },
       ]);
+    });
+
+    it("stops the call's tool in process when its caller cancels it (#17985)", async () => {
+      answer = (session) =>
+        new Promise((_resolve, reject) => {
+          session.signals.at(-1)?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      const controller = new AbortController();
+      const pending = runtime.call("a", LIST, { tier: "full", signal: controller.signal });
+      await vi.waitFor(() => expect(opened[0]?.calls).toHaveLength(1));
+
+      controller.abort();
+      const settled = await pending;
+
+      expect(opened[0]!.signals[0]?.aborted).toBe(true);
+      expect(settled).toMatchObject({
+        ok: true,
+        value: {
+          outcome: "ambiguous",
+          callId: "00000000-0000-4000-8000-000000000001",
+          result: null,
+        },
+      });
+      // Its answer is held for a resend, which runs nothing again.
+      await expect(
+        runtime.call("a", { ...LIST, callId: "00000000-0000-4000-8000-000000000001" }, {
+          tier: "full",
+        })
+      ).resolves.toMatchObject({ ok: true, value: { outcome: "ambiguous" } });
+      expect(opened[0]!.calls).toHaveLength(1);
     });
 
     it("answers a tool with no output schema in its structured half (#15730)", async () => {

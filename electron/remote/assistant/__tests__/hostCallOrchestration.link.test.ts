@@ -248,7 +248,7 @@ class Destination {
         return (await client.callTool(
           { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: options.callId } },
           undefined,
-          { timeout: options.timeoutMs }
+          { timeout: options.timeoutMs, ...(options.signal ? { signal: options.signal } : {}) }
         )) as never;
       },
       close: () => {
@@ -580,7 +580,7 @@ const agentReads: Array<{ projectId?: string }> = [];
 const agentReadFails = { value: false };
 
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
-const arrivals = { mcpCalls: 0, statusCalls: 0, projectReads: 0, sessionsOpened: 0 };
+const arrivals = { mcpCalls: 0, mcpCancels: 0, statusCalls: 0, projectReads: 0, sessionsOpened: 0 };
 
 function hostSource(link: LinkSession) {
   const session = new Proxy(link, {
@@ -592,6 +592,7 @@ function hostSource(link: LinkSession) {
             schema as never,
             ((payload: unknown) => {
               if (method === AssistantLinkMethod.MCP_CALL) arrivals.mcpCalls++;
+              if (method === AssistantLinkMethod.MCP_CANCEL) arrivals.mcpCancels++;
               if (method === AssistantLinkMethod.STATUS) arrivals.statusCalls++;
               return handler(payload);
             }) as never
@@ -646,6 +647,7 @@ function call(
     newCallId?: string;
     helpSessionId?: string;
     runtime?: HostCallRuntime;
+    signal?: AbortSignal;
   } = {}
 ) {
   return (extra.runtime ?? shell.runtime).call(
@@ -658,7 +660,7 @@ function call(
       ...(extra.callId !== undefined ? { callId: extra.callId } : {}),
       ...(extra.newCallId !== undefined ? { newCallId: extra.newCallId } : {}),
     },
-    { tier: "full" }
+    { tier: "full", ...(extra.signal ? { signal: extra.signal } : {}) }
   );
 }
 
@@ -675,6 +677,7 @@ beforeEach(async () => {
   destination = new Destination();
   throwaways = new ThrowawayRuns();
   arrivals.mcpCalls = 0;
+  arrivals.mcpCancels = 0;
   arrivals.statusCalls = 0;
   arrivals.projectReads = 0;
   arrivals.sessionsOpened = 0;
@@ -939,6 +942,65 @@ describe("an assistant run replaced while its write is pending (#14169)", () => 
     expect(joined).toMatchObject({ outcome: "ok", callId });
     expect(joined.result).toEqual(answered.result);
     expect(destination.submissions.get("w-1")).toHaveLength(1);
+  });
+});
+
+describe("a call its Shell cancelled, over a real link (#17985)", () => {
+  it("deletes nothing when the delete is cancelled while the person at the Shell decides", async () => {
+    await launchWorker();
+    destination.worktrees.add("/wt/feature");
+    destination.store.resourceOwnership.record(
+      principal("help-a"),
+      [{ kind: "worktree", id: "/wt/feature" }],
+      PROJECT
+    );
+    // The assistant's request is cancelled while the person is still being asked.
+    const controller = new AbortController();
+    const asking = shell.runtime;
+    const originalAsk = asking.receiveApproval.bind(asking);
+    const answers: unknown[] = [];
+    vi.spyOn(asking, "receiveApproval").mockImplementation(async (hostId, payload) => {
+      const pending = originalAsk(hostId, payload);
+      controller.abort();
+      answers.push(await pending);
+      return answers.at(-1) as never;
+    });
+
+    const deleted = await settled(
+      call("worktree.deleteOwned", { worktreeId: "/wt/feature" }, { signal: controller.signal })
+    );
+
+    expect(arrivals.mcpCancels).toBe(1);
+    // The approval the person gave after the cancel approves nothing.
+    expect(answers).toEqual([expect.objectContaining({ decision: "refused" })]);
+    // The host stopped its wait on the tool, so it says only what it saw.
+    expect(deleted).toMatchObject({ outcome: "ambiguous", result: null });
+    expect(destination.count("worktree.delete")).toBe(0);
+    expect(destination.worktrees.has("/wt/feature")).toBe(true);
+
+    // The host keeps that answer for a resend, which runs nothing again.
+    const resent = await settled(
+      call("worktree.deleteOwned", { worktreeId: "/wt/feature" }, { callId: deleted.callId! })
+    );
+    expect(resent).toMatchObject({ outcome: "ambiguous", callId: deleted.callId });
+    expect(asked).toEqual(["worktree.delete"]);
+    expect(destination.count("worktree.delete")).toBe(0);
+  });
+
+  it("sends nothing of a call cancelled before it went out", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const before = arrivals.mcpCalls;
+
+    const cancelled = await settled(call("agent.launch", LAUNCH, { signal: controller.signal }));
+
+    expect(cancelled).toMatchObject({
+      outcome: "ok",
+      callId: null,
+      result: { isError: true, structured: { code: "CANCELLED", dispatched: false } },
+    });
+    expect(arrivals.mcpCalls).toBe(before);
+    expect(destination.count("agent.launch")).toBe(0);
   });
 });
 

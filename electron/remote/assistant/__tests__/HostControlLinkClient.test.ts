@@ -905,3 +905,145 @@ describe("HostControlLinkClient.relayCall naming the caller's conversation (#179
     ]);
   });
 });
+
+describe("HostControlLinkClient.relayCall cancelled by its caller (#17985)", () => {
+  const CANCELLED = { status: "cancelled", dispatch: "after" };
+  const DONE = { status: "done", result: { isError: false, structured: null, text: "ok" } };
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /** A host whose answer to the call waits until the test gives it, as a running call's does. */
+  function host(onCancel: () => unknown) {
+    const reached = deferred<void>();
+    const answer = deferred<unknown>();
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) return null;
+      if (method === AssistantLinkMethod.MCP_CANCEL) return onCancel();
+      reached.resolve();
+      return answer.promise;
+    });
+    return { relay, calls, reached: reached.promise, answer: answer.resolve };
+  }
+
+  it("sends nothing of a call cancelled before it went out", async () => {
+    const { relay, calls } = client(() => DONE);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      relay.relayCall("studio", PAYLOAD, 105_000, controller.signal)
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls).toEqual([]);
+  });
+
+  it("sends nothing of a call cancelled while its sender is being proven", async () => {
+    const controller = new AbortController();
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.AUTHENTICATE) controller.abort();
+      return DONE;
+    });
+
+    await expect(
+      relay.relayCall("studio", PAYLOAD, 105_000, controller.signal)
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls.map((call) => call.method)).toEqual([AssistantLinkMethod.AUTHENTICATE]);
+  });
+
+  it("asks the host to stop a call already out, once, and answers what the host said", async () => {
+    const onCancel = vi.fn(() => ({}));
+    const { relay, calls, reached, answer } = host(onCancel);
+    const controller = new AbortController();
+    const sent = relay.relayCall("studio", PAYLOAD, 105_000, controller.signal);
+    await reached;
+
+    controller.abort();
+    answer(CANCELLED);
+
+    await expect(sent).resolves.toEqual(CANCELLED);
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.MCP_CALL,
+      AssistantLinkMethod.MCP_CANCEL,
+    ]);
+    expect(calls[2]!.payload).toEqual({ helpSessionId: "help-1", callId: "call-1" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a call's answer when it settled before any cancel", async () => {
+    const onCancel = vi.fn(() => ({}));
+    const { relay, calls, answer } = host(onCancel);
+    const controller = new AbortController();
+    answer(DONE);
+
+    await expect(relay.relayCall("studio", PAYLOAD, 105_000, controller.signal)).resolves.toEqual(
+      DONE
+    );
+    controller.abort();
+    expect(calls.map((call) => call.method)).not.toContain(AssistantLinkMethod.MCP_CANCEL);
+  });
+
+  it("waits out a host too old to stop the call, then can't say what it did", async () => {
+    const { relay, reached, answer } = host(() => {
+      throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+    });
+    const controller = new AbortController();
+    const sent = relay.relayCall("studio", PAYLOAD, 105_000, controller.signal);
+    let settled = false;
+    void sent.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await reached;
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The call still runs on the host, so its wait goes on to its own end.
+    expect(settled).toBe(false);
+    answer(DONE);
+    await expect(sent).rejects.toMatchObject({ code: "CANCEL_UNCONFIRMED" });
+  });
+
+  it("can't say what a call did when its cancel got no answer", async () => {
+    const { relay, reached, answer } = host(() => {
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer" });
+    });
+    const controller = new AbortController();
+    const sent = relay.relayCall("studio", PAYLOAD, 105_000, controller.signal);
+    await reached;
+    controller.abort();
+    answer(CANCELLED);
+
+    await expect(sent).rejects.toMatchObject({ code: "CANCEL_UNCONFIRMED" });
+  });
+
+  it("sends nothing more after a refused method when the call was cancelled meanwhile", async () => {
+    const controller = new AbortController();
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.CONVERSATION_MCP_CALL) {
+        controller.abort();
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      if (method === AssistantLinkMethod.MCP_CANCEL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return method === AssistantLinkMethod.AUTHENTICATE ? null : DONE;
+    });
+
+    await expect(
+      relay.relayCall(
+        "studio",
+        { ...PAYLOAD, global: true, conversationId: "conv-1" },
+        105_000,
+        controller.signal
+      )
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(calls.map((call) => call.method)).not.toContain(AssistantLinkMethod.GLOBAL_MCP_CALL);
+    expect(calls.map((call) => call.method)).not.toContain(AssistantLinkMethod.MCP_CALL);
+  });
+});

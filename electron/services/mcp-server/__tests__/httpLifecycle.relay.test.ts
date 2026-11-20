@@ -618,6 +618,52 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       session.close();
     });
 
+    it("runs nothing more of a call its Shell cancelled, and lets a sibling call on (#17985)", async () => {
+      let manifestRead: (manifest: ActionManifestEntry[]) => void = () => {};
+      const reads: Array<() => void> = [];
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle({
+        getCachedManifestForWorkspace: vi.fn(() => null),
+        requestManifestForWorkspace: vi.fn(
+          () =>
+            new Promise<ActionManifestEntry[]>((resolve) => {
+              reads.push(() => resolve(MANIFEST));
+              manifestRead = resolve;
+            })
+        ),
+      } as never);
+      dispatchActionForWorkspace.mockResolvedValue({ result: { ok: true, result: {} } });
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+      const controller = new AbortController();
+
+      // Still reading what the tool is when its Shell cancels it.
+      const cancelled = session.callTool(
+        "agent.launch",
+        { agentId: "claude" },
+        { timeoutMs: 60_000, callId: "c14", signal: controller.signal }
+      );
+      const sibling = session.callTool(
+        "agent.launch",
+        { agentId: "codex" },
+        { timeoutMs: 60_000, callId: "c15" }
+      );
+      await vi.waitFor(() => expect(reads.length).toBeGreaterThan(0));
+      controller.abort();
+      await expect(cancelled).rejects.toThrow();
+      expect(store.getRelayCaller(session.sessionId)?.callDeadline?.("c14")).toBeUndefined();
+      for (const read of reads) read();
+      manifestRead(MANIFEST);
+      await sibling;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(dispatchActionForWorkspace).toHaveBeenCalledTimes(1);
+      expect(dispatchActionForWorkspace.mock.calls[0]?.[2]).toMatchObject({ agentId: "codex" });
+      session.close();
+    });
+
     it("knows no deadline for a call the session isn't running", async () => {
       const { lc, store } = await startedLifecycle();
       const session = (await lc.openRelaySession({

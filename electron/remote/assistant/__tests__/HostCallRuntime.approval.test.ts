@@ -522,6 +522,61 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     expect(answers[0]?.decision).toBe("refused");
   });
 
+  describe("a call its caller cancelled (#17985)", () => {
+    const cancellable = (signal: AbortSignal) =>
+      runtime.call(
+        "a",
+        {
+          hostId: "studio",
+          projectId: "proj-2",
+          tool: "worktree.delete",
+          args: { worktreeId: "/wt/feature" },
+        },
+        { tier: "full", signal }
+      );
+
+    it("asks nobody about a call already cancelled", async () => {
+      const controller = new AbortController();
+      duringCall = (r, callId) => {
+        controller.abort();
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await cancellable(controller.signal);
+
+      expect(asked).toEqual([]);
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("withdraws an approval the person gave after the call was cancelled", async () => {
+      const controller = new AbortController();
+      duringCall = async (r, callId) => {
+        const pending = r.receiveApproval("studio", ask({ callId }));
+        controller.abort();
+        return pending;
+      };
+
+      await cancellable(controller.signal);
+
+      expect(asked).toHaveLength(1);
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("grants no skip for a call already cancelled under the person's own Never ask", async () => {
+      skips = true;
+      const controller = new AbortController();
+      duringCall = (r, callId) => {
+        controller.abort();
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await cancellable(controller.signal);
+
+      expect(answers[0]?.decision).toBe("refused");
+      expect(skipReads).toEqual([]);
+    });
+  });
+
   it("passes a decline or a missed dialog through, and refuses when no window could ask", async () => {
     const decisions: Array<typeof decision> = ["rejected", "timeout", null];
     for (const next of decisions) {

@@ -197,7 +197,7 @@ export interface McpRelaySessionHandle {
   callTool(
     tool: string,
     args: Record<string, unknown>,
-    options: { timeoutMs: number; callId: string }
+    options: { timeoutMs: number; callId: string; signal?: AbortSignal }
   ): Promise<CallToolResult>;
   close(): void;
 }
@@ -2026,14 +2026,15 @@ export class HttpLifecycle {
     return {
       sessionId,
       isOpen: () => store.relaySessions.has(sessionId),
-      callTool: async (tool, args, { timeoutMs, callId }) => {
+      callTool: async (tool, args, { timeoutMs, callId, signal }) => {
         const deadline = { at: Date.now() + timeoutMs };
         callDeadlines.set(callId, deadline);
         try {
+          // A Shell's cancel (#17985) reaches the tool as its own request's abort.
           return (await client.callTool(
             { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
             undefined,
-            { timeout: timeoutMs }
+            { timeout: timeoutMs, ...(signal ? { signal } : {}) }
           )) as CallToolResult;
         } finally {
           if (callDeadlines.get(callId) === deadline) callDeadlines.delete(callId);

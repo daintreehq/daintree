@@ -3143,6 +3143,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // own skip preference (#15698), which only this machine decides;
             // so does a `host.settings` apply the person handed over (#16752).
             // `host.status` reads each project at that tier too (#16191), and asks nobody.
+            // A cancelled `host.call` is cancelled on its host too (#17985).
             const callContext =
               tier === "core" || tier === "full"
                 ? actionId === HOST_CALL_TOOL || actionId === HOST_SETTINGS_TOOL
@@ -3151,6 +3152,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                       noteSkipPreference: () => {
                         dispatchAuthorization = "skip-preference";
                       },
+                      ...(actionId === HOST_CALL_TOOL ? { signal: extra.signal } : {}),
                     }
                   : actionId === HOST_STATUS_TOOL
                     ? { tier }

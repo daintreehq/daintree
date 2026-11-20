@@ -24,6 +24,7 @@ import {
   type HostBringBackArgs,
   type HostBringBackResult,
   type HostCallArgs,
+  type HostCallInnerResult,
   type HostCallResult,
   type HostControlOutcome,
   type HostControlOutcomeCode,
@@ -119,6 +120,7 @@ import {
   MAX_RELAY_ARGS_BYTES,
   MAX_RELAY_RUN_MS,
   RELAY_NOTICE_WINDOW_MS,
+  RelayCancelUnconfirmedError,
   type McpCallAnswer,
   type RelayApproveAnswer,
   type RelayApprovePayload,
@@ -188,6 +190,8 @@ export interface LocalHostReach {
   /** When this machine took that sample, on its own clocks. */
   summaryReceipt?(summary: HostMetricsSummary): SummaryReceipt | null;
   relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
+  /** Stops one of its relayed calls (#17985); false when it couldn't. Absent, nothing stops one. */
+  cancelCall?(helpSessionId: string, callId: string): boolean;
   /** A throwaway tool on this machine (#14446); absent, it runs none. */
   throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
@@ -435,6 +439,8 @@ interface CallInFlight {
   skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
+  /** One of its sends was cancelled (#17985): nothing asked about it is approved after. */
+  cancelled: boolean;
 }
 
 /** A host's dispatch into this Shell's view, naming one of this Shell's own calls. */
@@ -694,6 +700,16 @@ const CALL_RESEND_DISCONNECTED_DETAIL =
   "The host can't be reached right now. Resend under the same callId once it is back; it never runs twice.";
 const CALL_UNKNOWN_DETAIL =
   "The host no longer holds a record of this callId, so it may or may not have run. Check what it would have changed before running it again as a new call.";
+/** What a call cancelled before its tool ran answers (#17985): an answer, saying nothing ran. */
+const CALL_CANCELLED_BEFORE_RESULT: HostCallInnerResult = {
+  isError: true,
+  structured: { code: "CANCELLED", dispatched: false },
+  text: "The call was cancelled before it reached the tool, so nothing ran.",
+};
+const CALL_CANCELLED_AFTER_DETAIL =
+  "The call was cancelled after it reached the tool. The host told the tool to stop, but it may have acted first. A resend under this callId reads this same answer.";
+const CALL_CANCEL_UNCONFIRMED_DETAIL =
+  "The call was cancelled after it was sent, and the host didn't confirm it stopped: an older host runs a call until it is done or out of time. It may have run. Resend under this callId to read what it did; it never runs twice.";
 const CALL_CONFLICT_DETAIL =
   "That callId was already used for a different call. Resend only the exact call it named, or make a new call.";
 const CALL_ID_TAKEN_DETAIL =
@@ -1257,6 +1273,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       this.disposed ||
       call === undefined ||
       call.asked ||
+      call.cancelled ||
       call.hostId !== hostId ||
       call.helpSessionId !== dispatch.helpSessionId ||
       call.projectId !== dispatch.projectId ||
@@ -1517,6 +1534,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       ask === undefined ||
       call === undefined ||
       call.asked ||
+      call.cancelled ||
       call.hostId !== hostId ||
       call.helpSessionId !== payload.helpSessionId ||
       call.projectId !== payload.projectId ||
@@ -1568,6 +1586,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (
       decision === "approved" &&
       (this.callsInFlight.get(payload.callId) !== call ||
+        call.cancelled ||
         !this.stillRunning(call.run) ||
         !this.controlOn(hostId))
     ) {
@@ -1920,6 +1939,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           ? { conversationId: caller.conversationOwnershipId }
           : {}),
       };
+      // Cancelled before it went out (#17985): nothing is sent, and nothing ran.
+      if (context.signal?.aborted) {
+        return { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
+      }
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
@@ -1943,16 +1966,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           tier: context.tier,
           run: caller,
         },
-        context.noteSkipPreference
+        context.noteSkipPreference,
+        context.signal
       );
       let answer: McpCallAnswer;
       try {
         answer = local
-          ? await local.relayCall(payload)
+          ? await this.relayLocal(local, payload, context.signal)
           : await this.requireClient().relayCall(
               args.hostId,
               payload,
-              runMs + RELAY_ANSWER_GRACE_MS
+              runMs + RELAY_ANSWER_GRACE_MS,
+              context.signal
             );
       } catch (error) {
         return this.sendFailure(error, host, callId, resend, noted);
@@ -2000,6 +2025,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         case "conflict":
           noted.ran();
           return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
+        // What the host saw of its Shell's cancel (#17985), never a claim the tool did nothing.
+        case "cancelled":
+          if (answer.dispatch === "before") {
+            noted.notRun();
+            return { ...this.ok(), ...sent, result: CALL_CANCELLED_BEFORE_RESULT };
+          }
+          noted.ran();
+          return { ...this.outcomeWith("ambiguous", CALL_CANCELLED_AFTER_DETAIL), ...sent };
         case "refused": {
           noted.notRun();
           const { code, detail } =
@@ -2012,14 +2045,39 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   /**
+   * One of this machine's own relayed calls (#14024), stopped in process when
+   * `signal` aborts (#17985), as a host stops one on MCP_CANCEL.
+   */
+  private async relayLocal(
+    local: LocalHostReach,
+    payload: RelayCallRequest,
+    signal: AbortSignal | undefined
+  ): Promise<McpCallAnswer> {
+    const cancel: { taken: boolean | null } = { taken: null };
+    const onAbort = () => {
+      cancel.taken = local.cancelCall?.(payload.helpSessionId, payload.callId) ?? false;
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let answer: McpCallAnswer;
+    try {
+      answer = await local.relayCall(payload);
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+    if (cancel.taken === false) throw new RelayCancelUnconfirmedError();
+    return answer;
+  }
+
+  /**
    * Counts one send out to its host until `done`: a resend while its first
    * send is still out is the same call and shares that record, so an approval
-   * the host is asking for still counts.
+   * the host is asking for still counts. A cancel of any send marks the call.
    */
   private trackSend(
     callId: string,
-    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes">,
-    noteSkip?: () => void
+    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes" | "cancelled">,
+    noteSkip?: () => void,
+    signal?: AbortSignal
   ): () => void {
     const { hostId, helpSessionId } = record;
     this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
@@ -2027,7 +2085,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0, skipped: false, skipNotes: new Set() };
+        : {
+            ...record,
+            asked: false,
+            sends: 0,
+            skipped: false,
+            skipNotes: new Set(),
+            cancelled: false,
+          };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
     // Each send's own, so a send that settled, having written its record, is
@@ -2041,7 +2106,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (inFlight.skipped) note();
       else inFlight.skipNotes.add(note);
     }
+    const onAbort = () => {
+      inFlight.cancelled = true;
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     return () => {
+      signal?.removeEventListener("abort", onAbort);
       if (note !== undefined) inFlight.skipNotes.delete(note);
       const left = (this.callsOut.get(hostId) ?? 1) - 1;
       if (left > 0) this.callsOut.set(hostId, left);
@@ -2067,6 +2137,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       case "OUTCOME_UNKNOWN":
         noted.ran();
         return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+      // Cancelled before it went out (#17985).
+      case "CANCELLED":
+        noted.notRun();
+        return { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
+      case "CANCEL_UNCONFIRMED":
+        noted.ran();
+        return { ...this.outcomeWith("ambiguous", CALL_CANCEL_UNCONFIRMED_DETAIL), ...sent };
       // Never written to the link: a first send is simply not sent.
       case "HOST_DISCONNECTED":
         noted.notRun();
