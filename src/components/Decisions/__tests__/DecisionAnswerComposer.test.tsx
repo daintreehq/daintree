@@ -874,14 +874,19 @@ describe("a timed question in the view (#17943)", () => {
     expect(option("Ship it").checked).toBe(true);
   });
 
-  it("names no mode or plan for a question that never expires", async () => {
+  it("says there is no deadline for a question that never expires", async () => {
+    questions.q1 = question("q1", { replyMode: "blocking" });
+    await openOn("q1");
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/No deadline/);
+  });
+
+  it("names no plan for a question that never expires", async () => {
     questions.q1 = question("q1", {
       replyMode: "blocking",
       // A blocking question's stray plan is never one.
       plannedFallback: "use the existing fixture",
     });
     await openOn("q1");
-    expect(screen.queryByTestId("decision-question-deadline")).toBeNull();
     expect(screen.queryByTestId("decision-question-plan")).toBeNull();
   });
 

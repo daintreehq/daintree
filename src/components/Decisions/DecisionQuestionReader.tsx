@@ -78,8 +78,28 @@ function ExpiredAt({ expiresAt, nowMs }: { expiresAt: string; nowMs: number }) {
  */
 function DeadlineLine({ question, nowMs }: { question: DecisionQuestionContent; nowMs: number }) {
   const deadline = deadlineMs(question.expiresAt);
-  if (deadline === null || question.expiresAt === null) return null;
   const mode = replyModeText(question.replyMode);
+  // Nothing closes it but the person or the agent, which a missing line would leave unsaid.
+  if (question.expiresAt === null) {
+    return (
+      <p
+        className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-primary"
+        data-testid="decision-question-deadline"
+      >
+        <Clock className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
+        {mode !== null && (
+          <>
+            <span className="font-medium" data-testid="decision-question-mode">
+              {mode}
+            </span>
+            <FactSeparator />
+          </>
+        )}
+        <span data-testid="decision-question-no-deadline">No deadline</span>
+      </p>
+    );
+  }
+  if (deadline === null) return null;
   const elapsed = contentDeadlineElapsed(question, nowMs);
   return (
     <p
