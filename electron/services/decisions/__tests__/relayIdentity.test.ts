@@ -280,7 +280,9 @@ describe("relayRequests", () => {
 
   it("stops a request when the library's own signal for that call aborts, as well as its own deadline", async () => {
     let seen: AbortSignal | undefined;
+    // A deadline past the test's own timeout, so only the call's signal can end the request.
     const requests = await relayRequests(ORIGIN, {
+      timeoutMs: 60_000,
       fetchImpl: (_url, init) => {
         seen = init.signal ?? undefined;
         return new Promise((_resolve, reject) =>

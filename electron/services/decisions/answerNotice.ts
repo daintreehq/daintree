@@ -50,7 +50,8 @@ export interface AnswerBlock {
   expired: boolean;
   /**
    * A `system` block from 0.9.0: the question's deadline passed before this
-   * computer could send it, so it never reached the person and authorises nothing.
+   * computer could send it to the relay, so no answer was recorded and it
+   * authorises nothing.
    */
   neverPublished: boolean;
   /**
