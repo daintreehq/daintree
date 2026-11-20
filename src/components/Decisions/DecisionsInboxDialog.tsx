@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -20,7 +21,7 @@ import {
 } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { CountBadge } from "@/components/ui/badge";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -95,8 +96,10 @@ import {
   ELAPSED_NOTE,
   emptyText,
   expiresSoon,
+  folds,
   GO_TO_TERMINAL_TEXT,
   goneAsks,
+  hiddenIn,
   inboxGroupOf,
   inboxGroups,
   closedTime,
@@ -108,6 +111,7 @@ import {
   markedText,
   originFacts,
   paneTitle,
+  questionOfKey,
   referenceKey,
   replyLine,
   replyLineKey,
@@ -116,6 +120,7 @@ import {
   RETRY_DECLINE_TEXT,
   scopedQuestions,
   scopeOffered,
+  shownItems,
   standingText,
   waitingText,
   whereFacts,
@@ -123,6 +128,7 @@ import {
   WITHDRAW_TEXT,
   type InboxChoice,
   type InboxGroup,
+  type InboxGroupId,
   type InboxReach,
   type QuestionOrigin,
   type InboxScope,
@@ -200,11 +206,49 @@ type ListRead =
 const LOADING: ListRead = { state: "loading" };
 const NO_LINES: ReadonlyMap<string, string | null> = new Map();
 const NO_QUESTIONS: readonly DecisionQuestionListItem[] = [];
+const NO_GROUPS: ReadonlySet<InboxGroupId> = new Set();
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
 
 /** A pane on this computer, by the project and terminal a question names it by. */
 function paneKey(projectId: string, terminalId: string): string {
   return `${projectId}\u0000${terminalId}`;
+}
+
+const BAR_PREFIX = "group:";
+
+/** A folding group's bar among the rows the arrow keys walk; a question's key always has separators. */
+function barKey(id: InboxGroupId): string {
+  return `${BAR_PREFIX}${id}`;
+}
+
+function isBarKey(key: string): boolean {
+  return key.startsWith(BAR_PREFIX) && !key.includes("\u0000");
+}
+
+/** What the list's arrow keys walk, in order: a folding group's bar, then its rows while it's open. */
+function listStops(groups: readonly InboxGroup[], open: ReadonlySet<InboxGroupId>): string[] {
+  return groups.flatMap((group) => [
+    ...(folds(group.id) ? [barKey(group.id)] : []),
+    ...(folds(group.id) && !open.has(group.id)
+      ? []
+      : group.items.map((item) => referenceKey(item.reference))),
+  ]);
+}
+
+/**
+ * The drawn question a step from `fromKey` lands on, over the bars between: the
+ * first or last when it starts from nothing listed, itself at the list's ends,
+ * and null from a bar with no question past it.
+ */
+function stepFrom(stops: readonly string[], fromKey: string | null, step: -1 | 1): string | null {
+  const questions = stops.filter((key) => !isBarKey(key));
+  if (questions.length === 0) return null;
+  const from = fromKey === null ? -1 : stops.indexOf(fromKey);
+  if (from === -1) return step > 0 ? questions[0]! : questions[questions.length - 1]!;
+  for (let at = from + step; at >= 0 && at < stops.length; at += step) {
+    if (!isBarKey(stops[at]!)) return stops[at]!;
+  }
+  return isBarKey(stops[from]!) ? null : stops[from]!;
 }
 
 /**
@@ -276,6 +320,13 @@ function useQuestionLines(
   }, []);
   useEffect(() => forget, [forget]);
 
+  // The rows drawn now, for a read that spans batches: one a fold hid since isn't read (#18023).
+  // Synced with the commit, so a batch resuming before passive effects run still sees it.
+  const drawn = useRef(items);
+  useLayoutEffect(() => {
+    drawn.current = items;
+  }, [items]);
+
   useEffect(() => {
     if (!active) {
       forget();
@@ -287,7 +338,14 @@ function useQuestionLines(
     const thisOpening = opening.current;
     void (async () => {
       for (let start = 0; start < missing.length; start += SUMMARY_BATCH) {
-        const batch = missing.slice(start, start + SUMMARY_BATCH);
+        const still = new Set(drawn.current.map((item) => referenceKey(item.reference)));
+        const batch = missing.slice(start, start + SUMMARY_BATCH).filter((item) => {
+          const key = referenceKey(item.reference);
+          // Asked again once its row is drawn.
+          if (!still.has(key)) asked.current.delete(key);
+          return still.has(key);
+        });
+        if (batch.length === 0) continue;
         const result = await decisionsClient
           .getQuestionSummariesByReference(batch.map((item) => item.reference))
           .catch(() => null);
@@ -750,6 +808,8 @@ function InboxList({
   listRef,
   lead,
   groups,
+  open,
+  onFold,
   lines,
   replyLines,
   partsOf,
@@ -762,26 +822,39 @@ function InboxList({
   /** Above the groups: what the list says when it has nothing, or that nothing waits (#18022). */
   lead: ReactNode;
   groups: readonly InboxGroup[];
+  /** The folding groups this opening has open; the rest of History and Cleared are shut. */
+  open: ReadonlySet<InboxGroupId>;
+  onFold: (id: InboxGroupId, open: boolean) => void;
   lines: ReadonlyMap<string, string | null>;
   /** A request for a reply's line, by `replyLineKey`, in place of its question's. */
   replyLines: ReadonlyMap<string, string | null>;
   partsOf: (item: DecisionQuestionListItem) => QuestionOrigin;
   selectedKey: string | null;
-  onSelect: (key: string, index: number) => void;
+  onSelect: (key: string) => void;
   /** Show this row's question now and take the keyboard into its answer. */
   onAnswer: (key: string) => void;
   nowMs: number | null;
 }) {
   const labelId = useId();
   const hintId = useId();
-  const ordered = groups.flatMap((group) => group.items);
-  const keys = ordered.map((item) => referenceKey(item.reference));
-  const roving = useRovingRows({ keys, preferredKey: selectedKey, containerRef: listRef });
+  const barHintId = useId();
+  const shut = (id: InboxGroupId) => folds(id) && !open.has(id);
+  const keys = listStops(groups, open);
+  // The question shown, under a shut group, is reached through that group's bar.
+  const selectedShut = selectedKey === null ? null : hiddenIn(groups, selectedKey, open);
+  const roving = useRovingRows({
+    keys,
+    preferredKey: selectedShut !== null ? barKey(selectedShut) : selectedKey,
+    containerRef: listRef,
+  });
+  // The list's keys, said with the stop Tab lands on: the region's own description isn't read there.
+  // The stop itself while the question shown has no row drawn or a bar holds the stop, so Tab back
+  // from a group shut and opened again still hears it.
+  const barStop = roving.tabStopKey !== null && isBarKey(roving.tabStopKey);
+  const hintKey =
+    selectedKey === null || selectedShut !== null || barStop ? roving.tabStopKey : selectedKey;
   // The row the keyboard was on, until focus goes somewhere else on purpose.
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
-  const shape = groups
-    .flatMap((group) => group.items.map((item) => `${group.id}:${referenceKey(item.reference)}`))
-    .join("\n");
   // The arrows' rest before the row they reached shows. Armed only by the list's own keys:
   // a click shows at once, and focus put back on a row (a regroup, a dialog closing) shows nothing new.
   const dwell = useRef<{ timer?: ReturnType<typeof setTimeout> }>({});
@@ -790,28 +863,55 @@ function InboxList({
     return () => clearTimeout(held.timer);
   }, []);
 
-  // Started by each press that moves the keyboard to a row, for the row it moved to.
+  // Started by each press that moves the keyboard to a row, for the row it moved to. A bar shows
+  // no question, so resting on one shows nothing.
   const armDwell = () => {
     clearTimeout(dwell.current.timer);
     const landed = lastFocused.current;
-    if (landed === null || landed.key === selectedKey) return;
+    if (landed === null || landed.key === selectedKey || isBarKey(landed.key)) return;
     dwell.current.timer = setTimeout(() => {
       const now = lastFocused.current;
       // Only while the keyboard is still on it: another press, a blur, or its row going ends it.
       if (now === null || now.key !== landed.key || document.activeElement !== now.element) return;
-      const position = [...(listRef.current?.querySelectorAll("[data-roving-row]") ?? [])].indexOf(
-        now.element
-      );
-      if (position !== -1) onSelect(now.key, position);
+      onSelect(now.key);
     }, SELECTION_DWELL_MS);
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
     roving.onKeyDown(event);
     if (event.isDefaultPrevented()) armDwell();
   };
+  const renderRow = (item: DecisionQuestionListItem) => {
+    const key = referenceKey(item.reference);
+    const replyKey = replyLineKey(item);
+    return (
+      <InboxRow
+        key={key}
+        item={item}
+        rowKey={key}
+        // The question's line until its request's is read, and where that can't be.
+        line={(replyKey === null ? null : replyLines.get(replyKey)) ?? lines.get(key) ?? null}
+        origin={partsOf(item)}
+        selected={key === selectedKey}
+        describedBy={key === hintKey ? hintId : undefined}
+        tabStop={key === roving.tabStopKey}
+        rowRef={roving.rowRef(key)}
+        onFocus={(element) => {
+          lastFocused.current = { key, element };
+          roving.onRowFocus(key);
+        }}
+        onSelect={() => onSelect(key)}
+        onAnswer={() => {
+          clearTimeout(dwell.current.timer);
+          onAnswer(key);
+        }}
+        nowMs={nowMs}
+      />
+    );
+  };
 
   // A row that moves to another group is a new element, and the old one took
-  // focus with it; the keyboard goes back to the row, or to the list's stop.
+  // focus with it; the keyboard goes back to the row, to the bar of the shut
+  // group it went into, or to the list's stop.
   useLayoutEffect(() => {
     const last = lastFocused.current;
     const list = listRef.current;
@@ -820,11 +920,18 @@ function InboxList({
     lastFocused.current = null;
     const focused = document.activeElement;
     if (focused !== null && focused !== document.body) return;
-    const row =
-      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(last.key)}"]`) ??
-      list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
+    const at = (key: string) =>
+      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`);
+    const into = hiddenIn(groups, last.key, open);
+    const shutBar = into === null ? null : at(barKey(into));
+    // The bar can sit far from where the row was, so it comes into view with the keyboard.
+    if (at(last.key) === null && shutBar !== null) {
+      shutBar.focus();
+      return;
+    }
+    const row = at(last.key) ?? list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
     row?.focus({ preventScroll: true });
-  }, [shape, listRef]);
+  }, [groups, open, listRef]);
 
   return (
     <div
@@ -884,10 +991,71 @@ function InboxList({
       <span id={hintId} className="sr-only">
         Up and down arrows show each question. Right arrow moves into it.
       </span>
+      {/* A bar opens no question to move into. */}
+      <span id={barHintId} className="sr-only">
+        Up and down arrows show each question.
+      </span>
       {lead}
       {groups.map((group) => {
         const headingId = `${labelId}-${group.id}`;
+        const rowsId = `${headingId}-rows`;
         const stopped = groups.find((other) => other.id === "attention")?.items.length ?? 0;
+        const label = (
+          <>
+            {group.title}
+            <CountBadge label={pluralize(group.items.length, "question")}>
+              {group.items.length.toLocaleString()}
+            </CountBadge>
+          </>
+        );
+        if (folds(group.id)) {
+          const key = barKey(group.id);
+          const expanded = !shut(group.id);
+          return (
+            <section
+              key={group.id}
+              aria-labelledby={headingId}
+              className="flex flex-col"
+              data-testid={`decisions-inbox-group-${group.id}`}
+            >
+              {/* Canopy's folding bar: its count stays in view while the group is shut. */}
+              <h3 id={headingId} className="decisions-inbox-heading flex h-9 w-full shrink-0">
+                <button
+                  type="button"
+                  ref={roving.rowRef(key)}
+                  tabIndex={key === roving.tabStopKey ? 0 : -1}
+                  aria-expanded={expanded}
+                  aria-controls={rowsId}
+                  aria-describedby={key === hintKey ? barHintId : undefined}
+                  data-roving-row=""
+                  data-inbox-key={encodeURIComponent(key)}
+                  onFocus={(event) => {
+                    lastFocused.current = { key, element: event.currentTarget };
+                    roving.onRowFocus(key);
+                  }}
+                  // The keyboard on a row it shuts goes to the bar with the layout effect above.
+                  onClick={() => onFold(group.id, !expanded)}
+                  className="decisions-inbox-fold flex w-full cursor-pointer items-center justify-between gap-1.5 px-3 text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+                  data-testid={`decisions-inbox-fold-${group.id}`}
+                >
+                  <span className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
+                    {label}
+                  </span>
+                  <ChevronRight
+                    aria-hidden="true"
+                    className={cn(
+                      "size-3.5 shrink-0 text-text-secondary transition-transform duration-150 motion-reduce:transition-none",
+                      expanded && "rotate-90"
+                    )}
+                  />
+                </button>
+              </h3>
+              <ul id={rowsId} hidden={!expanded} className="flex flex-col">
+                {expanded && group.items.map((item) => renderRow(item))}
+              </ul>
+            </section>
+          );
+        }
         return (
           <section
             key={group.id}
@@ -901,10 +1069,7 @@ function InboxList({
                 id={headingId}
                 className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}
               >
-                {group.title}
-                <CountBadge label={pluralize(group.items.length, "question")}>
-                  {group.items.length.toLocaleString()}
-                </CountBadge>
+                {label}
               </h3>
               {/* Stopped deliveries can sit below a long queue: one click takes the list to them.
                   A pointer shortcut only; the keyboard reaches them with the list's own keys. */}
@@ -927,44 +1092,7 @@ function InboxList({
                 </button>
               )}
             </div>
-            <ul className="flex flex-col">
-              {group.items.map((item) => {
-                const key = referenceKey(item.reference);
-                const replyKey = replyLineKey(item);
-                return (
-                  <InboxRow
-                    key={key}
-                    item={item}
-                    rowKey={key}
-                    // The question's line until its request's is read, and where that can't be.
-                    line={
-                      (replyKey === null ? null : replyLines.get(replyKey)) ??
-                      lines.get(key) ??
-                      null
-                    }
-                    origin={partsOf(item)}
-                    selected={key === selectedKey}
-                    describedBy={
-                      (selectedKey === null ? key === roving.tabStopKey : key === selectedKey)
-                        ? hintId
-                        : undefined
-                    }
-                    tabStop={key === roving.tabStopKey}
-                    rowRef={roving.rowRef(key)}
-                    onFocus={(element) => {
-                      lastFocused.current = { key, element };
-                      roving.onRowFocus(key);
-                    }}
-                    onSelect={() => onSelect(key, keys.indexOf(key))}
-                    onAnswer={() => {
-                      clearTimeout(dwell.current.timer);
-                      onAnswer(key);
-                    }}
-                    nowMs={nowMs}
-                  />
-                );
-              })}
-            </ul>
+            <ul className="flex flex-col">{group.items.map((item) => renderRow(item))}</ul>
           </section>
         );
       })}
@@ -1017,12 +1145,45 @@ export function DecisionsInboxDialog() {
   const shown = questions === null ? null : scopedQuestions(questions, scope, windowProject);
   const groups = shown === null ? [] : inboxGroups(shown, nowMs);
   const ordered = groups.flatMap((group) => group.items);
-  const { lines, release: releaseLines } = useQuestionLines(ordered, active);
-  // The list as it came, so its next change, not every render, is what asks again.
-  const { lines: replyLines, release: releaseReplyLines } = useReplyLines(
-    questions ?? NO_QUESTIONS,
-    active
+  // Which of History and Cleared this opening has open (#18023), and which the person opened or
+  // shut themselves. Every opening starts with both shut, so one look back doesn't leave History's
+  // rows across every later visit.
+  const [unfolded, setUnfolded] = useState<{
+    seq: number;
+    groups: ReadonlySet<InboxGroupId>;
+    byPerson: ReadonlySet<InboxGroupId>;
+  } | null>(null);
+  const folding = unfolded !== null && unfolded.seq === request.seq ? unfolded : null;
+  const openGroups = folding?.groups ?? NO_GROUPS;
+  const foldedByPerson = folding?.byPerson ?? NO_GROUPS;
+  const fold = (id: InboxGroupId, open: boolean, byPerson: boolean) => {
+    const next = new Set(openGroups);
+    if (open) next.add(id);
+    else next.delete(id);
+    setUnfolded({
+      seq: request.seq,
+      groups: next,
+      byPerson: byPerson ? new Set([...foldedByPerson, id]) : foldedByPerson,
+    });
+  };
+  // Only the rows drawn: a shut group's lines are read once it opens.
+  const drawn = shownItems(groups, openGroups);
+  const drawnIndexOf = (key: string) =>
+    drawn.findIndex((item) => referenceKey(item.reference) === key);
+  const { lines, release: releaseLines } = useQuestionLines(drawn, active);
+  // The list as it came, so its next change, not every render, is what asks again; a shut
+  // group's rows wait until it opens.
+  const replyItems = useMemo(
+    () =>
+      questions === null
+        ? NO_QUESTIONS
+        : questions.filter((item) => {
+            const id = inboxGroupOf(item, nowMs);
+            return !folds(id) || openGroups.has(id);
+          }),
+    [questions, nowMs, openGroups]
   );
+  const { lines: replyLines, release: releaseReplyLines } = useReplyLines(replyItems, active);
   // Whether Clear Needs you says how far it goes: always beside the switch, which names the list
   // shown, and otherwise once the list holds a question from outside the window's project.
   const clearNamesReach =
@@ -1074,23 +1235,37 @@ export function DecisionsInboxDialog() {
     chosen === null || sameScope ? chosen : { ...chosen, picked: false },
     request.terminalId,
     currentHostId(),
-    windowProject
+    windowProject,
+    openGroups
   );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
-  const selectedIndex = selected === null ? -1 : ordered.indexOf(selected);
+  const drawnAt = selectedKey === null ? -1 : drawnIndexOf(selectedKey);
+  // Under a shut group, it keeps the place it was last drawn at.
+  const selectedIndex = drawnAt >= 0 ? drawnAt : (chosen?.index ?? 0);
   if (
     selectedKey !== null &&
     (chosen === null || !sameScope || chosen.key !== selectedKey || chosen.index !== selectedIndex)
   ) {
-    // One that took a picked row's place stays picked; one the inbox opened on stays its own choice.
-    // Across a switch, only the same question stays picked.
+    // One that took a picked row's place stays picked; one the inbox opened on stays its own choice,
+    // as does the pane's own a vanished pick falls back to with no drawn row to take its place.
+    // Across a switch, only the same question stays picked, and only once it's drawn in this list:
+    // under a shut group it has no place here yet for another to take.
     setChoice({
       seq: request.seq,
       scope,
       key: selectedKey,
       index: selectedIndex,
-      picked: chosen?.picked === true && (sameScope || chosen.key === selectedKey),
+      picked:
+        chosen?.picked === true &&
+        (chosen.key === selectedKey ? sameScope || drawnAt >= 0 : sameScope && drawn.length > 0),
     });
+    // Newly shown under a shut group can only be the opening pane's own question (rows and Next
+    // question pick drawn ones): it is never hidden, so its group opens for this opening, unless the
+    // person opened or shut that group themselves. One that moves into a shut group while shown,
+    // cleared, closed or listed under the pane its answer was sent to, leaves the group shut.
+    const stayed = chosen !== null && questionOfKey(chosen.key) === questionOfKey(selectedKey);
+    const into = stayed ? null : hiddenIn(groups, selectedKey, openGroups);
+    if (into !== null && !foldedByPerson.has(into)) fold(into, true, false);
   } else if (selectedKey === null && chosen !== null) {
     // Gone with nothing in its place: a later list starts afresh, rather than reviving it in History.
     setChoice(null);
@@ -1218,8 +1393,7 @@ export function DecisionsInboxDialog() {
   const clearGoneHintId = useId();
   const clearHint = clearText(selectedGroup === "cleared");
   const choose = (key: string) => {
-    const index = ordered.findIndex((item) => referenceKey(item.reference) === key);
-    setChoice({ seq: request.seq, scope, key, index, picked: true });
+    setChoice({ seq: request.seq, scope, key, index: drawnIndexOf(key), picked: true });
   };
   // Sends the keyboard into a question. The one already read takes it at once; another is
   // shown, and the keyboard waits in the pane until it's read (the effect below), since
@@ -1295,7 +1469,7 @@ export function DecisionsInboxDialog() {
   // last one: on its row, in its answer, or in the pane. Anywhere else it stays put.
   const onStepKeyDownCapture = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const step = listStepOf(event);
-    if (step === null || !active || ordered.length === 0) return;
+    if (step === null || !active || drawn.length === 0) return;
     const target = event.target;
     // A dialog opened over this one (an image at full size) keeps its own keys.
     if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
@@ -1303,16 +1477,17 @@ export function DecisionsInboxDialog() {
     event.stopPropagation();
     const row = target.closest<HTMLElement>("[data-roving-row]");
     const rowKey = row?.dataset.inboxKey;
-    // From the row the arrows rest on, before it has shown; else from the question shown.
-    const fromKey = rowKey !== undefined ? decodeURIComponent(rowKey) : selectedKey;
-    const from = ordered.findIndex((item) => referenceKey(item.reference) === fromKey);
-    const to =
-      from === -1
-        ? step > 0
-          ? 0
-          : ordered.length - 1
-        : Math.min(ordered.length - 1, Math.max(0, from + step));
-    const key = referenceKey(ordered[to]!.reference);
+    // From the row or bar the arrows rest on, before it has shown; else from the question shown,
+    // or the bar of the shut group holding it. Only drawn questions are stepped to (#18023).
+    const shutGroup = selectedKey === null ? null : hiddenIn(groups, selectedKey, openGroups);
+    const fromKey =
+      rowKey !== undefined
+        ? decodeURIComponent(rowKey)
+        : shutGroup !== null
+          ? barKey(shutGroup)
+          : selectedKey;
+    const key = stepFrom(listStops(groups, openGroups), fromKey, step);
+    if (key === null) return;
     if (row !== null) {
       choose(key);
       // Its focus moves the list's tab stop with it, and scrolls it into view.
@@ -1642,15 +1817,23 @@ export function DecisionsInboxDialog() {
                     ) : null
                   }
                   groups={groups}
+                  open={openGroups}
+                  onFold={(id, open) => fold(id, open, true)}
                   lines={lines}
                   replyLines={replyLines}
                   partsOf={partsOf}
                   nowMs={nowMs}
                   selectedKey={selectedKey}
-                  onSelect={(key, index) => {
+                  onSelect={(key) => {
                     // A dwell that ends as the inbox closes changes nothing shown.
                     if (stillShowing(request.seq)) {
-                      setChoice({ seq: request.seq, scope, key, index, picked: true });
+                      setChoice({
+                        seq: request.seq,
+                        scope,
+                        key,
+                        index: drawnIndexOf(key),
+                        picked: true,
+                      });
                     }
                   }}
                   onAnswer={(key) => handOff(key, "answer")}

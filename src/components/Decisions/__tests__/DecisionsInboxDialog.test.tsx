@@ -283,6 +283,18 @@ function rowNamed(alias: string) {
   return row;
 }
 
+/** A folding group's bar (#18023). */
+function bar(id: "cleared" | "history") {
+  return screen.getByTestId(`decisions-inbox-fold-${id}`);
+}
+
+/** Opens a shut group, as a press on its bar does. */
+function unfold(id: "cleared" | "history") {
+  const shut = bar(id);
+  expect(shut.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(shut);
+}
+
 /** What a screen reader says of a row: its accessible name, which leaves out what is drawn aria-hidden. */
 function nameOf(row: HTMLElement) {
   let name = "";
@@ -438,7 +450,7 @@ afterEach(() => {
 describe("DecisionsInboxDialog", () => {
   it("lists every question in its group, each named by its line, agent, place, age and state", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
     const groups = Array.from(
       screen.getByTestId("decisions-inbox-list").querySelectorAll("section")
     ).map((section) => section.getAttribute("data-testid"));
@@ -449,6 +461,15 @@ describe("DecisionsInboxDialog", () => {
     ]);
     expect(screen.getByTestId("decisions-inbox-group-needs-you").textContent).toContain("q-2");
     expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-3");
+    // History starts folded (#18023): its count in view, its row and its line not yet.
+    expect(bar("history").textContent).toContain("1");
+    expect(screen.getByTestId("decisions-inbox-group-history").textContent).not.toContain("q-1");
+    await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledOnce());
+    expect(
+      getQuestionSummariesByReference.mock.calls[0]![0].references.map((ref) => ref.questionId)
+    ).toEqual(["question-2", "question-3"]);
+    unfold("history");
+    await waitFor(() => expect(rows()).toHaveLength(3));
     expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-1");
 
     await waitFor(() => expect(rowNamed("q-2").textContent).toContain("Line of question-2"));
@@ -482,9 +503,12 @@ describe("DecisionsInboxDialog", () => {
     // The close time is named for the ear; the others stay "asked".
     expect(nameOf(rowNamed("q-1"))).toMatch(/Closed,/);
     expect(nameOf(rowNamed("q-2"))).toMatch(/Asked,/);
-    // One read of the lines, by reference, for every row.
-    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
-    expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
+    // One read of the lines, by reference, for every row: History's once it opened.
+    await waitFor(() => expect(rowNamed("q-1").textContent).toContain("Line of question-1"));
+    expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2);
+    expect(getQuestionSummariesByReference.mock.calls[1]![0].references).toEqual([
+      reference("question-1"),
+    ]);
   });
 
   describe("telling two agents in one place apart (#18039)", () => {
@@ -630,6 +654,8 @@ describe("DecisionsInboxDialog", () => {
       });
       fleet([INDEXING]);
       open();
+      await waitFor(() => bar("history"));
+      unfold("history");
       await waitFor(() => expect(rows()).toHaveLength(1));
       expect(originOf("q-1")).toBe(`${CLAUDE} in “Index migrations” · Expired unanswered · Alpha`);
       expect(nameOf(rowNamed("q-1")).match(/Expired unanswered/g)).toHaveLength(1);
@@ -683,6 +709,8 @@ describe("DecisionsInboxDialog", () => {
       ],
     });
     open();
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    unfold("history");
     await waitFor(() => expect(rows()).toHaveLength(2));
     const time = (alias: string) =>
       rowNamed(alias).querySelector("time")?.getAttribute("datetime") ?? null;
@@ -724,6 +752,7 @@ describe("DecisionsInboxDialog", () => {
     const answer = screen.getByRole("region", { name: "Your answer" });
     expect(section.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
 
+    unfold("history");
     fireEvent.click(rowNamed("q-1"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
     expect(screen.queryByTestId("decision-question-preparation")).toBeNull();
@@ -770,7 +799,7 @@ describe("DecisionsInboxDialog", () => {
 
   it("picks from this opening's list, never one an earlier opening read", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
     act(() => useDecisionsInboxStore.getState().close());
 
     // Pane t4 asks its first question while the inbox is closed.
@@ -795,7 +824,10 @@ describe("DecisionsInboxDialog", () => {
 
   it("keeps the chosen question as the list regroups, and takes its place's when it goes", async () => {
     open();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    unfold("history");
     await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2));
     fireEvent.click(rowNamed("q-3"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
 
@@ -812,7 +844,8 @@ describe("DecisionsInboxDialog", () => {
     expect(rows().map(aliasOf)).toEqual(["q-2", "q-3", "q-1"]);
     expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
     expect(shownBody()).toContain("Body of question 3");
-    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
+    // Each line was read once, before the regroup; moving a row reads nothing again.
+    expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2);
 
     // Gone from the list: the question now at its place, q-1, is shown instead.
     push({ revision: 3, questions: [LIST.questions[0]!, LIST.questions[1]!] });
@@ -833,7 +866,7 @@ describe("DecisionsInboxDialog", () => {
     CONTENT["question-2"] = { ...shown, expiresAt, replyMode: "advisory" };
     try {
       open();
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
       fireEvent.click(rowNamed("q-2"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       // Inside a day: when to reply by, in this computer's time, and the time left.
@@ -872,7 +905,7 @@ describe("DecisionsInboxDialog", () => {
 
   it("says Clear stays on this computer before it's pressed (#17943)", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
     fireEvent.click(rowNamed("q-2"));
     const clear = await screen.findByTestId("decisions-inbox-clear");
     const hint = document.getElementById(clear.getAttribute("aria-describedby") ?? "");
@@ -882,11 +915,14 @@ describe("DecisionsInboxDialog", () => {
 
   it("moves through native buttons with one tab stop, reading none it passes", async () => {
     open();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    unfold("history");
     await waitFor(() => expect(rows()).toHaveLength(3));
     await waitFor(() => expect(readsOf("question-2")).toBeGreaterThan(0));
     // Native buttons, so Enter and Space choose a row as a click does.
     for (const row of rows()) expect(row.tagName).toBe("BUTTON");
-    expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-2")]);
+    const list = screen.getByTestId("decisions-inbox-groups");
+    expect([...list.querySelectorAll('[tabindex="0"]')]).toEqual([rowNamed("q-2")]);
 
     act(() => rows()[0]!.focus());
     fireEvent.keyDown(rows()[0]!, { key: "ArrowDown" });
@@ -903,12 +939,12 @@ describe("DecisionsInboxDialog", () => {
     expect(rows()[2]!.getAttribute("aria-current")).toBe("true");
     await waitFor(() => expect(readsOf("question-1")).toBe(1));
     expect(readsOf("question-3")).toBe(0);
-    expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rows()[2]]);
+    expect([...list.querySelectorAll('[tabindex="0"]')]).toEqual([rows()[2]]);
   });
 
   it("puts the keyboard back on a focused row that moves to another group", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
     act(() => rowNamed("q-2").focus());
     push({
       revision: 2,
@@ -926,7 +962,7 @@ describe("DecisionsInboxDialog", () => {
 
   it("leaves the keyboard where it went when a row it left moves later", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
     await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
     act(() => rowNamed("q-2").blur());
     // The blur's own turn has passed before the list moves.
@@ -1076,6 +1112,7 @@ describe("DecisionsInboxDialog", () => {
       open();
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      unfold("history");
       fakeTimers();
 
       // Focus put back on a row (a regroup, a dialog closing) isn't the arrows resting there.
@@ -1083,7 +1120,12 @@ describe("DecisionsInboxDialog", () => {
       pass(1000);
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
 
+      // Over History's bar, which shows nothing however long the arrows rest there (#18023).
       fireEvent.keyDown(rowNamed("q-3"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(bar("history"));
+      pass(1000);
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      fireEvent.keyDown(bar("history"), { key: "ArrowDown" });
       expect(document.activeElement).toBe(rowNamed("q-1"));
       pass(200);
       act(() => closeButton().focus());
@@ -1181,6 +1223,7 @@ describe("DecisionsInboxDialog", () => {
     it("steps the list's row with the question shown, at once, from the row the keyboard is on, stopping at the ends", async () => {
       open();
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      unfold("history");
 
       expect(fireEvent.keyDown(rowNamed("q-2"), step("ArrowUp"))).toBe(false);
       expect(document.activeElement).toBe(rowNamed("q-2"));
@@ -1394,8 +1437,10 @@ describe("DecisionsInboxDialog", () => {
     );
     pushStatus({ state: "connected", relayOrigin: "https://relay.example", revision: 3 });
     await waitFor(() => expect(screen.queryByTestId("decisions-inbox-connection")).toBeNull());
-    // The questions this computer holds stay listed throughout.
-    expect(rows()).toHaveLength(3);
+    // The questions this computer holds stay listed throughout, History's under its bar.
+    expect(rows().map(aliasOf)).toEqual(["q-2", "q-3"]);
+    unfold("history");
+    expect(rows().map(aliasOf)).toEqual(["q-2", "q-3", "q-1"]);
   });
 
   it("waits for the relay's status before calling an empty list new, and not for good", async () => {
@@ -1579,7 +1624,8 @@ describe("DecisionsInboxDialog", () => {
 
   it("offers no decline for a question that has stopped waiting", async () => {
     open();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    unfold("history");
     fireEvent.click(rowNamed("q-1"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
     expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
@@ -1872,7 +1918,7 @@ describe("DecisionsInboxDialog", () => {
       open();
       fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
       open();
-      await waitFor(() => expect(rows()).toHaveLength(3));
+      await waitFor(() => expect(rows()).toHaveLength(2));
       act(() => useDecisionsInboxStore.getState().close());
       await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
       expect(dispatch).not.toHaveBeenCalled();
@@ -2358,6 +2404,7 @@ describe("DecisionsInboxDialog", () => {
       open();
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       const button = screen.getByTestId("decisions-inbox-clear");
+      act(() => button.focus());
       fireEvent.click(button);
       await waitFor(() =>
         expect(markQuestions).toHaveBeenCalledWith({
@@ -2372,12 +2419,19 @@ describe("DecisionsInboxDialog", () => {
 
       push(marked({ ...unmarked, seen: true, cleared: true }, 3));
       await waitFor(() =>
-        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
+        expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull()
       );
-      expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull();
-      // Still the question shown, and one button that now undoes it.
+      // Into Cleared, which stays shut (#18023): its count says so, its row isn't drawn.
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      expect(bar("cleared").textContent).toContain("1");
+      expect(rows().map(aliasOf)).not.toContain("q-2");
+      // Still the question shown, and one button that now undoes it, with the keyboard on it.
       expect(shownBody()).toContain("Body of question 2");
       expect(screen.getByTestId("decisions-inbox-clear")).toBe(button);
+      expect(document.activeElement).toBe(button);
+      // Opened, Cleared holds it.
+      unfold("cleared");
+      expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2");
       fireEvent.click(button);
       await waitFor(() =>
         expect(markQuestions).toHaveBeenLastCalledWith({
@@ -2418,7 +2472,7 @@ describe("DecisionsInboxDialog", () => {
       };
       listQuestions.mockResolvedValue(marked(unmarked, 2, [second]));
       open();
-      await waitFor(() => expect(rows()).toHaveLength(4));
+      await waitFor(() => expect(rows()).toHaveLength(3));
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
       const clearAll = screen.getByTestId("decisions-inbox-clear-all");
       const footer = clearAll.parentElement!;
@@ -2450,9 +2504,12 @@ describe("DecisionsInboxDialog", () => {
       expect(footer.contains(screen.getByRole("radiogroup", { name: "Questions shown" }))).toBe(
         true
       );
-      await waitFor(() =>
-        expect(document.activeElement).toBe(rows().find((row) => row.tabIndex === 0))
-      );
+      // The question shown went into a shut Cleared (#18023): it stays shown, and the keyboard
+      // lands on the bar that holds it.
+      await waitFor(() => expect(document.activeElement).toBe(bar("cleared")));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      expect(bar("cleared").tabIndex).toBe(0);
+      expect(shownBody()).toContain("Body of question 2");
       expect(screen.getByTestId("decisions-inbox-waiting").textContent).toBe(
         "No questions waiting on you"
       );
@@ -2462,6 +2519,9 @@ describe("DecisionsInboxDialog", () => {
       const asking = item("question-4", 4, OPEN, { askedAt: "2026-11-02T09:30:00.000Z" });
       listQuestions.mockResolvedValue(marked({ ...unmarked, cleared: true }, 2, [asking]));
       open();
+      await waitFor(() => bar("cleared"));
+      unfold("cleared");
+      unfold("history");
       await waitFor(() =>
         expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
       );
@@ -2509,6 +2569,9 @@ describe("DecisionsInboxDialog", () => {
         marked({ ...unmarked, cleared: true }, 2, [live, soon, passed, reply, queued])
       );
       open();
+      await waitFor(() => bar("cleared"));
+      unfold("cleared");
+      unfold("history");
       await waitFor(() => expect(rows()).toHaveLength(8));
       const group = screen.getByTestId("decisions-inbox-group-cleared");
       for (const alias of ["q-2", "q-5", "q-6", "q-7", "q-8"]) {
@@ -2585,16 +2648,20 @@ describe("DecisionsInboxDialog", () => {
     it("says so above the list and opens on nothing, with the keyboard on the list", async () => {
       listQuestions.mockResolvedValue(PASSIVE);
       open();
-      await waitFor(() => expect(rows()).toHaveLength(2));
-      expect(rows().map(aliasOf)).toEqual(["q-5", "q-1"]);
+      // Both groups shut (#18023): their bars, in order, and no row.
+      await waitFor(() => bar("cleared"));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      expect(rows()).toHaveLength(0);
       const line = await screen.findByTestId("decisions-inbox-waiting");
       expect(line.textContent).toBe("No questions waiting on you");
       // At the top of the list, before any group.
       expect(screen.getByTestId("decisions-inbox-groups").querySelector("p, section")).toBe(line);
-      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-5")));
+      // The first bar takes the keyboard.
+      await waitFor(() => expect(document.activeElement).toBe(bar("cleared")));
       // Nothing chosen, nothing read: the pane says how to open one.
-      for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       expect(getQuestionContentByReference).not.toHaveBeenCalled();
+      expect(getQuestionSummariesByReference).not.toHaveBeenCalled();
       expect(screen.queryByTestId("decisions-inbox-detail-title")).toBeNull();
       expect(screen.getByTestId("decisions-inbox-detail-empty").textContent).toMatch(
         /Choose a question/
@@ -2606,6 +2673,10 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull();
 
       // Picked, it opens, by its own reference.
+      unfold("cleared");
+      unfold("history");
+      expect(rows().map(aliasOf)).toEqual(["q-5", "q-1"]);
+      for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       fireEvent.click(rowNamed("q-5"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
       expect(getQuestionContentByReference).toHaveBeenCalledWith({
@@ -2621,7 +2692,7 @@ describe("DecisionsInboxDialog", () => {
         questions: [...PASSIVE.questions, LIST.questions[2]!],
       });
       open();
-      await waitFor(() => expect(rows()).toHaveLength(3));
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-3"]));
       const groups = Array.from(
         screen.getByTestId("decisions-inbox-groups").querySelectorAll("section")
       ).map((section) => section.getAttribute("data-testid"));
@@ -2640,22 +2711,23 @@ describe("DecisionsInboxDialog", () => {
       open({ terminalId: "t1" });
       await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
-      expect(rowNamed("q-5").getAttribute("aria-current")).toBeNull();
+      // Its group opened for it (#18023); Cleared, holding nothing of the pane's, stays shut.
+      expect(bar("history").getAttribute("aria-expanded")).toBe("true");
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-1")));
     });
 
     it("opens a question that comes to need the person while nothing is chosen, leaving the keyboard where it is", async () => {
       listQuestions.mockResolvedValue(PASSIVE);
       open();
-      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-5")));
+      await waitFor(() => expect(document.activeElement).toBe(bar("cleared")));
       expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
-      for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       expect(getQuestionContentByReference).not.toHaveBeenCalled();
       useAnnouncerStore.setState({ polite: null });
       push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
-      expect(document.activeElement).toBe(rowNamed("q-5"));
+      expect(document.activeElement).toBe(bar("cleared"));
       expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
       // Shown with the keyboard elsewhere: a screen reader hears which (#18038).
       await waitFor(() =>
@@ -2666,11 +2738,12 @@ describe("DecisionsInboxDialog", () => {
     it("keeps a question the person picked as one comes to need them", async () => {
       listQuestions.mockResolvedValue(PASSIVE);
       open();
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => bar("history"));
+      unfold("history");
       fireEvent.click(rowNamed("q-1"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
       push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
-      await waitFor(() => expect(rows()).toHaveLength(3));
+      await waitFor(() => expect(rows()).toHaveLength(2));
       expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
       expect(shownBody()).toContain("Body of question 1");
     });
@@ -2682,8 +2755,9 @@ describe("DecisionsInboxDialog", () => {
       });
       open();
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      unfold("history");
       push({ revision: 2, questions: PASSIVE.questions });
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(rows()).toHaveLength(1));
       await waitFor(() => expect(screen.queryByTestId("decisions-inbox-detail-title")).toBeNull());
       for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
       expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
@@ -2696,7 +2770,7 @@ describe("DecisionsInboxDialog", () => {
         settledAt: "2026-11-02T12:00:00Z",
       };
       push({ revision: 3, questions: [...PASSIVE.questions, closed] });
-      await waitFor(() => expect(rows()).toHaveLength(3));
+      await waitFor(() => expect(rows()).toHaveLength(2));
       await act(async () => {});
       expect(rowNamed("q-2").getAttribute("aria-current")).toBeNull();
       expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
@@ -2741,13 +2815,18 @@ describe("DecisionsInboxDialog", () => {
       const list = await screen.findByTestId("decisions-inbox-groups");
       await waitFor(() => expect(document.activeElement).toBe(list));
       push({ ...PASSIVE, revision: 2 });
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => bar("cleared"));
       expect(document.activeElement).toBe(list);
+      // The first stop is Cleared's bar while both groups are shut (#18023).
       fireEvent.keyDown(list, { key: "ArrowDown" });
-      expect(document.activeElement).toBe(rowNamed("q-5"));
-      // And shows it once the keyboard has rested there, as any arrow does (#18038).
-      await waitFor(() => expect(shownBody()).toContain("Body of question 5"));
-      expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true");
+      expect(document.activeElement).toBe(bar("cleared"));
+      // Resting on a bar shows nothing: it holds no question.
+      const restLongerThanAnyDwellMs = 1000;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, restLongerThanAnyDwellMs));
+      });
+      expect(getQuestionContentByReference).not.toHaveBeenCalled();
+      expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
     });
 
     it("leaves the keyboard where it went when Clear Needs you goes later", async () => {
@@ -2884,6 +2963,11 @@ describe("DecisionsInboxDialog", () => {
       });
     const clearCalls = () =>
       markQuestions.mock.calls.filter(([payload]) => payload.action === "clear");
+    /** History starts shut each opening (#18023); these tests read its row. */
+    async function openHistory() {
+      await waitFor(() => bar("history"));
+      unfold("history");
+    }
 
     beforeEach(() => {
       CONTENT["question-6"] = content("question-6", 6, {
@@ -2904,6 +2988,7 @@ describe("DecisionsInboxDialog", () => {
 
     it("opens on every project, as the toolbar counts, on this project's question that needs the person", async () => {
       open();
+      await openHistory();
       await waitFor(() => expect(rows()).toHaveLength(5));
       expect(rows().map(aliasOf)).toEqual(["q-6", "q-2", "q-7", "q-3", "q-1"]);
       expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
@@ -2917,6 +3002,7 @@ describe("DecisionsInboxDialog", () => {
 
     it("narrows to this project and back, choosing afresh when the question shown isn't this project's", async () => {
       open();
+      await openHistory();
       await waitFor(() => expect(rows()).toHaveLength(5));
       // Beta's delivery, picked from the fourth row: nothing in this project's list takes its place.
       fireEvent.click(rowNamed("q-3"));
@@ -2974,13 +3060,16 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() => expect(rows()).toHaveLength(2));
       act(() => useDecisionsInboxStore.getState().close());
       open();
-      await waitFor(() => expect(rows()).toHaveLength(5));
+      // Every project again, and History shut again.
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-6", "q-2", "q-7", "q-3"]));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
       expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
     });
 
     it("keeps the switch for the opening once offered, and offers it afresh each opening", async () => {
       const alphaOnly = { revision: 2, questions: [LIST.questions[0]!, ALPHA_WAITING] };
       open();
+      await openHistory();
       await waitFor(() => expect(rows()).toHaveLength(5));
       expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
       // Only this project's questions left, never narrowed: the switch stays, on All projects.
@@ -2994,7 +3083,8 @@ describe("DecisionsInboxDialog", () => {
       act(() => useDecisionsInboxStore.getState().close());
       listQuestions.mockResolvedValue(alphaOnly);
       open();
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+      expect(screen.getByRole("button", { name: /^History\s*1 question$/ })).toBe(bar("history"));
       expect(screen.queryByRole("radiogroup", { name: "Questions shown" })).toBeNull();
       expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe("Clear Needs you");
     });
@@ -3005,6 +3095,8 @@ describe("DecisionsInboxDialog", () => {
         questions: [...MIXED.questions, ALPHA_CLEARED, ALPHA_ELAPSED],
       });
       open();
+      await openHistory();
+      unfold("cleared");
       await waitFor(() => expect(rows()).toHaveLength(7));
       expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-8");
       expect(screen.getByTestId("decisions-inbox-group-awaiting").textContent).toContain("q-9");
@@ -3053,7 +3145,8 @@ describe("DecisionsInboxDialog", () => {
         questions: [LIST.questions[0]!, ALPHA_WAITING],
       });
       open();
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+      expect(screen.getByRole("button", { name: /^History\s*1 question$/ })).toBe(bar("history"));
       expect(screen.queryByRole("radiogroup", { name: "Questions shown" })).toBeNull();
       const clearAll = screen.getByTestId("decisions-inbox-clear-all");
       expect(clearAll.textContent).toBe("Clear Needs you");
@@ -3073,13 +3166,415 @@ describe("DecisionsInboxDialog", () => {
       );
     });
 
+    it("lets nothing take the place of a pick a shut group hid across a switch", async () => {
+      listQuestions.mockResolvedValue({
+        ...MIXED,
+        questions: [...MIXED.questions, ALPHA_CLEARED, ALPHA_ELAPSED],
+      });
+      CONTENT["question-8"] = content("question-8", 8, {
+        status: "open",
+        terminalId: "t8",
+        reference: ALPHA_CLEARED.reference,
+      });
+      try {
+        open();
+        await waitFor(() => bar("cleared"));
+        unfold("cleared");
+        // Picked from every project's list, sixth: needs you, awaiting, delivering, then Cleared.
+        await waitFor(() =>
+          expect(rows().map(aliasOf)).toEqual(["q-6", "q-2", "q-7", "q-9", "q-3", "q-8"])
+        );
+        fireEvent.click(rowNamed("q-8"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 8"));
+        fireEvent.click(bar("cleared"));
+        fireEvent.click(scopeSegment("project"));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2", "q-9"]));
+        expect(shownBody()).toContain("Body of question 8");
+        // It goes: no place in this list was ever its, so the inbox chooses afresh.
+        push({ ...MIXED, revision: 2, questions: [...MIXED.questions, ALPHA_ELAPSED] });
+        await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+        expect(rowNamed("q-9").getAttribute("aria-current")).toBeNull();
+      } finally {
+        delete CONTENT["question-8"];
+      }
+    });
+
     it("takes a Remote Host window's project to be that Host's", async () => {
       remote = true;
       open();
+      await openHistory();
       await waitFor(() => expect(rows()).toHaveLength(5));
       expect(rowNamed("q-7").getAttribute("aria-current")).toBe("true");
       fireEvent.click(scopeSegment("project"));
       await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-7"]));
+    });
+  });
+
+  describe("folding History and Cleared (#18023)", () => {
+    const SET_ASIDE = {
+      ...item("question-5", 5, OPEN, {
+        reference: reference("question-5", { terminalId: "t5" }),
+        askedAt: "2026-11-01T09:00:00.000Z",
+      }),
+      inbox: { ask: null, seen: true, cleared: true },
+    };
+    const OLDER = item(
+      "question-6",
+      6,
+      { kind: "settled", outcome: "answered", handled: false },
+      {
+        reference: reference("question-6", { terminalId: "t6" }),
+        askedAt: "2026-11-01T08:00:00.000Z",
+        settledAt: "2026-11-01T10:00:00Z",
+      }
+    );
+    /** q-2 waits on the person, q-5 was cleared, and q-1 and q-6 closed. */
+    const FOLDING: DecisionQuestionList = {
+      revision: 1,
+      questions: [LIST.questions[0]!, LIST.questions[1]!, SET_ASIDE, OLDER],
+    };
+    const summaryReads = () =>
+      getQuestionSummariesByReference.mock.calls.map(([payload]) =>
+        payload.references.map((ref) => ref.questionId)
+      );
+
+    beforeEach(() => {
+      CONTENT["question-5"] = content("question-5", 5, {
+        status: "open",
+        terminalId: "t5",
+        reference: SET_ASIDE.reference,
+      });
+      CONTENT["question-6"] = content("question-6", 6, {
+        status: "human-answered",
+        terminalId: "t6",
+        reference: OLDER.reference,
+      });
+    });
+
+    afterEach(() => {
+      delete CONTENT["question-5"];
+      delete CONTENT["question-6"];
+    });
+
+    it("starts with both shut, their counts in view, their rows neither stops nor read", async () => {
+      listQuestions.mockResolvedValue(FOLDING);
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      expect(rows().map(aliasOf)).toEqual(["q-2"]);
+      for (const [id, name] of [
+        ["cleared", /^Cleared\s*1 question$/],
+        ["history", /^History\s*2 questions$/],
+      ] as const) {
+        const shut = bar(id);
+        expect(shut.tagName).toBe("BUTTON");
+        expect(screen.getByRole("button", { name, expanded: false })).toBe(shut);
+        // It controls its group's rows, there to point at while the group is shut.
+        const rowsOf = document.getElementById(shut.getAttribute("aria-controls") ?? "");
+        expect(rowsOf?.hidden).toBe(true);
+        expect(rowsOf?.closest("section")).toBe(screen.getByTestId(`decisions-inbox-group-${id}`));
+        expect(rowsOf?.children).toHaveLength(0);
+      }
+      // What still needs someone never folds.
+      expect(
+        screen.getByTestId("decisions-inbox-group-needs-you").querySelector("[aria-expanded]")
+      ).toBeNull();
+      // One stop for the whole list.
+      const list = screen.getByTestId("decisions-inbox-groups");
+      expect([...list.querySelectorAll('[tabindex="0"]')]).toEqual([rowNamed("q-2")]);
+      // Only the drawn row's line is read.
+      await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledOnce());
+      await act(async () => {});
+      expect(summaryReads()).toEqual([["question-2"]]);
+    });
+
+    it("walks the bars with the list's arrows, and opens a group into rows the arrows reach and whose lines are read then", async () => {
+      listQuestions.mockResolvedValue(FOLDING);
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(bar("cleared"));
+      fireEvent.keyDown(bar("cleared"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(bar("history"));
+      // The last stop: no further, and End lands there too.
+      fireEvent.keyDown(bar("history"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(bar("history"));
+      fireEvent.keyDown(bar("history"), { key: "Home" });
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      fireEvent.keyDown(rowNamed("q-2"), { key: "End" });
+      expect(document.activeElement).toBe(bar("history"));
+
+      // A native button, so Enter and Space press it as a click does.
+      fireEvent.click(bar("history"));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("true");
+      expect(document.getElementById(bar("history").getAttribute("aria-controls")!)?.hidden).toBe(
+        false
+      );
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2", "q-1", "q-6"]));
+      expect(document.activeElement).toBe(bar("history"));
+      fireEvent.keyDown(bar("history"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      fireEvent.keyDown(rowNamed("q-1"), { key: "ArrowUp" });
+      expect(document.activeElement).toBe(bar("history"));
+      fireEvent.keyDown(bar("history"), { key: "ArrowUp" });
+      expect(document.activeElement).toBe(bar("cleared"));
+
+      // History's lines are read once it opens, and only theirs; shutting and opening again reads none.
+      await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2));
+      expect(summaryReads()[1]).toEqual(["question-1", "question-6"]);
+      fireEvent.click(bar("history"));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      expect(rows().map(aliasOf)).toEqual(["q-2"]);
+      fireEvent.click(bar("history"));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("true");
+      await act(async () => {});
+      expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2);
+
+      // Opening it doesn't outlive the opening.
+      act(() => useDecisionsInboxStore.getState().close());
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      expect(rows().map(aliasOf)).toEqual(["q-2"]);
+    });
+
+    it("puts the keyboard on the bar of the group it shuts, keeping the question shown open", async () => {
+      listQuestions.mockResolvedValue(FOLDING);
+      open();
+      await waitFor(() => rowNamed("q-2"));
+      unfold("history");
+      fireEvent.click(rowNamed("q-6"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+      act(() => rowNamed("q-6").focus());
+      // A press that doesn't move focus itself, as a script's: the bar takes the keyboard anyway.
+      act(() => bar("history").click());
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(bar("history"));
+      expect(rows().map(aliasOf)).toEqual(["q-2"]);
+      expect(shownBody()).toContain("Body of question 6");
+      expect(screen.getByTestId("decisions-inbox-detail-title").textContent).toContain("q-6");
+      // The list's stop is the bar that holds the question shown.
+      expect(bar("history").tabIndex).toBe(0);
+      expect(rowNamed("q-2").tabIndex).toBe(-1);
+      // The bar holding the stop says the list's keys, without a way into a question it can't open.
+      const hintOf = (element: HTMLElement) =>
+        document.getElementById(element.getAttribute("aria-describedby") ?? "")?.textContent;
+      expect(hintOf(bar("history"))).toBe("Up and down arrows show each question.");
+      // Opened again, the question shown is drawn as shown, and the stop and its hint stay with the
+      // keyboard.
+      fireEvent.click(bar("history"));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+      expect(document.activeElement).toBe(bar("history"));
+      expect(bar("history").tabIndex).toBe(0);
+      expect(rowNamed("q-6").tabIndex).toBe(-1);
+      expect(hintOf(bar("history"))).toBe("Up and down arrows show each question.");
+      expect(rowNamed("q-6").getAttribute("aria-describedby")).toBeNull();
+    });
+
+    it("hands the keyboard on a row that moves into a shut group to that group's bar", async () => {
+      const another = item("question-4", 4, OPEN, { askedAt: "2026-11-02T09:30:00.000Z" });
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [LIST.questions[0]!, LIST.questions[1]!, another],
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      // On a row other than the one shown, when the phone clears it.
+      act(() => rowNamed("q-4").focus());
+      push({
+        revision: 2,
+        questions: [
+          LIST.questions[0]!,
+          LIST.questions[1]!,
+          { ...another, inbox: { ask: null, seen: true, cleared: true } },
+        ],
+      });
+      await waitFor(() => expect(document.activeElement).toBe(bar("cleared")));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      expect(shownBody()).toContain("Body of question 2");
+      // The arrows go on from the bar.
+      fireEvent.keyDown(bar("cleared"), { key: "ArrowUp" });
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+    });
+
+    it("opens the group of the pane's own question for that opening only, and lets the person shut it", async () => {
+      listQuestions.mockResolvedValue(FOLDING);
+      open({ terminalId: "t6" });
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-6")));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("true");
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      await waitFor(() =>
+        expect(summaryReads()).toContainEqual(["question-2", "question-1", "question-6"])
+      );
+
+      // Shut by the person, it stays shut through the opening, the question still shown.
+      fireEvent.click(bar("history"));
+      expect(document.activeElement).toBe(bar("history"));
+      push({ ...FOLDING, revision: 2 });
+      await act(async () => {});
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      expect(shownBody()).toContain("Body of question 6");
+
+      // Another opening starts with both shut, and from Cleared's pane opens only Cleared.
+      act(() => useDecisionsInboxStore.getState().close());
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+      act(() => useDecisionsInboxStore.getState().close());
+      open({ terminalId: "t5" });
+      await waitFor(() => expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true"));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("true");
+      expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("reads no line for a row a fold hid while an earlier batch was on its way", async () => {
+      const many = Array.from({ length: 66 }, (_, index) =>
+        item(`question-${100 + index}`, 100 + index, OPEN)
+      );
+      const plain = getQuestionSummariesByReference.getMockImplementation()!;
+      let releaseFirst!: () => void;
+      const gate = new Promise<void>((resolve) => (releaseFirst = resolve));
+      getQuestionSummariesByReference.mockImplementationOnce(async (payload) => {
+        await gate;
+        return plain(payload);
+      });
+      listQuestions.mockResolvedValue({ revision: 1, questions: many });
+      open();
+      await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledOnce());
+      expect(summaryReads()[0]).toHaveLength(64);
+      // The 65th is cleared into a shut Cleared before the first batch comes back; the 66th stays.
+      const hidden = many[64]!;
+      push({
+        revision: 2,
+        questions: [
+          ...many.slice(0, 64),
+          { ...hidden, inbox: { ask: null, seen: true, cleared: true } },
+          many[65]!,
+        ],
+      });
+      await waitFor(() => bar("cleared"));
+      await act(async () => releaseFirst());
+      await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(2));
+      expect(summaryReads()[1]).toEqual(["question-165"]);
+      // Opened, it is read then.
+      unfold("cleared");
+      await waitFor(() => expect(getQuestionSummariesByReference).toHaveBeenCalledTimes(3));
+      expect(summaryReads()[2]).toEqual(["question-164"]);
+    });
+
+    it("steps with the list chord over the bars to drawn questions only", async () => {
+      const chord = (key: "ArrowUp" | "ArrowDown") => ({
+        key,
+        ...(isMac() ? { metaKey: true } : { altKey: true }),
+      });
+      listQuestions.mockResolvedValue(FOLDING);
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      // Both shut: nothing past q-2 to step to, so it stays.
+      fireEvent.keyDown(rowNamed("q-2"), chord("ArrowDown"));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      unfold("history");
+      // Over Cleared's bar, its shut row and History's bar, to History's first.
+      fireEvent.keyDown(rowNamed("q-2"), chord("ArrowDown"));
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
+      fireEvent.keyDown(rowNamed("q-1"), chord("ArrowUp"));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+      // From a bar, on to the question past it.
+      act(() => bar("cleared").focus());
+      fireEvent.keyDown(bar("cleared"), chord("ArrowDown"));
+      expect(document.activeElement).toBe(rowNamed("q-1"));
+      expect(readsOf("question-5")).toBe(0);
+    });
+
+    it("reads no reply line for a shut Cleared row until the group opens", async () => {
+      const waitsForReply = {
+        ...item(
+          "question-5",
+          5,
+          { kind: "waiting", reason: "reply" },
+          {
+            reference: SET_ASIDE.reference,
+            askedAt: "2026-11-01T09:00:00.000Z",
+            replyRequest: "ask-5",
+          }
+        ),
+        inbox: { ask: "ask-5", seen: true, cleared: true },
+      };
+      listQuestions.mockResolvedValue({
+        ...FOLDING,
+        questions: [LIST.questions[0]!, LIST.questions[1]!, waitsForReply, OLDER],
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await act(async () => {});
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      expect(readsOf("question-5")).toBe(0);
+      unfold("cleared");
+      await waitFor(() => expect(readsOf("question-5")).toBe(1));
+    });
+
+    it("takes a vanished pick's place among the drawn rows, past a shut group's", async () => {
+      const LATER = item(
+        "question-7",
+        7,
+        { kind: "settled", outcome: "withdrawn" },
+        {
+          reference: reference("question-7", { terminalId: "t7" }),
+          askedAt: "2026-10-31T08:00:00.000Z",
+          settledAt: "2026-10-31T10:00:00Z",
+        }
+      );
+      listQuestions.mockResolvedValue({ ...FOLDING, questions: [...FOLDING.questions, LATER] });
+      open();
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+      unfold("history");
+      // Cleared's row, shut, sits between q-2 and History in the list but isn't drawn.
+      expect(rows().map(aliasOf)).toEqual(["q-2", "q-1", "q-6", "q-7"]);
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      push({ ...FOLDING, revision: 2, questions: [LIST.questions[1]!, SET_ASIDE, OLDER, LATER] });
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2", "q-6", "q-7"]));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+      expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+    });
+
+    it("leaves a group the person shut shut when the pane's question it opened on gives way to another there", async () => {
+      const SECOND = item(
+        "question-8",
+        8,
+        { kind: "settled", outcome: "expired" },
+        {
+          reference: reference("question-8", { terminalId: "t6" }),
+          askedAt: "2026-10-30T08:00:00.000Z",
+          settledAt: "2026-10-30T10:00:00Z",
+        }
+      );
+      CONTENT["question-8"] = content("question-8", 8, {
+        terminalId: "t6",
+        reference: SECOND.reference,
+      });
+      try {
+        listQuestions.mockResolvedValue({ ...FOLDING, questions: [...FOLDING.questions, SECOND] });
+        open({ terminalId: "t6" });
+        await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+        fireEvent.click(bar("history"));
+        expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+        // q-6 leaves the list: the pane's other question is shown, in the group the person shut.
+        push({
+          ...FOLDING,
+          revision: 2,
+          questions: [LIST.questions[0]!, LIST.questions[1]!, SET_ASIDE, SECOND],
+        });
+        await waitFor(() => expect(shownBody()).toContain("Body of question 8"));
+        expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+        expect(rows().map(aliasOf)).toEqual(["q-2"]);
+        expect(bar("history").tabIndex).toBe(0);
+      } finally {
+        delete CONTENT["question-8"];
+      }
     });
   });
 
@@ -3405,7 +3900,8 @@ describe("DecisionsInboxDialog", () => {
         })
       );
       open();
-      await waitFor(() => expect(rows()).toHaveLength(4));
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      expect(screen.getByRole("button", { name: /^History\s*1 question$/ })).toBe(bar("history"));
       fireEvent.click(rowNamed("q-5"));
       await waitFor(() => expect(shownBody()).toContain("Which region?"));
       await act(async () => {});
@@ -3806,10 +4302,10 @@ describe("DecisionsInboxDialog: resolving a stopped delivery in place (#18027)",
         },
       ],
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-6")
-    );
-    expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true");
+    // It moves into History, shut on this opening (#18023), and stays shown.
+    await waitFor(() => expect(bar("history").getAttribute("aria-expanded")).toBe("false"));
+    expect(rows().some((row) => aliasOf(row) === "q-6")).toBe(false);
+    expect(shownBody()).toContain("Body of question 6");
     expect(actionsShown()).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(detail()));
 
@@ -3963,6 +4459,8 @@ describe("DecisionsInboxDialog: resolving a stopped delivery in place (#18027)",
       stall: null,
     };
     push({ revision: 2, questions: [OTHER, Q5, delivered] });
+    await waitFor(() => expect(bar("history").getAttribute("aria-expanded")).toBe("false"));
+    unfold("history");
     fireEvent.click(rowNamed("q-6"));
     await waitFor(() =>
       expect(screen.getByTestId("decisions-inbox-attention-outcome").textContent).toContain(
@@ -4271,5 +4769,30 @@ describe("DecisionsInboxDialog: resolving a stopped delivery in place (#18027)",
         "Answer to q-6 goes to “Pane seven”"
       )
     );
+  });
+
+  it("leaves History shut when the question shown settles there under the pane its answer went to (#18023)", async () => {
+    open();
+    await select(6);
+    await screen.findByRole("button", { name: "Choose destination for q-6" });
+    push({
+      revision: 2,
+      questions: [
+        OTHER,
+        Q5,
+        {
+          ...Q6,
+          reference: reference("question-6", { terminalId: "t7" }),
+          standing: { kind: "settled", outcome: "answered", handled: false },
+          settledAt: "2026-11-02T12:00:00Z",
+          stall: null,
+        },
+      ],
+    });
+    await waitFor(() => expect(bar("history").getAttribute("aria-expanded")).toBe("false"));
+    await act(async () => {});
+    expect(bar("history").getAttribute("aria-expanded")).toBe("false");
+    expect(rows().some((row) => aliasOf(row) === "q-6")).toBe(false);
+    expect(shownBody()).toContain("Body of question 6");
   });
 });
