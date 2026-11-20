@@ -623,21 +623,36 @@ describe("DecisionsAttentionDialog: where and when a moved answer goes (#18056)"
   }
 
   it.each([
-    { waitsFor: "composer" as const, says: /composer is empty/, never: /prompt/ },
-    { waitsFor: "prompt" as const, says: /next prompt/, never: /composer/ },
+    {
+      title: "Queueing agent",
+      says: /composer is empty, even while it's working/,
+      never: /prompt/,
+    },
+    {
+      title: "Prompt agent",
+      says: /at its prompt with its composer empty, never while it's working/,
+      never: /even while/,
+    },
   ])(
-    "confirms the wait the chosen agent's delivery makes ($waitsFor)",
-    async ({ waitsFor, says, never }) => {
+    "confirms the wait the chosen agent's delivery makes ($title)",
+    async ({ title, says, never }) => {
       listAnswerDestinations.mockResolvedValue({
         result: "listed",
-        destinations: [destination("pane-9", "Other agent", { waitsFor })],
+        destinations: [
+          destination("pane-8", "Queueing agent", { waitsFor: "composer" }),
+          destination("pane-9", "Prompt agent", { waitsFor: "prompt" }),
+        ],
       });
       render(tree(true));
       await listedRows(1);
       await openDestinations(3);
-      await waitFor(() => expect(menuRows()[0]).toContain("Other agent"));
+      await waitFor(() => expect(menuRows()).toHaveLength(2));
 
-      const asking = await choose("Other agent");
+      const asking = await choose(title);
+      expect(asking.getAttribute("aria-labelledby")).not.toBeNull();
+      expect(
+        document.getElementById(asking.getAttribute("aria-labelledby")!)?.textContent
+      ).toContain(title);
       const body = asking.textContent ?? "";
       expect(body).toMatch(says);
       expect(body).not.toMatch(never);
@@ -670,23 +685,24 @@ describe("DecisionsAttentionDialog: where and when a moved answer goes (#18056)"
           .map((row) => row.textContent ?? ""),
       };
     });
-    expect(named).toHaveLength(3);
-    expect(named[0]!.label).toContain("Helios");
-    expect(named[0]!.label).toMatch(/asking project/i);
+    expect(named.map((group) => group.label)).toEqual([
+      "Asking project · Helios",
+      "Other project · Atlas",
+      "Other project",
+    ]);
     expect(named[0]!.rows.map((row) => row.split("Claude")[0])).toEqual([
       expect.stringContaining("Pane 3"),
       expect.stringContaining("Sibling"),
     ]);
-    expect(named[1]!.label).toContain("Atlas");
-    expect(named[1]!.label).toMatch(/other project/i);
     expect(named[1]!.rows).toEqual([
       expect.stringContaining("Atlas agent"),
       expect.stringContaining("Atlas second"),
     ]);
-    expect(named[2]!.label).toMatch(/other project/i);
     expect(named[2]!.rows).toEqual([expect.stringContaining("Nameless agent")]);
-    // Every project after the asking one starts past a rule.
-    expect(within(destinationsMenu()!).getAllByRole("separator")).toHaveLength(2);
+    // Every project after the asking one starts past a rule of its own.
+    expect(groups.map((group) => within(group).queryAllByRole("separator").length)).toEqual([
+      0, 1, 1,
+    ]);
   });
 
   it("still calls another project's agents another project's when none of the asking project's are running", async () => {

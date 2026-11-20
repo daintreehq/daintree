@@ -345,8 +345,9 @@ export function destinationGroups(
 }
 
 /**
- * What the move's confirmation promises (#18056): when the chosen agent's
- * delivery types it in, as main read that agent, and that it goes in once.
+ * What the move's confirmation promises (#18056): what the chosen agent's
+ * delivery waits for, as main read that agent, and that nothing is typed
+ * twice. Never a moment: a selector, a draft or a startup still hold it.
  */
 export function moveConfirmBody(
   subject: AttentionSubject,
@@ -354,9 +355,10 @@ export function moveConfirmBody(
 ): string {
   const when =
     waitsFor === "composer"
-      ? "as soon as that agent's composer is empty, even while it's working"
-      : "at that agent's next prompt";
-  return `Daintree types the ${subject} in ${when}, and only once. The Decisions audit trail records the move.`;
+      ? "when that agent can take input and its composer is empty, even while it's working"
+      : "when that agent is at its prompt with its composer empty, never while it's working";
+  const twice = isPlural(subject) ? "They're never typed in twice" : "It's never typed in twice";
+  return `Daintree types the ${subject} in ${when}. ${twice}, and the Decisions audit trail records the move.`;
 }
 
 /** A pane as a confirmation names it: its title, or its agent when it has none. */

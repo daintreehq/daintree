@@ -425,43 +425,63 @@ describe("Choose destination's menu and confirmation (#18056)", () => {
     };
   }
 
-  it("promises the wait the chosen agent's delivery makes, for whatever moves, typed in once", () => {
+  it("promises the wait the chosen agent's delivery makes, for whatever moves, never typed twice", () => {
     for (const subject of ["answer", "follow-ups", "answer and follow-ups"] as const) {
       const composer = moveConfirmBody(subject, "composer");
       const prompt = moveConfirmBody(subject, "prompt");
+      const twice =
+        subject === "answer" ? "It's never typed in twice" : "They're never typed in twice";
       for (const body of [composer, prompt]) {
         expect(body).toContain(`types the ${subject} in`);
-        expect(body).toContain("only once");
+        expect(body).toContain(twice);
         expect(body).toContain("audit trail records the move");
       }
-      expect(composer).toContain("composer is empty");
-      expect(composer).toContain("while it's working");
+      expect(composer).toContain("its composer is empty, even while it's working");
       expect(composer).not.toContain("prompt");
-      expect(prompt).toContain("next prompt");
-      expect(prompt).not.toContain("composer");
+      expect(prompt).toContain("at its prompt");
+      expect(prompt).toContain("never while it's working");
+      expect(prompt).not.toContain("even while");
     }
   });
 
   it("puts the asking project's agents first, then each other project's in main's order, by id", () => {
     const groups = destinationGroups(
       [
-        destination("atlas-1", { projectId: "atlas", projectName: "Atlas" }),
+        destination("zeta-1", { projectId: "zeta", projectName: "Zeta" }),
         destination("asker", { askedHere: true }),
-        destination("twin-1", { projectId: "twin", projectName: "Atlas" }),
-        destination("atlas-2", { projectId: "atlas", projectName: "Atlas" }),
+        destination("twin-1", { projectId: "twin", projectName: "Zeta" }),
+        destination("zeta-2", { projectId: "zeta", projectName: "Zeta" }),
         destination("sibling"),
-        destination("nameless", { projectId: "unnamed", projectName: null }),
+        destination("nameless", { projectId: "anon", projectName: null }),
       ],
       "helios"
     );
     expect(
-      groups.map((group) => [group.label, group.destinations.map((d) => d.terminalId)])
+      groups.map((group) => [
+        group.projectId,
+        group.label,
+        group.destinations.map((d) => d.terminalId),
+      ])
     ).toEqual([
-      ["Asking project · Helios", ["asker", "sibling"]],
-      ["Other project · Atlas", ["atlas-1", "atlas-2"]],
+      ["helios", "Asking project · Helios", ["asker", "sibling"]],
+      ["zeta", "Other project · Zeta", ["zeta-1", "zeta-2"]],
       // Another project of the same name keeps a section of its own.
-      ["Other project · Atlas", ["twin-1"]],
-      ["Other project", ["nameless"]],
+      ["twin", "Other project · Zeta", ["twin-1"]],
+      ["anon", "Other project", ["nameless"]],
+    ]);
+  });
+
+  it("knows the asking project by id, not by the pane that asked, which may be gone", () => {
+    const groups = destinationGroups(
+      [
+        destination("zeta-1", { projectId: "zeta", projectName: "Zeta" }),
+        destination("sibling", { projectName: null }),
+      ],
+      "helios"
+    );
+    expect(groups.map((group) => [group.label, group.destinations[0]!.terminalId])).toEqual([
+      ["Asking project", "sibling"],
+      ["Other project · Zeta", "zeta-1"],
     ]);
   });
 
