@@ -454,6 +454,29 @@ describe("readQuestionContent", () => {
     ).toEqual([true, false]);
   });
 
+  it("leaves a decline from a source the library doesn't know out of the thread (#17943)", async () => {
+    const decline: AnswerEntry = {
+      entry_id: "decline-x",
+      kind: "declined",
+      action: "cancel",
+      revision: 1,
+      source: "proxy",
+      correction: false,
+      created_at: "2026-11-01T11:00:00.000Z",
+      deliver: true,
+      delivered: false,
+      sealed: null,
+    };
+    const row = await question(CONTENT, {
+      local_status: "cancelled",
+      answers_json: serializeAnswers([decline]),
+    });
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question.closedReason).toBe("withdrawn");
+    expect(read.question.thread).toEqual([]);
+  });
+
   it("names no reason or notice for a question the relay refused (#17943)", async () => {
     const row = await question(CONTENT, { local_status: "publish-failed", error_code: "invalid" });
     const read = await readQuestionContent(ctx(), row);

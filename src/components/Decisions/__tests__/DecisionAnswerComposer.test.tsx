@@ -767,7 +767,47 @@ describe("a timed question in the view (#17943)", () => {
     expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with any plan it stated/);
   });
 
-  it("keeps the form for a question whose deadline passed before anything was written, and hides Clear choice once locked", async () => {
+  it("lists the options, with no form, for a question opened untouched after its deadline", async () => {
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    act(() => useDecisionsQuestionViewStore.getState().open("t1", ["q1"], "q1"));
+    await screen.findByTestId("decision-question-content");
+    await settle();
+    expect(screen.queryByTestId("decision-answer-composer")).toBeNull();
+    expect(screen.getByText("Ship it")).toBeTruthy();
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+
+  it("keeps the form, and then where the answer stands, for someone in it with nothing written", async () => {
+    questions.q1 = question("q1", {
+      kind: "text",
+      options: [],
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 500).toISOString(),
+    });
+    await openOn("q1");
+    const text = screen.getByTestId("decision-answer-text") as HTMLTextAreaElement;
+    act(() => text.focus());
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(document.activeElement).toBe(text);
+    expect(text.readOnly).toBe(true);
+
+    // Confirmed closed: the form goes, and focus stays with where the answer stands.
+    await move(question("q1", { kind: "text", options: [], allowText: true, status: "expired" }));
+    await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
+    expect(status()).toMatch(/expired/);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("decision-answer-status").contains(document.activeElement) ||
+          document.activeElement === screen.getByTestId("decision-answer-status")
+      ).toBe(true)
+    );
+  });
+
+  it("keeps the form for a question whose deadline passed with a choice made, and hides Clear choice once locked", async () => {
     questions.q1 = question("q1", {
       kind: "mixed",
       allowText: true,

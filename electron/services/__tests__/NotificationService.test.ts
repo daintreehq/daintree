@@ -1427,6 +1427,17 @@ describe("NotificationService", () => {
         expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
 
+        // Only a deadline moves, on a pane already counted: the sooner one is waited for.
+        setDecisionQuestions([
+          { ...question("shared", "terminal-d"), expiresAt: at(60_000 + 5 * 60_000) },
+        ]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        setDecisionQuestions([
+          { ...question("shared", "terminal-d"), expiresAt: at(60_000 + 2 * 60_000) },
+        ]);
+        vi.advanceTimersByTime(2 * 60_000);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("Daintree");
+
         // A sleep: the wall clock moves on while no timer runs, and the wake counts again.
         setDecisionQuestions([
           { ...question("shared", "terminal-c", open), expiresAt: at(30 * 60_000) },

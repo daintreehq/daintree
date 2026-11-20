@@ -81,10 +81,12 @@ export function answerComposerMode(
   // Dismissed from here, or being dismissed: nothing to answer unless that falls through.
   if (isDeclineCommitted(record)) return "none";
   if (isAnswerable(question, nowMs)) return "form";
-  // Only the clock says it passed (#17943): the form stays, locked, rather than vanish from under
-  // the person and their focus, until the store records how the question closed.
-  if (question.status === "open" || question.status === "queued") return "form";
-  const writing = record.draft !== null || record.hold !== null || submission !== null;
+  const writing =
+    record.draft !== null || record.hold !== null || submission !== null || record.engaged === true;
+  // Only the clock says it passed (#17943): for someone who was in it, the form stays, locked,
+  // rather than vanish from under them and their focus, until the store says how it closed.
+  // One opened after its deadline, untouched, lists its options as a closed one does.
+  if (writing && (question.status === "open" || question.status === "queued")) return "form";
   return writing ? "closed" : "none";
 }
 
@@ -217,6 +219,11 @@ export function DecisionAnswerComposer({
   const trackFocus = {
     onFocus: () => {
       focusedInside.current = true;
+      if (record.engaged !== true) {
+        update(key, (current) =>
+          current.engaged === true ? current : { ...current, engaged: true }
+        );
+      }
     },
     onBlur: (event: React.FocusEvent<HTMLElement>) => {
       const next = event.relatedTarget;

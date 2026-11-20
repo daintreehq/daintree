@@ -79,6 +79,12 @@ export interface AnswerRecord {
   hold: AnswerHold | null;
   /** The person's dismissal of the question from here, once one was asked for. */
   decline: DeclineSubmission | null;
+  /**
+   * The person has been in its answer form here, written anything or not
+   * (#17943): a deadline passing under them then keeps the form, locked, and
+   * the question closing keeps where its answer stands, so focus has a place.
+   */
+  engaged?: boolean;
 }
 
 /** Questions whose record is kept; past it, the oldest with nothing in flight goes first. */

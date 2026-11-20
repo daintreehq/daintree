@@ -7,6 +7,7 @@ import {
   openQuestionContent,
   parseAnswers,
   parseMessages,
+  unsupportedEntry,
   type QuestionRow,
   type RelayClient,
   type SealContext,
@@ -291,6 +292,8 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
     // A question that never reached the relay (0.9.0) says so by its status;
     // the notice its agent is typed is no entry of the thread.
     if (entry.kind === "unpublished") continue;
+    // A decline from a source the library doesn't know is no one's (#17943), as the bridge reads it.
+    if (entry.kind === "declined" && unsupportedEntry(entry) !== null) continue;
     // Content-free notices: nothing to open, and never an answer.
     if (entry.kind === "expired" || entry.kind === "declined") {
       placed.push({
