@@ -721,6 +721,35 @@ describe("runProjects", () => {
     expect(h.signals.eventNames()).toEqual([]);
   });
 
+  it("clears the grace timer when every kill closes its compiler at once", async () => {
+    vi.useFakeTimers();
+    const h = harness({ concurrency: 2, deadlineMs: 1000 });
+    h.kill.mockImplementation((child) => child.emit("close", null, "SIGKILL"));
+    const result = h.run([project("a"), project("b")]);
+    vi.advanceTimersByTime(1000);
+    await expect(result).resolves.toBe(DEADLINE_STATUS);
+    expect(h.kill).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("exits at once only on a second signal, not on the first after a deadline stop", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {});
+    try {
+      const h = harness({ deadlineMs: 1000 });
+      const result = h.run([project("a")]);
+      vi.advanceTimersByTime(1000);
+      h.signals.emit("SIGTERM", "SIGTERM");
+      expect(exit).not.toHaveBeenCalled();
+      h.signals.emit("SIGINT", "SIGINT");
+      expect(exit).toHaveBeenCalledWith(130);
+      h.children[0].emit("close", null, "SIGKILL");
+      await expect(result).resolves.toBe(DEADLINE_STATUS);
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
   it("treats a compiler that Ctrl+C reached first as an interruption, not a failure", async () => {
     const h = harness({ concurrency: 1 }, { now: () => 0 });
     const result = h.run([project("a"), project("b")]);
@@ -773,7 +802,9 @@ describe("runProjects", () => {
       await isReady;
       const closed = new Promise((resolve) => child.once("close", (_, signal) => resolve(signal)));
       signals.emit("SIGTERM", "SIGTERM");
-      await expect(closed).resolves.toBe(process.platform === "win32" ? null : "SIGKILL");
+      const signal = await closed;
+      // On Windows the kill is TerminateProcess, whatever signal name it reports.
+      if (process.platform !== "win32") expect(signal).toBe("SIGKILL");
       await expect(result).resolves.toBe(143);
       expect(output.join("")).toContain(`(pid ${child.pid}`);
       expect(output.join("")).toContain("[hung] checking");
