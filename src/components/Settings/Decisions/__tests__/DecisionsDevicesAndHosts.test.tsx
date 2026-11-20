@@ -178,7 +178,9 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rotate keys" }));
 
     const confirm = dialog();
-    expect(within(confirm).getByText("Rotate keys for 'decisions.example.workers.dev'?")).toBeTruthy();
+    expect(
+      within(confirm).getByText("Rotate keys for 'decisions.example.workers.dev'?")
+    ).toBeTruthy();
     const recipients = within(confirm)
       .getAllByRole("listitem")
       .map((item) => item.textContent);

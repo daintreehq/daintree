@@ -2,7 +2,12 @@ import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { hostOf } from "./relayCheckCopy";
-import { KEYS_GATE_TARGET, NO_CURRENT_KIT, SAVE_KIT_FIRST, onlyCopyPreamble } from "./recoveryKitCopy";
+import {
+  KEYS_GATE_TARGET,
+  NO_CURRENT_KIT,
+  SAVE_KIT_FIRST,
+  onlyCopyPreamble,
+} from "./recoveryKitCopy";
 
 interface DecisionsDisconnectDialogProps {
   isOpen: boolean;

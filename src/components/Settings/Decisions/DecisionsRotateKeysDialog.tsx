@@ -74,7 +74,8 @@ function RecipientPreview({
       <ul className="space-y-0.5 text-xs text-text-primary">
         {recipients.map((device) => (
           <li key={device.deviceId}>
-            {device.label} <span className="text-text-secondary">· {deviceRoleLabel(device.role)}</span>
+            {device.label}{" "}
+            <span className="text-text-secondary">· {deviceRoleLabel(device.role)}</span>
           </li>
         ))}
       </ul>

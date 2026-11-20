@@ -927,7 +927,9 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
   }
 
   function unavailable(element: HTMLElement): boolean {
-    return element.getAttribute("aria-disabled") === "true" || (element as HTMLButtonElement).disabled;
+    return (
+      element.getAttribute("aria-disabled") === "true" || (element as HTMLButtonElement).disabled
+    );
   }
 
   it("asks for one click while a current kit holds the keys", () => {
