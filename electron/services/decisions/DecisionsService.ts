@@ -64,7 +64,8 @@ import {
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
-import { projectDecisionQuestions, questionAsks } from "./questionList.js";
+import { asksAboutAsker, projectDecisionQuestions, questionAsks } from "./questionList.js";
+import { AskerPresence, type AskerPresenceSources } from "./askerPresence.js";
 import type { AdvisoryHost } from "./questionRound.js";
 import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
 import {
@@ -249,6 +250,11 @@ export interface DecisionsServiceOptions {
    */
   notifyQuestions?: (store: MetaStore) => QuestionNotifications;
   /**
+   * Where an owner's lifetime observes the run that asked each of its open
+   * questions (#18029), for its list; none observed without it.
+   */
+  askerPresence?: Omit<AskerPresenceSources, "resumeEnded">;
+  /**
    * The relay revoked the identity this lifetime connected with. The entry
    * records it, in the setting or the Host's record, so no later lifetime
    * connects with it either.
@@ -345,6 +351,9 @@ export class DecisionsService {
   ) => void;
   private readonly publishHostQuestions: (list: HostServedQuestions | null) => void;
   private readonly notifyQuestions: ((store: MetaStore) => QuestionNotifications) | null;
+  private readonly askerSources: Omit<AskerPresenceSources, "resumeEnded"> | null;
+  /** The run that asked each open question, observed while the owner's store is read. */
+  private askers: AskerPresence | null = null;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
@@ -445,6 +454,7 @@ export class DecisionsService {
     this.publishQuestions = options.publishQuestions ?? (() => {});
     this.publishHostQuestions = options.publishHostQuestions ?? (() => {});
     this.notifyQuestions = options.notifyQuestions ?? null;
+    this.askerSources = options.askerPresence ?? null;
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
     this.onDevicesChanged = options.onDevicesChanged ?? (() => {});
@@ -869,13 +879,28 @@ export class DecisionsService {
   private listQuestions(
     rows: readonly QuestionRow[],
     handled: HandledAnswers,
-    marks: QuestionMarks
+    marks: QuestionMarks,
+    presence: AskerPresence | null = null
   ): ReadonlyMap<string, number> {
     // Every read applied replaces what the last one counted, its deadline wait included.
     this.disarmQuestionDeadline();
     if (this.disposed || this.state === "off") return new Map();
     const hostId = this.settings?.hostId ?? null;
-    const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
+    const questions = projectDecisionQuestions(
+      rows,
+      handled,
+      hostId,
+      this.advisoryHost(),
+      presence === null ? undefined : (origin) => presence.lookup(origin)
+    );
+    if (presence !== null) {
+      const asking = new Set(
+        questions
+          .filter((item) => asksAboutAsker(item.standing))
+          .map((item) => item.reference.questionId)
+      );
+      presence.track(rows.filter((row) => asking.has(row.question_id)).map((row) => row.origin));
+    }
     const waiting = new Set(
       questions
         .filter((item) => item.standing.kind === "waiting" || item.standing.kind === "queued")
@@ -1611,6 +1636,8 @@ export class DecisionsService {
     this.feed?.stop();
     this.feed = null;
     this.disarmQuestionDeadline();
+    this.askers?.dispose();
+    this.askers = null;
     this.offCommit?.();
     this.offCommit = null;
     this.notifications?.stop();
@@ -1623,6 +1650,27 @@ export class DecisionsService {
     // The person's marks (#17895) are an owner's alone. One that can't be read keeps the last read.
     let marks: QuestionMarks = new Map();
     const owner = this.role === "owner";
+    // The rows last listed, with what they were read with, while an asker is observed: a pane
+    // event lists them again with what was observed since, without reading the store again.
+    let listed: {
+      rows: readonly QuestionRow[];
+      handled: HandledAnswers;
+      marks: QuestionMarks;
+    } | null = null;
+    const sources = this.askerSources;
+    const presence =
+      owner && sources !== null
+        ? new AskerPresence(
+            {
+              ...sources,
+              resumeEnded: (origin) => this.getAnswerDelivery()?.resumeEnded(origin) ?? false,
+            },
+            () => {
+              if (this.feed !== feed || this.askers !== presence || listed === null) return;
+              this.listQuestions(listed.rows, listed.handled, listed.marks, presence);
+            }
+          )
+        : null;
     const feed = new QuestionRowsFeed(
       async () => {
         handled = await readHandledAnswers(store);
@@ -1630,11 +1678,14 @@ export class DecisionsService {
         return store.listQuestions();
       },
       (rows) => {
-        const questions = this.listQuestions(rows, handled, marks);
+        const questions = this.listQuestions(rows, handled, marks, presence);
+        // Kept only while an asker is observed, the one case a pane event can change the list.
+        listed = presence?.tracking === true ? { rows, handled, marks } : null;
         this.observeQuestions(rows, handled, questions);
       }
     );
     this.feed = feed;
+    this.askers = presence;
     this.offCommit = store.onCommit(() => void feed.refresh());
     const first = feed.refresh();
     const notifyQuestions = this.notifyQuestions;

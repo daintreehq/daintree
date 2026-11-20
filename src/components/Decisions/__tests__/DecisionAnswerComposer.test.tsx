@@ -33,6 +33,8 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
+import { DecisionAnswerComposer } from "../DecisionAnswerComposer";
+import { paneQuestion } from "../decisionQuestionTarget";
 
 type Payload = { terminalId: string; questionId: string };
 const getQuestionContent = vi.fn<(payload: Payload) => Promise<DecisionQuestionContentResult>>();
@@ -948,5 +950,48 @@ describe("a timed question in the view (#17943)", () => {
       /Answer from your phone/
     );
     expect(answerQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionAnswerComposer delivery notice (#18029)", () => {
+  it("says nothing can take an answer before one is written, with Send's own hint still showing", () => {
+    const shown = question("q-gone");
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={shown}
+          target={paneQuestion("t1", "q-gone")}
+          unshown={{}}
+          onMoved={() => {}}
+          deliveryNotice="Nothing can take this answer now."
+        />
+      </TooltipProvider>
+    );
+    const notice = screen.getByTestId("decision-answer-delivery");
+    expect(notice.textContent).toBe("Nothing can take this answer now.");
+    // Ahead of the choices, so it is met before anything is chosen.
+    expect(
+      notice.compareDocumentPosition(option("Ship it")) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Advice only: the answer can still be given, and Send keeps its own hint.
+    expect(option("Ship it").disabled).toBe(false);
+    const described = send().getAttribute("aria-describedby");
+    const hint = described === null ? null : document.getElementById(described);
+    expect(hint?.textContent).toBeTruthy();
+    expect(hint?.textContent).not.toContain("Nothing can take this answer now.");
+  });
+
+  it("says nothing when there is no notice", () => {
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={question("q-live")}
+          target={paneQuestion("t1", "q-live")}
+          unshown={{}}
+          onMoved={() => {}}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("decision-answer-delivery")).toBeNull();
   });
 });

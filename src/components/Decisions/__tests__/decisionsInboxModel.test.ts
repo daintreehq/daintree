@@ -13,15 +13,18 @@ import {
   CLEARED_NOTE,
   ELAPSED_NOTE,
   agentName,
+  askerNotes,
   askShownIn,
   askedOnHost,
   attentionNotice,
   attentionText,
   AWAY_NOTE,
   clearAllText,
+  clearGoneText,
   clearText,
   closedTime,
   connectionNotice,
+  goneAsks,
   groupOf,
   headerFacts,
   inboxGroupOf,
@@ -1281,5 +1284,154 @@ describe("a request for a reply on its row (#18040)", () => {
     for (const id of ["unreadable", "wordless", "person", "absent"]) {
       expect(replyLine(shown, id)).toBeNull();
     }
+  });
+});
+
+describe("askerNotes (#18029)", () => {
+  const OPEN = { kind: "waiting", reason: "open" } as const;
+  type Asker = NonNullable<DecisionQuestionListItem["asker"]>;
+  const at = (asker: Asker, over: Partial<DecisionQuestionListItem> = {}) =>
+    askerNotes(item("q1", OPEN, { asker, ...over }));
+  const resumable = { directory: "present", resume: "resumable" } as const;
+
+  it("says each way the terminal that asked was seen, and lets each be cleared in one step", () => {
+    expect(at({ target: "closed", ...resumable })?.row).toBe("Terminal ended · Resume possible");
+    expect(at({ target: "trashed", ...resumable })).toMatchObject({
+      row: "Terminal in Trash · Resume possible",
+      detail: expect.stringMatching(/^The terminal that asked is in the Trash\. /),
+    });
+    expect(at({ target: "replaced", ...resumable })?.detail).toBe(
+      "The terminal that asked was restarted or reused since it asked. When an answer is sent, Daintree can try to resume its Claude session in a new terminal to take it."
+    );
+    expect(at({ target: "moved", directory: "present", resume: "other-worktree" })).toMatchObject({
+      row: "Terminal moved · Can't resume",
+      detail:
+        "The terminal that asked is now in another worktree. Its session runs there now, so it isn't resumed in the worktree it asked from.",
+    });
+    for (const target of ["closed", "trashed", "moved", "replaced", "agent-undetected"] as const) {
+      expect(at({ target, ...resumable })?.gone).toBe(true);
+    }
+  });
+
+  it("names the agent whose session would be tried", () => {
+    expect(at({ target: "closed", ...resumable }, { agentKind: "codex" })?.detail).toContain(
+      `its ${agentName("codex")} session`
+    );
+  });
+
+  it("warns the composer only when nothing observed can take the answer and its session can't be resumed", () => {
+    expect(at({ target: "closed", ...resumable })?.composer).toBeNull();
+    expect(at({ target: "closed", directory: "unknown", resume: "unknown" })?.composer).toBeNull();
+    const refused = at({ target: "closed", directory: "missing", resume: "worktree-missing" });
+    expect(refused?.row).toBe("Terminal ended · Folder missing · Can't resume");
+    expect(refused?.composer).toBe(
+      "Nothing observed can take this answer now. The terminal that asked is no longer running. The folder it asked from is gone. Its session can't be resumed without that folder."
+    );
+    expect(at({ target: "trashed", directory: "present", resume: "ended" })?.composer).toMatch(
+      /already resumed once/
+    );
+    expect(
+      at(
+        { target: "trashed", directory: "present", resume: "unsupported-agent" },
+        { agentKind: "gemini" }
+      )?.detail
+    ).toContain(`doesn't resume ${agentName("gemini")} sessions`);
+  });
+
+  it("names a folder seen gone even when another check refuses the resume first", () => {
+    const notes = at({ target: "closed", directory: "missing", resume: "no-session" });
+    expect(notes?.row).toBe("Terminal ended · Folder missing · Can't resume");
+    expect(notes?.detail).toBe(
+      "The terminal that asked is no longer running. The folder it asked from is gone. No session id was recorded when it asked, so its session can't be resumed."
+    );
+  });
+
+  it("says no agent is detected, without claiming one is gone or that a resume follows", () => {
+    const notes = at({ target: "agent-undetected", ...resumable });
+    expect(notes).toEqual({
+      row: "Agent not detected",
+      detail: "The terminal that asked is still open, but no agent is detected in it any more.",
+      composer:
+        "No agent is detected in the terminal that asked. An answer isn't typed in while none is detected there.",
+      gone: true,
+    });
+    expect(
+      at({ target: "agent-undetected", directory: "missing", resume: "worktree-missing" })?.row
+    ).toBe("Agent not detected · Folder missing");
+  });
+
+  it("claims nothing of a running or unread asker, a later standing, or a connected Host", () => {
+    expect(at({ target: "running", ...resumable })).toBeNull();
+    expect(at({ target: "unknown", directory: "unknown", resume: "unknown" })).toBeNull();
+    expect(askerNotes(item("q1", OPEN))).toBeNull();
+    const closed = { target: "closed", directory: "present", resume: "no-session" } as const;
+    expect(askerNotes(item("q1", { kind: "to-type" }, { asker: closed }))).toBeNull();
+    expect(
+      askerNotes(item("q1", { kind: "waiting", reason: "reply" }, { asker: closed }))
+    ).toBeNull();
+    expect(
+      askerNotes(
+        item("q1", OPEN, { remoteHost: { hostId: "studio", name: "Studio", connected: true } })
+      )
+    ).toBeNull();
+  });
+
+  it("names a folder gone under a terminal still open, without calling the asker gone", () => {
+    expect(at({ target: "running", directory: "missing", resume: "worktree-missing" })).toEqual({
+      row: "Folder missing",
+      detail: "The terminal that asked is still open, but the folder it asked from is gone.",
+      composer: null,
+      gone: false,
+    });
+  });
+
+  it("says only that the folder is gone when the terminal couldn't be read", () => {
+    expect(at({ target: "unknown", directory: "missing", resume: "worktree-missing" })).toEqual({
+      row: "Folder missing",
+      detail: "The folder it asked from is gone.",
+      composer: null,
+      gone: false,
+    });
+    expect(at({ target: "running", directory: "none", resume: "no-worktree" })).toBeNull();
+  });
+
+  it("says a Host's terminal is unknown while the Host is away, whatever it last said", () => {
+    const notes = askerNotes(
+      item(
+        "q1",
+        { kind: "queued" },
+        {
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+          asker: { target: "closed", directory: "present", resume: "no-session" },
+        }
+      )
+    );
+    expect(notes).toMatchObject({ row: "Terminal status unknown", gone: false, composer: null });
+  });
+});
+
+describe("goneAsks (#18029)", () => {
+  const OPEN = { kind: "waiting", reason: "open" } as const;
+  const closed = { target: "closed", directory: "present", resume: "resumable" } as const;
+  const inbox = { ask: null, seen: false, cleared: false };
+
+  it("takes only Needs you's asks with no agent, never one cleared, elapsed, or still running", () => {
+    const now = Date.parse("2026-11-02T12:00:00.000Z");
+    const gone = item("q1", OPEN, { asker: closed, inbox });
+    const list = [
+      gone,
+      item("q2", OPEN, { asker: { ...closed, target: "running" }, inbox }),
+      item("q3", OPEN, { asker: closed, inbox: { ...inbox, cleared: true } }),
+      item("q4", OPEN, { asker: closed, inbox, expiresAt: "2026-11-02T11:00:00.000Z" }),
+      item("q5", OPEN, { asker: closed }),
+      item("q6", { kind: "queued" }, { asker: { ...closed, target: "running" }, inbox }),
+    ];
+    const queued = item("q7", { kind: "queued" }, { asker: closed, inbox });
+    expect(goneAsks([...list, queued], now)).toEqual([gone, queued]);
+  });
+
+  it("counts them in its label", () => {
+    expect(clearGoneText(1)).toBe("Clear 1 question with no agent detected");
+    expect(clearGoneText(3)).toBe("Clear 3 questions with no agent detected");
   });
 });

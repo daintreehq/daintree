@@ -528,6 +528,147 @@ function heldSentence(what: string, plural: boolean, delivery: HeldDelivery): st
 }
 
 /**
+ * What the inbox says of the run that asked an open question (#18029): only
+ * what was observed, and what delivery's own checks say of resuming it.
+ * - `row`: the short fact a row shows;
+ * - `detail`: the sentences the question's pane shows;
+ * - `composer`: said before an answer is written when nothing observed can
+ *   take one, null otherwise;
+ * - `gone`: no agent was detected in the terminal that asked, so a person
+ *   may set it aside in one step (it stays answerable).
+ */
+export interface AskerNotes {
+  row: string;
+  detail: string;
+  composer: string | null;
+  gone: boolean;
+}
+
+type AskerResume = NonNullable<DecisionQuestionListItem["asker"]>["resume"];
+
+const RESUME_REFUSED: Record<
+  Exclude<AskerResume, "resumable" | "unknown">,
+  (agent: string) => string
+> = {
+  "unsupported-agent": (agent) => `Daintree doesn't resume ${agent} sessions to take an answer.`,
+  "no-session": () => "No session id was recorded when it asked, so its session can't be resumed.",
+  "no-worktree": () => "It asked from outside a worktree, so its session can't be resumed.",
+  "worktree-missing": () => "Its session can't be resumed without that folder.",
+  ended: () =>
+    "Its session was already resumed once for an answer and closed again, so it isn't resumed again.",
+  "other-worktree": () =>
+    "Its session runs there now, so it isn't resumed in the worktree it asked from.",
+};
+
+const FOLDER_GONE = "The folder it asked from is gone.";
+
+export function askerNotes(
+  item: Pick<DecisionQuestionListItem, "asker" | "remoteHost" | "standing" | "agentKind">
+): AskerNotes | null {
+  const open =
+    (item.standing.kind === "waiting" && item.standing.reason === "open") ||
+    item.standing.kind === "queued";
+  if (!open) return null;
+  const host = item.remoteHost;
+  if (host !== undefined && !host.connected) {
+    return {
+      row: "Terminal status unknown",
+      detail: `${host.name} isn't connected, so whether the terminal that asked is still open is unknown.`,
+      composer: null,
+      gone: false,
+    };
+  }
+  const asker = item.asker;
+  if (asker === undefined) return null;
+  const folderGone = asker.directory === "missing";
+  switch (asker.target) {
+    case "unknown":
+      // The terminal couldn't be read: the folder is all that was seen.
+      return folderGone
+        ? { row: "Folder missing", detail: FOLDER_GONE, composer: null, gone: false }
+        : null;
+    case "running":
+      return folderGone
+        ? {
+            row: "Folder missing",
+            detail: "The terminal that asked is still open, but the folder it asked from is gone.",
+            composer: null,
+            gone: false,
+          }
+        : null;
+    case "agent-undetected":
+      return {
+        row: folderGone ? "Agent not detected · Folder missing" : "Agent not detected",
+        detail: `The terminal that asked is still open, but no agent is detected in it any more.${folderGone ? ` ${FOLDER_GONE}` : ""}`,
+        composer:
+          "No agent is detected in the terminal that asked. An answer isn't typed in while none is detected there.",
+        gone: true,
+      };
+  }
+  const lead =
+    asker.target === "closed"
+      ? { row: "Terminal ended", detail: "The terminal that asked is no longer running." }
+      : asker.target === "trashed"
+        ? { row: "Terminal in Trash", detail: "The terminal that asked is in the Trash." }
+        : asker.target === "moved"
+          ? {
+              row: "Terminal moved",
+              detail: "The terminal that asked is now in another worktree.",
+            }
+          : {
+              row: "Terminal restarted",
+              detail: "The terminal that asked was restarted or reused since it asked.",
+            };
+  const facts = [lead.row, ...(folderGone ? ["Folder missing"] : [])];
+  const said = [lead.detail, ...(folderGone ? [FOLDER_GONE] : [])].join(" ");
+  if (asker.resume === "unknown") {
+    return {
+      row: facts.join(" · "),
+      detail: `${said} Whether its session can be resumed couldn't be checked.`,
+      composer: null,
+      gone: true,
+    };
+  }
+  if (asker.resume === "resumable") {
+    return {
+      row: [...facts, "Resume possible"].join(" · "),
+      detail: `${said} When an answer is sent, Daintree can try to resume its ${agentName(item.agentKind)} session in a new terminal to take it.`,
+      composer: null,
+      gone: true,
+    };
+  }
+  const refused = RESUME_REFUSED[asker.resume](agentName(item.agentKind));
+  return {
+    row: [...facts, "Can't resume"].join(" · "),
+    detail: `${said} ${refused}`,
+    composer: `Nothing observed can take this answer now. ${said} ${refused}`,
+    gone: true,
+  };
+}
+
+/** The questions in Needs you that one press sets aside as having no agent detected (#18029). */
+export function goneAsks(
+  questions: readonly DecisionQuestionListItem[],
+  nowMs: number | null
+): DecisionQuestionListItem[] {
+  return questions.filter(
+    (item) =>
+      item.inbox !== undefined &&
+      inboxGroupOf(item, nowMs) === "needs-you" &&
+      askerNotes(item)?.gone === true
+  );
+}
+
+/** The one-step clear's label, with how many it sets aside. */
+export function clearGoneText(count: number): string {
+  return `Clear ${pluralize(count, "question")} with no agent detected`;
+}
+
+/** What the one-step clear does, before it's pressed: it stays here, and declines nothing. */
+export const CLEAR_GONE_HINT =
+  "Moves each question in Needs you whose terminal ended, is in the Trash, moved, was restarted, or has no agent detected to Cleared on this computer. Nothing is declined or withdrawn, and each can still be answered.";
+
+/**
  * What the shown question's warning says while delivery needs a person: what
  * stopped and why, in the words the stall's notification uses, then what to
  * do. Hedged only where the list can't say what stopped. A Remote Host keeps

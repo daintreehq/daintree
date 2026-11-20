@@ -436,6 +436,7 @@ function QuestionBody({
   onMoved,
   headingId,
   sendNote,
+  deliveryNotice,
   eyebrow,
 }: {
   question: DecisionQuestionContent;
@@ -448,6 +449,7 @@ function QuestionBody({
   onMoved: () => void;
   headingId: string | undefined;
   sendNote: string | null;
+  deliveryNotice: string | null;
   eyebrow: React.ReactNode;
 }) {
   // Moved on only when the deadline line would read differently, or the clock jumped.
@@ -526,6 +528,7 @@ function QuestionBody({
         unshown={unshown}
         onMoved={onMoved}
         sendNote={sendNote}
+        deliveryNotice={deliveryNotice}
       />
       {/* After the thread, which it adds to; folded away while the answer form leads. */}
       {followUps && (
@@ -573,6 +576,7 @@ export function DecisionQuestionReadView({
   noticeShown = null,
   headingId,
   sendNote = null,
+  deliveryNotice = null,
   eyebrow = null,
 }: {
   reader: DecisionQuestionReader;
@@ -595,6 +599,8 @@ export function DecisionQuestionReadView({
   headingId?: string;
   /** What happens to an answer sent now, when that isn't simply "it goes": shown beside Send. */
   sendNote?: string | null;
+  /** Why nothing can take an answer now (#18029), said before one is written. */
+  deliveryNotice?: string | null;
   /** Who asked, over the question, when the surface knows it. */
   eyebrow?: React.ReactNode;
 }) {
@@ -615,6 +621,7 @@ export function DecisionQuestionReadView({
           onMoved={reader.reread}
           headingId={headingId}
           sendNote={sendNote}
+          deliveryNotice={deliveryNotice}
           eyebrow={eyebrow}
         />
       )}

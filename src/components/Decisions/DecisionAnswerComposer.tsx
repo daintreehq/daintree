@@ -101,6 +101,11 @@ export interface DecisionAnswerComposerProps {
   onMoved: () => void;
   /** Said beside Send once it would go, when an answer sent now won't go at once. */
   sendNote?: string | null;
+  /**
+   * Why nothing can take an answer now (#18029), said before one is
+   * written; the form stays usable, since an answer is still recorded.
+   */
+  deliveryNotice?: string | null;
 }
 
 /** Whether this question shows its composer rather than the plain list of its options. */
@@ -123,6 +128,7 @@ export function DecisionAnswerComposer({
   unshown,
   onMoved,
   sendNote = null,
+  deliveryNotice = null,
 }: DecisionAnswerComposerProps) {
   const key = answerKey(question.reference);
   const record = useAnswerRecord(key);
@@ -365,6 +371,12 @@ export function DecisionAnswerComposer({
         {notice !== null && (
           <Callout severity="warning" size="compact" data-testid="decision-answer-notice">
             {notice}
+          </Callout>
+        )}
+        {/* Not past the deadline: the locked form already says it can't be sent. */}
+        {deliveryNotice !== null && !elapsed && (
+          <Callout severity="warning" size="compact" data-testid="decision-answer-delivery">
+            {deliveryNotice}
           </Callout>
         )}
       </div>

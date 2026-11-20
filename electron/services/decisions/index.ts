@@ -178,6 +178,7 @@ import type {
   DecisionsDeliveryDeps,
   DecisionsPresenceDeps,
   DecisionsService,
+  DecisionsServiceOptions,
   DecisionsSnapshotDeps,
 } from "./DecisionsService.js";
 import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
@@ -912,6 +913,68 @@ function watchSnapshotPanes(onPane: (terminalId: string, state?: string) => void
 }
 
 /**
+ * Main's pane and worktree events that can change what the run that asked a
+ * question shows (#18029), each naming the pane or worktree it concerns: it
+ * started, exited or was lost with its pty host, went to or came back from
+ * the Trash, moved worktree, its agent came or went, or a worktree was
+ * removed or came back. A pty client created later is followed from the next
+ * subscription.
+ */
+function watchAskerPanes(
+  onPane: (hint?: { paneId: string } | { worktreeId: string; missingOnly?: true }) => void
+): () => void {
+  const pane = (paneId: string | undefined) => {
+    if (paneId) onPane({ paneId });
+  };
+  const offs = [
+    events.on("terminal:lifecycle", ({ type, terminalId }) => {
+      if (type === "spawned" || type === "exited") pane(terminalId);
+    }),
+    events.on("terminal:trashed", ({ id }) => pane(id)),
+    events.on("terminal:restored", ({ id }) => pane(id)),
+    events.on("terminal:trash-cleared", ({ id }) => pane(id)),
+    events.on("terminal:worktree-changed", ({ id }) => pane(id)),
+    events.on("agent:spawned", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:detected", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:exited", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:killed", ({ terminalId }) => pane(terminalId)),
+    events.on("agent-session:attributed", ({ terminalId }) => pane(terminalId)),
+    events.on("sys:worktree:remove", ({ worktreeId }) => onPane({ worktreeId })),
+    events.on("sys:worktree:update", ({ id }) => onPane({ worktreeId: id, missingOnly: true })),
+  ];
+  const client = getPtyClient();
+  if (client !== null && typeof client.on === "function") {
+    const lost = (terminalId: string) => pane(terminalId);
+    const incarnationLost = ({ terminalId }: { terminalId: string }) => pane(terminalId);
+    const spawned = (terminalId: string) => pane(terminalId);
+    // A pty host that gave up restarting names no pane: every asker is read again.
+    const crashed = () => onPane();
+    client.on("terminal-lost", lost);
+    client.on("incarnation-lost", incarnationLost);
+    client.on("spawn-result", spawned);
+    client.on("host-crash", crashed);
+    offs.push(() => {
+      client.off("terminal-lost", lost);
+      client.off("incarnation-lost", incarnationLost);
+      client.off("spawn-result", spawned);
+      client.off("host-crash", crashed);
+    });
+  }
+  return () => {
+    for (const off of offs) off();
+  };
+}
+
+/** What observing the run that asked each open question reaches in the rest of main (#18029). */
+const askerPresenceDeps: DecisionsServiceOptions["askerPresence"] = {
+  hostId: () => service?.getSettings()?.hostId ?? null,
+  principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
+  getPtyClient: () => getPtyClient(),
+  stat: (path) => stat(path),
+  watch: watchAskerPanes,
+};
+
+/**
  * What terminal snapshots reach in the rest of main (#16230). An owner's
  * lifetime shares them under its own switch; a Host's, as its owner's Shell
  * last said.
@@ -1113,6 +1176,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
         presence: presenceDeps,
+        askerPresence: askerPresenceDeps,
         agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,

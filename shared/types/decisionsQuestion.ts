@@ -482,12 +482,56 @@ export interface DecisionQuestionListItem {
    */
   remoteHost?: DecisionQuestionRemoteHost;
   /**
+   * What this computer last observed of the run that asked (#18029), for its
+   * own open or queued questions only, once observed: never a Remote Host's,
+   * whose panes this computer can't see.
+   */
+  asker?: DecisionAskerPresence;
+  /**
    * What a waiting or queued question asks of the person now, and what they
    * did with that on this computer (#17895). Only this computer's list
    * carries it, never a Host's own, and only while the question is in Needs you.
    */
   inbox?: DecisionQuestionInbox;
 }
+
+/**
+ * The run that asked an open question, as this computer last observed it
+ * (#18029). Observations only: nothing here closes, declines or withdraws the
+ * question, and none of it says what the agent is doing.
+ * - `target`, the terminal that asked: `running`, the same run with its agent
+ *   detected; `agent-undetected`, the same run with its agent no longer
+ *   detected; `closed`, it stopped running or closed; `trashed`, in the Trash;
+ *   `moved`, the same run now filed under another worktree; `replaced`, it
+ *   now runs another session; `unknown`, it couldn't be read.
+ * - `directory`, the folder it asked from: `none` for a terminal in no worktree.
+ * - `resume`, whether an answer could reopen its session in a new terminal,
+ *   by the checks delivery makes before it tries: `resumable` when they all
+ *   pass (the launch itself can still fail), else the first that doesn't.
+ */
+export interface DecisionAskerPresence {
+  target: "running" | "agent-undetected" | "closed" | "trashed" | "moved" | "replaced" | "unknown";
+  directory: "present" | "missing" | "none" | "unknown";
+  resume: DecisionAskerResume;
+}
+
+/**
+ * `unsupported-agent`, its agent's resume isn't proven; `no-session`, no
+ * session id was recorded when it asked; `no-worktree`, it asked from no
+ * worktree; `worktree-missing`, its folder is gone; `ended`, a resume already
+ * reopened it once this run and that terminal went too; `other-worktree`,
+ * the session itself runs in another worktree now, which a resume won't take
+ * over; `unknown`, a check couldn't be made.
+ */
+export type DecisionAskerResume =
+  | "resumable"
+  | "unsupported-agent"
+  | "no-session"
+  | "no-worktree"
+  | "worktree-missing"
+  | "ended"
+  | "other-worktree"
+  | "unknown";
 
 /**
  * The person's own reading of what a question asks of them, kept on this
