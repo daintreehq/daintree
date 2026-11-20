@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
@@ -11,8 +15,10 @@ import {
   useDecisionsStoppedCount,
   useDecisionsWaitingCount,
 } from "@/hooks/useDecisionsWaitingCount";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { useUnlistedStoppedAnswers } from "./useUnlistedStoppedAnswers";
 
 const INBOX_TEXT =
   "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided";
@@ -84,17 +90,23 @@ export function DecisionsQuestionsSection({
   // The section shows only while Decisions is on, so the toolbar's watch is shared, not doubled.
   const waiting = useDecisionsWaitingCount(true);
   const stopped = useDecisionsStoppedCount(true);
+  const unlisted = useUnlistedStoppedAnswers(stopped);
   const openInbox = useDecisionsInboxStore((state) => state.open);
-  const showInbox = () => {
+  const openAttention = useDecisionsAttentionStore((state) => state.open);
+  // Settings goes first, so nothing stacks over it; reopened before it had gone, nothing opens.
+  const afterSettings = (show: () => void) => {
     if (onClose === undefined) {
-      openInbox();
+      show();
       return;
     }
-    // Settings goes first; reopened before it had gone, nothing opens.
     void onClose((closed) => {
-      if (closed) openInbox();
+      if (closed) show();
     }).catch(() => {});
   };
+  // At the first stopped delivery when it lists one (#18048), else where the inbox opens itself.
+  const showInbox = () => afterSettings(() => openInbox({ prefer: "stopped" }));
+  // Only the attention list holds an answer the inbox can't list.
+  const showUnlisted = () => afterSettings(() => openAttention());
   return (
     <SettingsSection title="Questions" id="decisions-questions">
       <SettingsGroup>
@@ -136,17 +148,36 @@ export function DecisionsQuestionsSection({
           id="decisions-questions-inbox"
           label="Inbox"
           description={inboxDescription(waiting, stopped)}
-          control={({ descriptionId }) => (
-            <Button
-              variant="outline"
-              size="sm"
-              aria-describedby={descriptionId}
-              onClick={showInbox}
-              data-testid="decisions-inbox-open"
-            >
-              Open inbox
-            </Button>
-          )}
+          // Two actions would squeeze the label on the rail.
+          layout={unlisted > 0 ? "stacked" : "inline"}
+          control={({ descriptionId }) => {
+            const open = (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-describedby={descriptionId}
+                onClick={showInbox}
+                data-testid="decisions-inbox-open"
+              >
+                Open inbox
+              </Button>
+            );
+            if (unlisted === 0) return open;
+            return (
+              <SettingsRowActions>
+                {open}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-describedby={descriptionId}
+                  onClick={showUnlisted}
+                  data-testid="decisions-attention-review"
+                >
+                  Review other answers
+                </Button>
+              </SettingsRowActions>
+            );
+          }}
         />
       </SettingsGroup>
       {policy === null && loadError !== null && (
