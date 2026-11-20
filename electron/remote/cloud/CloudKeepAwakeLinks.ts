@@ -354,11 +354,8 @@ export class CloudKeepAwakeLinks {
     const gateOpen = lastMint === undefined || now - lastMint >= REMINT_AFTER_MS;
     const lastBypass = this.bypassedAt.get(bindingId);
     const bypass =
-      rechecking &&
-      !gateOpen &&
-      (lastBypass === undefined || now - lastBypass >= REMINT_AFTER_MS);
-    const lost =
-      status.expiresAt === null && !this.retryAt.has(bindingId) && (gateOpen || bypass);
+      rechecking && !gateOpen && (lastBypass === undefined || now - lastBypass >= REMINT_AFTER_MS);
+    const lost = status.expiresAt === null && !this.retryAt.has(bindingId) && (gateOpen || bypass);
     if (!attempt.mint && !lost) return;
     if (!attempt.mint && !gateOpen) this.bypassedAt.set(bindingId, now);
     attempt.mint = true;
