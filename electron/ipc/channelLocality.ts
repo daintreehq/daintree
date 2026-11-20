@@ -1624,7 +1624,6 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "decisions:status-changed": "shell",
   "decisions:questions-changed": "shell",
   "decisions:open-question": "shell",
-  "decisions:open-attention": "shell",
   "decisions:devices-changed": "shell",
   "decisions:setup-check-changed": "shell",
   "watchdog:active": "host",

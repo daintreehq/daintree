@@ -7,7 +7,7 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { openStoppedAnswers } from "@/components/Decisions/openStoppedAnswers";
 import {
   decisionsAttentionHolds,
   itemAnswerAttention,
@@ -570,14 +570,16 @@ export function useCanopyInboxActions({
     itemAnswerAttention(item) > 0 && placeOf(item, hostId, ownHostId).hostId === null;
   const answers: CanopyAnswerActions = {
     canReviewAnswers,
-    // Its first answer for the run takes the focus; once the run's last
-    // answer has gone, and the control that opened the list with it, the
-    // close returns to the run's row.
+    // In the inbox at the run's first stopped delivery (#18048), or the attention
+    // list for one the inbox can't list; once the run's last answer has gone, and
+    // the control that opened it with it, the close returns to the run's row.
     onReviewAnswers: (item) => {
       if (!canReviewAnswers(item)) return;
-      useDecisionsAttentionStore.getState().open(placeOf(item, hostId, ownHostId).runId, {
-        returnFocusTo: canopyCardDomId(item.runId),
-      });
+      const { runId, workspaceId } = placeOf(item, hostId, ownHostId);
+      void openStoppedAnswers(
+        { terminalId: runId, projectId: workspaceId },
+        { returnFocusTo: canopyCardDomId(item.runId) }
+      );
     },
   };
 

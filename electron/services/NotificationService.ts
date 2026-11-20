@@ -26,7 +26,6 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   DecisionQuestionList,
   DecisionQuestionReference,
-  DecisionsOpenAttentionRequest,
   DecisionsOpenQuestionRequest,
 } from "../../shared/types/decisionsQuestion.js";
 
@@ -975,21 +974,10 @@ class NotificationService {
     );
   }
 
-  /**
-   * Opens the list of answers needing attention (#17235) at the pane that
-   * asked `reference`, in a window on this computer chosen as a question is.
-   * The list is this computer's, whatever project the window shows.
-   */
-  openDecisionAttention(reference: DecisionQuestionReference): boolean {
-    return this.sendToDecisionsWindow(reference.projectId, "decisions:open-attention", {
-      terminalId: reference.terminalId,
-    });
-  }
-
   private sendToDecisionsWindow(
     projectId: string,
-    name: "decisions:open-question" | "decisions:open-attention",
-    payload: DecisionsOpenQuestionRequest | DecisionsOpenAttentionRequest
+    name: "decisions:open-question",
+    payload: DecisionsOpenQuestionRequest
   ): boolean {
     const targets = (this.registry?.focusOrder() ?? []).flatMap((ctx) => {
       const window = ctx.browserWindow;

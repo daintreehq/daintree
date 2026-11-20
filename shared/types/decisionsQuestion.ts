@@ -682,14 +682,6 @@ export interface DecisionsOpenQuestionRequest {
   messageId?: string;
 }
 
-/**
- * Open the list of answers needing attention: a click on a stalled answer's
- * desktop notification (#17235), starting at the pane that asked.
- */
-export interface DecisionsOpenAttentionRequest {
-  terminalId: string;
-}
-
 /** One question read by its reference, from any window (#17229). */
 export interface GetDecisionQuestionByReferencePayload {
   reference: DecisionQuestionReference;

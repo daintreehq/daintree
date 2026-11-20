@@ -1416,6 +1416,21 @@ function InboxList({
   );
 }
 
+/** Where Go to terminal goes: one of this computer's terminals, by its project. */
+export interface InboxTerminal {
+  terminalId: string;
+  projectId: string;
+}
+
+export interface DecisionsInboxDialogProps {
+  /**
+   * Takes the person to the terminal once the inbox has closed, in a window
+   * with no project of its own (the Canopy window, #18048), where the
+   * project's actions aren't registered. Absent, the view's own actions do.
+   */
+  goToTerminal?: (terminal: InboxTerminal) => void;
+}
+
 /**
  * Every question this computer's Decisions holds (#17231), across its
  * projects and terminals, or only the window's project's once narrowed to it
@@ -1425,7 +1440,7 @@ function InboxList({
  * a way to the terminal that asked while it is still open. The words are
  * read on demand by reference and held in memory only while it is open.
  */
-export function DecisionsInboxDialog() {
+export function DecisionsInboxDialog({ goToTerminal }: DecisionsInboxDialogProps = {}) {
   const isOpen = useDecisionsInboxStore((state) => state.isOpen);
   const request = useDecisionsInboxStore((state) => state.request);
   const close = useDecisionsInboxStore((state) => state.close);
@@ -1576,7 +1591,8 @@ export function DecisionsInboxDialog() {
     viewHostId,
     windowProject,
     openGroups,
-    asked
+    asked,
+    request.prefer ?? null
   );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
   // A page of History at a time (#18033), from the newest, for this opening; the question shown
@@ -2162,7 +2178,9 @@ export function DecisionsInboxDialog() {
   } | null>(null);
   const going = handoff !== null && handoff.seq === request.seq ? handoff : null;
 
+  // An opener that named its own successor (a Canopy card, #18048) gets that instead.
   const restoreFocusTo = useCallback((): HTMLElement | null => {
+    if (request.returnFocusTo != null) return document.getElementById(request.returnFocusTo);
     const terminalId = request.terminalId;
     if (terminalId === null) return null;
     const escaped = CSS.escape(terminalId);
@@ -2171,7 +2189,7 @@ export function DecisionsInboxDialog() {
         `[data-panel-id="${escaped}"][data-panel-location="grid"]`
       ) ?? document.querySelector<HTMLElement>(`[data-panel-id="${escaped}"]`);
     return pane?.querySelector<HTMLElement>(PANE_CHIP) ?? pane;
-  }, [request.terminalId]);
+  }, [request.terminalId, request.returnFocusTo]);
 
   // Only while this opening is the one on screen: its button stays focusable through the exit.
   const stillShowing = (seq: number): boolean => {
@@ -2213,6 +2231,10 @@ export function DecisionsInboxDialog() {
     releaseList();
     setHandoff(null);
     if (going === null) return;
+    if (goToTerminal !== undefined) {
+      goToTerminal({ terminalId: going.terminalId, projectId: going.projectId });
+      return;
+    }
     const landed =
       going.reach === "here"
         ? actionService.dispatch("panel.focus", { panelId: going.terminalId })

@@ -985,7 +985,7 @@ export function AppLayout({
           reference, and this computer's answers needing attention, so a
           notification's click opens them wherever it lands (#17232, #17235). */}
       {isHydrated && <DecisionQuestionHost followsOpenRequests />}
-      {isHydrated && <DecisionsAttentionHost followsOpenRequests />}
+      {isHydrated && <DecisionsAttentionHost />}
       {/* Every question on this computer, from any window, whatever project it shows (#17231). */}
       {isHydrated && <DecisionsInboxHost />}
       <div

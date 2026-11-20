@@ -35,7 +35,6 @@ const notificationServiceMock = vi.hoisted(() => ({
   isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
   closeNotificationByKey: vi.fn(),
   openDecisionQuestion: vi.fn(),
-  openDecisionAttention: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -4905,7 +4904,7 @@ describe("Decisions questions (#17232)", () => {
       expect(body).toBe("Open the question to read the follow-up.");
     });
 
-    it("gives a stalled answer's reason in the attention list's words, and opens that list", () => {
+    it("gives a stalled answer's reason in the attention list's words, and opens its question in the inbox (#18048)", () => {
       const stalled = question("term-1", Date.now(), {
         standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
         stall: { answerRevision: 2, followUpIds: [], reason: "pane_gone" },
@@ -4917,8 +4916,9 @@ describe("Decisions questions (#17232)", () => {
       expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
       expect(body).toBe("The terminal that asked was closed.");
       options.onClick();
-      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(stalled.reference);
-      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+        stalled.reference
+      );
     });
 
     it("names held follow-ups, an uncertain delivery, and a reason it has no words for", () => {
@@ -4984,12 +4984,14 @@ describe("Decisions questions (#17232)", () => {
       for (const text of [title, body, remoteTitle, remoteBody]) expect(text).not.toMatch(/plan/i);
 
       options.onClick();
-      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
         question("term-1", Date.now(), closed).reference
       );
-      // Only the Host's own list holds its question: the click opens the question here.
+      // The Host's question opens too, its stall read and resolved through its Host.
       remoteOptions.onClick();
-      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(remote.reference);
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
+        remote.reference
+      );
     });
 
     it("plays and shows nothing without a stall, and names the Remote Host where the reason would say this computer (#18026)", () => {
