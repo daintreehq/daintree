@@ -343,6 +343,12 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
    * are told `OWNER_STATE_V2` or older, and report no question policy.
    */
   private readonly beforeQuestionPolicy = new WeakSet<DecisionsHostSession>();
+  /**
+   * Counts each session's announcements, apart from pushes: an announcement
+   * a later one overtook while it waited on a refusal never falls back to an
+   * older method, or the Host would apply what it said after what came later.
+   */
+  private readonly announcements = new WeakMap<DecisionsHostSession, number>();
   private readonly listeners = new Set<() => void>();
   /** Each wired session's handler and close listener, removed on stop. */
   private readonly unwires = new Set<() => void>();
@@ -937,9 +943,15 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (state === null) return;
     const turn = (this.announced.get(hostId) ?? 0) + 1;
     this.announced.set(hostId, turn);
+    const generation = (this.announcements.get(session) ?? 0) + 1;
+    this.announcements.set(session, generation);
     let answer: { raw: unknown; v2: boolean };
     try {
-      answer = await this.sendOwnerState(session, state);
+      answer = await this.sendOwnerState(
+        session,
+        state,
+        () => this.announcements.get(session) === generation
+      );
     } catch {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
@@ -958,13 +970,18 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
    * `state` as the Host can take it, and whether it answered a v2 report
    * (#17942): asked for one, else with terminal snapshots (#16230), or, to a
    * Host from before them, without, which it reads as off. Each method a
-   * Host answers UNSUPPORTED is never tried again on that link.
+   * Host answers UNSUPPORTED is never tried again on that link, and an
+   * announcement no longer `current` stops there rather than fall back.
    */
   private async sendOwnerState(
     session: DecisionsHostSession,
-    state: OwnerStateAnnouncement
+    state: OwnerStateAnnouncement,
+    current: () => boolean
   ): Promise<{ raw: unknown; v2: boolean }> {
     const options = { timeoutMs: OWNER_STATE_TIMEOUT_MS };
+    const overtaken = () => {
+      if (!current()) throw new Error("A later announcement overtook this one");
+    };
     if (!this.beforeQuestionPolicy.has(session) && !this.beforeSnapshots.has(session)) {
       try {
         const raw = await session.call(
@@ -976,6 +993,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       } catch (error) {
         if (codeOf(error) !== "UNSUPPORTED") throw error;
         this.beforeQuestionPolicy.add(session);
+        overtaken();
       }
     }
     if (!this.beforeSnapshots.has(session)) {
@@ -989,6 +1007,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       } catch (error) {
         if (codeOf(error) !== "UNSUPPORTED") throw error;
         this.beforeSnapshots.add(session);
+        overtaken();
       }
     }
     const { terminalSnapshots: _snapshots, ...earlier } = state;

@@ -604,6 +604,7 @@ describe("DecisionsService question list (#17229)", () => {
     options: {
       handled?: Record<string, number>;
       notifyQuestions?: DecisionsServiceOptions["notifyQuestions"];
+      connect?: DecisionsServiceOptions["connect"];
     } = {}
   ) {
     let rows: QuestionRow[] = [];
@@ -653,6 +654,7 @@ describe("DecisionsService question list (#17229)", () => {
       publishHostQuestions: (list) =>
         hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
       notifyQuestions: options.notifyQuestions,
+      ...(options.connect ? { connect: options.connect } : {}),
     });
     const commit = async (next: QuestionRow[]) => {
       rows = next;
@@ -930,6 +932,59 @@ describe("DecisionsService question list (#17229)", () => {
 
     await service.stop();
     expect(hostLists.at(-1)).toBeNull();
+  });
+
+  it("lists a Host's untyped advisory notice as its lifetime would type it, again once its connection settles that (#17942)", async () => {
+    const made: RelayConnectionOptions[] = [];
+    const { service, hostLists, setRows } = listed({
+      connect: (options) => {
+        made.push(options);
+        return { start: () => {}, stop: () => {} };
+      },
+    });
+    // Its round 0 expired unanswered, its plan due, the notice not typed yet.
+    setRows([
+      row(1, {
+        question_revision: 0,
+        local_status: "expired",
+        content_sealed: JSON.stringify({ aad: { revision: 0, reply_mode: "advisory" } }),
+        answers_json: answers({
+          entry_id: "expiry-1",
+          kind: "expired",
+          action: "expire",
+          revision: 0,
+          advisory_disposition: "fallback-due",
+        }),
+      }),
+    ]);
+    const notice = () => hostLists.at(-1)?.questions[0]?.closureNotice;
+    // With a relay identity, so its connection is made.
+    await service.start(
+      on({
+        ...HOST,
+        relayOrigin: "https://relay.example.com",
+        installationId: "inst_12345678",
+        deviceId: "dev_12345678",
+      }),
+      "host"
+    );
+    expect(made).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(notice()).toEqual({ delivery: "pending", disposition: "fallback-due" })
+    );
+
+    // Its delivery couldn't start, so nothing would type the plan due: listed again, withheld.
+    made[0]!.onQuestionsReady!({
+      identity: () => null,
+      live: () => null,
+      store: {} as QuestionSource["store"],
+      policy: {} as QuestionSource["policy"],
+      advisoryDeadlines: false,
+    });
+    await vi.waitFor(() =>
+      expect(notice()).toEqual({ delivery: "pending", disposition: "fallback-withheld" })
+    );
+    await service.stop();
   });
 
   it("hands nothing to a Remote Host's owner from an owner's lifetime", async () => {
@@ -1524,15 +1579,30 @@ describe("DecisionsService relay connection", () => {
     policy: {} as QuestionSource["policy"],
   };
 
-  it("reports a Host's advice as its connection settled it, once that's known (#17942)", async () => {
-    const { service, made } = connected();
+  it("reports a Host's advice as its connection settled it, and says so when that changes it (#17942)", async () => {
+    const made: RelayConnectionOptions[] = [];
+    const changed = vi.fn();
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      onQuestionPolicyChanged: changed,
+      connect: (options) => {
+        made.push(options);
+        return { start: () => {}, stop: () => {} };
+      },
+    });
     await service.start(on(RELAY), "host");
     expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
+    // Settled as assumed: nothing to tell.
+    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
+    expect(changed).not.toHaveBeenCalled();
     // Delivery couldn't start, so the connection gave no bridge advice: the Host says it can't take it.
-    made[0]!.options.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: false });
+    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: false });
     expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
-    made[0]!.options.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
+    expect(changed).toHaveBeenCalledTimes(1);
+    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
     expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
     await service.stop();
   });
 

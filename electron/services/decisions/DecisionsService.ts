@@ -276,6 +276,11 @@ export interface DecisionsServiceOptions {
   model?: Pick<DecisionModelRuntimeOptions, "openHistory" | "createAdapter">;
   /** Something Settings shows of the decision model changed (#16027), or the model came or went. */
   onModelChanged?: () => void;
+  /**
+   * What `getQuestionPolicy` answers changed without a status change: the
+   * connection settled whether it types advisory outcomes (#17942).
+   */
+  onQuestionPolicyChanged?: () => void;
   /** Deletes the model's files with none running; the model package's files unless a test says otherwise. */
   deleteModelFiles?: (files: DecisionModelFiles) => Promise<void>;
   /**
@@ -398,6 +403,7 @@ export class DecisionsService {
   private model: DecisionModelRuntime | null = null;
   private readonly modelOptions: DecisionsServiceOptions["model"];
   private readonly onModelChanged: () => void;
+  private readonly onQuestionPolicyChanged: () => void;
   private readonly deleteModelFiles: (files: DecisionModelFiles) => Promise<void>;
   /** The model's files are being deleted with no model running, so none may open them meanwhile. */
   private clearingModel = false;
@@ -441,6 +447,7 @@ export class DecisionsService {
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
+    this.onQuestionPolicyChanged = options.onQuestionPolicyChanged ?? (() => {});
     this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
     this.onStoreReplacing = options.onStoreReplacing ?? (() => {});
     const checkDiskSpace = options.checkDiskSpace ?? (async () => null);
@@ -1328,8 +1335,12 @@ export class DecisionsService {
         if (this.connection !== connection) return;
         const listed = this.advisoryHost();
         this.questionSource = source;
-        // Listed before the connection settled advisory delivery: list again if it isn't what was assumed.
-        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh();
+        // Listed and reported before the connection settled advisory delivery: again if it isn't
+        // what was assumed, as no status change need follow.
+        if (this.advisoryHost().outcomes !== listed.outcomes) {
+          void feed?.refresh();
+          this.onQuestionPolicyChanged();
+        }
         if (this.openQuestions !== null) {
           this.closeQuestions();
           try {

@@ -160,7 +160,6 @@ import {
   HOST_DEFAULT_QUESTION_EXPIRY_MS,
   isQuestionExpiryChoice,
 } from "../../../shared/config/decisionsQuestionExpiry.js";
-import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "./relayFeatures.js";
 import {
   MAX_ASK_HUMAN_AGENTS,
   isAskHumanAgentId,
@@ -1074,6 +1073,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
+        onQuestionPolicyChanged: publishHostRuntime,
         checkDiskSpace,
         onStoreReplacing: cancelSetupCheckForStore,
       });
@@ -3013,17 +3013,16 @@ export function decisionsHostRuntimeFor(
   return hostRuntimeOf(
     record,
     running?.getStatus() ?? null,
-    running?.getQuestionPolicy() ?? HOST_QUESTION_POLICY
+    running?.getQuestionPolicy() ?? IDLE_HOST_QUESTION_POLICY
   );
 }
 
 /**
- * How a Host's lifetime asks its agents' questions once it runs (#17942):
- * what the Host reports while it doesn't run now, its owner having turned it
- * on but its connection not yet started.
+ * What a Host reports of how it asks while no Host lifetime runs (#17942):
+ * nothing settles an advisory question then, so its agents can't ask one.
  */
-const HOST_QUESTION_POLICY: DecisionsHostQuestionPolicy = {
-  advisoryQuestions: DAINTREE_DELIVERS_ADVISORY_OUTCOMES,
+const IDLE_HOST_QUESTION_POLICY: DecisionsHostQuestionPolicy = {
+  advisoryQuestions: false,
   defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
 };
 
