@@ -972,6 +972,12 @@ export function clearAllText(scope: InboxScope, namesReach: boolean): string {
   return namesReach ? "Clear Needs you in all projects" : "Clear Needs you";
 }
 
+/** The host and question a reference key names, whichever pane and project it is listed under. */
+function questionOfKey(key: string): string {
+  const parts = key.split("\u0000");
+  return `${parts[0]}\u0000${parts[parts.length - 1]}`;
+}
+
 /**
  * The quiet line at the top of the list while Needs you is empty (#18022):
  * that nothing waits on the person, only as far as the list can say. Not
@@ -1053,8 +1059,9 @@ export function askedOnHost(item: DecisionQuestionListItem, hostId: string): boo
 }
 
 /**
- * The question the inbox shows: the one chosen while it is still listed; for
- * one the person picked that went, the one that took its place; else the
+ * The question the inbox shows: the one chosen while it is still listed, even
+ * under another pane once its answer was sent there (#18027); for one the
+ * person picked that went, the one that took its place; else the
  * first of the pane that opened the inbox, on the view's own machine
  * (`viewHostId`), in any group; else the first of the window's own project
  * that needs the person (#18051); else the first that still needs something
@@ -1070,7 +1077,10 @@ export function resolveSelection(
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
-    const kept = ordered.find((item) => referenceKey(item.reference) === chosen.key);
+    const question = questionOfKey(chosen.key);
+    const kept =
+      ordered.find((item) => referenceKey(item.reference) === chosen.key) ??
+      ordered.find((item) => questionOfKey(referenceKey(item.reference)) === question);
     if (kept !== undefined) return kept;
     if (chosen.picked && ordered.length > 0) {
       return ordered[Math.min(chosen.index, ordered.length - 1)]!;

@@ -781,6 +781,18 @@ describe("decisionsInboxModel", () => {
     });
   });
 
+  it("keeps the chosen question once its answer is listed under another pane (#18027)", () => {
+    const chosen = item("q2", OPEN).reference;
+    const choice = { key: referenceKey(chosen), index: 1, picked: true };
+    const moved = item("q2", OPEN, { reference: { ...chosen, projectId: "p2", terminalId: "t7" } });
+    const groups = inboxGroups([item("q1", OPEN), item("q3", OPEN), moved]);
+    expect(resolveSelection(groups, choice, null)).toBe(moved);
+    // Another host's question by the same id is a different question.
+    const elsewhere = item("q2", OPEN, { reference: { ...chosen, hostId: "h2" } });
+    const others = inboxGroups([item("q1", OPEN), item("q3", OPEN), elsewhere]);
+    expect(resolveSelection(others, choice, null)).toBe(others[0]!.items[1]);
+  });
+
   it("says nothing about the relay while connected or before main has said", () => {
     expect(connectionNotice(null)).toBeNull();
     expect(connectionNotice({ state: "connected", relayOrigin: "https://r.example" })).toBeNull();

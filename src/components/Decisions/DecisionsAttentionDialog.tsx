@@ -1,110 +1,62 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, RotateCw } from "lucide-react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { CopyButton } from "@/components/ui/CopyButton";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
-import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
-import { worktreeDisplayName } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { WorktreeSnapshot } from "@shared/types";
 import type { DecisionQuestionList } from "@shared/types/decisionsQuestion";
 import type {
   DecisionsAnswerDestination,
-  DecisionsAnswerDestinations,
-  DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
   DecisionsFollowUpPreview,
   DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
+  ATTENTION_ACTIONS,
+  AttentionActionRow,
+  AttentionConfirmations,
+  ResumePending,
+  useWorktreeNames,
+  type WorktreeName,
+} from "./AttentionActions";
+import {
   ELSEWHERE_HEADING,
   EMPTY_DESCRIPTION,
   LIST_DESCRIPTION,
   NONE_FOR_PANE,
   PLAN_CAPTION,
-  RESUME_PENDING,
-  STILL_WORKING,
-  agentLabel,
   aliasLabel,
   attentionFingerprint,
-  canCopy,
   canOpenQuestion,
-  copyLabel,
-  destinationGroups,
-  destinationRowDetail,
-  fromLines,
   groupForPane,
-  handledConfirmBody,
-  handledConfirmTitle,
-  handledNeedsConfirm,
   hasFullerQuestion,
   leavesList,
   missingAnswerText,
-  moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
   originParts,
-  outcomeSeverity,
-  outcomeText,
-  paneName,
   reasonText,
   remainingText,
-  sameAttention,
   statusText,
   subjectOf,
-  toLines,
-  type PaneLines,
 } from "./decisionsAttentionModel";
-
-type Busy = "resume" | "reassign" | "handled";
-
-interface PendingMove {
-  item: DecisionsAttentionItem;
-  destination: DecisionsAnswerDestination;
-}
-
-interface Outcome {
-  message: string;
-  severity: "success" | "warning";
-}
-
-/** A question's actions, so focus can land on the next one when its item leaves. */
-const ITEM_ACTIONS = "[data-attention-action]";
+import { useAttentionActions, type AttentionBusy } from "./useAttentionActions";
 
 /** A pane's Decisions chip, where the close returns when the list was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
 
 /** Pushes for panes arrive in bursts; one read after they settle. */
 const REFRESH_DEBOUNCE_MS = 300;
-
-/** Past this, a resume's wait says it is still going. */
-const STILL_WORKING_MS = 5_000;
-
-type WorktreeName = (id: string, fallback: string | null) => string | null;
 
 /**
  * Whether `element` is in a modal over the list whose body is `body` (the
@@ -117,38 +69,6 @@ function inModalOver(body: HTMLElement | null, element: Element): boolean {
   const modal = element.closest('[aria-modal="true"]');
   if (own === null || modal === null || modal === own) return false;
   return Boolean(own.compareDocumentPosition(modal) & Node.DOCUMENT_POSITION_FOLLOWING);
-}
-
-const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
-
-/**
- * The project's own names for its worktrees, where the list opens in a project
- * view. The Canopy window holds no project: there each answer keeps the name
- * it was asked under.
- */
-function useWorktreeNames(): WorktreeName {
-  const worktreeMap = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
-  return useCallback(
-    (id: string, fallback: string | null) => {
-      const known = worktreeMap.get(id);
-      return worktreeDisplayName(known) ?? fallback;
-    },
-    [worktreeMap]
-  );
-}
-
-/** True once `active` has held for `ms`; false again as soon as it ends. */
-function useHeldFor(active: boolean, ms: number): boolean {
-  const [held, setHeld] = useState(false);
-  useEffect(() => {
-    if (!active) {
-      setHeld(false);
-      return;
-    }
-    const timer = setTimeout(() => setHeld(true), ms);
-    return () => clearTimeout(timer);
-  }, [active, ms]);
-  return held;
 }
 
 /**
@@ -429,7 +349,7 @@ interface ItemProps {
   /** One of the opening pane's own items, where an opening for it lands. */
   forPane: boolean;
   worktreeName: WorktreeName;
-  busy: Busy | null;
+  busy: AttentionBusy | null;
   onResume: () => void;
   onChoose: (destination: DecisionsAnswerDestination) => void;
   onHandled: () => void;
@@ -446,41 +366,13 @@ function AttentionItem({
   onHandled,
 }: ItemProps) {
   const headingId = useId();
-  const groupIdBase = useId();
   const alias = aliasLabel(item.alias);
   const { pane, place } = originParts(
     item,
     worktreeName(item.origin.worktreeId, item.origin.worktreeName)
   );
   const reason = reasonText(item.reason, subjectOf(item));
-  const [destinations, setDestinations] = useState<DecisionsAnswerDestinations | null>(null);
-  const [destinationsError, setDestinationsError] = useState<string | null>(null);
   const locked = busy !== null;
-  const stillWorking = useHeldFor(busy === "resume", STILL_WORKING_MS);
-  const announce = useAnnouncerStore((state) => state.announce);
-  // The wait's reassurance reaches a screen reader too, once, outside the busy item.
-  useEffect(() => {
-    if (stillWorking) announce(`${alias}: ${STILL_WORKING}`);
-  }, [stillWorking, alias, announce]);
-
-  // Every opening and closing starts a new generation, so a lookup from an opening already
-  // closed can't overwrite the agents (or the error) of the menu showing now.
-  const destinationsGenerationRef = useRef(0);
-  const loadDestinations = (open: boolean) => {
-    const generation = ++destinationsGenerationRef.current;
-    if (!open) return;
-    setDestinations(null);
-    setDestinationsError(null);
-    decisionsClient.listAnswerDestinations(item.questionId).then(
-      (listed) => {
-        if (generation === destinationsGenerationRef.current) setDestinations(listed);
-      },
-      (error) => {
-        if (generation !== destinationsGenerationRef.current) return;
-        setDestinationsError(formatErrorMessage(error, "Couldn't list the running agents"));
-      }
-    );
-  };
 
   return (
     <li
@@ -539,144 +431,17 @@ function AttentionItem({
       {item.followUps.map((followUp) => (
         <FollowUpPreview key={followUp.messageId} followUp={followUp} alias={alias} />
       ))}
-      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-        {item.canResume && (
-          <Button
-            variant="outline"
-            size="xs"
-            aria-label={`Try resume for ${alias}`}
-            aria-busy={busy === "resume" || undefined}
-            aria-disabled={busy === "resume" || undefined}
-            data-attention-action=""
-            disabled={locked && busy !== "resume"}
-            // Busy keeps its focus and its width: the glyph turns while it runs.
-            onClick={busy === "resume" ? undefined : onResume}
-          >
-            {/* Resuming restarts the session that asked: the restart glyph, turning while it runs. */}
-            <SpinningIcon icon={RotateCw} active={busy === "resume"} aria-hidden="true" />
-            Try resume
-          </Button>
-        )}
-        {item.canReassign && (
-          <DropdownMenu onOpenChange={loadDestinations}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant={item.canResume ? "ghost" : "outline"}
-                size="xs"
-                aria-label={`Choose destination for ${alias}`}
-                className="data-[state=open]:bg-overlay-soft"
-                data-attention-action=""
-                loading={busy === "reassign"}
-                disabled={locked && busy !== "reassign"}
-              >
-                Choose destination
-                <ChevronDown aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-80">
-              {destinations === null && destinationsError === null && (
-                <DropdownMenuItem disabled>Looking…</DropdownMenuItem>
-              )}
-              {destinationsError !== null && (
-                <DropdownMenuItem disabled>{destinationsError}</DropdownMenuItem>
-              )}
-              {destinations !== null && destinations.result !== "listed" && (
-                <DropdownMenuItem disabled>
-                  {destinations.result === "not-running"
-                    ? "Decisions isn't running"
-                    : "This answer can't be moved now"}
-                </DropdownMenuItem>
-              )}
-              {destinations?.result === "listed" && destinations.destinations.length === 0 && (
-                <DropdownMenuItem disabled>No agents are running here</DropdownMenuItem>
-              )}
-              {destinations?.result === "listed" &&
-                destinationGroups(destinations.destinations, item.origin.projectId).map(
-                  (group, index) => (
-                    <DropdownMenuGroup
-                      key={group.projectId}
-                      aria-labelledby={`${groupIdBase}-${index}`}
-                    >
-                      {index > 0 && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel id={`${groupIdBase}-${index}`}>
-                        {group.label}
-                      </DropdownMenuLabel>
-                      {group.destinations.map((destination) => (
-                        <DropdownMenuItem
-                          key={destination.terminalId}
-                          focusHandoff
-                          onSelect={() => onChoose(destination)}
-                          className="flex-col items-start gap-0.5"
-                        >
-                          <span className="flex w-full items-baseline gap-2">
-                            <span className="min-w-0 flex-1 truncate text-text-primary">
-                              {destination.title}
-                            </span>
-                            {destination.askedHere && (
-                              <span className="shrink-0 text-2xs text-text-secondary">
-                                asked here
-                              </span>
-                            )}
-                          </span>
-                          <span className="w-full truncate text-2xs text-text-secondary">
-                            {destinationRowDetail(
-                              destination,
-                              worktreeName(destination.worktreeId, destination.worktreeName)
-                            )}
-                            {/* The section label shows the project; a row heard alone still names it. */}
-                            {destination.projectName !== null && (
-                              <span className="sr-only">{` · ${destination.projectName}`}</span>
-                            )}
-                          </span>
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuGroup>
-                  )
-                )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        {canCopy(item) && (
-          <CopyButton
-            label={copyLabel(item)}
-            aria-label={`${copyLabel(item)} to ${alias}`}
-            variant={item.canResume || item.canReassign ? "ghost" : "outline"}
-            size="xs"
-            data-attention-action=""
-            disabled={locked}
-            text={() => decisionsClient.copyAnswer(item.questionId)}
-          />
-        )}
-        {/* Pulled out by its own padding, so its words end on the column's edge. */}
-        <Button
-          variant="ghost"
-          size="xs"
-          className="-mr-2.5 ml-auto"
-          aria-label={`Mark ${alias} handled`}
-          data-attention-action=""
-          loading={busy === "handled"}
-          disabled={locked && busy !== "handled"}
-          onClick={onHandled}
-        >
-          Mark handled
-        </Button>
-      </div>
-      {busy === "resume" && (
-        <p className="text-xs text-text-secondary [text-wrap:pretty]">
-          {stillWorking ? `${RESUME_PENDING} ${STILL_WORKING}` : RESUME_PENDING}
-        </p>
-      )}
+      <AttentionActionRow
+        item={item}
+        worktreeName={worktreeName}
+        busy={busy}
+        onResume={onResume}
+        onChoose={onChoose}
+        onHandled={onHandled}
+        className="pt-0.5"
+      />
+      <ResumePending alias={item.alias} active={busy === "resume"} />
     </li>
-  );
-}
-
-/** A pane in the move confirmation: what it's called, then its agent and place. */
-function PaneLinesValue({ lines }: { lines: PaneLines }) {
-  return (
-    <dd className="flex min-w-0 flex-col">
-      <span className="text-text-primary [text-wrap:pretty]">{lines.primary}</span>
-      <span className="text-text-secondary [text-wrap:pretty]">{lines.detail}</span>
-    </dd>
   );
 }
 
@@ -707,15 +472,9 @@ interface DecisionsAttentionDialogProps {
  */
 export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttentionDialogProps) {
   const request = useDecisionsAttentionStore((state) => state.request);
-  const announce = useAnnouncerStore((state) => state.announce);
   const worktreeName = useWorktreeNames();
   const [list, setList] = useState<DecisionsAttentionList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<ReadonlyMap<string, Busy>>(new Map());
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
-  const [move, setMove] = useState<PendingMove | null>(null);
-  /** The item Mark handled is asking about (#16638). */
-  const [handling, setHandling] = useState<DecisionsAttentionItem | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   /** The row a confirmation was opened from, for its close to land after it. */
   const confirmFrom = useRef<{ questionId: string; index: number } | null>(null);
@@ -740,6 +499,15 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     seq: 0,
     terminalId: null,
   });
+  /**
+   * The opening in which an action took an item off the list: the next read
+   * for it that lists nothing closes the list rather than leave it empty (#18027).
+   */
+  const closeWhenEmpty = useRef<number | null>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
   /**
    * The opening the shown list or error was read in. The host keeps the last
    * opening's list mounted, so a reopening shows it until its own read lands.
@@ -775,7 +543,14 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       setList(next);
       setListedFor(launchedFor);
       setLoadError(null);
+      // The first read that lands after the action decides, once: a list
+      // emptied by another window, or one opened empty, stays open.
+      if (closeWhenEmpty.current !== null && closeWhenEmpty.current === launchedFor.seq) {
+        closeWhenEmpty.current = null;
+        if (next.result === "listed" && next.items.length === 0) onCloseRef.current();
+      }
     } catch (error) {
+      // A read that failed says nothing of what is left: the next one decides.
       if (ticket !== reading.current) return;
       setLoadError(formatErrorMessage(error, "Couldn't read the answers"));
     }
@@ -783,19 +558,46 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   }, []);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      closeWhenEmpty.current = null;
+      return;
+    }
     opening.current = { seq: request.seq, terminalId: request.terminalId };
-    setOutcome(null);
     void refresh();
   }, [isOpen, request.seq, request.terminalId, refresh]);
 
-  // A confirmation belongs to the opening it was asked in: closing the list
-  // takes it with it, so a reopening never shows one for an item it never asked about.
-  useEffect(() => {
-    if (isOpen) return;
-    setMove(null);
-    setHandling(null);
-  }, [isOpen]);
+  // An action and its outcome belong to the opening they were taken in, so a reopening
+  // never shows one for an item it never asked about; a confirmation goes with the close.
+  const actions = useAttentionActions({
+    scope: isOpen ? `open:${request.seq}` : null,
+    confirmScope: isOpen ? "open" : null,
+    shown: list === null ? null : items,
+    refresh,
+    onAsk: (item) => {
+      confirmFrom.current = {
+        questionId: item.questionId,
+        index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
+      };
+    },
+    onStart: (item) => {
+      focusAfter.current = {
+        questionId: item.questionId,
+        index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
+      };
+    },
+    onSettled: (item, result, current) => {
+      if (!current || result === null || !leavesList(result)) {
+        // Only its own place: another action may have set one since.
+        if (focusAfter.current?.questionId === item.questionId) focusAfter.current = null;
+        return;
+      }
+      // `resolved` says it needed nothing by then: another window took it off.
+      if (result.result !== "resolved") closeWhenEmpty.current = opening.current.seq;
+    },
+  });
+  const { busy, outcome } = actions;
+  /** One of this list's confirmations is open over it. */
+  const asking = actions.move !== null || actions.handling !== null;
 
   // Panes' Decisions state changes whenever an answer moves, but reaches only
   // their project's window; the question list reaches every window here, so
@@ -892,10 +694,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     if (focusMovedFor.current === seq && kept) return undefined;
     // A modal over this one keeps the focus it holds; one under it doesn't.
     if (active !== null && inModalOver(bodyRef.current, active)) return undefined;
+    // One of this list's confirmations, still open over it, keeps the keyboard it already had.
+    if (asking && kept) return undefined;
     // This opening's read has landed, so the rows marked for its pane are its pane's own.
     const target =
       loadError === null
-        ? listRef.current?.querySelector<HTMLElement>(`[data-for-pane] ${ITEM_ACTIONS}`)
+        ? listRef.current?.querySelector<HTMLElement>(`[data-for-pane] ${ATTENTION_ACTIONS}`)
         : null;
     if (target) {
       target.focus({ preventScroll: true });
@@ -904,18 +708,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       target.closest<HTMLElement>("[data-question-id]")?.scrollIntoView({ block: "nearest" });
     } else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
     return undefined;
-  }, [isOpen, loadError, readFor, request]);
-
-  // A confirmation asks about the item as it was read: once the list no longer
-  // shows it so (handled in another window, its round replaced, delivered),
-  // the confirmation goes rather than act on whatever the question holds now.
-  useEffect(() => {
-    if (list === null) return;
-    const stillShown = (asked: DecisionsAttentionItem) =>
-      items.some((item) => sameAttention(item, asked));
-    if (handling !== null && !stillShown(handling)) setHandling(null);
-    if (move !== null && !stillShown(move.item)) setMove(null);
-  }, [items, list, handling, move]);
+  }, [isOpen, loadError, readFor, request, asking]);
 
   // A row that moves keeps its saved place current, so when it does leave,
   // focus goes to the row that followed it where it last showed.
@@ -939,77 +732,10 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     if (active !== null && active !== document.body && document.contains(active)) return;
     const rows = listRef.current?.querySelectorAll<HTMLElement>("[data-question-id]") ?? [];
     const row = rows[Math.min(pending.index, rows.length - 1)];
-    const next = row?.querySelector<HTMLElement>(ITEM_ACTIONS);
+    const next = row?.querySelector<HTMLElement>(ATTENTION_ACTIONS);
     if (next) next.focus();
     else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
   }, [items, list]);
-
-  const run = async (
-    item: DecisionsAttentionItem,
-    kind: Busy,
-    action: () => Promise<DecisionsAnswerOutcome>
-  ) => {
-    setBusy((current) => new Map(current).set(item.questionId, kind));
-    if (kind === "resume")
-      announce(`Resuming the agent for ${aliasLabel(item.alias)}. ${RESUME_PENDING}`);
-    focusAfter.current = {
-      questionId: item.questionId,
-      index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
-    };
-    let next: Outcome;
-    try {
-      const result = await action();
-      next = {
-        message: outcomeText(item.alias, result, subjectOf(item)),
-        severity: outcomeSeverity(result),
-      };
-      if (!leavesList(result)) focusAfter.current = null;
-    } catch (error) {
-      focusAfter.current = null;
-      next = {
-        message: formatErrorMessage(
-          error,
-          `Couldn't change ${aliasLabel(item.alias)}'s ${subjectOf(item)}`
-        ),
-        severity: "warning",
-      };
-    }
-    setBusy((current) => {
-      const remaining = new Map(current);
-      remaining.delete(item.questionId);
-      return remaining;
-    });
-    setOutcome(next);
-    announce(next.message);
-    await refresh();
-  };
-
-  const askAbout = (item: DecisionsAttentionItem) => {
-    confirmFrom.current = {
-      questionId: item.questionId,
-      index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
-    };
-  };
-
-  // The item's token goes with it: main refuses once the question asks something else (#17944).
-  const markHandled = (item: DecisionsAttentionItem) =>
-    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId, item.token));
-
-  const confirmHandled = () => {
-    if (handling === null) return;
-    const item = handling;
-    setHandling(null);
-    markHandled(item);
-  };
-
-  const confirmMove = () => {
-    if (move === null) return;
-    const { item, destination } = move;
-    setMove(null);
-    void run(item, "reassign", () =>
-      decisionsClient.reassignAnswer(item.questionId, destination, item.token)
-    );
-  };
 
   // Opened from a chip, the close returns to that pane: its chip while it
   // shows, else the pane itself, since the chip goes with its last answer.
@@ -1035,7 +761,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       const row =
         rows.find((candidate) => candidate.dataset.questionId === from.questionId) ??
         rows[Math.min(Math.max(from.index, 0), rows.length - 1)];
-      const target = row?.querySelector<HTMLElement>(ITEM_ACTIONS);
+      const target = row?.querySelector<HTMLElement>(ATTENTION_ACTIONS);
       if (target) return target;
     }
     return bodyRef.current;
@@ -1125,21 +851,9 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
                     forPane={groups?.forPane.includes(item) ?? false}
                     worktreeName={worktreeName}
                     busy={busy.get(item.questionId) ?? null}
-                    onResume={() =>
-                      void run(item, "resume", () => decisionsClient.resumeAnswer(item.questionId))
-                    }
-                    onChoose={(destination) => {
-                      askAbout(item);
-                      setMove({ item, destination });
-                    }}
-                    onHandled={() => {
-                      if (!handledNeedsConfirm(item)) {
-                        markHandled(item);
-                        return;
-                      }
-                      askAbout(item);
-                      setHandling(item);
-                    }}
+                    onResume={() => actions.resume(item)}
+                    onChoose={(destination) => actions.choose(item, destination)}
+                    onHandled={() => actions.handle(item)}
                   />
                 ))}
               </ul>
@@ -1149,92 +863,15 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         {/* How many are left, and a rule that marks more below when the list scrolls. */}
         {count > 0 && <AppDialog.Footer hint={remainingText(count)} />}
       </AppDialog>
-      <ConfirmDialog
-        isOpen={move !== null}
-        onClose={() => setMove(null)}
-        zIndex="nested"
-        variant="default"
-        title={
-          move === null
-            ? ""
-            : `Send ${aliasLabel(move.item.alias)}'s ${subjectOf(move.item)} to ${paneName(
-                move.destination.title,
-                agentLabel(move.destination)
-              )}?`
-        }
-        description={
-          <span className="[text-wrap:pretty]">
-            {move === null ? "" : moveConfirmBody(subjectOf(move.item), move.destination.waitsFor)}
-          </span>
-        }
-        // The menu that opened it is its row's; when a fast move has already
-        // taken that row away, the close lands on the next row, else the one
-        // before, else the list's own place.
+      <AttentionConfirmations
+        actions={actions}
+        worktreeName={worktreeName}
+        // The menu or button that opened it is its row's; when a fast action has
+        // already taken that row away, the close lands on the next row, else the
+        // one before, else the list's own place.
         restoreFocusTo={restoreAfterConfirm}
-        confirmLabel={move === null ? "Send answer" : `Send ${subjectOf(move.item)}`}
-        onConfirm={confirmMove}
-      >
-        {move !== null && (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">
-            {move.item.question !== null && (
-              <>
-                <dt className="text-text-secondary">Question</dt>
-                <dd className="text-text-primary [text-wrap:pretty]">{move.item.question}</dd>
-              </>
-            )}
-            <dt className="text-text-secondary">From</dt>
-            <PaneLinesValue
-              lines={fromLines(
-                move.item,
-                worktreeName(move.item.origin.worktreeId, move.item.origin.worktreeName)
-              )}
-            />
-            <dt className="text-text-secondary">To</dt>
-            <PaneLinesValue
-              lines={toLines(
-                move.destination,
-                worktreeName(move.destination.worktreeId, move.destination.worktreeName)
-              )}
-            />
-          </dl>
-        )}
-      </ConfirmDialog>
-      <ConfirmDialog
-        isOpen={handling !== null}
-        onClose={() => setHandling(null)}
-        zIndex="nested"
-        variant="destructive"
-        title={handling === null ? "" : handledConfirmTitle(handling.alias)}
-        description={
-          <span className="[text-wrap:pretty]">
-            {handledConfirmBody(handling === null ? "answer" : subjectOf(handling))}
-          </span>
-        }
-        // Cancelling returns to the button that asked; once the row is gone,
-        // the close lands on the next row, else the one before, else the
-        // list's own place.
-        restoreFocusTo={restoreAfterConfirm}
-        confirmLabel="Mark handled"
-        onConfirm={confirmHandled}
-      >
-        {handling !== null && (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">
-            {handling.question !== null && (
-              <>
-                <dt className="text-text-secondary">Question</dt>
-                <dd className="text-text-primary [text-wrap:pretty]">{handling.question}</dd>
-              </>
-            )}
-            <dt className="text-text-secondary">From</dt>
-            <PaneLinesValue
-              lines={fromLines(
-                handling,
-                worktreeName(handling.origin.worktreeId, handling.origin.worktreeName)
-              )}
-            />
-          </dl>
-        )}
-      </ConfirmDialog>
+        restoreFocusOnClose={isOpen}
+      />
     </>
   );
 }
