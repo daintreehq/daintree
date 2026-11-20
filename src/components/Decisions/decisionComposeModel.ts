@@ -103,15 +103,31 @@ export interface ComposeVerdict {
   blockedOptions: readonly string[];
 }
 
-type Option = ShapedQuestion["options"][number];
+/**
+ * The library's own Approve and Reject (`APPROVAL_OPTIONS`), as an approval offers them when the
+ * agent names none and as the design-review gate puts them in place of any it named: these two,
+ * with no descriptions.
+ */
+const LIBRARY_APPROVAL = [
+  { id: "approve", label: "Approve" },
+  { id: "reject", label: "Reject" },
+] as const;
 
 /**
- * The library's own Reject, offered when the agent names no options and by the design-review
- * gate. Only it goes without an image that couldn't be shown: an agent's own options may reuse
- * its id, and nothing says which of them approves.
+ * Whether the question offers exactly the library's Approve and Reject. Only that Reject goes
+ * without an image that couldn't be shown: among an agent's own options, one may borrow its id
+ * and label, and nothing says which of them approves.
  */
-function isRejection(option: Option): boolean {
-  return option.id === "reject" && option.label === "Reject";
+function offersLibraryReject(options: ShapedQuestion["options"]): boolean {
+  return (
+    options.length === LIBRARY_APPROVAL.length &&
+    LIBRARY_APPROVAL.every((want) =>
+      options.some(
+        (option) =>
+          option.id === want.id && option.label === want.label && option.description === null
+      )
+    )
+  );
 }
 
 type Attachment = DecisionQuestionContent["attachments"][number];
@@ -158,17 +174,19 @@ export function composeVerdict(input: ComposeInput): ComposeVerdict {
   // Every choice waits on an image that can still be opened, Reject included, as on the phone.
   // One that can't be opened holds back all but Reject, so the person can ask for new images.
   const toOpen = remainingImages - unshown.length;
+  const rejectable = offersLibraryReject(question.options);
   const blockedOptions = shape.hasOptions
     ? question.options
-        .filter((option) => remainingImages > 0 && (toOpen > 0 || !isRejection(option)))
+        .filter(
+          (option) => remainingImages > 0 && (toOpen > 0 || !rejectable || option.id !== "reject")
+        )
         .map((option) => option.id)
     : [];
   const chosen = chosenOption(question, draft);
   const waiting = chosen !== null ? blockedOptions.includes(chosen) : remainingImages > 0;
-  const unshownHint =
-    unshown.length > 0 ? unshownText(question, unshown, question.options.some(isRejection)) : null;
+  const unshownHint = unshown.length > 0 ? unshownText(question, unshown, rejectable) : null;
 
-  let hint: string | null = null;
+  let hint: string | null;
   if (input.closed) hint = null;
   else if (input.stale) hint = "Review the updated question";
   // Before the choice: its options stay unavailable until then.
@@ -190,6 +208,15 @@ export function composeVerdict(input: ComposeInput): ComposeVerdict {
 
   const canSend = !input.closed && !input.stale && !waiting && hasAnswer && textOver === 0;
   return { canSend, hint, textOver, remainingImages, blockedOptions };
+}
+
+/**
+ * What's said beside Send: why it won't go yet; once it would, what happens when it does
+ * (`sendNote`), if that isn't simply "it goes", else why the other choices can't. Nothing
+ * when it can't be sent at all, since a note about sending would promise what can't happen.
+ */
+export function sendHint(verdict: ComposeVerdict, sendNote: string | null): string | null {
+  return verdict.canSend ? (sendNote ?? verdict.hint) : verdict.hint;
 }
 
 /** Whether the question still takes an answer: waiting, and not past its expiry. */

@@ -401,11 +401,23 @@ describe("DecisionQuestionDialog images (#17100)", () => {
   });
 
   it("reads the images again from the start when the question lists other ones", async () => {
+    // The reference image's first read is held, to land after the images change.
+    let releaseOld: (() => void) | undefined;
+    getQuestionImage.mockImplementation(({ attachmentId }) =>
+      attachmentId === REFERENCE.attachmentId && releaseOld === undefined
+        ? new Promise((resolve) => {
+            releaseOld = () => resolve(served(attachmentId));
+          })
+        : Promise.resolve(served(attachmentId))
+    );
     openView();
-    await screen.findByRole("button", { name: "Open Reference image 3" });
-    const made = createObjectURL.mock.results.map((result) => result.value as string);
-    const replacement = attachment("attach_000d", "reference", null);
-    current = { ...question([BEFORE, replacement]), revision: 1 };
+    await openImage("Before image 1");
+    const first = createObjectURL.mock.results.map((result) => String(result.value));
+    // The same image id under another digest: a replaced screenshot.
+    current = {
+      ...question([{ ...BEFORE, sha256: "e".repeat(64) }, AFTER, REFERENCE]),
+      revision: 1,
+    };
 
     act(() => {
       for (const listener of [...paneListeners]) {
@@ -419,13 +431,25 @@ describe("DecisionQuestionDialog images (#17100)", () => {
       }
     });
 
-    await screen.findByRole("button", { name: "Open Reference image 2" });
-    expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(made.sort());
+    // The viewer showed the image that was replaced, so it goes with it.
+    await waitFor(() => expect(screen.queryByTestId("decision-image-viewer")).toBeNull());
+    await screen.findByRole("button", { name: "Open Reference image 3" });
+    expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(first.sort());
     expect(
       getQuestionImage.mock.calls.filter(
         ([payload]) => payload.attachmentId === BEFORE.attachmentId
       )
     ).toHaveLength(2);
+
+    // The first read of the reference image lands late, and is dropped unseen.
+    const made = createObjectURL.mock.calls.length;
+    await act(async () => releaseOld!());
+    expect(createObjectURL.mock.calls.length).toBe(made);
+
+    act(() => useDecisionsQuestionViewStore.getState().close());
+    await waitFor(() => expect(screen.queryByTestId("decision-question-content")).toBeNull());
+    const created = createObjectURL.mock.results.map((result) => String(result.value));
+    expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(created.sort());
   });
 
   it("lets go of every image once the question closes", async () => {

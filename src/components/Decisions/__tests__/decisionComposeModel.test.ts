@@ -11,6 +11,7 @@ import {
   composeVerdict,
   isAnswerable,
   reviewedDigests,
+  sendHint,
   type ComposeInput,
 } from "../decisionComposeModel";
 
@@ -215,20 +216,41 @@ describe("composeVerdict", () => {
       expect(verdict).toMatchObject({ canSend: false, blockedOptions: ["approve", "reject"] });
     });
 
-    it("excuses nothing an agent's own options call Reject", () => {
-      const custom = question({
-        kind: "approval",
-        options: [
+    it.each([
+      [
+        "its own option borrowing Reject's id",
+        [
           { id: "ship", label: "Ship it", description: null },
           { id: "reject", label: "Ship anyway", description: null },
         ],
-        attachments: [image("x"), image("y")],
-      });
+      ],
+      [
+        "a Reject it describes",
+        [
+          { id: "approve", label: "Approve", description: null },
+          { id: "reject", label: "Reject", description: "Lift the freeze and deploy" },
+        ],
+      ],
+      [
+        "a third option beside Approve and Reject",
+        [...APPROVAL, { id: "later", label: "Later", description: null }],
+      ],
+    ])("excuses nothing when the agent offers %s", (_name, options) => {
+      const custom = question({ kind: "approval", options, attachments: [image("x"), image("y")] });
       const verdict = composeVerdict(
         input(custom, { selected: "reject", reviewed: seenX, unshown: failedY })
       );
-      expect(verdict).toMatchObject({ canSend: false, blockedOptions: ["ship", "reject"] });
+      expect(verdict.canSend).toBe(false);
+      expect(verdict.blockedOptions).toEqual(options.map((option) => option.id));
       expect(verdict.hint).toMatch(/decided/);
+    });
+
+    it("takes the library's Approve and Reject in either order", () => {
+      const reversed = { ...content, options: [...APPROVAL].reverse() };
+      const verdict = composeVerdict(
+        input(reversed, { selected: "reject", reviewed: seenX, unshown: failedY })
+      );
+      expect(verdict).toMatchObject({ canSend: true, blockedOptions: ["approve"] });
     });
 
     it("names one image and counts the rest when several couldn't be shown", () => {
@@ -237,6 +259,27 @@ describe("composeVerdict", () => {
       );
       expect(verdict.blockedOptions).toEqual(["approve"]);
       expect(verdict.hint).toMatch(/^After image 1 and 1 other image couldn't be shown/);
+
+      const three = question({
+        kind: "approval",
+        options: APPROVAL,
+        attachments: [{ ...image("w"), role: "other" }, image("x"), image("y")],
+      });
+      const [w] = three.attachments;
+      const named = composeVerdict(
+        input(three, {
+          reviewed: { [w!.attachmentId]: w!.sha256 },
+          unshown: { ...failedY, [x!.attachmentId]: x!.sha256 },
+        })
+      );
+      // The first that couldn't be shown, by its place among all of them.
+      expect(named.hint).toMatch(/^After image 2 and 1 other image couldn't be shown/);
+      const all = composeVerdict(
+        input(three, {
+          unshown: { ...failedY, [x!.attachmentId]: x!.sha256, [w!.attachmentId]: w!.sha256 },
+        })
+      );
+      expect(all.hint).toMatch(/^Image 1 and 2 other images couldn't be shown/);
     });
 
     it("says an over-long note before the image when Reject is chosen", () => {
@@ -261,6 +304,38 @@ describe("composeVerdict", () => {
         })
       );
       expect(verdict).toMatchObject({ canSend: true, hint: null, blockedOptions: [] });
+    });
+  });
+
+  describe("sendHint", () => {
+    const NOTE = "Sends once reconnected";
+    const approval = question({
+      kind: "approval",
+      options: [
+        { id: "approve", label: "Approve", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+      attachments: [image("x")],
+    });
+    const failedX = { x: approval.attachments[0]!.sha256 };
+
+    it("says why Send waits, over what happens when it goes", () => {
+      const verdict = composeVerdict(input(approval, { unshown: failedX }));
+      expect(sendHint(verdict, NOTE)).toBe(verdict.hint);
+      expect(sendHint(verdict, NOTE)).toMatch(/couldn't be shown/);
+    });
+
+    it("says what happens when it goes once it would, else why Approve can't", () => {
+      const verdict = composeVerdict(input(approval, { selected: "reject", unshown: failedX }));
+      expect(verdict.canSend).toBe(true);
+      expect(sendHint(verdict, NOTE)).toBe(NOTE);
+      expect(sendHint(verdict, null)).toMatch(/couldn't be shown/);
+      expect(sendHint(composeVerdict(input(question(), { selected: "a" })), null)).toBeNull();
+    });
+
+    it("promises nothing about sending a draft that can't be sent at all", () => {
+      const verdict = composeVerdict(input(question(), { selected: "a", closed: true }));
+      expect(sendHint(verdict, NOTE)).toBeNull();
     });
   });
 

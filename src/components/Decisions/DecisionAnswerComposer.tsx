@@ -29,6 +29,7 @@ import {
   composeShape,
   composeVerdict,
   isAnswerable,
+  sendHint,
   type AnswerDraft,
   type UnshownImages,
 } from "./decisionComposeModel";
@@ -312,9 +313,7 @@ export function DecisionAnswerComposer({
     );
   }
 
-  // Why Send won't go yet; once it would, what happens when it does, if that isn't simply
-  // "it goes", else why the other choices can't (an image that couldn't be shown).
-  const hint = verdict.canSend ? (sendNote ?? verdict.hint) : (verdict.hint ?? sendNote);
+  const hint = sendHint(verdict, sendNote);
   const shortcut = isMac() ? "Meta+Enter" : "Control+Enter";
 
   return (
