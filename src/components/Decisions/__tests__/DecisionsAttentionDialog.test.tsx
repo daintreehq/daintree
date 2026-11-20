@@ -452,7 +452,7 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     const row = screen.getByTestId("decisions-attention-item");
 
     expect(row.textContent).toContain("This timeout notice may or may not have been delivered.");
-    expect(row.textContent).toContain("Typing it in was interrupted");
+    expect(row.textContent).toContain("Daintree stopped while typing it in");
     expect(row.textContent).toContain("Timeout notice, may or may not have been typed in");
     expect(row.textContent).not.toMatch(/told the agent|went ahead/);
     expect(within(row).queryByRole("button", { name: /Try resume/ })).toBeNull();
