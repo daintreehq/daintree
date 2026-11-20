@@ -1064,7 +1064,8 @@ export class ActivityMonitor {
    * classifier's, which is wider than the prompt scan since an approval's
    * selector sits above the input box — with room beneath for the task
    * checklist Claude Code draws under an open dialog, which is set aside
-   * rather than counted against the window.
+   * rather than counted against the window. A settle on the agent's own input
+   * row carries when it was read (#18018).
    */
   private settleReading(
     lines: string[],
