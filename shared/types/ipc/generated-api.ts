@@ -599,6 +599,9 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    hostAttention(
+      ...args: IpcInvokeMap["decisions:host-attention"]["args"]
+    ): Promise<IpcInvokeMap["decisions:host-attention"]["result"]>;
     listAnswerDestinations(
       ...args: IpcInvokeMap["decisions:list-answer-destinations"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-answer-destinations"]["result"]>;

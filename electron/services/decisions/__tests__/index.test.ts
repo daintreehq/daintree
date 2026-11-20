@@ -507,6 +507,11 @@ import { events } from "../../events.js";
 import { readUserPresence } from "../../userPresence.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
 import type {
+  DecisionsAttentionItem,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../../shared/types/decisionsAttention.js";
+import type {
   DecisionsHostLink,
   DecisionsHostQuestionRead,
   DecisionsHostQuestions,
@@ -553,8 +558,10 @@ import {
   getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
   getDecisionQuestionSummariesByReference,
+  actOnHostAttention,
   cancelDecisionQuestionByReference,
   cancelHostServedQuestion,
+  hostServedAttention,
   readHostServedQuestion,
   getDecisionsPaneState,
   getDecisionsPolicy,
@@ -851,6 +858,7 @@ describe("Decisions entry", () => {
       },
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
+      hostAttention: () => null,
       lastHostRead: () => null,
       onAgentStopChanges: () => () => {},
     });
@@ -1935,6 +1943,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          hostAttention: () => null,
           lastHostRead: () => null,
           onAgentStopChanges: () => () => {},
           ...over,
@@ -2210,6 +2219,93 @@ describe("Decisions entry", () => {
         expect(cancelQuestionByReference).not.toHaveBeenCalled();
       });
 
+      it("resolves a Host's stopped delivery on that Host alone, never on a delivery here (#18031)", async () => {
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        const current = await running({ markHandled, resumeAnswer });
+        const expected = "b".repeat(64);
+        let outcome: HostCallOutcome<DecisionsHostAttentionAnswer> = {
+          ok: true,
+          value: { result: "acted", outcome: { result: "handled" } },
+        };
+        const hostAttention = vi.fn((request: DecisionsHostAttentionRequest) =>
+          request.reference.hostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({ hostAttention });
+        const unknown = { ...ON_HOST, hostId: "qhost_unknown_0001" };
+        try {
+          await expect(
+            actOnHostAttention({ action: "handled", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "acted", outcome: { result: "handled" } });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          // With no delivery of its own running, this computer still reaches the Host.
+          current.delivery = null;
+          await expect(
+            actOnHostAttention({ action: "resume", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "unreachable", failure: "outcome-unknown" });
+          // This computer's own question, or one no Host lists, under the same id: never acted on here.
+          for (const reference of [{ ...OWN, questionId: ON_HOST.questionId }, unknown]) {
+            await expect(
+              actOnHostAttention({ action: "handled", reference, expected })
+            ).resolves.toEqual({ result: "no-host" });
+          }
+          expect(hostAttention.mock.calls).toEqual([
+            [{ action: "handled", reference: ON_HOST, expected }],
+            [{ action: "resume", reference: ON_HOST, expected }],
+            [{ action: "handled", reference: unknown, expected }],
+          ]);
+          expect(markHandled).not.toHaveBeenCalled();
+          expect(resumeAnswer).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("serves a Host's stopped delivery to its owner through this machine's delivery, only as a Host (#18031)", async () => {
+        const item = { questionId: OWN.questionId } as DecisionsAttentionItem;
+        const attentionItem = vi.fn(async () => item);
+        const copiedAnswer = vi.fn(async () => "copied");
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        await running({ attentionItem, copiedAnswer, markHandled, resumeAnswer });
+        const expected = "c".repeat(64);
+        const requests: DecisionsHostAttentionRequest[] = [
+          { action: "read", reference: OWN },
+          { action: "copy", reference: OWN },
+          { action: "resume", reference: OWN, expected },
+          { action: "handled", reference: OWN, expected },
+        ];
+
+        // Running as an owner itself, it serves no owner's Shell over the link.
+        for (const request of requests) {
+          await expect(hostServedAttention(request)).resolves.toEqual({ result: "off" });
+        }
+        expect(attentionItem).not.toHaveBeenCalled();
+        expect(markHandled).not.toHaveBeenCalled();
+
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+        await expect(hostServedAttention(requests[0]!)).resolves.toEqual({ result: "read", item });
+        await expect(hostServedAttention(requests[1]!)).resolves.toEqual({
+          result: "copied",
+          text: "copied",
+        });
+        await expect(hostServedAttention(requests[2]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "resolved" },
+        });
+        await expect(hostServedAttention(requests[3]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "handled" },
+        });
+        expect(attentionItem).toHaveBeenCalledExactlyOnceWith(OWN);
+        expect(copiedAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, OWN);
+        expect(resumeAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, {
+          reference: OWN,
+          expected,
+        });
+        expect(markHandled).toHaveBeenCalledExactlyOnceWith(OWN.questionId, expected, OWN);
+      });
+
       it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {
         const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
           ids.map((questionId) => ({ questionId, result: "read" as const, line: "Here?" }))
@@ -2315,6 +2411,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -2871,6 +2968,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          hostAttention: () => null,
           lastHostRead: () => null,
           onAgentStopChanges: (listener) => {
             listeners.add(listener);
@@ -2964,6 +3062,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: (listener) => {
           port.tell = listener;
@@ -3408,6 +3507,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -5679,6 +5779,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -5727,6 +5828,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       };

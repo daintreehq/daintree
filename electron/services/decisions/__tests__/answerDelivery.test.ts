@@ -3865,3 +3865,190 @@ describe("AnswerDelivery, the whole question in the needs-attention list (#18055
     await stopped(h.delivery);
   });
 });
+
+describe("AnswerDelivery, a stopped delivery acted on from the owner's Shell (#18031)", () => {
+  const REFERENCE = { hostId: HOST, projectId: "project-1", terminalId: PANE, questionId: Q1 };
+
+  /** An answer whose pane closed: Try resume, Copy and Mark handled are all on offer. */
+  async function stalled(h: ReturnType<typeof setup>) {
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    h.client.terminals.delete(PANE);
+  }
+
+  it("reads the item the list shows, only by the reference that names it", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+
+    const [listed] = await h.delivery.attentionItems();
+    expect(listed).toMatchObject({ questionId: Q1, canResume: true });
+    expect(await h.delivery.attentionItem(REFERENCE)).toEqual(listed);
+    for (const other of [
+      { ...REFERENCE, hostId: "host-other-01" },
+      { ...REFERENCE, projectId: "project-2" },
+      { ...REFERENCE, terminalId: "pane-2" },
+      { ...REFERENCE, questionId: Q2 },
+    ]) {
+      expect(await h.delivery.attentionItem(other)).toBeNull();
+    }
+    expect(await h.delivery.copiedAnswer(Q1, { ...REFERENCE, terminalId: "pane-2" })).toBeNull();
+    expect(await h.delivery.copiedAnswer(Q1, REFERENCE)).toContain("approve");
+
+    expect(await h.delivery.markHandled(Q1, listed!.token, REFERENCE)).toEqual({
+      result: "handled",
+    });
+    expect(await h.delivery.attentionItem(REFERENCE)).toBeNull();
+  });
+
+  it("handles nothing for a reference naming another pane, and handles once across two windows", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+
+    expect(
+      await h.delivery.markHandled(Q1, read.token, { ...REFERENCE, terminalId: "pane-2" })
+    ).toEqual({ result: "resolved" });
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+
+    // This Host's own window and the owner's Shell confirm the same read at once.
+    const results = await Promise.all([
+      h.delivery.markHandled(Q1, read.token),
+      h.delivery.markHandled(Q1, read.token, REFERENCE),
+    ]);
+    expect(results.map((r) => r.result).sort()).toEqual(["handled", "resolved"]);
+    const handled = (await h.store.listAudit(500)).filter((e) => e.event === "delivery.handled");
+    expect(handled).toHaveLength(1);
+  });
+
+  /** A correction the phone sent after the owner read the item: readable, resumable, new token. */
+  async function corrected(h: ReturnType<typeof setup>) {
+    const row = (await h.question(Q1))!;
+    const [first] = parseAnswers(row.answers_json);
+    await h.store.updateQuestion(Q1, {
+      answers_json: serializeAnswers([
+        { ...first!, deliver: false },
+        {
+          ...first!,
+          entry_id: `${Q1}-a2`,
+          revision: 2,
+          correction: true,
+          sealed: await sealAnswerContent({ identity }, Q1, `${Q1}-a2`, 2, {
+            choices: [{ id: "hold", label: "hold" }],
+            text: "Hold off.",
+            reviewed_attachment_digests: [],
+          }),
+        },
+      ]),
+    });
+  }
+
+  it("refuses an owner's resume or Mark handled confirmed before a correction, and acts on neither", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    await corrected(h);
+    const now = (await h.delivery.attentionItem(REFERENCE))!;
+    // The correction is one a person could resume from here: only the token tells them apart.
+    expect(now).toMatchObject({ canResume: true, answer: { choices: ["hold"], correction: true } });
+    expect(now.token).not.toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(await h.delivery.markHandled(Q1, read.token, REFERENCE)).toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    expect(h.launches).toEqual([]);
+    expect(await h.delivery.attentionItem(REFERENCE)).toEqual(now);
+    const audit = (await h.store.listAudit(500)).map((e) => e.event);
+    expect(audit).not.toContain("delivery.retry-requested");
+    expect(audit).not.toContain("delivery.handled");
+  });
+
+  it("resumes nothing for a reference naming another pane or project, though its token holds", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+
+    for (const reference of [
+      { ...REFERENCE, terminalId: "pane-2" },
+      { ...REFERENCE, projectId: "project-2" },
+    ]) {
+      expect(await h.delivery.resumeAnswer(Q1, { reference, expected: read.token })).toEqual({
+        result: "resolved",
+      });
+    }
+    expect(h.launches).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.retry-requested")).toBe(
+      false
+    );
+  });
+
+  it("refuses an owner's resume once its answer can't be opened here, though the token and session hold", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    const row = (await h.question(Q1))!;
+    const [first] = parseAnswers(row.answers_json);
+    // Sealed for another entry: it no longer opens, and nothing the token covers changed.
+    await h.store.updateQuestion(Q1, {
+      answers_json: serializeAnswers([
+        {
+          ...first!,
+          sealed: await sealAnswerContent({ identity }, Q1, `${Q1}-other`, 1, {
+            choices: [{ id: "approve", label: "approve" }],
+            text: "",
+            reviewed_attachment_digests: [],
+          }),
+        },
+      ]),
+    });
+    const now = (await h.delivery.attentionItem(REFERENCE))!;
+    expect(now).toMatchObject({ canResume: false, answerUnavailable: "unreadable" });
+    expect(now.token).toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(h.launches).toEqual([]);
+  });
+
+  it("refuses an owner's resume once this machine would no longer offer one, though the token holds", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    expect(read.canResume).toBe(true);
+    // The session it would resume is forgotten: nothing the token covers changed.
+    await h.store.updateQuestion(Q1, { origin: { ...ORIGIN, agent_session_id: null } });
+    expect((await h.delivery.attentionItem(REFERENCE))!.token).toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(h.launches).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.retry-requested")).toBe(
+      false
+    );
+  });
+
+  it("resumes for the owner as for a window here, and types the answer into the resumed run", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    h.delivery.start();
+
+    const resumed = settledValue(
+      h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    );
+    await until(() => resumed.done);
+    expect(resumed.value).toMatchObject({ result: "delivered", terminalId: RESUMED });
+    expect(h.launches).toHaveLength(1);
+    expect(typedChoices(h.client.submitted[0]!.text)).toEqual(["approve"]);
+    await stopped(h.delivery);
+  });
+});

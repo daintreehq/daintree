@@ -144,6 +144,11 @@ import { useAttentionActions } from "./useAttentionActions";
 import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
 import { replyRequest } from "./decisionFollowUpModel";
 import { useInboxAttentionItem } from "./useInboxAttentionItem";
+import {
+  HostAttentionActions,
+  HostAttentionStatus,
+  useHostAttention,
+} from "./HostAttentionActions";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -1295,7 +1300,7 @@ export function DecisionsInboxDialog() {
   const { reach, markGone } = useTerminalReach(selected, active);
   const selectedAsker = selected === null ? null : askerNotes(selected);
   // A stopped delivery on this computer is resolved here, in the detail, rather than in a
-  // second list over it (#18027). A Remote Host's stall stays that Host's.
+  // second list over it (#18027). A Remote Host's stall is read and resolved through its Host.
   const attention = useInboxAttentionItem(selected, active, request.seq);
   const attentionItem = attention.read.state === "found" ? attention.read.item : null;
   const attentionWorktreeName = useWorktreeNames();
@@ -1333,6 +1338,7 @@ export function DecisionsInboxDialog() {
       clearOutcome(attentionScope, supersededToken);
     }
   }, [supersededToken, attentionScope, clearOutcome]);
+  const hostAttention = useHostAttention(selected, active);
   const questionHeadingId = useId();
   // `reached` once its question has been the one shown, so a later choice of another abandons it.
   const pendingFocus = useRef<{
@@ -2078,6 +2084,15 @@ export function DecisionsInboxDialog() {
                               ? "Delivery uncertain"
                               : "Delivery stopped"
                           }
+                          action={
+                            // This computer's stall is resolved below; a Remote Host's, as it offers it.
+                            selected.remoteHost === undefined ? undefined : (
+                              <HostAttentionActions
+                                attention={hostAttention}
+                                fallbackFocus={detailRef}
+                              />
+                            )
+                          }
                           data-testid="decisions-inbox-attention"
                         >
                           {attentionText(selected)}
@@ -2142,6 +2157,7 @@ export function DecisionsInboxDialog() {
                         {attentionOutcome.message}
                       </Callout>
                     )}
+                    <HostAttentionStatus attention={hostAttention} fallbackFocus={detailRef} />
                     <DecisionQuestionReadView
                       reader={reader}
                       target={shownTarget}

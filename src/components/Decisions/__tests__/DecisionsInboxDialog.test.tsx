@@ -27,6 +27,8 @@ import type {
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
 } from "@shared/types/decisionsAttention";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -127,6 +129,8 @@ const reassignAnswer =
 const listAnswerDestinations =
   vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
 const copyAnswer = vi.fn<(questionId: string) => Promise<string>>();
+const hostAttention =
+  vi.fn<(request: DecisionsHostAttentionRequest) => Promise<DecisionsHostAttentionResult>>();
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 
@@ -395,6 +399,7 @@ beforeEach(() => {
     isOpen: false,
     request: { terminalId: null, returnFocusTo: null, seq: 0 },
   });
+  hostAttention.mockReset().mockResolvedValue({ result: "no-host" });
   Reflect.set(window, "electron", {
     decisions: {
       listQuestions,
@@ -412,6 +417,7 @@ beforeEach(() => {
       reassignAnswer,
       listAnswerDestinations,
       copyAnswer,
+      hostAttention,
     },
     events: {
       on: (
@@ -1759,6 +1765,334 @@ describe("DecisionsInboxDialog", () => {
     } finally {
       CONTENT["question-3"] = shown;
     }
+  });
+
+  describe("a Remote Host's stopped delivery (#18031)", () => {
+    const HOST_REFERENCE = reference("question-7", { hostId: "qhost_studio_0001" });
+    const TOKEN = "e".repeat(64);
+    const stalledOnHost = (connected = true, reason = "pane_gone") =>
+      item(
+        "question-7",
+        7,
+        { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        {
+          reference: HOST_REFERENCE,
+          remoteHost: { hostId: "studio", name: "Studio", connected },
+          stall: { answerRevision: 1, followUpIds: [], reason },
+        }
+      );
+    const hostItem = (over: Partial<DecisionsAttentionItem> = {}): DecisionsAttentionItem => ({
+      questionId: "question-7",
+      alias: 7,
+      status: "needs-attention",
+      reason: "pane_gone",
+      question: "Body of question 7",
+      fullQuestion: null,
+      plan: null,
+      reference: HOST_REFERENCE,
+      askedAt: "2026-11-02T10:00:00.000Z",
+      origin: {
+        projectId: "project-a",
+        projectName: "Alpha",
+        worktreeId: "w1",
+        worktreeName: "feature-x",
+        agentId: "claude",
+        agentName: "Claude",
+        paneId: "t1",
+        paneTitle: null,
+        otherHost: { hostId: "qhost_studio_0001", name: "Studio" },
+      },
+      answer: {
+        source: "human",
+        choices: ["Ship it"],
+        text: null,
+        correction: false,
+        answeredAt: "2026-11-02T10:05:00.000Z",
+      },
+      answerUnavailable: null,
+      notice: null,
+      followUps: [],
+      canResume: true,
+      canReassign: false,
+      token: TOKEN,
+      ...over,
+    });
+    const hostButton = (name: "resume" | "copy" | "handled") =>
+      screen.queryByTestId(`decisions-host-${name}`);
+
+    beforeEach(() => {
+      CONTENT["question-7"] = content("question-7", 7, {
+        status: "human-answered",
+        reference: HOST_REFERENCE,
+        deliveryStatus: "needs-attention",
+      });
+      listQuestions.mockResolvedValue({ revision: 2, questions: [stalledOnHost()] });
+    });
+
+    async function showStall() {
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(1));
+      fireEvent.click(rowNamed("q-7"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 7"));
+    }
+
+    it("offers nothing until the Host answers, then what it offers, and marks it handled there with the token read", async () => {
+      let answerRead: (result: DecisionsHostAttentionResult) => void = () => {};
+      hostAttention.mockImplementation(async (request) => {
+        if (request.action === "read") {
+          return new Promise((resolve) => {
+            answerRead = resolve;
+          });
+        }
+        if (request.action === "copy") return { result: "copied", text: "<copied block>" };
+        return { result: "acted", outcome: { result: "handled" } };
+      });
+      const writeText = vi.fn(async (_text: string) => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      onTestFinished(() => {
+        Reflect.deleteProperty(navigator, "clipboard");
+      });
+      await showStall();
+      await waitFor(() =>
+        expect(hostAttention).toHaveBeenCalledWith({ action: "read", reference: HOST_REFERENCE })
+      );
+      expect(hostButton("handled")).toBeNull();
+      expect(hostButton("resume")).toBeNull();
+      expect(hostButton("copy")).toBeNull();
+      expect(screen.queryByTestId("decisions-inbox-review-attention")).toBeNull();
+
+      act(() => answerRead({ result: "read", item: hostItem() }));
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+      expect(hostButton("resume")).not.toBeNull();
+      // What the controls act on, from the same read as their token.
+      expect(screen.getByTestId("decisions-host-attention-waiting").textContent).toBe(
+        "Waiting on Studio: the answer “Ship it”"
+      );
+      fireEvent.click(hostButton("copy")!);
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("<copied block>"));
+      expect(hostAttention).toHaveBeenCalledWith({ action: "copy", reference: HOST_REFERENCE });
+
+      // A resume is on offer, so handling it asks first, in words that offer no other pane.
+      fireEvent.click(hostButton("handled")!);
+      const asking = await screen.findByRole("alertdialog");
+      expect(asking.textContent).toContain("Mark q-7 handled?");
+      expect(asking.textContent).toContain("Studio");
+      expect(asking.textContent).not.toContain("Choose destination");
+      fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-outcome").textContent).toContain(
+          "marked handled"
+        )
+      );
+      expect(hostAttention).toHaveBeenCalledWith({
+        action: "handled",
+        reference: HOST_REFERENCE,
+        expected: TOKEN,
+      });
+      expect(hostButton("handled")).toBeNull();
+      // The Host's own list then leaves it: the outcome outlasts the warning.
+      push({
+        revision: 3,
+        questions: [
+          {
+            ...stalledOnHost(),
+            standing: { kind: "settled", outcome: "answered", handled: true },
+            stall: null,
+          },
+        ],
+      });
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-attention")).toBeNull());
+      expect(screen.getByTestId("decisions-host-attention-outcome")).not.toBeNull();
+    });
+
+    it("says what resolving it here needs on a Host from before, offering no action", async () => {
+      hostAttention.mockResolvedValue({ result: "unreachable", failure: "needs-update" });
+      await showStall();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-note").textContent).toBe(
+          "Update Daintree on Studio to resolve this from here."
+        )
+      );
+      expect(
+        within(screen.getByTestId("decisions-inbox-attention")).queryAllByRole("button")
+      ).toEqual([]);
+      expect(screen.queryByTestId("decisions-host-attention-failed")).toBeNull();
+    });
+
+    it("says to reconnect when the link drops before the list says so, and offers a retry for a read that failed", async () => {
+      hostAttention.mockResolvedValueOnce({ result: "unreachable", failure: "disconnected" });
+      await showStall();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-note").textContent).toBe(
+          "Reconnect to Studio to resolve this from here."
+        )
+      );
+      expect(hostButton("handled")).toBeNull();
+
+      // A read that came back unreadable is worth another try, never an update to install.
+      hostAttention
+        .mockResolvedValueOnce({ result: "unreachable", failure: "unexpected-answer" })
+        .mockResolvedValue({ result: "read", item: hostItem() });
+      push({ revision: 3, questions: [stalledOnHost(true, "resume_timeout")] });
+      const failed = await screen.findByTestId("decisions-host-attention-failed");
+      expect(screen.queryByTestId("decisions-host-attention-note")).toBeNull();
+      fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+    });
+
+    it("offers no resume the Host wouldn't, and asks first only while handling it takes another way away", async () => {
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem({ canResume: false, canReassign: true }) }
+          : { result: "acted", outcome: { result: "handled" } }
+      );
+      await showStall();
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+      expect(hostButton("resume")).toBeNull();
+
+      // Another of the Host's panes could still take it there, so handling it here asks first.
+      fireEvent.click(hostButton("handled")!);
+      const asking = await screen.findByRole("alertdialog");
+      expect(asking.textContent).toContain("Choose destination on Studio");
+      fireEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem({ canResume: false, canReassign: false }) }
+          : { result: "acted", outcome: { result: "handled" } }
+      );
+      push({ revision: 3, questions: [stalledOnHost(true, "resume_timeout")] });
+      await waitFor(() =>
+        expect(hostAttention.mock.calls.filter(([r]) => r.action === "read")).toHaveLength(2)
+      );
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+      fireEvent.click(hostButton("handled")!);
+      await waitFor(() =>
+        expect(hostAttention).toHaveBeenCalledWith({
+          action: "handled",
+          reference: HOST_REFERENCE,
+          expected: TOKEN,
+        })
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("never says nothing changed when the Host's answer to an action was lost", async () => {
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem({ canResume: false }) }
+          : { result: "unreachable", failure: "outcome-unknown" }
+      );
+      await showStall();
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+
+      fireEvent.click(hostButton("handled")!);
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-outcome").textContent).toContain(
+          "may or may not have changed"
+        )
+      );
+      // Read again, never sent again.
+      await waitFor(() =>
+        expect(hostAttention.mock.calls.filter(([r]) => r.action === "read")).toHaveLength(2)
+      );
+      expect(hostAttention.mock.calls.filter(([r]) => r.action === "handled")).toHaveLength(1);
+    });
+
+    it("says to reconnect while its Host is away, and asks it nothing", async () => {
+      listQuestions.mockResolvedValue({ revision: 2, questions: [stalledOnHost(false)] });
+      await showStall();
+
+      expect(screen.getByTestId("decisions-host-attention-note").textContent).toBe(
+        "Reconnect to Studio to resolve this from here."
+      );
+      expect(hostAttention).not.toHaveBeenCalled();
+      expect(hostButton("handled")).toBeNull();
+    });
+
+    it("drops a confirmation once the Host goes away, and once the question asks something new", async () => {
+      let token = TOKEN;
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem({ token }) }
+          : { result: "acted", outcome: { result: "handled" } }
+      );
+      await showStall();
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+
+      fireEvent.click(hostButton("handled")!);
+      await screen.findByRole("alertdialog");
+      push({ revision: 3, questions: [stalledOnHost(false)] });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.getByTestId("decisions-host-attention-note").textContent).toContain(
+        "Reconnect to Studio"
+      );
+
+      // Back on the same stall, nothing of the last read comes back before the Host answers again.
+      let answerRead: () => void = () => {};
+      hostAttention.mockImplementation((request) =>
+        request.action === "read"
+          ? new Promise((resolve) => {
+              answerRead = () => resolve({ result: "read", item: hostItem({ token }) });
+            })
+          : Promise.resolve({ result: "acted", outcome: { result: "handled" } })
+      );
+      push({ revision: 4, questions: [stalledOnHost(true)] });
+      await waitFor(() =>
+        expect(hostAttention.mock.calls.filter(([r]) => r.action === "read")).toHaveLength(2)
+      );
+      expect(hostButton("handled")).toBeNull();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      act(() => answerRead());
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem({ token }) }
+          : { result: "acted", outcome: { result: "handled" } }
+      );
+      fireEvent.click(hostButton("handled")!);
+      await screen.findByRole("alertdialog");
+      // A correction reaches the Host: its list says the stall changed, and a new read a new token.
+      token = "f".repeat(64);
+      push({ revision: 5, questions: [stalledOnHost(true, "resume_timeout")] });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(hostAttention.mock.calls.some(([request]) => request.action === "handled")).toBe(
+        false
+      );
+    });
+
+    it("resumes on the Host with the token read, and says what became of it", async () => {
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read"
+          ? { result: "read", item: hostItem() }
+          : {
+              result: "acted",
+              outcome: {
+                result: "needs-attention",
+                status: "needs-attention",
+                reason: "resume_timeout",
+              },
+            }
+      );
+      await showStall();
+      await waitFor(() => expect(hostButton("resume")).not.toBeNull());
+
+      fireEvent.click(hostButton("resume")!);
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-outcome").textContent).toContain(
+          "still needs attention"
+        )
+      );
+      expect(hostAttention).toHaveBeenCalledWith({
+        action: "resume",
+        reference: HOST_REFERENCE,
+        expected: TOKEN,
+      });
+    });
   });
 
   describe("a Remote Host's question while its Host is away (#17946)", () => {

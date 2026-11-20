@@ -61,6 +61,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   listAnswerDestinations: "decisions:list-answer-destinations",
   reassignAnswer: "decisions:reassign-answer",
   markAnswerHandled: "decisions:mark-answer-handled",
+  hostAttention: "decisions:host-attention",
   getModel: "decisions:get-model",
   setModel: "decisions:set-model",
   startModelEvaluation: "decisions:start-model-evaluation",

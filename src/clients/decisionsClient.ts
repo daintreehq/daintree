@@ -4,6 +4,8 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
 } from "@shared/types/decisionsAttention";
 import type {
   AnswerDecisionQuestionPayload,
@@ -171,6 +173,14 @@ export const decisionsClient = {
       questionId,
       ...(expected !== undefined ? { expected } : {}),
     }),
+
+  /**
+   * One of a Remote Host's stopped deliveries, read or acted on on that Host
+   * by its reference (#18031). A resume or Mark handled names the token of
+   * the item the person saw.
+   */
+  hostAttention: (request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> =>
+    window.electron.decisions.hostAttention(request),
 
   /** This view's whole set of hybrid-input draft keys; an answer waits behind a draft (#16282). */
   reportComposerDrafts: (keys: string[]): Promise<void> =>
