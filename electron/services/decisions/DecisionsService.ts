@@ -599,7 +599,12 @@ export class DecisionsService {
     this.applyModel();
     this.reconcileConnection();
     // The list names questions by this machine's host id: a forgotten or new one lists again now.
-    if (hostChanged) void this.feed?.refresh();
+    if (hostChanged) {
+      // What the old id counted raises no run meanwhile, however long the read takes.
+      this.disarmQuestionDeadline();
+      this.panes.setQuestions(new Map());
+      void this.feed?.refresh();
+    }
   }
 
   /**
@@ -907,6 +912,7 @@ export class DecisionsService {
         () => {
           this.questionDeadline = null;
           if (this.disposed || this.state === "off" || this.feed !== feed) return;
+          if ((this.settings?.hostId ?? null) !== hostId) return;
           this.panes.setQuestions(this.countQuestions(questions, hostId, asks, marks));
         },
         next === null ? DEADLINE_RECHECK_MS : Math.min(next - now, DEADLINE_RECHECK_MS)

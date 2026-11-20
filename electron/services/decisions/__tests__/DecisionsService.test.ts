@@ -1002,6 +1002,20 @@ describe("DecisionsService question list (#17229)", () => {
     await service.stop();
   });
 
+  it("raises no run for what an old host id counted while the read for a new one is held", async () => {
+    const { service, attention, setRows, hold } = listed();
+    setRows([row(1, { expires_at: new Date(Date.now() + 60_000).toISOString() })]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
+    const release = hold();
+    service.updateSettings(on({ hostId: "host_2" }));
+    expect(attention.at(-1)?.size).toBe(0);
+    release();
+    await service.stop();
+  });
+
   it("raises a Remote Host lifetime's own questions on its fleet, which has no marks to clear them", async () => {
     const { service, attention, setRows, setMarks } = listed();
     setMarks(
