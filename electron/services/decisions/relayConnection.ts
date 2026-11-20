@@ -3,6 +3,7 @@ import {
   RelayClient,
   RelayError,
   loadIdentity,
+  type AgentStoppedPushResult,
   type DecisionLearner,
   type DesktopRole,
   type Identity,
@@ -44,6 +45,7 @@ import {
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
 import { DesktopPresence, type DesktopPresenceOptions } from "./desktopPresence.js";
+import { AgentStoppedPushes, type AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
 import { watchNetwork } from "../../utils/networkWatch.js";
 import { logWarn } from "../../utils/logger.js";
 
@@ -171,6 +173,14 @@ export interface RelayConnectionOptions {
    * the connection through `presenceChanged`.
    */
   presence?: Omit<DesktopPresenceOptions, "report">;
+  /**
+   * Telling the person's phone that one of this computer's agents stopped
+   * while they were away (#17319), through whichever attempt's bridge is live
+   * when a batch goes out, for the owner's connection only: a Remote Host's
+   * bridge is refused it. A change to what `allowed` reads reaches the
+   * connection through `agentStoppedPushesChanged`.
+   */
+  agentStopped?: Omit<AgentStoppedPushesOptions, "send">;
   watchResume?: (onResume: () => void) => () => void;
   watchNetwork?: (onChange: (online: boolean) => void) => () => void;
   now?: () => number;
@@ -291,6 +301,7 @@ export class RelayConnection {
   private readonly lock = newBridgeLock();
   private readonly snapshots: PaneSnapshots | null;
   private readonly presence: DesktopPresence | null;
+  private readonly agentStopped: AgentStoppedPushes | null;
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
@@ -314,6 +325,15 @@ export class RelayConnection {
             // A store that stopped writing can't record a question's notification, so none shows.
             allowed: () => !this.o.store.isFaulted?.() && presence.allowed(),
             report: (present) => this.reportPresence(present),
+          })
+        : null;
+    const agentStopped = options.agentStopped;
+    this.agentStopped =
+      agentStopped && (options.role ?? "owner-desktop") === "owner-desktop"
+        ? new AgentStoppedPushes({
+            ...agentStopped,
+            allowed: () => !this.o.store.isFaulted?.() && agentStopped.allowed(),
+            send: () => this.requestAgentStoppedPush(),
           })
         : null;
   }
@@ -344,6 +364,15 @@ export class RelayConnection {
    */
   presenceChanged(): void {
     if (!this.ended && this.identity !== null) this.presence?.update();
+  }
+
+  /**
+   * Whether agent-stopped pushes may be asked for may have changed (#17319):
+   * the switch, or Decisions being turned off. Out of turn is fine: it starts
+   * nothing else.
+   */
+  agentStoppedPushesChanged(): void {
+    if (!this.ended && this.identity !== null) this.agentStopped?.update();
   }
 
   /**
@@ -465,6 +494,7 @@ export class RelayConnection {
       })
     );
     this.presence?.update();
+    this.agentStopped?.update();
     this.begin();
   }
 
@@ -845,6 +875,18 @@ export class RelayConnection {
     bridge.reportPresence(present);
   }
 
+  /**
+   * Asks the bridge live now for an agent-stopped push; null when none is
+   * (between attempts, or one still starting), so a batch is dropped rather
+   * than held for a later one.
+   */
+  private requestAgentStoppedPush(): Promise<AgentStoppedPushResult> | null {
+    const current = this.current;
+    const bridge = current?.started && !current.retired ? current.bridge : null;
+    if (this.ended || !bridge || bridge.state !== "running") return null;
+    return bridge.requestAgentStoppedPush();
+  }
+
   private retire(attempt: Attempt): void {
     if (attempt.retired) return;
     attempt.retired = true;
@@ -880,6 +922,7 @@ export class RelayConnection {
     this.clearRetry();
     this.snapshots?.stop();
     this.presence?.stop();
+    this.agentStopped?.stop();
     for (const off of this.watchers.splice(0)) off();
     // Reports to the relay stop now: a stalled one must not hold up the local
     // record of an answer being typed. A delivery's report is sent again next

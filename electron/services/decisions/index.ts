@@ -17,8 +17,11 @@ import {
   getDecisionsHostsPort,
   getMcpServerServiceRef,
   getPtyClient,
+  getRunAttentionServiceRef,
   watchDecisionsHostsPort,
 } from "../../window/serviceRefs.js";
+import { readUserPresence } from "../userPresence.js";
+import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
 import { setAnswerAttention } from "../runAnswerAttentionSource.js";
@@ -165,6 +168,7 @@ import {
 } from "./decisionsSettings.js";
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type {
+  DecisionsAgentStoppedDeps,
   DecisionsDeliveryDeps,
   DecisionsPresenceDeps,
   DecisionsService,
@@ -901,6 +905,58 @@ function presenceAllowed(): boolean {
 
 const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
 
+/**
+ * Turns off of Decisions asked for and not yet through the queue: the switch
+ * reads on in the store until its turn comes, and no agent-stopped push may
+ * go out after the person turned it off (#17319).
+ */
+let decisionsOffsPending = 0;
+
+/**
+ * Whether the phone may be told that an agent stopped (#17319): Decisions on
+ * in this run with no turn off on its way, and the switch on. Desktop
+ * notifications and their per-event switches don't count: the switch stands
+ * alone. Read each time; a setting that can't be read sends nothing.
+ */
+function agentStoppedPushesAllowed(): boolean {
+  try {
+    const settings = readDecisionsSettings(store);
+    return (
+      !shutDown && decisionsOffsPending === 0 && settings.enabled && settings.agentStoppedPushes
+    );
+  } catch {
+    return false;
+  }
+}
+
+const agentStoppedDeps: DecisionsAgentStoppedDeps = {
+  allowed: agentStoppedPushesAllowed,
+  presence: readUserPresence,
+  // The schedule is global: a project's overrides never change it.
+  quiet: () => {
+    try {
+      return isScheduledQuietNow(store.get("notificationSettings"));
+    } catch {
+      // Unreadable, it may say quiet: nothing is sent.
+      return true;
+    }
+  },
+  putAside: (terminalId) => {
+    const attention = getRunAttentionServiceRef();
+    if (!attention) return false;
+    return attention.getParkRecord(terminalId) !== undefined || attention.isSnoozed(terminalId);
+  },
+  watchTransitions: (listener) =>
+    events.on("agent:state-changed", (payload) =>
+      listener({
+        terminalId: payload.terminalId,
+        state: payload.state,
+        previousState: payload.previousState,
+        terminalClosing: payload.terminalClosing === true,
+      })
+    ),
+};
+
 // Turning desktop notifications off ends presence at once, and on starts it.
 // This module loads only once Decisions is on, so vanilla Daintree never listens.
 onNotificationSettingsWritten(() => service?.presenceChanged());
@@ -935,6 +991,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
         presence: presenceDeps,
+        agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
@@ -998,6 +1055,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
     ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
+    ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(checked !== null
@@ -2257,6 +2315,41 @@ export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<Decisions
   });
 }
 
+/** Rises with each turn off of agent-stopped pushes, so a turn on queued before one never lands after it. */
+let agentStoppedPushesOffs = 0;
+
+/**
+ * Turns telling the phone when an agent here stops on or off (#17319). Off is
+ * saved to the store before the queue, as holding pushes' is, so a batch
+ * gathering now is dropped the moment it's turned off; the service hears of
+ * the setting in turn.
+ */
+export function setDecisionsAgentStoppedPushes(enabled: boolean): Promise<DecisionsStatus> {
+  const offs = enabled ? agentStoppedPushesOffs : ++agentStoppedPushesOffs;
+  if (!enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.agentStoppedPushes) {
+      writeDecisionsSettings(store, { ...current, agentStoppedPushes: false });
+      service?.agentStoppedPushesChanged();
+      // Every window shows it off now, not once the queue reaches it.
+      publishStatus();
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== agentStoppedPushesOffs) return getDecisionsStatus();
+    }
+    const saved = writeDecisionsSettings(store, { ...current, agentStoppedPushes: enabled });
+    service?.updateSettings(saved);
+    service?.agentStoppedPushesChanged();
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
 /**
  * Whether a terminal snapshot may be captured or published now (#16228):
  * Decisions on in this run, and snapshots on with the person's agreement.
@@ -3249,8 +3342,13 @@ export function setDecisionsEnabled(
   // Before the queue, as a disconnect does: an export whose kit is still being
   // made would otherwise reach its dialog before this turn comes round.
   const checkStopped = enabled ? Promise.resolve() : endSetupCheck();
-  if (!enabled) cancelKitExports();
-  return serialize(async () => {
+  if (!enabled) {
+    cancelKitExports();
+    // No agent-stopped push goes out while this waits its turn.
+    decisionsOffsPending += 1;
+    service?.agentStoppedPushesChanged();
+  }
+  const run = serialize(async () => {
     const current = readDecisionsSettings(store);
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
     const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
@@ -3277,6 +3375,11 @@ export function setDecisionsEnabled(
       getDecisionsHostsPort()?.announceOwnerState();
     }
     return getDecisionsStatus();
+  });
+  if (enabled) return run;
+  return run.finally(() => {
+    decisionsOffsPending -= 1;
+    service?.agentStoppedPushesChanged();
   });
 }
 
@@ -3312,6 +3415,8 @@ export function _resetDecisionsForTesting(): void {
   creating = null;
   questionNotifier = null;
   holdPhonePushesOffs = 0;
+  agentStoppedPushesOffs = 0;
+  decisionsOffsPending = 0;
   shutDown = false;
   transitions = Promise.resolve();
   statusRevision = 0;

@@ -2,34 +2,37 @@ import { useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DecisionsStatus } from "@shared/types/decisions";
 
-export interface DecisionsHoldPhonePushesFailure {
+export interface DecisionsSwitchFailure {
   enabled: boolean;
   message: string;
 }
 
-export interface UseDecisionsHoldPhonePushesResult {
+export interface UseDecisionsSwitchResult {
   /** On as main last showed it, or as being saved. */
   enabled: boolean;
   saving: boolean;
-  failure: DecisionsHoldPhonePushesFailure | null;
+  failure: DecisionsSwitchFailure | null;
   /** Settles once main has answered, failure included; never rejects. */
   set(enabled: boolean): Promise<void>;
 }
 
 /**
- * Holding phone pushes while the person is here (#17240), shown from the
- * Decisions status, which main pushes to every window with each change. Main
- * answers a change with the status; a failed one reads it again
- * (`onChanged(null)`), since an off is saved before main's queue and can
- * stand even when the change fails. Promise chains rather than try/finally,
- * which the React Compiler can't lower.
+ * A Decisions switch that needs no consent of its own: holding phone pushes
+ * while the person is here (#17240), or telling the phone when an agent
+ * stops (#17319). `saved` is the switch as the Decisions status shows it,
+ * which main pushes to every window with each change. Main answers a change
+ * with the status; a failed one reads it again (`onChanged(null)`), since an
+ * off is saved before main's queue and can stand even when the change fails.
+ * Promise chains rather than try/finally, which the React Compiler can't
+ * lower.
  */
-export function useDecisionsHoldPhonePushes(
-  status: DecisionsStatus,
+export function useDecisionsSwitch(
+  saved: boolean,
+  save: (enabled: boolean) => Promise<DecisionsStatus>,
   onChanged: (next: DecisionsStatus | null) => void
-): UseDecisionsHoldPhonePushesResult {
+): UseDecisionsSwitchResult {
   const [pending, setPending] = useState<boolean | null>(null);
-  const [failure, setFailure] = useState<DecisionsHoldPhonePushesFailure | null>(null);
+  const [failure, setFailure] = useState<DecisionsSwitchFailure | null>(null);
   const savingRef = useRef(false);
 
   const set = (enabled: boolean): Promise<void> => {
@@ -37,8 +40,7 @@ export function useDecisionsHoldPhonePushes(
     savingRef.current = true;
     setPending(enabled);
     setFailure(null);
-    return window.electron.decisions
-      .setHoldPhonePushes(enabled)
+    return save(enabled)
       .then(
         (next) => onChanged(next),
         (error: unknown) => {
@@ -53,7 +55,7 @@ export function useDecisionsHoldPhonePushes(
   };
 
   return {
-    enabled: pending ?? status.holdPhonePushes !== false,
+    enabled: pending ?? saved,
     saving: pending !== null,
     failure,
     set,

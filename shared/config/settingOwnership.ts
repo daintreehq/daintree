@@ -251,6 +251,7 @@ export const SETTING_CATALOG = {
           terminalSnapshots: device,
           terminalSnapshotsConsentedAt: device,
           holdPhonePushes: device,
+          agentStoppedPushes: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

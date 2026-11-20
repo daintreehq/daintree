@@ -37,7 +37,7 @@ import {
 import { questionExpiryLabel, questionExpiryText } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 import { useDecisionsTerminalSnapshots } from "./useDecisionsTerminalSnapshots";
-import { useDecisionsHoldPhonePushes } from "./useDecisionsHoldPhonePushes";
+import { useDecisionsSwitch } from "./useDecisionsSwitch";
 import { DecisionsTerminalSnapshotsConsentDialog } from "./DecisionsTerminalSnapshotsConsentDialog";
 
 const NEVER = "never";
@@ -67,7 +67,8 @@ interface DecisionsQuestionsSectionProps {
  * Questions: how long one waits when its agent sets no expiry (#16122), as
  * the library applies the saved choice, whether the phone may show the pane
  * that asked one (#16228), whether a new question's phone push waits while
- * the person is here (#17240), the answers that couldn't be typed in on
+ * the person is here (#17240), whether the phone hears when an agent here
+ * stops while they're away (#17319), the answers that couldn't be typed in on
  * their own (#16020), and the inbox of every question (#17231). The
  * description follows what main has saved, not a choice still being saved.
  * Snapshots ask before every turn on.
@@ -85,9 +86,20 @@ export function DecisionsQuestionsSection({
   const [snapshotsConsentOpen, setSnapshotsConsentOpen] = useState(false);
   const snapshotsLocked = locked || snapshots.saving;
   const snapshotsFailure = snapshots.failure;
-  const hold = useDecisionsHoldPhonePushes(status, onChanged);
+  const hold = useDecisionsSwitch(
+    status.holdPhonePushes !== false,
+    (enabled) => window.electron.decisions.setHoldPhonePushes(enabled),
+    onChanged
+  );
   const holdLocked = locked || hold.saving;
   const holdFailure = hold.failure;
+  const stopped = useDecisionsSwitch(
+    status.agentStoppedPushes === true,
+    (enabled) => window.electron.decisions.setAgentStoppedPushes(enabled),
+    onChanged
+  );
+  const stoppedLocked = locked || stopped.saving;
+  const stoppedFailure = stopped.failure;
   const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
   const attention = useDecisionsAttentionCount();
   const openAttention = useDecisionsAttentionStore((state) => state.open);
@@ -159,6 +171,21 @@ export function DecisionsQuestionsSection({
           }}
           resetAriaLabel="Hold phone notifications again"
         />
+        <SettingsSwitchCard
+          id="decisions-agent-stopped-pushes"
+          title="Notify my phone when an agent stops"
+          subtitle="While you're away and outside quiet hours, your relay tells your phone only that an agent on this computer stopped, never which one"
+          isEnabled={stopped.enabled}
+          onChange={() => {
+            if (!stoppedLocked) void stopped.set(!stopped.enabled);
+          }}
+          disabled={stoppedLocked}
+          isModified={status.agentStoppedPushes === true}
+          onReset={() => {
+            if (!stoppedLocked) void stopped.set(false);
+          }}
+          resetAriaLabel="Stop notifying my phone when an agent stops"
+        />
         <SettingsRow
           id="decisions-questions-inbox"
           label="Inbox"
@@ -228,6 +255,19 @@ export function DecisionsQuestionsSection({
           message={holdFailure.message}
           onRetry={() => {
             if (!holdLocked) void hold.set(holdFailure.enabled);
+          }}
+        />
+      )}
+      {stoppedFailure && (
+        <SettingsLoadErrorBanner
+          title={
+            stoppedFailure.enabled
+              ? "Couldn't turn on phone notifications when an agent stops"
+              : "Couldn't turn off phone notifications when an agent stops"
+          }
+          message={stoppedFailure.message}
+          onRetry={() => {
+            if (!stoppedLocked) void stopped.set(stoppedFailure.enabled);
           }}
         />
       )}

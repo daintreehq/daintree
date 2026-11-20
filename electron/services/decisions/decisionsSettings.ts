@@ -50,6 +50,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     terminalSnapshots: false,
     terminalSnapshotsConsentedAt: null,
     holdPhonePushes: true,
+    agentStoppedPushes: false,
   };
 }
 
@@ -234,6 +235,8 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     terminalSnapshotsConsentedAt,
     // On unless turned off: a setting saved before the field existed holds them.
     holdPhonePushes: value.holdPhonePushes !== false,
+    // Off unless turned on: a setting saved before the field existed sends none.
+    agentStoppedPushes: value.agentStoppedPushes === true,
   };
 }
 

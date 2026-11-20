@@ -647,6 +647,9 @@ export interface GeneratedElectronAPI {
     setAgentAskHuman(
       ...args: IpcInvokeMap["decisions:set-agent-ask-human"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-agent-ask-human"]["result"]>;
+    setAgentStoppedPushes(
+      ...args: IpcInvokeMap["decisions:set-agent-stopped-pushes"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-agent-stopped-pushes"]["result"]>;
     setAutoEnrollHosts(
       ...args: IpcInvokeMap["decisions:set-auto-enroll-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-auto-enroll-hosts"]["result"]>;
