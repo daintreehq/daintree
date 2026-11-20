@@ -206,9 +206,10 @@ describe("built-in panel views", () => {
       extensionId: BUILTIN_ID,
       standalone: true,
     });
-    const fileDocument = { fileName: "users.csv" } as unknown as NonNullable<
-      PanelViewProps["fileDocument"]
-    >;
+    const fileDocument = {
+      fileName: "users.csv",
+      getDraft: () => "a,b",
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
     render(
       <Content
         panelId="file-editor:panel-1"
@@ -218,11 +219,91 @@ describe("built-in panel views", () => {
     );
 
     await screen.findByTestId("builtin-view");
-    expect(seen.at(-1)?.fileDocument).toBe(fileDocument);
+    // The view's own hold on it (#17903): one object for the mount, reading
+    // through to the host's document.
+    expect(new Set(seen.map((props) => props.fileDocument)).size).toBe(1);
+    expect(seen.at(-1)?.fileDocument?.fileName).toBe("users.csv");
+    expect(seen.at(-1)?.fileDocument?.getDraft()).toBe("a,b");
     expect(seen.at(-1)?.hostContext).toEqual({ kind: "fileEditor" });
     expect(activateForView).toHaveBeenCalledWith(kindId);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  // A view replaced inside the same host (a crash and Try again, a reload, a
+  // rebind) may still have a formatter or a debounced report in flight. Landing
+  // on the draft its successor started, under the successor's base, it would
+  // have the close prompt's Save write text that base never described (#17903).
+  it("keeps a crashed file editor view's late writes off the document its retry edits", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: PanelViewProps[] = [];
+    let shouldThrow = true;
+    function Editor(props: PanelViewProps) {
+      seen.push(props);
+      const { fileDocument } = props;
+      useEffect(
+        () => () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-a" }),
+        [fileDocument]
+      );
+      // Thrown post-commit, as in the retry test below.
+      useEffect(() => {
+        if (shouldThrow) throw new Error("editor exploded");
+      }, []);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/editor`;
+    registerBuiltinView(kindId, Editor, { pluginId: BUILTIN_ID, label: "Editor" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Editor fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const setDraft = vi.fn();
+    const setConflict = vi.fn();
+    const save = vi.fn(() => Promise.resolve({ status: "saved", revision: "rev-c" }));
+    const fileDocument = {
+      fileName: "a.json",
+      readOnly: false,
+      setDraft,
+      setConflict,
+      save,
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
+    render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+    await screen.findByTestId("plugin-view-diagnostics");
+    const crashed = seen.at(-1)!;
+    // Its unmount cleanup's flush still reaches the document.
+    expect(setDraft).toHaveBeenCalledWith("flushed on unmount", { baseRevision: "rev-a" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    setDraft.mockClear();
+    crashed.fileDocument!.setDraft("formatted late", { baseRevision: "rev-a" });
+    crashed.fileDocument!.setConflict(true);
+    await expect(
+      crashed.fileDocument!.save("formatted late", { expectedRevision: "rev-a" })
+    ).resolves.toEqual({ status: "refused", reason: "unavailable" });
+    expect(setDraft).not.toHaveBeenCalled();
+    expect(setConflict).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-retry"));
+    await screen.findByTestId("builtin-view");
+    const retried = seen.at(-1)!;
+    expect(retried.fileDocument).not.toBe(crashed.fileDocument);
+    retried.fileDocument!.setDraft("edited", { baseRevision: "rev-b" });
+    expect(setDraft).toHaveBeenCalledWith("edited", { baseRevision: "rev-b" });
+    expect(retried.fileDocument!.fileName).toBe("a.json");
   });
 
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {
