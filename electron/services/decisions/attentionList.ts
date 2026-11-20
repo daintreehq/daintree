@@ -139,10 +139,11 @@ export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers):
  *   stopped status of an answer nothing will type.
  * - **Expired, or never published:** only while the round's own notice is
  *   untyped, nothing else of the answer waits to be typed, the code is no
- *   answer's, and none of the person's follow-ups waits: the library holds a
- *   follow-up behind a stopped notice, so the two go back together. A
- *   possibly typed write stays the person's while the row holds an untyped
- *   answer it could have been.
+ *   answer's, and none of the person's follow-ups waits to be typed. While
+ *   one does, the notice stays theirs to resolve with it, so the two go back
+ *   in thread order (the library would hold one sequenced after it behind a
+ *   stopped notice). A possibly typed write stays the person's while the row
+ *   holds an untyped answer it could have been.
  */
 export function closedUnanswered(row: QuestionRow): boolean {
   if (row.local_status === "cancelled") return true;

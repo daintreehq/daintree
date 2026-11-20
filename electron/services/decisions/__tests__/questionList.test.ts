@@ -424,7 +424,7 @@ describe("standingOf", () => {
     expect(list.map((item) => item.stall)).toEqual(cases.map(() => null));
   });
 
-  it("keeps a closed question's notice in Needs attention with the person's follow-up it holds back", () => {
+  it("keeps a closed question's notice in Needs attention with the person's follow-up that stopped too", () => {
     const item = projectDecisionQuestions(
       [
         row(1, {
@@ -438,9 +438,10 @@ describe("standingOf", () => {
             sealed: null,
             event_seq: 5,
           }),
+          // Sent before the deadline, as a closed thread takes none.
           messages_json: messages({
             message_id: "held-1",
-            event_seq: 6,
+            event_seq: 4,
             delivery: { status: "needs-attention", error_code: "pane_gone" },
           }),
         }),
@@ -451,6 +452,7 @@ describe("standingOf", () => {
     )[0]!;
     expect(item.standing).toEqual({ kind: "needs-attention", deliveryStatus: "needs-attention" });
     expect(item.stall).toEqual({ answerRevision: 1, followUpIds: ["held-1"], reason: "pane_gone" });
+    expect(item.closureNotice).toEqual({ delivery: "needs-attention", disposition: null });
   });
 
   it("settles a handled answer, keeping it listed, until a correction needs the person again", () => {

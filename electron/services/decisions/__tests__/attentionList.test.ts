@@ -132,18 +132,21 @@ describe("questions over without an answer (#18021)", () => {
           answers_json: serializeAnswers([entry(UNPUBLISHED)]),
         })
       );
-      // A reopened round that expired again: its earlier round's notice was withdrawn.
-      over(
-        row(3, {
-          ...stall,
-          local_status: "expired",
-          question_revision: 2,
-          answers_json: serializeAnswers([
-            entry({ ...EXPIRY, deliver: false }),
-            entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
-          ]),
-        })
-      );
+      // A reopened round that expired again: its earlier round's notice was withdrawn, or,
+      // left marked as a store may hold it, is never typed again either.
+      for (const deliver of [false, true]) {
+        over(
+          row(3, {
+            ...stall,
+            local_status: "expired",
+            question_revision: 2,
+            answers_json: serializeAnswers([
+              entry({ ...EXPIRY, deliver }),
+              entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+            ]),
+          })
+        );
+      }
     }
   });
 
@@ -223,9 +226,23 @@ describe("questions over without an answer (#18021)", () => {
     expect(
       answerNeedsAttention(row(5, { ...expired, local_status: "publish-failed" }), new Map())
     ).toBe(true);
+    // Nor does a notice of a round since replaced, of either kind, untyped as it is.
+    for (const [local_status, notice] of [
+      ["expired", EXPIRY],
+      ["publish-failed", UNPUBLISHED],
+    ] as const) {
+      const stale = row(6, {
+        ...expired,
+        local_status,
+        answers_json: serializeAnswers([entry(notice)]),
+      });
+      expect(answerNeedsAttention(stale, new Map()), local_status).toBe(true);
+    }
+    // Only an uncertain write could have been the untyped answer's: stopped, the notice is all.
+    expect(isHandled({ ...mixed, delivery_status: "needs-attention" }, new Map())).toBe(true);
   });
 
-  it("keeps the notice with the person's follow-up it holds back, held or waiting, so they go back together", () => {
+  it("keeps the notice with the person's follow-up still to be typed, held or waiting, so they go back together", () => {
     for (const [local_status, notice] of [
       ["expired", EXPIRY],
       ["publish-failed", UNPUBLISHED],
@@ -236,21 +253,28 @@ describe("questions over without an answer (#18021)", () => {
         error_code: "pane_gone",
         answers_json: serializeAnswers([entry({ ...notice, event_seq: 5 })]),
       };
-      const held = row(1, {
-        ...closed,
-        messages_json: messages({
-          message_id: "m-1",
-          event_seq: 6,
-          delivery: { status: "needs-attention", error_code: "pane_gone" },
-        }),
-      });
-      expect(answerNeedsAttention(held, new Map())).toBe(true);
-      expect(heldFollowUps(held).map((m) => m.message_id)).toEqual(["m-1"]);
-      expect(withoutHandled([held], new Map())).toEqual([held]);
-      // Received and never held: the stopped notice still keeps it from being typed.
-      const waiting = row(2, { ...closed, messages_json: messages({ event_seq: 6 }) });
-      expect(answerNeedsAttention(waiting, new Map())).toBe(true);
-      expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+      // Sent before the deadline, as a closed thread takes none; or after it, as the library
+      // would hold one behind the stopped notice.
+      for (const event_seq of [4, 6]) {
+        for (const stall of STALLS) {
+          const held = row(1, {
+            ...closed,
+            ...stall,
+            messages_json: messages({
+              message_id: "m-1",
+              event_seq,
+              delivery: { status: "needs-attention", error_code: "pane_gone" },
+            }),
+          });
+          expect(answerNeedsAttention(held, new Map())).toBe(true);
+          expect(heldFollowUps(held).map((m) => m.message_id)).toEqual(["m-1"]);
+          expect(withoutHandled([held], new Map())).toEqual([held]);
+        }
+        // Received and never held, it is still the person's words waiting with it.
+        const waiting = row(2, { ...closed, messages_json: messages({ event_seq }) });
+        expect(answerNeedsAttention(waiting, new Map())).toBe(true);
+        expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+      }
       // One already typed, or that the person handled, holds nothing.
       over(
         row(3, {

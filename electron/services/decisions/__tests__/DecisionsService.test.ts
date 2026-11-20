@@ -777,34 +777,30 @@ describe("DecisionsService question list (#17229)", () => {
     const { service, lists, panes, paneProjects, attention, commit, setRows } = listed();
     const later = { origin: { project_id: "project-2" } };
     const stalled = { delivery_status: "needs-attention" as const, error_code: "pane_gone" };
+    // Still open, with an answer the inbox refused.
     setRows([
       row(1),
-      row(2, { ...later, ...stalled, local_status: "human-answered", answers_json: answers({}) }),
+      row(2, { ...later, delivery_status: "needs-attention", error_code: "choice_required" }),
     ]);
     await service.start(on(HOST));
     expect(lists.at(-1)?.[1]?.standing).toMatchObject({ kind: "needs-attention" });
     expect(panes.at(-1)?.needsAttention.map((item) => item.alias)).toEqual([2]);
     expect([...attention.at(-1)!]).toEqual([["pane-a", 1]]);
 
-    // Reopened, then expired unanswered, and its notice stopped too.
+    // Then it expired unanswered, and its notice stopped too.
     await commit([
       row(1),
       row(2, {
         ...later,
         ...stalled,
         local_status: "expired",
-        question_revision: 2,
-        answers_json: answers(
-          { deliver: false },
-          {
-            entry_id: "expiry-2",
-            kind: "expired",
-            action: "expire",
-            source: "system",
-            revision: 2,
-            sealed: null,
-          }
-        ),
+        answers_json: answers({
+          entry_id: "expiry-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+        }),
       }),
     ]);
 

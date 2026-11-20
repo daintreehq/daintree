@@ -320,6 +320,21 @@ describe("projectPaneDecisionStates", () => {
     expect(panes.get("pane-a")?.content.needsAttention).toEqual([]);
   });
 
+  it("lets a question the person marked handled decide its pane's project, and show nothing there", () => {
+    // Still open, its refused answer marked handled: it adds no open question either.
+    const refused = row(2, {
+      question_id: "q_handled_0002",
+      origin: { project_id: "project-2" },
+      delivery_status: "needs-attention",
+      error_code: "choice_required",
+    });
+    const panes = projectPaneDecisionStates([row(1), refused], new Map([["q_handled_0002", 0]]));
+
+    expect(panes.get("pane-a")?.projectId).toBe("project-2");
+    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1]);
+    expect(panes.get("pane-a")?.content.needsAttention).toEqual([]);
+  });
+
   it("lists stopped deliveries as needing attention with the recorded reason, not as waiting", () => {
     const state = only([
       row(1, {
@@ -644,31 +659,38 @@ describe("PaneDecisionStates answer attention", () => {
       () => 0,
       (next) => counts.push(new Map(next))
     );
-    const expired = row(1, {
-      local_status: "expired",
-      delivery_status: "needs-attention",
-      error_code: "pane_gone",
-      answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
+    const notice = { action: "expire", source: "system", sealed: null } as const;
+    const paneIds = ["pane-a", "pane-b", "pane-c", "pane-d", "pane-e", "pane-f"];
+    const closed = (["needs-attention", "delivery-uncertain"] as const).flatMap((status, i) => {
+      const at = (n: number) => ({
+        ...stopped(i * 3 + n, paneIds[i * 3 + n - 1]),
+        delivery_status: status,
+      });
+      return [
+        {
+          ...at(1),
+          local_status: "expired" as const,
+          answers_json: answers({ ...notice, kind: "expired" }),
+        },
+        {
+          ...at(2),
+          local_status: "publish-failed" as const,
+          answers_json: answers({ ...notice, kind: "unpublished" }),
+        },
+        { ...at(3), local_status: "cancelled" as const, answers_json: answers({ deliver: false }) },
+      ];
     });
-    const withdrawn = {
-      ...stopped(2, "pane-b"),
-      local_status: "cancelled" as const,
-      answers_json: answers({ deliver: false }),
-    };
 
-    states.replace([stopped(1), stopped(2, "pane-b")]);
-    expect([...counts.at(-1)!]).toEqual([
-      ["pane-a", 1],
-      ["pane-b", 1],
-    ]);
-    states.replace([expired, withdrawn]);
+    states.replace(paneIds.map((paneId, i) => stopped(i + 1, paneId)));
+    expect([...counts.at(-1)!]).toEqual(paneIds.map((paneId) => [paneId, 1]));
+    const before = pushes.length;
+    states.replace(closed);
     expect(counts.at(-1)?.size).toBe(0);
     // Each pane's views get one empty state, and are let go.
-    expect(pushes.slice(-2)).toEqual([
-      expect.objectContaining(empty("pane-a")),
-      expect.objectContaining(empty("pane-b")),
-    ]);
-    expect(states.get("pane-a")).toBeNull();
+    expect(pushes.slice(before)).toEqual(
+      paneIds.map((paneId) => expect.objectContaining(empty(paneId)))
+    );
+    for (const paneId of paneIds) expect(states.get(paneId)).toBeNull();
   });
 
   it("clears every count once the panes go, whether or not the views are told", () => {
