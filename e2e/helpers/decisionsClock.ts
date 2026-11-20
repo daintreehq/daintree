@@ -142,9 +142,10 @@ export class DecisionsTestClock {
    * jump would use up before it could be typed.
    */
   async advancePast(deadline: string, byMs = 30_000): Promise<void> {
-    if (byMs <= 0 || byMs > STEP_MS - 5_000) throw new Error(`cannot cross a deadline by ${byMs}`);
-    const left = Math.ceil(Date.parse(deadline) - this.now());
-    await this.advance(Math.max(0, left - 5_000));
+    // Stopping short leaves room for the real time the approach itself takes.
+    const margin = 20_000;
+    if (byMs <= 0 || byMs + margin > STEP_MS) throw new Error(`cannot cross a deadline by ${byMs}`);
+    await this.advance(Math.max(0, Math.ceil(Date.parse(deadline) - this.now()) - margin));
     await this.advance(Math.max(0, Math.ceil(Date.parse(deadline) - this.now())) + byMs);
   }
 

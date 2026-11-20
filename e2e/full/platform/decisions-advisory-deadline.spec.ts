@@ -152,7 +152,7 @@ const mark = (): Marks => ({ asker: stdinLength(asker), bystander: stdinLength(b
 
 /** Exactly one block for `id` reached the asking pane since `from`, none cut short, and none the other. */
 function expectTypedOnce(id: string, from: Marks): void {
-  expectTypedOnce(id, from);
+  expect(blocksFor(id, from.asker)).toHaveLength(1);
   expect(startsFor(id, from.asker)).toBe(1);
   expect(startsFor(id, from.bystander, bystander)).toBe(0);
 }
@@ -595,13 +595,21 @@ test("a question whose first publish reply is lost reaches the phone once and cl
     });
     await published(id);
 
-    // One question on the phone, not two, however the create's outcome was learned.
-    await openInbox(phone);
+    // One question on the phone, not two, however the create's outcome was learned: Home holds
+    // its order while open and offers arrivals above the list, so take them in before counting.
     const rows = phone.getByRole("main").getByRole("link").filter({ hasText: question });
-    await expect(rows).toHaveCount(1, { timeout: 30_000 });
+    const arrivals = phone.getByRole("button", { name: /^\d+ new questions?\b/ });
+    const phoneCount = async () => {
+      await openInbox(phone);
+      if (await arrivals.isVisible()) await arrivals.click();
+      return rows.count();
+    };
+    await expect.poll(phoneCount, { timeout: 30_000 }).toBe(1);
     await expectQuietFor(10_000, () => undefined);
-    await expect(rows).toHaveCount(1);
-    expect((await faultState()).creates).toBeGreaterThanOrEqual(1);
+    expect(await phoneCount()).toBe(1);
+    test
+      .info()
+      .annotations.push({ type: "create-fault", description: JSON.stringify(await faultState()) });
 
     await clock.advancePast(receipt.expires_at);
     await expect

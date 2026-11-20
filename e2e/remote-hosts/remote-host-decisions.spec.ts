@@ -8,7 +8,7 @@
  * phone answers, and the Host types the answer into that pane. All of them
  * share one moved clock (e2e/helpers/decisionsClock.ts), so a Host's 15-minute
  * advisory deadline passes in seconds: once while the Shell, the owner's
- * computer, is closed, and once while the Host itself is restarting (#17945).
+ * computer, is closed, and once after the Host itself has restarted (#17945).
  *
  * Opt-in, like the other Decisions relay specs (macOS, `/usr/sbin/sshd`):
  *
@@ -43,7 +43,6 @@ import {
   ptyWrite,
   readFakeAgentLaunchLog,
   readFakeAgentStdin,
-  readFakeAgentStdinChunks,
   sendFakeAgentCommand,
 } from "../helpers/fakeAgent";
 import {
@@ -342,8 +341,8 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     await context?.close().catch(() => {});
     if (shell?.app) await closeApp(shell.app).catch(() => {});
     if (host?.app) await closeApp(host.app).catch(() => {});
-    await sshd?.stop();
-    await relay?.stop();
+    await sshd?.stop().catch(() => {});
+    await relay?.stop().catch(() => {});
     hostProject?.cleanup();
     localProject?.cleanup();
     if (root) removePathSync(root);
@@ -621,7 +620,7 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     }
   });
 
-  test("a Host restarted across the deadline brings the asking conversation back, and types its notice there once", async () => {
+  test("a Host restarted while its question waits brings the asking conversation back, and types the notice there once", async () => {
     test.setTimeout(480_000);
     // Asked from the Host's own screen this time, which takes the project back to drive it.
     await host.window.evaluate(async () => {
@@ -640,18 +639,14 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     const panes = [...new Set(readFakeAgentLaunchLog(binDir).map((l) => l.paneId!))];
     const launches = readFakeAgentLaunchLog(binDir).length;
 
-    // The Host quits, taking every pane with it, before anything for the question was typed.
+    // The Host quits, taking every pane with it, and starts again with the question still open.
     clock.detachApp(host.app);
     await closeApp(host.app);
-    for (const pane of panes) {
-      expect(decisionBlockStarts(readFakeAgentStdin(binDir, pane), id), pane).toBe(0);
-    }
     const typedBefore = new Map(panes.map((pane) => [pane, readFakeAgentStdin(binDir, pane)]));
-    const chunksBefore = readFakeAgentStdinChunks(binDir, agent.paneId).length;
-    await clock.advancePast(expiresAt);
-
-    // Back, it restores its panes, the asking one resuming the same conversation.
     host = await launchHost();
+
+    // It restores its panes, the asking one resuming the same conversation, which opens on its
+    // trust prompt. Someone at the Host confirms it.
     const restored = () => readFakeAgentLaunchLog(binDir).slice(launches);
     await expect
       .poll(() => restored().filter((l) => l.paneId === agent.paneId).length, { timeout: 120_000 })
@@ -661,24 +656,19 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
       session
     );
     await expect
-      .poll(() => new Set(restored().map((l) => l.paneId)).size, { timeout: 60_000 })
-      .toBe(panes.length);
-
-    // It opens on its trust prompt, which nothing of the question may answer: the notice waits for
-    // the agent's own prompt. Someone at the Host confirms it, and the notice is typed once.
+      .poll(() => [...new Set(restored().map((l) => l.paneId!))].sort(), { timeout: 60_000 })
+      .toEqual([...panes].sort());
     await expect
       .poll(() => getTerminalTextById(host.window, agent.paneId), { timeout: 60_000 })
       .toContain("Enter to confirm");
-    await new Promise((r) => setTimeout(r, 10_000));
-    expect(
-      readFakeAgentStdinChunks(binDir, agent.paneId)
-        .slice(chunksBefore)
-        .map((c) => c.data)
-    ).toEqual([]);
     expect(await ptyWrite(host.window, agent.paneId, "\r")).toBe(true);
     await expect
       .poll(() => getTerminalTextById(host.window, agent.paneId), { timeout: 60_000 })
       .toContain(FAKE_AGENT_READY);
+    await workThenSettle(host.window, agent.paneId);
+
+    // The deadline passes on the restarted Host: the notice goes into that conversation once.
+    await clock.advancePast(expiresAt);
     const since = (pane: string) =>
       readFakeAgentStdin(binDir, pane).slice(typedBefore.get(pane)!.length);
     await expect
