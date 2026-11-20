@@ -11,7 +11,12 @@ import {
 } from "@/store/decisionsAnswerStore";
 import { reviewKey, useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import type { DecisionQuestionAnswerResult } from "@shared/types/decisionsQuestion";
-import { answerPayload, composeVerdict, isAnswerable } from "./decisionComposeModel";
+import {
+  answerPayload,
+  composeVerdict,
+  isAnswerable,
+  type UnshownImages,
+} from "./decisionComposeModel";
 import {
   questionOf,
   readTargetContent,
@@ -259,11 +264,14 @@ export function followAnswer(key: string, retry = false): Promise<void> {
  * Sends the person's draft for `key`: reads the question again first, and
  * signs nothing unless it still takes an answer at the revision the person
  * read, with the choice, words and images the composer checked. The draft is
- * the store's at the moment of Send, never one passed in.
+ * the store's at the moment of Send, never one passed in; `unshown` is the
+ * view's, the images it couldn't show as Send was pressed, and excuses only
+ * the digests the question still lists them under.
  */
 export async function sendAnswer(
   key: string,
   target: DecisionQuestionTarget,
+  unshown: UnshownImages,
   now: () => number = Date.now
 ): Promise<void> {
   const generation = useDecisionsAnswerStore.getState().generation;
@@ -291,7 +299,14 @@ export async function sendAnswer(
     hold(key, generation, "closed");
     return;
   }
-  const verdict = composeVerdict({ question, draft, reviewed, stale: false, closed: false });
+  const verdict = composeVerdict({
+    question,
+    draft,
+    reviewed,
+    unshown,
+    stale: false,
+    closed: false,
+  });
   if (question.revision !== draft.revision || !verdict.canSend) {
     hold(key, generation, "changed");
     return;

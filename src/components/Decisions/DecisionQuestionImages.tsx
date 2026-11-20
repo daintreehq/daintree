@@ -12,7 +12,7 @@ import {
   type QuestionImageLoad,
 } from "./decisionQuestionImageModel";
 import { DecisionImageViewer } from "./DecisionImageViewer";
-import { useQuestionImages } from "./questionImageLoader";
+import type { QuestionImages } from "./questionImageLoader";
 import { questionOf, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 
 const LOADING: QuestionImageLoad = { status: "loading" };
@@ -21,6 +21,8 @@ export interface DecisionQuestionImagesProps {
   /** The question, as it was opened: its images are read the same way. */
   question: DecisionQuestionTarget;
   attachments: readonly DecisionQuestionAttachment[];
+  /** The images as the question view reads them, where the answer composer sees which failed. */
+  images: QuestionImages;
   /** Whether the question view is open; its closing closes the viewer too. */
   active: boolean;
 }
@@ -35,9 +37,10 @@ export interface DecisionQuestionImagesProps {
 export function DecisionQuestionImages({
   question,
   attachments,
+  images,
   active,
 }: DecisionQuestionImagesProps) {
-  const { loads, retry, prioritize, undecodable } = useQuestionImages(question, attachments);
+  const { loads, retry, prioritize, undecodable } = images;
   // Seen is a fact about the question, however it was opened.
   const { terminalId, questionId } = questionOf(question);
   const reviewed = useReviewedImages(terminalId, questionId);

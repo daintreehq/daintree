@@ -17,7 +17,8 @@ import { deliveryStalled } from "./decisionFollowUpModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
-import { imagesKey } from "./questionImageLoader";
+import { unshownImages } from "./decisionQuestionImageModel";
+import { imagesKey, useQuestionImages } from "./questionImageLoader";
 import {
   choiceLabels,
   closureNoticeText,
@@ -354,6 +355,9 @@ function QuestionBody({
       : [],
     active
   );
+  // Read here rather than in the image strip, so the composer knows which couldn't be shown.
+  const images = useQuestionImages(target, question.attachments);
+  const unshown = unshownImages(question.attachments, images.loads);
   return (
     <div className="flex flex-col gap-6" data-testid="decision-question-content">
       <div className="flex flex-col gap-2">
@@ -389,6 +393,7 @@ function QuestionBody({
           key={imagesKey(target, question.attachments)}
           question={target}
           attachments={question.attachments}
+          images={images}
           active={active}
         />
       )}
@@ -396,6 +401,7 @@ function QuestionBody({
       <DecisionAnswerComposer
         question={question}
         target={target}
+        unshown={unshown}
         onMoved={onMoved}
         sendNote={sendNote}
       />

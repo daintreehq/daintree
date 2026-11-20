@@ -338,6 +338,7 @@ describe("answering a question from the view (#17102)", () => {
     expect(answerQuestion.mock.calls[0]![0]).toMatchObject({
       selectedOptionIds: ["reject"],
       text: "Image 2 didn't open; send new ones",
+      explicitApproval: true,
       reviewedAttachmentDigests: [images[0]!.sha256],
     });
   });

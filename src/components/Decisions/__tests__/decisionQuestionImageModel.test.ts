@@ -6,6 +6,7 @@ import {
   imageName,
   reviewedDigests,
   unreviewedAttachments,
+  unshownImages,
 } from "../decisionQuestionImageModel";
 
 function image(
@@ -89,5 +90,20 @@ describe("canRetryImage", () => {
     ] as const) {
       expect(canRetryImage(verdict), verdict).toBe(false);
     }
+  });
+});
+
+describe("unshownImages", () => {
+  it("lists each failed load by the digest the question lists it under, and nothing still coming or shown", () => {
+    const B2 = image("attach_0003", "before", "3".repeat(64));
+    expect(
+      unshownImages([B1, A1, B2], {
+        [B1.attachmentId]: { status: "failed", failure: "digest-mismatch" },
+        [A1.attachmentId]: { status: "ready", url: "blob:a1" },
+        [B2.attachmentId]: { status: "loading" },
+      })
+    ).toEqual({ [B1.attachmentId]: B1.sha256 });
+    // An image the loads don't know of yet is still coming, not failed.
+    expect(unshownImages([B1], {})).toEqual({});
   });
 });

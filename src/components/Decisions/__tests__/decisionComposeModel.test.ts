@@ -65,6 +65,7 @@ function input(content: DecisionQuestionContent, over: Over = {}): ComposeInput 
     question: content,
     draft: { revision: content.revision, selected, text },
     reviewed: {},
+    unshown: {},
     stale: false,
     closed: false,
     ...rest,
@@ -145,6 +146,113 @@ describe("composeVerdict", () => {
       })
     );
     expect(all).toMatchObject({ canSend: true, remainingImages: 0, hint: null });
+  });
+
+  describe("an approval with an image that couldn't be shown (#18043)", () => {
+    const APPROVAL = [
+      { id: "approve", label: "Approve", description: null },
+      { id: "reject", label: "Reject", description: null },
+    ];
+    const content = question({
+      kind: "approval",
+      options: APPROVAL,
+      allowText: true,
+      attachments: [image("x"), image("y")],
+    });
+    const [x, y] = content.attachments;
+    const seenX = { [x!.attachmentId]: x!.sha256 };
+    const failedY = { [y!.attachmentId]: y!.sha256 };
+
+    it("takes Reject, with or without a note, and holds Approve, naming the image", () => {
+      const none = composeVerdict(input(content, { reviewed: seenX, unshown: failedY }));
+      expect(none).toMatchObject({ canSend: false, remainingImages: 1, blockedOptions: ["approve"] });
+      expect(none.hint).toMatch(/^After image 2 couldn't be shown/);
+      expect(none.hint).toMatch(/approved/);
+
+      const reject = composeVerdict(
+        input(content, { selected: "reject", text: "send new ones", reviewed: seenX, unshown: failedY })
+      );
+      expect(reject.canSend).toBe(true);
+      // Still says why Approve isn't on offer.
+      expect(reject.hint).toBe(none.hint);
+      expect(
+        composeVerdict(input(content, { selected: "reject", reviewed: seenX, unshown: failedY }))
+          .canSend
+      ).toBe(true);
+
+      // A draft holding Approve from before can't go on it either.
+      const approve = composeVerdict(
+        input(content, { selected: "approve", reviewed: seenX, unshown: failedY })
+      );
+      expect(approve.canSend).toBe(false);
+      expect(approve.hint).toBe(none.hint);
+    });
+
+    it("keeps Reject waiting on an image that can still be opened, as on the phone", () => {
+      const verdict = composeVerdict(input(content, { selected: "reject", unshown: failedY }));
+      expect(verdict).toMatchObject({ canSend: false, blockedOptions: ["approve", "reject"] });
+      // Only the one that can be opened is asked for.
+      expect(verdict.hint).toBe("Open the remaining image to decide");
+    });
+
+    it("doesn't excuse a replaced image, listed under another digest", () => {
+      const verdict = composeVerdict(
+        input(content, {
+          selected: "reject",
+          reviewed: seenX,
+          unshown: { [y!.attachmentId]: "0".repeat(64) },
+        })
+      );
+      expect(verdict).toMatchObject({ canSend: false, blockedOptions: ["approve", "reject"] });
+    });
+
+    it("excuses nothing an agent's own options call Reject", () => {
+      const custom = question({
+        kind: "approval",
+        options: [
+          { id: "ship", label: "Ship it", description: null },
+          { id: "reject", label: "Ship anyway", description: null },
+        ],
+        attachments: [image("x"), image("y")],
+      });
+      const verdict = composeVerdict(
+        input(custom, { selected: "reject", reviewed: seenX, unshown: failedY })
+      );
+      expect(verdict).toMatchObject({ canSend: false, blockedOptions: ["ship", "reject"] });
+      expect(verdict.hint).toMatch(/decided/);
+    });
+
+    it("names one image and counts the rest when several couldn't be shown", () => {
+      const verdict = composeVerdict(
+        input(content, { unshown: { ...failedY, [x!.attachmentId]: x!.sha256 } })
+      );
+      expect(verdict.blockedOptions).toEqual(["approve"]);
+      expect(verdict.hint).toMatch(/^After image 1 and 1 other image couldn't be shown/);
+    });
+
+    it("says an over-long note before the image when Reject is chosen", () => {
+      const verdict = composeVerdict(
+        input(content, {
+          selected: "reject",
+          text: "x".repeat(ANSWER_TEXT_BYTES + 1),
+          reviewed: seenX,
+          unshown: failedY,
+        })
+      );
+      expect(verdict.canSend).toBe(false);
+      expect(verdict.hint).toMatch(/^Shorten/);
+    });
+
+    it("has nothing to excuse once every image has been seen", () => {
+      const verdict = composeVerdict(
+        input(content, {
+          selected: "approve",
+          reviewed: { ...seenX, [y!.attachmentId]: y!.sha256 },
+          unshown: failedY,
+        })
+      );
+      expect(verdict).toMatchObject({ canSend: true, hint: null, blockedOptions: [] });
+    });
   });
 
   it("doesn't hold a choice question on its images", () => {

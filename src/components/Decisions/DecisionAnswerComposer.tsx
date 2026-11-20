@@ -30,6 +30,7 @@ import {
   composeVerdict,
   isAnswerable,
   type AnswerDraft,
+  type UnshownImages,
 } from "./decisionComposeModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { questionOf, type DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -93,6 +94,8 @@ export function answerComposerMode(
 export interface DecisionAnswerComposerProps {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
+  /** The question's images this view couldn't show: an approval can still be rejected without them. */
+  unshown: UnshownImages;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
   /** Said beside Send once it would go, when an answer sent now won't go at once. */
@@ -116,6 +119,7 @@ export function useAnswerComposerMode(
 export function DecisionAnswerComposer({
   question,
   target,
+  unshown,
   onMoved,
   sendNote = null,
 }: DecisionAnswerComposerProps) {
@@ -141,6 +145,7 @@ export function DecisionAnswerComposer({
     question,
     draft,
     reviewed,
+    unshown,
     stale,
     closed: mode !== "form" || elapsed,
   });
@@ -273,7 +278,7 @@ export function DecisionAnswerComposer({
 
   const send = () => {
     if (!ready) return;
-    void sendAnswer(key, target).finally(onMoved);
+    void sendAnswer(key, target, unshown).finally(onMoved);
   };
 
   if (mode === "none") return null;
@@ -307,9 +312,9 @@ export function DecisionAnswerComposer({
     );
   }
 
-  const imagesFirst = verdict.remainingImages > 0;
-  // Why Send won't go yet, else what happens when it does, if that isn't simply "it goes".
-  const hint = verdict.hint ?? sendNote;
+  // Why Send won't go yet; once it would, what happens when it does, if that isn't simply
+  // "it goes", else why the other choices can't (an image that couldn't be shown).
+  const hint = verdict.canSend ? (sendNote ?? verdict.hint) : (verdict.hint ?? sendNote);
   const shortcut = isMac() ? "Meta+Enter" : "Control+Enter";
 
   return (
@@ -373,9 +378,10 @@ export function DecisionAnswerComposer({
                     <DecisionMarkdown text={option.description} size="xs" tone="secondary" />
                   ) : undefined
                 }
-                // An approval decides on its images, so its choices wait until each is opened.
-                // Past the deadline they stay focusable, and edits are refused instead.
-                disabled={imagesFirst || stale}
+                // An approval decides on its images, so its choices wait until each is opened,
+                // all but Reject past one that couldn't be shown. Past the deadline they stay
+                // focusable, and edits are refused instead.
+                disabled={stale || verdict.blockedOptions.includes(option.id)}
                 testId="decision-answer-option"
               />
             ))}
