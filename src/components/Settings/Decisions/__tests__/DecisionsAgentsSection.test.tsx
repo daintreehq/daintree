@@ -63,7 +63,6 @@ const REFRESH = useCliAvailabilityStore.getState().refresh;
 function policy(overrides: Partial<DecisionsPolicy> = {}): DecisionsPolicy {
   return {
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
     askHumanAgents: [],

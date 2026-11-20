@@ -334,7 +334,6 @@ export const CHANNEL_LOCALITY = {
   "decisions:set-enabled": "shell",
   "decisions:set-model": "shell",
   "decisions:set-model-threshold": "shell",
-  "decisions:set-proxy-allowlisted": "shell",
   "decisions:set-terminal-snapshots": "shell",
   "decisions:set-hold-phone-pushes": "shell",
   "decisions:set-agent-stopped-pushes": "shell",

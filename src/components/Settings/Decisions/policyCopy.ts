@@ -56,14 +56,10 @@ export function questionExpiryText(
   return `${first}${limit}. ${host} An expired question authorises nothing, and the agent is told so.`;
 }
 
-/** What the proxy switch allows, given which registered gates still need the person. */
-export function proxyAllowlistText(gates: readonly DecisionsWorkflowGate[]): string {
-  const human = gates.filter((gate) => gate.requirement === "human-required").map((g) => g.id);
-  const gated =
-    human.length === 0
-      ? "A question under a registered gate follows that gate's rule."
-      : human.length === gates.length
-        ? `A question under a registered gate (${human.join(", ")}) still needs your own answer.`
-        : `A question under ${human.join(", ")} still needs your own answer.`;
-  return `Lets a question without a registered workflow gate accept an answer from the decision model on this computer, when the agent that asked allows one. ${gated} The model answers only once it has been evaluated against your own past answers, and its answers are labelled as a proxy's. Off by default.`;
-}
+/**
+ * Who answers a question without a registered gate (#18062): the person,
+ * unless they chose to let the decision model answer automatically, which
+ * Decision model holds as its one choice.
+ */
+export const UNGATED_QUESTION_TEXT =
+  "Need your own answer, unless you choose to let the decision model answer automatically under Decision model and the agent that asked allows a proxy answer. A proxy's answer is labelled as one.";

@@ -16,6 +16,7 @@ import { DecisionsModelConsentDialog } from "./DecisionsModelConsentDialog";
 import { DecisionsModelClearDialog } from "./DecisionsModelClearDialog";
 import { DecisionsModelReport } from "./DecisionsModelReport";
 import {
+  AUTOMATIC_ANSWER_SCOPE,
   MODEL_ADAPTERS,
   NO_ADAPTER,
   adapterChoiceDescription,
@@ -60,17 +61,11 @@ function dateTime(epochMs: number): string {
 /**
  * Decision model (#16027): learning, off by default and agreed to on its own
  * the first time; which agent CLI it runs, each saying where it sends; the
- * evaluation report, shown before any threshold can be chosen; and clearing
+ * evaluation report, shown before any threshold can be chosen; the one
+ * choice that lets it answer in the person's place (#18062); and clearing
  * what it learned, confirmed first and last in the section.
  */
-export function DecisionsModelSection({
-  model: read,
-  proxyAllowlisted,
-}: {
-  model: UseDecisionsModelResult;
-  /** Policy's switch, which decides whether questions without a gate can take a proxy answer at all. */
-  proxyAllowlisted: boolean;
-}) {
+export function DecisionsModelSection({ model: read }: { model: UseDecisionsModelResult }) {
   const { model, loadError, pending, pendingPreferences, failure } = read;
   const [consentOpen, setConsentOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
@@ -122,6 +117,13 @@ export function DecisionsModelSection({
         if (failure.runId) void read.cancelEvaluation(failure.runId);
         return;
       case "threshold":
+        // A withdrawal asks again, against the report main holds now.
+        if (failure.withdrawal && evaluation) {
+          void read.setThreshold(null, evaluation.evaluatedAt);
+          return;
+        }
+        void read.reload();
+        return;
       case "clear":
         void read.reload();
         return;
@@ -133,10 +135,12 @@ export function DecisionsModelSection({
       ? "Replays your past answers through the agent CLI you choose, to show how often it would have matched you"
       : `Replays ${historyCount === null ? "your past answers" : pluralize(historyCount, "past answer")} through ${MODEL_ADAPTERS[savedAdapter].label}, one past question at a time, which sends them to ${providerText(savedAdapter)}. It can take many minutes.`;
 
-  const thresholdValue =
-    evaluation?.autoAnswerThreshold === null || evaluation === null
-      ? NOT_ANSWERING
-      : String(evaluation.autoAnswerThreshold);
+  // What main answers from, not only what was saved: a threshold saved before
+  // the person chose to let the model answer arms nothing (#18062), and
+  // choosing it again here is what does.
+  const answering =
+    evaluation !== null && evaluation.autoAnswerThreshold !== null && model?.answeringFrom != null;
+  const thresholdValue = answering ? String(evaluation.autoAnswerThreshold) : NOT_ANSWERING;
 
   return (
     <SettingsSection
@@ -186,8 +190,8 @@ export function DecisionsModelSection({
           title={FAILURE_TITLE[failure.action]}
           message={failure.message}
           onRetry={retry}
-          // The choice is made again from what main holds now.
-          retryLabel={failure.action === "threshold" ? "Reload" : undefined}
+          // A confidence is chosen again from what main holds now.
+          retryLabel={failure.action === "threshold" && !failure.withdrawal ? "Reload" : undefined}
         />
       )}
 
@@ -255,7 +259,7 @@ export function DecisionsModelSection({
               description={
                 evaluation.thresholds.length === 0
                   ? "No confidence in this report matched your answers often enough on enough answers, so the model can't answer automatically yet"
-                  : "Only from a confidence this report supports. When a new evaluation finishes, its report stops automatic answers until you choose again."
+                  : `Lets the model answer in your place, from a confidence this report supports. ${AUTOMATIC_ANSWER_SCOPE} When a new evaluation finishes, its report stops automatic answers until you choose again.`
               }
               value={thresholdValue}
               onValueChange={(value) =>
@@ -273,14 +277,14 @@ export function DecisionsModelSection({
               ]}
               controlWidth="wide"
               disabled={locked || running !== null || evaluation.thresholds.length === 0}
-              isModified={evaluation.autoAnswerThreshold !== null}
+              isModified={answering}
               onReset={() => void read.setThreshold(null, evaluation.evaluatedAt)}
             />
           )}
           <SettingsRow
             id="decisions-model-answering"
             label={model.answeringFrom === null ? "Not answering" : "Answering in your place"}
-            description={answeringText(model, proxyAllowlisted)}
+            description={answeringText(model)}
           />
         </SettingsGroup>
       )}

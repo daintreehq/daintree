@@ -11,6 +11,7 @@ import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LearnedDecision } from "@daintreehq/decisions-client";
+import { FakeAdapter, type ModelPrompt } from "@daintreehq/decisions-model";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
@@ -568,7 +569,6 @@ import {
   setDecisionsEnabled,
   setDecisionsModel,
   setDecisionsModelThreshold,
-  setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
@@ -597,6 +597,7 @@ import {
   setDecisionQuestions,
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
+import { DecisionModelRuntime, decisionModelFiles } from "../decisionModel.js";
 import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
 
 /** A question in Needs you as the owner lists it before the person has marked it (#17895). */
@@ -1418,6 +1419,196 @@ describe("Decisions entry", () => {
       // Learning stays off, and its agreement stays.
       expect(saved.value).toMatchObject({ modelLearning: false });
       expect(cleared.consentedAt).toBeGreaterThan(0);
+    });
+
+    /** Stores an evaluation of `claude` with a supported threshold chosen, as an earlier lifetime left it. */
+    async function seedChosenThreshold(threshold: number): Promise<number> {
+      const cli = new FakeAdapter({
+        responder: (prompt: ModelPrompt) =>
+          JSON.stringify({
+            action: "answer",
+            selected_option_ids: ["rebase"],
+            answer_text: null,
+            confidence_estimate: 0.95,
+            supporting_decision_ids: [/\[example id=(\S+) chosen_at=/.exec(prompt.user)?.[1]],
+            risk_flags: [],
+            rationale: null,
+            reason: null,
+          }),
+      });
+      const seeding = new DecisionModelRuntime({
+        files: decisionModelFiles(keyFile.path),
+        onProxyChanged: () => {},
+        createAdapter: () => cli,
+      });
+      try {
+        await seeding.update({
+          modelLearning: true,
+          modelAdapter: "claude",
+          proxyAllowlisted: true,
+        });
+        for (let n = 1; n <= 36; n += 1) await seeding.learner.learn(learned(n));
+        const { evaluatedAt } = await seeding.evaluate();
+        await seeding.setAutoAnswerThreshold(threshold, evaluatedAt);
+        return evaluatedAt;
+      } finally {
+        await seeding.close();
+      }
+    }
+
+    // #18062: answering automatically is one choice, and the heading reads what main does.
+    it("answers nothing from a threshold saved without consent, and choosing it arms the model and the policy together", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      // What anyone who chose a confidence while Policy's old switch was off has saved.
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      const running = service.getPolicy()!;
+      expect(getDecisionsModel()).toMatchObject({
+        evaluation: { autoAnswerThreshold: 0.8 },
+        answeringFrom: null,
+      });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(saved.value).toMatchObject({ ...RELAY, consentedAt: 5, proxyAllowlisted: true });
+      expect(service.getPolicy()).toBe(running);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      expect(
+        running.resolve({ gateId: "design-review/final", requested: "proxy-ok" }).requirement
+      ).toBe("human-required");
+
+      const off = await setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+      expect(off).toMatchObject({ answeringFrom: null, evaluation: { autoAnswerThreshold: null } });
+      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    });
+
+    it("stops answering at once on Don't answer automatically though nothing can be written, and stays stopped until chosen again", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: true,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+      const running = service.getPolicy()!;
+      expect(model.proxy()).not.toBeNull();
+
+      // The setting's write fails, and the file's write waits its turn and then fails too.
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const write = vi.spyOn(model, "setAutoAnswerThreshold").mockImplementationOnce(async () => {
+        await held;
+        throw new Error("disk full");
+      });
+      try {
+        const off = setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        expect(model.proxy()).toBeNull();
+        expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+        release();
+        await expect(off).rejects.toMatchObject({ code: "INTERNAL" });
+      } finally {
+        write.mockRestore();
+      }
+      // Both still say yes on disk, and an unrelated save hands the model that setting again.
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(model.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+      await setDecisionsDefaultQuestionExpiry(60 * 60_000);
+      await model.settled();
+      expect(model.proxy()).toBeNull();
+      expect(getDecisionsModel().answeringFrom).toBeNull();
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      // Choosing a confidence again is the person's consent, though the setting already said yes.
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
+    it("arms only at the confidence just chosen, never a saved one while the new one writes", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = model.setAutoAnswerThreshold.bind(model);
+      const write = vi
+        .spyOn(model, "setAutoAnswerThreshold")
+        .mockImplementation(async (...args) => {
+          await held;
+          return original(...args);
+        });
+      try {
+        const choosing = setDecisionsModelThreshold({ threshold: 0.9, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        // Consent waits for the new threshold, so the saved 0.8 never arms meanwhile.
+        expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+        expect(model.proxy()).toBeNull();
+        release();
+        await expect(choosing).resolves.toMatchObject({ answeringFrom: 0.9 });
+      } finally {
+        write.mockRestore();
+      }
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+    });
+
+    it("keeps answering from a confidence chosen in Settings across a restart", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      await peekDecisionsService()!.getDecisionModel()!.settled();
+      await setDecisionsModelThreshold({ threshold: 0.7, evaluatedAt });
+      await peekDecisionsService()!.stop();
+
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      expect(getDecisionsModel().answeringFrom).toBe(0.7);
+      expect(service.getPolicy()!.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
   });
 
@@ -2711,37 +2902,12 @@ describe("Decisions entry", () => {
   });
 
   describe("policy", () => {
-    it("reads the trusted gates and the proxy allowlist as saved", () => {
+    it("reads the trusted gates and the default expiry, with no allowlist of its own (#18062)", () => {
       saved.value = { enabled: true, proxyAllowlisted: true };
       const policy = getDecisionsPolicy();
-      expect(policy.proxyAllowlisted).toBe(true);
+      expect(policy).not.toHaveProperty("proxyAllowlisted");
       expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
       expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
-    });
-
-    it("saves the proxy allowlist, keeping every other field, and the running policy follows it", async () => {
-      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
-      await startDecisionsIfEnabled();
-      const running = peekDecisionsService()!.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
-
-      const policy = await setDecisionsProxyAllowlisted(true);
-
-      expect(policy.proxyAllowlisted).toBe(true);
-      expect(saved.value).toEqual({
-        ...defaultDecisionsSettings(),
-        enabled: true,
-        ...RELAY,
-        consentedAt: 5,
-        proxyAllowlisted: true,
-      });
-      expect(peekDecisionsService()!.getPolicy()).toBe(running);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
-      expect(connections).toHaveLength(1);
-      expect(connections[0]!.stopped).toBe(0);
-
-      expect((await setDecisionsProxyAllowlisted(false)).proxyAllowlisted).toBe(false);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
     });
 
     it("moves the revision with each save, and tells every window to read it again", async () => {
@@ -2754,18 +2920,18 @@ describe("Decisions entry", () => {
         );
 
       let status = (await getDecisionsStatus()).revision ?? 0;
-      const saved1 = await setDecisionsProxyAllowlisted(true);
+      const saved1 = await setDecisionsDefaultQuestionExpiry(null);
       expect(saved1.revision).toBeGreaterThan(before);
       expect(getDecisionsPolicy()).toEqual(saved1);
       await pushedAfter(status);
 
       status = (await getDecisionsStatus()).revision ?? 0;
-      const saved2 = await setDecisionsProxyAllowlisted(false);
+      const saved2 = await setDecisionsDefaultQuestionExpiry(60 * 60_000);
       expect(saved2.revision).toBeGreaterThan(saved1.revision);
       await pushedAfter(status);
     });
 
-    it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
+    it("waits for a switch-on under way, so the starting lifetime can't keep the old expiry", async () => {
       saved.value = { enabled: true, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const service = peekDecisionsService()!;
@@ -2777,21 +2943,22 @@ describe("Decisions entry", () => {
       const enabling = setDecisionsEnabled(true);
       await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
 
-      let allowed = false;
-      const allowing = setDecisionsProxyAllowlisted(true).then((policy) => {
-        allowed = true;
+      let answered = false;
+      const saving = setDecisionsDefaultQuestionExpiry(null).then((policy) => {
+        answered = true;
         return policy;
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
       // Queued behind the switch-on: nothing saved, nothing answered yet.
-      expect(allowed).toBe(false);
-      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(answered).toBe(false);
+      expect(saved.value).toMatchObject({
+        defaultQuestionExpiryMs: defaultDecisionsSettings().defaultQuestionExpiryMs,
+      });
 
       closed();
-      await Promise.all([stopping, enabling, allowing]);
-      expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
-      const running = service.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      await Promise.all([stopping, enabling, saving]);
+      expect(saved.value).toMatchObject({ enabled: true, defaultQuestionExpiryMs: null });
+      expect(service.getPolicy()!.defaultQuestionExpiryMs).toBeNull();
     });
 
     it("saves the default expiry, never included, and the running policy asks the next question with it", async () => {
@@ -2837,37 +3004,43 @@ describe("Decisions entry", () => {
       expect(running.defaultQuestionExpiryMs).toBe(before.defaultQuestionExpiryMs);
     });
 
-    it("keeps both fields when the expiry and the allowlist are saved at once", async () => {
+    it("keeps both fields when the expiry and an agent's switch are saved at once", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const running = peekDecisionsService()!.getPolicy()!;
 
-      const [allowed, expiry] = await Promise.all([
-        setDecisionsProxyAllowlisted(true),
+      const [agents, expiry] = await Promise.all([
+        setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }),
         setDecisionsDefaultQuestionExpiry(null),
       ]);
-      expect(allowed.proxyAllowlisted).toBe(true);
+      expect(agents.askHumanAgents).toEqual(["claude"]);
       // The later save is applied over the earlier one, so its answer holds both.
-      expect(expiry).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
-      expect(saved.value).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
+      expect(expiry).toMatchObject({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: null });
+      expect(saved.value).toMatchObject({
+        askHumanAgents: ["claude"],
+        defaultQuestionExpiryMs: null,
+      });
       expect(running.defaultQuestionExpiryMs).toBeNull();
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
-    it("refuses either policy change after quit, though the switch still reads on", async () => {
+    it("refuses a policy change or an automatic-answer choice after quit, though the switch still reads on", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       await stopDecisions();
       vi.mocked(store.set).mockClear();
 
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
     });
 
-    it("refuses to change the allowlist while off, and saves nothing", async () => {
+    it("refuses to change the policy or choose automatic answers while off, and saves nothing", async () => {
       saved.value = { enabled: false };
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
       await expect(
         setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })

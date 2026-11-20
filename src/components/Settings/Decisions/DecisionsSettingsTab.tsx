@@ -150,10 +150,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onClose={onClose}
           />
           <DecisionsPolicySection policy={policy} />
-          <DecisionsModelSection
-            model={model}
-            proxyAllowlisted={policy.policy?.proxyAllowlisted === true}
-          />
+          <DecisionsModelSection model={model} />
           <DecisionsVoiceSection />
           <DecisionsDataSection
             status={status}

@@ -671,9 +671,6 @@ export interface GeneratedElectronAPI {
     setModelThreshold(
       ...args: IpcInvokeMap["decisions:set-model-threshold"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-model-threshold"]["result"]>;
-    setProxyAllowlisted(
-      ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
-    ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
     setTerminalSnapshots(
       ...args: IpcInvokeMap["decisions:set-terminal-snapshots"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-terminal-snapshots"]["result"]>;

@@ -1018,26 +1018,17 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.deleteLocalData();
       }
     ),
-    // The trusted gates, the proxy allowlist (#16013) and the default question
-    // expiry (#16122). Read and changed only while on: Settings shows them
-    // behind the switch, and reading them loads Decisions. No op registers or
-    // edits a gate.
+    // The trusted gates (#16013) and the default question expiry (#16122).
+    // Read and changed only while on: Settings shows them behind the switch,
+    // and reading them loads Decisions. No op registers or edits a gate, and
+    // whether a question without one may take a proxy answer follows the
+    // decision model's own choice (#18062).
     getPolicy: op(CHANNELS.DECISIONS_GET_POLICY, async (): Promise<DecisionsPolicy> => {
       refuseWhileOff("read its policy");
       const decisions = await loadDecisions();
       if (!decisions) throw setupCancelled();
       return decisions.getDecisionsPolicy();
     }),
-    setProxyAllowlisted: opValidated(
-      CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
-      z.boolean(),
-      async (allowed: boolean): Promise<DecisionsPolicy> => {
-        refuseWhileOff("change who may answer");
-        const decisions = await loadDecisions();
-        if (!decisions) throw setupCancelled();
-        return decisions.setDecisionsProxyAllowlisted(allowed);
-      }
-    ),
     // Only the shape here; main refuses any value Settings doesn't offer.
     setDefaultQuestionExpiry: opValidated(
       CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,

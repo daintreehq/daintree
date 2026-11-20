@@ -228,23 +228,13 @@ const decisionsEntry = vi.hoisted(() => ({
   })),
   getDecisionsPolicy: vi.fn((): DecisionsPolicy => ({
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
     askHumanAgents: [],
     revision: 0,
   })),
-  setDecisionsProxyAllowlisted: vi.fn(async (allowed: boolean): Promise<DecisionsPolicy> => ({
-    gates: [],
-    proxyAllowlisted: allowed,
-    defaultQuestionExpiryMs: 1,
-    maxQuestionExpiryMs: 2,
-    askHumanAgents: [],
-    revision: 1,
-  })),
   setDecisionsDefaultQuestionExpiry: vi.fn(async (ms: number | null): Promise<DecisionsPolicy> => ({
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: ms,
     maxQuestionExpiryMs: null,
     askHumanAgents: [],
@@ -253,7 +243,6 @@ const decisionsEntry = vi.hoisted(() => ({
   setDecisionsAgentAskHuman: vi.fn(
     async (payload: SetDecisionsAgentAskHumanPayload): Promise<DecisionsPolicy> => ({
       gates: [],
-      proxyAllowlisted: false,
       defaultQuestionExpiryMs: 1,
       maxQuestionExpiryMs: 2,
       askHumanAgents: payload.enabled ? [payload.agentId] : [],
@@ -375,7 +364,6 @@ vi.mock("../../../services/decisions/index.js", () => {
     deleteRelayData: decisionsEntry.deleteRelayData,
     deleteLocalData: decisionsEntry.deleteLocalData,
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
-    setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
@@ -516,9 +504,6 @@ const disconnectRelay = decisionsNamespace.ops.disconnectRelay
   .handler as unknown as () => Promise<DecisionsStatus>;
 const getPolicy = decisionsNamespace.ops.getPolicy
   .handler as unknown as () => Promise<DecisionsPolicy>;
-const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler as unknown as (
-  allowed: boolean
-) => Promise<DecisionsPolicy>;
 const setDefaultQuestionExpiry = decisionsNamespace.ops.setDefaultQuestionExpiry
   .handler as unknown as (ms: number | null) => Promise<DecisionsPolicy>;
 const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unknown as (
@@ -667,7 +652,6 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_DELETE_RELAY_DATA,
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
   CHANNELS.DECISIONS_GET_POLICY,
-  CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
   CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
@@ -729,7 +713,6 @@ describe("decisions IPC", () => {
     decisionsEntry.verifyRecoveryKit.mockClear();
     dialogMock.showSaveDialog.mockClear();
     decisionsEntry.getDecisionsPolicy.mockClear();
-    decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
     decisionsEntry.setDecisionsHoldPhonePushes.mockClear();
@@ -1204,12 +1187,11 @@ describe("decisions IPC", () => {
     expect(getVoiceSettings).not.toHaveBeenCalled();
   });
 
-  it("refuses to read the policy or change the allowlist while off, loading none of Decisions", async () => {
+  it("refuses to read or change the policy while off, loading none of Decisions", async () => {
     for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
       saved.value = value;
 
       await expect(getPolicy()).rejects.toMatchObject({ code: "PERMISSION" });
-      await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setDefaultQuestionExpiry(null)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setAgentAskHuman({ agentId: "claude", enabled: true })).rejects.toMatchObject({
         code: "PERMISSION",
@@ -2197,14 +2179,12 @@ describe("decisions IPC", () => {
     }
   });
 
-  it("reads the policy and changes the allowlist through Decisions itself once on", async () => {
+  it("reads the policy through Decisions itself once on", async () => {
     saved.value = { enabled: true };
 
-    await expect(getPolicy()).resolves.toMatchObject({ proxyAllowlisted: false });
-    await expect(setProxyAllowlisted(true)).resolves.toMatchObject({ proxyAllowlisted: true });
+    await expect(getPolicy()).resolves.toMatchObject({ gates: [], revision: 0 });
 
     expect(decisionsEntry.getDecisionsPolicy).toHaveBeenCalledOnce();
-    expect(decisionsEntry.setDecisionsProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2374,14 +2354,13 @@ describe("decisions IPC", () => {
     }
   });
 
-  it("takes only a boolean for the allowlist, and nothing that could carry a gate", () => {
-    const schema = decisionsNamespace.ops.setProxyAllowlisted.schema as SafeParse;
-
-    expect(schema.safeParse(true).success).toBe(true);
-    expect(schema.safeParse(false).success).toBe(true);
-    for (const value of [undefined, "true", 1, { proxyAllowlisted: true }, { gates: [] }]) {
-      expect(schema.safeParse(value).success).toBe(false);
-    }
+  // #18062: whether a question without a gate may take a proxy answer is
+  // the decision model's threshold choice, so no op sets it on its own.
+  it("offers no op that lets questions without a gate take a proxy answer by itself", () => {
+    const ops = Object.keys(decisionsNamespace.ops);
+    expect(ops).toContain("setModelThreshold");
+    expect(ops.filter((name) => /proxy|allowlist/i.test(name))).toEqual([]);
+    expect(Object.values(CHANNELS)).not.toContain("decisions:set-proxy-allowlisted");
   });
 
   it("revokes and rotates through Decisions itself once the setting is on", async () => {

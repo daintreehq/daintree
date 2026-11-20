@@ -1218,18 +1218,22 @@ describe("DecisionsService relay connection", () => {
     expect(made[0]!.options.policy).toBe(policy);
     expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
 
-    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    service.updateSettings(on({ ...RELAY, defaultQuestionExpiryMs: 60 * 60_000 }));
     expect(service.getPolicy()).toBe(policy);
-    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    expect(policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+
+    // The saved consent alone lets nothing take a proxy answer: only an armed model does (#18062).
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
 
     // Another relay identity gets a new connection on the same policy.
     service.updateSettings(on({ ...RELAY, proxyAllowlisted: true, deviceId: "dev_87654321" }));
     expect(made).toHaveLength(2);
     expect(made[1]!.options.policy).toBe(policy);
 
-    await service.start(on({ ...RELAY, proxyAllowlisted: false, deviceId: "dev_87654321" }));
+    await service.start(on({ ...RELAY, defaultQuestionExpiryMs: null, deviceId: "dev_87654321" }));
     expect(service.getPolicy()).toBe(policy);
-    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    expect(policy?.defaultQuestionExpiryMs).toBeNull();
   });
 
   it.each([
@@ -2968,22 +2972,101 @@ describe("DecisionsService decision model (#16026)", () => {
   it("asks the running connection to replace its attempt each time the proxy arms or disarms", async () => {
     const t = modelled();
     try {
-      await t.service.start(on({ ...RELAY, modelLearning: true, modelAdapter: "claude" }));
+      const settings = { ...RELAY, modelLearning: true, modelAdapter: "claude" as const };
+      await t.service.start(on({ ...settings, proxyAllowlisted: true }));
       const hooks = t.made[0]!.options.model!;
       await vi.waitFor(() => expect(t.histories).toHaveLength(1));
       for (let n = 1; n <= 36; n += 1) await hooks.learner.learn(decision(n));
+      // What a question without a gate asking for a proxy would be recorded as, when the connection hears.
+      const ungated = () => t.service.getPolicy()?.resolve({ requested: "proxy-ok" }).requirement;
+      const heard: Array<string | undefined> = [];
+      t.made[0]!.modelChanged.mockImplementation(() => heard.push(ungated()));
 
       const model = t.service.getDecisionModel()!;
       await model.evaluate();
       expect(t.made[0]!.modelChanged).not.toHaveBeenCalled();
+      expect(ungated()).toBe("human-required");
       await model.setAutoAnswerThreshold(0.8);
       expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(1);
       expect(hooks.proxy()).toBe(model.proxy());
       expect(hooks.proxy()).not.toBeNull();
 
-      t.service.updateSettings(on({ ...RELAY, modelLearning: false, modelAdapter: "claude" }));
+      t.service.updateSettings(on({ ...settings, modelLearning: false, proxyAllowlisted: true }));
       await vi.waitFor(() => expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(2));
       expect(hooks.proxy()).toBeNull();
+      // The policy follows the proxy, and is set before the connection is told (#18062).
+      expect(heard).toEqual(["proxy-ok", "human-required"]);
+      expect(ungated()).toBe("human-required");
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // #18062: answering automatically is one choice, and the policy follows the armed model.
+  it("arms nothing from a threshold while the setting withholds consent, and takes a withdrawal at once", async () => {
+    const t = modelled();
+    try {
+      const settings = { ...RELAY, modelLearning: true, modelAdapter: "claude" as const };
+      await t.service.start(on({ ...settings, proxyAllowlisted: false }));
+      const hooks = t.made[0]!.options.model!;
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      for (let n = 1; n <= 36; n += 1) await hooks.learner.learn(decision(n));
+      const ungated = () => t.service.getPolicy()?.resolve({ requested: "proxy-ok" }).requirement;
+
+      const model = t.service.getDecisionModel()!;
+      await model.evaluate();
+      await model.setAutoAnswerThreshold(0.8);
+      expect(hooks.proxy()).toBeNull();
+      expect(model.snapshot().answeringFrom).toBeNull();
+      expect(ungated()).toBe("human-required");
+      expect(t.made[0]!.modelChanged).not.toHaveBeenCalled();
+
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: true }));
+      await model.settled();
+      expect(hooks.proxy()).not.toBeNull();
+      expect(ungated()).toBe("proxy-ok");
+      // A design review still needs the person, armed or not.
+      expect(
+        t.service.getPolicy()?.resolve({ gateId: "design-review/final", requested: "proxy-ok" })
+          .requirement
+      ).toBe("human-required");
+
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: false }));
+      // Before the model's queue runs anything.
+      expect(hooks.proxy()).toBeNull();
+      expect(ungated()).toBe("human-required");
+      await model.settled();
+      expect(hooks.proxy()).toBeNull();
+
+      // Closing the model, as stopping or a store's recovery does, disarms
+      // without its callback, so the policy is told before the close finishes.
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: true }));
+      await model.settled();
+      expect(ungated()).toBe("proxy-ok");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = DecisionModelRuntime.prototype.close;
+      const close = vi
+        .spyOn(DecisionModelRuntime.prototype, "close")
+        .mockImplementation(async function (this: DecisionModelRuntime) {
+          await held;
+          return original.call(this);
+        });
+      try {
+        const stopping = t.service.stop();
+        await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+        expect(ungated()).toBe("human-required");
+        release();
+        await stopping;
+      } finally {
+        close.mockRestore();
+      }
+
+      // The saved choice arms the next lifetime's model again, and its policy follows.
+      await t.service.start(on({ ...settings, proxyAllowlisted: true }));
+      await vi.waitFor(() => expect(t.service.getDecisionModel()?.proxy()).not.toBeNull());
+      expect(ungated()).toBe("proxy-ok");
       await t.service.stop();
     } finally {
       t.cleanup();

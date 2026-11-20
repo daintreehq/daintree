@@ -392,7 +392,6 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     // What Settings → Decisions reads while connected.
     handle("decisions:get-policy", () => ({
       gates: [],
-      proxyAllowlisted: false,
       defaultQuestionExpiryMs: 86_400_000,
       maxQuestionExpiryMs: 7 * 86_400_000,
       revision: 1,
