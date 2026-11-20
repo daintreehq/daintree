@@ -243,7 +243,7 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 
 ### Advice instead of a decision
 
-Daintree doesn't take advisory questions yet: until it types the deadline notice into the agent's terminal, an ask with `planned_fallback` is refused with `host-unsupported` before anything else is checked (see [Asking](#asking)). This is how they will work.
+Daintree doesn't take advisory questions yet: until it types the deadline notice into the agent's terminal, an ask with `planned_fallback` that passes the usual checks is refused with `host-unsupported`, before any of the checks below (see [Asking](#asking)). This is how they will work.
 
 The final review is a decision: the workflow waits for your answer, and an expired question authorises nothing. A step the agent could take on its own can ask for advice instead, with a deadline and the plan it follows if you don't answer by then:
 

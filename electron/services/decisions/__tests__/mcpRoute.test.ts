@@ -847,6 +847,7 @@ describe("/mcp/decisions (#16011)", () => {
     const { port, live } = await connectOwner(relay, { defaultQuestionExpiryMs: hour });
     await adviceSupportRead(live, CAPABLE);
 
+    const receipts: Record<string, unknown>[] = [];
     for (const planned of ["Use the in-memory fixture.", null]) {
       const before = Date.now();
       const asked = await call(port, "pane-token-pane-a", "ask_human", {
@@ -866,7 +867,16 @@ describe("/mcp/decisions (#16011)", () => {
       expect(
         (await store.getQuestion(asked.structuredContent.question_id as string))?.expires_at
       ).toBe(expiresAt);
+      receipts.push(asked.structuredContent);
     }
+    await vi.waitFor(() => expect(relay.creates).toHaveLength(2));
+    expect(
+      relay.creates.map(({ question }) => [
+        question.record.question_id,
+        question.record.expires_at,
+        question.envelope.aad.reply_mode ?? "blocking",
+      ])
+    ).toEqual(receipts.map((r) => [r.question_id, r.expires_at, r.reply_mode]));
   });
 
   it.each([
@@ -931,7 +941,9 @@ describe("/mcp/decisions (#16011)", () => {
       expect(relay.creates[0].question.record.question_id).toBe(
         asked.structuredContent.question_id
       );
+      expect(relay.creates[0].question.record.expires_at).toBe(asked.structuredContent.expires_at);
       expect(relay.creates[0].question.envelope.aad.reply_mode).toBeUndefined();
+      expect(relay.requests.filter((r) => r === "POST /api/v1/questions")).toHaveLength(1);
     }
   );
 
@@ -1067,6 +1079,7 @@ describe("/mcp/decisions (#16011)", () => {
       const review = (await store.listQuestions()).find(
         (row) => row.attachment_digests.length > 0
       )!;
+      expect(review.attachment_digests).toHaveLength(1);
       const read = await call(port, "pane-token-pane-a", "get_decision", {
         question_id: review.question_id,
       });

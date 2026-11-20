@@ -28,6 +28,7 @@ import type {
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
+import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "../relayFeatures.js";
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
   AnswerDecisionQuestionPayload,
@@ -1122,14 +1123,18 @@ describe("DecisionsService relay connection", () => {
     expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
   });
 
-  it.each([true, false])(
-    "lets an owner lifetime's agents ask for advice, signed only when Daintree delivers its outcome (%s), and keeps a Remote Host's blocking (#17940)",
-    async (outcomes) => {
+  it.each([
+    ["delivers", true, true],
+    ["doesn't deliver", false, false],
+    ["is left to say (#17941)", undefined, DAINTREE_DELIVERS_ADVISORY_OUTCOMES],
+  ])(
+    "lets an owner lifetime's agents ask for advice, signed only when Daintree %s its outcome, and keeps a Remote Host's blocking (#17940)",
+    async (_label, outcomes, expected) => {
       const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
       const service = new DecisionsService({
         openStore: async () => fakeStore(),
         keyFilePath: () => "/nonexistent/keys.bin",
-        advisoryOutcomes: outcomes,
+        ...(outcomes === undefined ? {} : { advisoryOutcomes: outcomes }),
         connect: (options) => {
           const record = { options, stopped: false };
           made.push(record);
@@ -1146,7 +1151,7 @@ describe("DecisionsService relay connection", () => {
       expect(owner?.advisoryQuestions).toBe(true);
       expect(made).toHaveLength(1);
       expect(made[0]!.options.policy).toBe(owner);
-      expect(made[0]!.options.advisoryDeadlines).toBe(outcomes);
+      expect(made[0]!.options.advisoryDeadlines).toBe(expected);
 
       // The other role ends the lifetime first, and the next one starts from its own policy.
       await service.start(on(RELAY), "host");

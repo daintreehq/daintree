@@ -1358,7 +1358,7 @@ describe("RelayConnection", () => {
         if (options.delivery) {
           expect(hostSupport(delivery!.owner)).toBe(expected);
           // Delivery decides whether a plan may go ahead under the policy agents ask under.
-          expect(delivery!.owner.ctx.policy).toBe(bridges[0].ctx.policy);
+          for (const bridge of bridges) expect(bridge.ctx.policy).toBe(delivery!.owner.ctx.policy);
         } else {
           expect(delivery).toBeNull();
         }
@@ -1368,7 +1368,7 @@ describe("RelayConnection", () => {
     }
   );
 
-  it("signs no advice on an attempt when the lifetime's delivery couldn't start (#17940)", async () => {
+  it("gives no bridge advisoryDeadlines when the lifetime's delivery couldn't start (#17940)", async () => {
     const bridges: DecisionsBridge[] = [];
     const start = DecisionsBridge.prototype.start;
     vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
@@ -1380,8 +1380,13 @@ describe("RelayConnection", () => {
     });
     // Delivery asks for its way to the relay first; the attempt's own request gets through.
     relayRequestFailures.left = 1;
+    let source: QuestionSource | null = null;
     const h = await harness({
-      overrides: { advisoryDeadlines: true, delivery: deliveryDeps().deps },
+      overrides: {
+        advisoryDeadlines: true,
+        delivery: deliveryDeps().deps,
+        onQuestionsReady: (ready) => (source = ready),
+      },
     });
     try {
       h.connection.start();
@@ -1389,6 +1394,10 @@ describe("RelayConnection", () => {
       expect(relayRequestFailures.left).toBe(0);
       expect(h.connection.getDelivery()).toBeNull();
       expect(bridges.map(hostSupport)).toEqual([false]);
+      // Questions read alike between attempts and on them.
+      const ready = source as unknown as QuestionSource;
+      expect(ready.advisoryDeadlines).toBe(false);
+      expect(hostSupport(new QuestionBridge({ source: ready, isCurrent: () => true }))).toBe(false);
     } finally {
       await h.connection.stop();
     }

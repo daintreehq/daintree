@@ -29,7 +29,7 @@ import {
 } from "./paneSnapshots.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { DaintreeRelayClient } from "./relayFeatures.js";
-import { relayRequests } from "./relayIdentity.js";
+import { relayRequests, type RelayRequests } from "./relayIdentity.js";
 import {
   ObservedSocket,
   RetiredAttemptError,
@@ -171,8 +171,8 @@ export interface RelayConnectionOptions {
    * attempt's, the one between attempts and delivery's own, is given
    * `advisoryDeadlines`: it then signs advice the trusted policy allows, and
    * reads and types its outcome alike. Only with `delivery`: without it, or
-   * once it couldn't start, no outcome is typed, so no attempt signs one
-   * either. Off unless said.
+   * when delivery couldn't start, no outcome is typed, so no bridge is given
+   * it. Off unless said.
    */
   advisoryDeadlines?: boolean;
   /**
@@ -322,12 +322,14 @@ export class RelayConnection {
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
   private readonly rotations: KeyRotations;
-  /** `advisoryDeadlines` for every bridge the connection makes (`RelayConnectionOptions`). */
-  private readonly advisoryDeadlines: boolean;
+  /**
+   * `advisoryDeadlines` for every bridge the connection makes
+   * (`RelayConnectionOptions`), settled before questions can be asked.
+   */
+  private advisoryDeadlines = false;
 
   constructor(options: RelayConnectionOptions) {
     this.o = options;
-    this.advisoryDeadlines = options.advisoryDeadlines === true && options.delivery !== undefined;
     this.now = options.now ?? Date.now;
     this.rand = options.rand ?? Math.random;
     this.keys = retireable(options.keys, () => this.ended);
@@ -492,6 +494,11 @@ export class RelayConnection {
       return;
     }
     this.identity = identity;
+    // Made before questions can be asked: a lifetime whose delivery couldn't
+    // start types no advisory outcome, so none of its bridges is given one.
+    const deliveryRequests = await this.deliveryRequests();
+    if (this.ended) return;
+    this.advisoryDeadlines = this.o.advisoryDeadlines === true && deliveryRequests !== null;
     this.o.onQuestionsReady?.({
       identity: () => (this.ended ? null : this.identity),
       live: () => {
@@ -505,8 +512,7 @@ export class RelayConnection {
       advisoryDeadlines: this.advisoryDeadlines,
     });
     if (this.ended) return;
-    await this.startDelivery(identity);
-    if (this.ended) return;
+    this.startDelivery(identity, deliveryRequests);
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
       (this.o.watchNetwork ?? watchNetwork)((online) => {
@@ -544,24 +550,27 @@ export class RelayConnection {
     return true;
   }
 
-  /**
-   * Delivery runs for the connection's lifetime, not an attempt's, so an
-   * answer already stored is typed while the relay is out of reach.
-   */
-  private async startDelivery(identity: Identity): Promise<void> {
-    const deps = this.o.delivery;
-    if (!deps) return;
-    let requests: Awaited<ReturnType<typeof relayRequests>>;
+  /** Delivery's way to the relay; null without delivery, or when none could be made. */
+  private async deliveryRequests(): Promise<RelayRequests | null> {
+    if (!this.o.delivery) return null;
     try {
-      requests = await relayRequests(this.o.relay.relayOrigin, {
+      return await relayRequests(this.o.relay.relayOrigin, {
         fetchImpl: this.o.fetchImpl,
         signal: this.lifetime.signal,
       });
     } catch {
       console.warn("[Decisions] Answers can't be delivered: no way to reach the relay was made");
-      return;
+      return null;
     }
-    if (this.ended) return;
+  }
+
+  /**
+   * Delivery runs for the connection's lifetime, not an attempt's, so an
+   * answer already stored is typed while the relay is out of reach.
+   */
+  private startDelivery(identity: Identity, requests: RelayRequests | null): void {
+    const deps = this.o.delivery;
+    if (!deps || requests === null) return;
     const delivery = new AnswerDelivery({
       deps,
       identity,
@@ -633,8 +642,7 @@ export class RelayConnection {
         // Its inbox stores the person's follow-ups; the lifetime's delivery types them.
         followUps: true,
         policy: this.o.policy,
-        // Only beside a delivery that started: one that couldn't would type no outcome.
-        advisoryDeadlines: this.advisoryDeadlines && this.delivery !== null,
+        advisoryDeadlines: this.advisoryDeadlines,
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
           : {}),
