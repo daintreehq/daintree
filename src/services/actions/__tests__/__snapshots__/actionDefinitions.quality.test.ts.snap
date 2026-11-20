@@ -741,7 +741,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live panel forward, not a second agent. Opens off-screen unless that worktree is active.",
+    "description": "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A live panel already holding it is returned, wherever it is filed. Opens off-screen unless that worktree is active.",
     "examples": [
       {
         "args": {
