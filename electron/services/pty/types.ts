@@ -78,6 +78,12 @@ export interface TerminalPublicState {
    */
   promptUnseen?: true;
   /**
+   * When `promptUnseen` was last set (#18018). Only an input row read off the
+   * screen after this clears it, so a reading made for the run before, however
+   * late it arrives, never does.
+   */
+  promptUnseenAt?: number;
+  /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.
    */

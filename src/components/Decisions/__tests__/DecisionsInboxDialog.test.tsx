@@ -513,8 +513,11 @@ describe("DecisionsInboxDialog", () => {
       expect(document.activeElement?.getAttribute("data-inbox-key")).toBe(
         focused.getAttribute("data-inbox-key")
       );
-      expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
-        /Deadline passed/
+      // The reader keeps a clock of its own, so it can flip a moment after the list.
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
+          /Deadline passed/
+        )
       );
       // Nothing there to set aside: it no longer waits on the person. The button stays, unavailable,
       // so a keyboard on it isn't dropped.
