@@ -43,6 +43,7 @@ import {
 } from "../../helpers/fakeAgent";
 import { dispatchAction } from "../../helpers/actions";
 import {
+  answerOnPhone,
   askHuman,
   closeSettings,
   connectRelay,
@@ -353,14 +354,7 @@ test("a timely phone answer reaches the agent as the person's, and the deadline 
 
   // Ten minutes in, the person picks the option that isn't the plan.
   await clock.advance(10 * MINUTE);
-  // An advisory question offers its choices as chips beside the composer.
-  await openQuestionOnPhone(phone, question);
-  await phone
-    .getByRole("radio", { name: /A SQLite file per test/ })
-    .first()
-    .check();
-  await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
-  await expect(phone.getByText("Your answer", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await answerOnPhone(phone, question, { option: /A SQLite file per test/ });
   await expect
     .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);

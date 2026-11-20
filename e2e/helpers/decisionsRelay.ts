@@ -354,8 +354,8 @@ export async function openPhoneNotifications(device: Page): Promise<void> {
 }
 
 export async function choosePhoneOption(device: Page, name: RegExp): Promise<void> {
-  // The composer mirrors the choices as chips. Use the full option cards here.
-  await device.locator('input[type="radio"]').and(device.getByRole("radio", { name })).check();
+  // The phone app (0.9.0) offers a question's choices as radio chips beside its composer.
+  await device.getByRole("radio", { name }).first().check();
 }
 
 /** Opens `question` on the phone, picks `option` and/or writes `text`, and submits. */
