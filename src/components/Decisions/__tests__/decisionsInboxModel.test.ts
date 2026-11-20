@@ -675,6 +675,8 @@ describe("closedTime (#18025)", () => {
       at: asked,
       kind: "asked",
     });
+  });
+});
 
 describe("attentionText (#18054)", () => {
   const STOPPED: DecisionQuestionStanding = {
