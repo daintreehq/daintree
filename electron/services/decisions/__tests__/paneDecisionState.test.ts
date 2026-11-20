@@ -330,7 +330,17 @@ describe("projectPaneDecisionStates", () => {
       ...empty("pane-a"),
       waitingFollowUps: [{ questionId: qid(1), alias: 1 }],
     });
-    expect(standingOf(refused, handled)).toEqual({ kind: "to-type" });
+    // The handled answer is no longer typed in: only the follow-up waits.
+    expect(standingOf(refused, handled)).toEqual({
+      kind: "to-type",
+      delivery: {
+        answer: false,
+        followUps: 1,
+        first: "follow-up",
+        recordedAt: "2026-11-01T10:06:00.000Z",
+        hostAway: false,
+      },
+    });
   });
 
   it("marks an open or queued question a withdrawal or decline is queued for (#18052)", () => {
