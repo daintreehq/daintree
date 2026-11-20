@@ -308,6 +308,7 @@ function webhookItem(alias: number, question: string, text: string): DecisionsAt
       agentName: "Codex",
       paneId: "s-two",
       paneTitle: "Webhook queue migration",
+      otherHost: null,
     },
     answer: {
       source: "human",
@@ -317,6 +318,7 @@ function webhookItem(alias: number, question: string, text: string): DecisionsAt
       answeredAt: iso(70 * 60_000),
     },
     answerUnavailable: null,
+    notice: null,
     followUps: [],
     canResume: false,
     canReassign: true,
@@ -351,6 +353,7 @@ function attentionItems(asker: string, projectName: string): DecisionsAttentionI
         agentName: "Claude",
         paneId: asker,
         paneTitle: "Token refresh retry",
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -360,6 +363,7 @@ function attentionItems(asker: string, projectName: string): DecisionsAttentionI
         answeredAt: iso(40 * 60_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: true,
       canReassign: true,

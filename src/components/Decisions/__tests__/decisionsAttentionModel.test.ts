@@ -6,9 +6,13 @@ import type {
 import {
   canCopy,
   copyLabel,
+  fromLines,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  noticeOutcomeText,
+  noticePlanText,
+  originParts,
   outcomeText,
   reasonText,
   remainingText,
@@ -37,17 +41,29 @@ const ANSWER: DecisionsAttentionItem["answer"] = {
   answeredAt: "2026-11-01T09:00:00.000Z",
 };
 
-type Fields = Pick<DecisionsAttentionItem, "status" | "answer" | "answerUnavailable" | "followUps">;
+type Fields = Pick<
+  DecisionsAttentionItem,
+  "status" | "answer" | "answerUnavailable" | "notice" | "followUps"
+>;
 
 function item(over: Partial<Fields> = {}): Fields {
   return {
     status: "needs-attention",
     answer: ANSWER,
     answerUnavailable: null,
+    notice: null,
     followUps: [],
     ...over,
   };
 }
+
+const NOTICE: NonNullable<DecisionsAttentionItem["notice"]> = {
+  kind: "expired",
+  revision: 0,
+  deadline: "2026-11-01T09:45:00.000Z",
+  delivery: "needs-attention",
+  disposition: "fallback-due",
+};
 
 describe("follow-ups in the needs-attention list (#16231)", () => {
   it("names what of the question needs a person", () => {
@@ -158,5 +174,122 @@ describe("Mark handled's confirmation (#16638)", () => {
     expect(several).toContain("Its answer and follow-ups leave this list");
     expect(several).toContain("won't type them in");
     expect(several).toContain("so they can't be copied or sent to an agent");
+  });
+});
+
+describe("a timeout notice in the needs-attention list (#17944)", () => {
+  const notice = (over: Partial<Fields> = {}) => item({ answer: null, notice: NOTICE, ...over });
+
+  it("names the notice in the answer's place, and the follow-ups beside it", () => {
+    expect(subjectOf(notice())).toBe("timeout notice");
+    expect(subjectOf(notice({ followUps: [followUp()] }))).toBe("timeout notice and follow-up");
+    expect(subjectOf(notice({ followUps: [followUp(), followUp()] }))).toBe(
+      "timeout notice and follow-ups"
+    );
+    // A real answer waiting beside it is still what leads.
+    expect(subjectOf(item({ notice: NOTICE }))).toBe("answer");
+    expect(subjectOf(notice({ answerUnavailable: "unreadable" }))).toBe("answer");
+  });
+
+  it("says whether it needs attention or may already have been typed, apart from how the question ended", () => {
+    expect(statusText(notice())).toBe("Timeout notice needs attention");
+    expect(statusText(notice({ followUps: [followUp(), followUp()] }))).toBe(
+      "Timeout notice and follow-ups need attention"
+    );
+    expect(statusText(notice({ status: "delivery-uncertain" }))).toBe(
+      "This timeout notice may or may not have been delivered"
+    );
+    expect(noticeOutcomeText(NOTICE)).toBe("Its deadline passed without an answer.");
+    expect(noticeOutcomeText({ kind: "never-published" })).toContain(
+      "before it reached the relay"
+    );
+  });
+
+  it("says what typing it says of the plan, never that anything was carried out", () => {
+    expect(noticePlanText(NOTICE)).toBe(
+      "Once typed, it tells the agent it may go ahead with its stated plan. Nothing was decided or approved."
+    );
+    expect(noticePlanText({ ...NOTICE, delivery: "delivery-uncertain" })).toMatch(
+      /^If it reached the terminal, it told the agent/
+    );
+    expect(noticePlanText({ ...NOTICE, disposition: "fallback-withheld" })).toBe(
+      "Once typed, it doesn't clear the agent to go ahead with its plan."
+    );
+    expect(noticePlanText({ ...NOTICE, disposition: null })).toBeNull();
+    for (const delivery of ["needs-attention", "delivery-uncertain"] as const) {
+      for (const disposition of ["fallback-due", "fallback-withheld"] as const) {
+        expect(noticePlanText({ delivery, disposition })).not.toMatch(/went ahead|carried out|did /);
+      }
+    }
+  });
+
+  it("copies nothing of the notice, only the follow-ups beside it", () => {
+    expect(canCopy(notice())).toBe(false);
+    expect(canCopy(notice({ followUps: [followUp()] }))).toBe(true);
+    expect(copyLabel(notice({ followUps: [followUp()] }))).toBe("Copy follow-up");
+    expect(copyLabel(notice({ followUps: [followUp(), followUp()] }))).toBe("Copy follow-ups");
+  });
+
+  it("explains its code in its words, and what became of it after an action", () => {
+    expect(reasonText("inject_rejected", "timeout notice")).toBe(
+      "The terminal refused the timeout notice."
+    );
+    expect(reasonText("resume_exited", "timeout notice and follow-ups")).toBe(
+      "The resumed agent exited before the timeout notice was typed in."
+    );
+    expect(
+      outcomeText(7, { result: "delivered", terminalId: "p", title: "Build" }, "timeout notice")
+    ).toBe("Timeout notice for q-7 typed into “Build”");
+    expect(outcomeText(7, { result: "resolved" }, "timeout notice")).toBe(
+      "Timeout notice for q-7 no longer needs attention"
+    );
+    expect(outcomeText(7, { result: "refused", reason: "uncertain" }, "timeout notice")).toBe(
+      "Timeout notice for q-7 may already have been typed in, so it isn't typed again"
+    );
+  });
+
+  it("offers in Mark handled's confirmation only what a notice has", () => {
+    const one = handledConfirmBody("timeout notice");
+    expect(one).toContain("Its timeout notice leaves this list");
+    expect(one).toContain("Try resume goes with it");
+    expect(one).not.toContain("Choose destination");
+    expect(one).not.toContain("Copy");
+    expect(handledConfirmBody("timeout notice and follow-ups")).toContain(
+      "Copy and Try resume go with them"
+    );
+  });
+
+  it("names the computer a question was asked on when it isn't this one", () => {
+    const base = {
+      questionId: "q",
+      alias: 7,
+      status: "needs-attention" as const,
+      reason: "resume_other_host",
+      question: null,
+      askedAt: "2026-11-01T09:00:00.000Z",
+      answer: null,
+      answerUnavailable: null,
+      notice: NOTICE,
+      followUps: [],
+      canResume: false,
+      canReassign: false,
+    };
+    const origin = {
+      projectId: "p",
+      projectName: "Helios",
+      worktreeId: "w",
+      worktreeName: null,
+      agentId: "claude",
+      agentName: "Claude",
+      paneId: "pane-1",
+      paneTitle: null,
+    };
+    const atlas = { ...base, origin: { ...origin, otherHost: { hostId: "h", name: "Atlas" } } };
+    expect(originParts(atlas, null).pane).toBe("Claude on Atlas");
+    expect(fromLines(atlas, null).primary).toBe("Atlas");
+    const unknown = { ...base, origin: { ...origin, otherHost: { hostId: "h", name: null } } };
+    expect(originParts(unknown, null).pane).toBe("Claude on another computer");
+    const here = { ...base, origin: { ...origin, otherHost: null } };
+    expect(originParts(here, null).pane).toBe("Claude, terminal closed");
   });
 });

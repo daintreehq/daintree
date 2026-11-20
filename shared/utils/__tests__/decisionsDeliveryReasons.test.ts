@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deliveryReasonText, deliverySubject } from "../decisionsDeliveryReasons.js";
+import {
+  deliveryReasonText,
+  deliverySubject,
+  deliverySubjectPlural,
+} from "../decisionsDeliveryReasons.js";
 
 describe("decisionsDeliveryReasons", () => {
   it("names what of a question is held, in agreement with how many follow-ups", () => {
@@ -27,5 +31,20 @@ describe("decisionsDeliveryReasons", () => {
       "The resumed agent exited before the follow-ups were typed in."
     );
     expect(deliveryReasonText("pane_gone")).toBe("The terminal that asked was closed.");
+  });
+
+  it("names a timeout notice in the answer's place, and what its own code stopped (#17944)", () => {
+    expect(deliverySubject(true, 0, true)).toBe("timeout notice");
+    expect(deliverySubject(true, 2, true)).toBe("timeout notice and follow-ups");
+    // Only follow-ups held: the notice isn't part of it.
+    expect(deliverySubject(false, 1, true)).toBe("follow-up");
+    expect(deliverySubjectPlural("timeout notice")).toBe(false);
+    expect(deliverySubjectPlural("timeout notice and follow-up")).toBe(true);
+    expect(deliveryReasonText("inject_rejected", "timeout notice")).toBe(
+      deliveryReasonText("inject_rejected")!.replace("the answer", "the timeout notice")
+    );
+    expect(deliveryReasonText("pane_gone", "timeout notice")).toBe(
+      "The terminal that asked was closed."
+    );
   });
 });

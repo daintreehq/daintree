@@ -1,6 +1,7 @@
 import {
   DecisionsBridge,
   DeliveryEngine,
+  closureInForce,
   isAdvisoryNotice,
   isClosure,
   isUndeliveredMessage,
@@ -960,9 +961,9 @@ export class AnswerDelivery {
 
   /**
    * What became of `questionId` once delivery had its go. `tried`, the closure
-   * notices the action sent back, are delivered only once each is marked
-   * typed: one a reopen replaced, or a person handled meanwhile, left untyped,
-   * so it no longer needs attention rather than having been typed (#17944).
+   * notices the action sent back: one neither typed nor still to be typed (a
+   * reopen replaced its round, or a person handled it meanwhile) no longer
+   * needs attention, and is never reported delivered or waiting (#17944).
    */
   private async outcomeOf(
     questionId: string,
@@ -982,21 +983,22 @@ export class AnswerDelivery {
         reason: reasonOf(answerHeld ? row.error_code : (held[0]?.delivery?.error_code ?? null)),
       };
     }
+    // As the engine's own test: a closure notice of a round since replaced is never typed.
+    const live = pendingEntries(row).filter(
+      (entry) => !isClosure(entry) || closureInForce(entry, row)
+    );
+    const left = new Set(live.map((entry) => entry.entry_id));
+    for (const entry of parseAnswers(row.answers_json)) {
+      if (entry.delivered) left.add(entry.entry_id);
+    }
+    if (tried.some((id) => !left.has(id))) return { result: "resolved" };
     const terminalId = row.origin.pane_id;
     const title =
       (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
       null;
     const waiting =
-      pendingEntries(row).length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
-    if (!waiting) {
-      const typed = new Set(
-        parseAnswers(row.answers_json)
-          .filter((entry) => entry.delivered)
-          .map((entry) => entry.entry_id)
-      );
-      if (tried.some((id) => !typed.has(id))) return { result: "resolved" };
-      return { result: "delivered", terminalId, title };
-    }
+      live.length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
+    if (!waiting) return { result: "delivered", terminalId, title };
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
     const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
     return {
