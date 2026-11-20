@@ -574,6 +574,24 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
     expect(bothFormsShown()).toBe(true);
   });
 
+  it("opens when the relay changes to one whose kit isn't verified", () => {
+    const tree = (status: DecisionsStatus) => (
+      <TooltipProvider>
+        <DecisionsRecoveryKit
+          status={status}
+          disabled={false}
+          onVerified={vi.fn()}
+          focusRequest={0}
+        />
+      </TooltipProvider>
+    );
+    const view = render(tree(VERIFIED));
+
+    view.rerender(tree({ ...UNFINISHED, relayOrigin: "https://other.example.workers.dev" }));
+
+    expect(bothFormsShown()).toBe(true);
+  });
+
   it.each(["decisions-recovery-kit-save", "decisions-recovery-kit-verify"])(
     "opens for a settings link to %s, and stays open once the link is cleared",
     (id) => {

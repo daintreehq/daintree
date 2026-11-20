@@ -496,7 +496,10 @@ describe("DecisionsDataSection folded away", () => {
   });
 
   const details = () => screen.getByRole("button", { name: /What's sent, and where/ });
-  const listShown = () => document.querySelector("#decisions-data-sent ul") !== null;
+  const listShown = () =>
+    (document.getElementById("decisions-data-sent")?.textContent ?? "").includes(
+      "Questions and answers, end-to-end encrypted."
+    );
 
   function renderLinked(deepLink: SettingsDeepLink) {
     const tree = (value: SettingsDeepLink) => (

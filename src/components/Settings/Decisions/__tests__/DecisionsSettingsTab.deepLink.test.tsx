@@ -141,6 +141,7 @@ describe("Decisions settings links, in either order", () => {
 
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-data", true);
     expect(sentList()).not.toBeNull();
+    expect(document.activeElement?.closest("#decisions-data-sent")).not.toBeNull();
     expect(document.activeElement?.textContent).toBe("Details");
     expect(document.activeElement?.getAttribute("aria-expanded")).toBe("true");
   });
@@ -154,6 +155,7 @@ describe("Decisions settings links, in either order", () => {
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-data", true);
     expect(sentList()).toBeNull();
     expect(document.querySelector("#decisions-data-sent.settings-highlight")).not.toBeNull();
+    expect(document.activeElement?.closest("#decisions-data-sent")).not.toBeNull();
     expect(document.activeElement?.textContent).toBe("Details");
     expect(document.activeElement?.getAttribute("aria-expanded")).toBe("false");
   });
