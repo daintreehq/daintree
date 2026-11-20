@@ -2233,6 +2233,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyDecisionsSettingsTab.preload,
     LazyComponent: LazyDecisionsSettingsTab,
     needsOnClose: true,
+    needsIsActive: true,
     searchNavDescription:
       "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
     searchNavKeywords: [
@@ -2527,7 +2528,7 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "decisions-voice",
-        section: "Voice",
+        section: "Data",
         title: "Dictating answers",
         description: "Dictation in the phone app isn't end-to-end encrypted",
         keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],

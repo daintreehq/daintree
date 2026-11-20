@@ -1,15 +1,17 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { DecisionsDisclosure } from "./DecisionsDisclosure";
+import { DecisionsDisclosureToggle } from "./DecisionsDisclosureToggle";
 import { DecisionsRecoveryKit } from "./DecisionsRecoveryKit";
 import { DecisionsExportDialog } from "./DecisionsExportDialog";
 import { DecisionsDeleteRelayDialog } from "./DecisionsDeleteRelayDialog";
 import { DecisionsDeleteLocalDialog } from "./DecisionsDeleteLocalDialog";
 import { useDecisionsData, type DecisionsDataOutcome } from "./useDecisionsData";
+import { useLinkedDisclosure } from "./useLinkedDisclosure";
 import {
   describeExportResult,
   describeLocalDeleteResult,
@@ -33,7 +35,8 @@ function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null
 /**
  * Data: once a relay is set up, its recovery kit to save and verify at any
  * time (#16007); what's sent and where, the same list the consent dialog
- * showed; then exporting the decision history and deleting the relay's
+ * showed, folded away until asked for, with the note on dictating answers
+ * beside it; then exporting the decision history and deleting the relay's
  * stored content or this computer's Decisions data (#16025). Each action says what main
  * observed it do, on its own row; the deletions sit last, apart.
  */
@@ -63,6 +66,13 @@ export function DecisionsDataSection({
   const data = useDecisionsData((next) => onChanged?.(next));
   const [open, setOpen] = useState<OpenDialog>(null);
   const busy = locked || data.pending !== null;
+  const sentPanelId = useId();
+  // Only a search for it opens the list: the relay-removal banner links to this
+  // section to retry the deletions below, which the list would push down.
+  const [sentOpen, setSentOpen] = useLinkedDisclosure(["decisions-data"], {
+    initial: false,
+    searchOnly: true,
+  });
 
   // A relay set up or removed since leaves the last relay outcome about another relay.
   const forget = useEffectEvent(() => {
@@ -110,7 +120,25 @@ export function DecisionsDataSection({
           id="decisions-data-sent"
           layout="stacked"
           label="What's sent, and where"
-          description={<DecisionsDisclosure className="mt-2" />}
+          description="What Decisions sends to your relay, and what the relay can read"
+          control={({ labelId }) => (
+            <div>
+              <DecisionsDisclosureToggle
+                open={sentOpen}
+                onToggle={() => setSentOpen(!sentOpen)}
+                controls={sentPanelId}
+                labelId={labelId}
+              >
+                Details
+              </DecisionsDisclosureToggle>
+              <div id={sentPanelId}>{sentOpen && <DecisionsDisclosure className="mt-3" />}</div>
+            </div>
+          )}
+        />
+        <SettingsRow
+          id="decisions-voice"
+          label="Dictating answers"
+          description="It's a setting in the phone app, off until you turn it on there, and it isn't end-to-end encrypted: a speech provider hears what you say and a correction provider reads the transcript with the question. The answer you send is still encrypted."
         />
         <SettingsRow
           id="decisions-data-export"
