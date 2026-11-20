@@ -3722,6 +3722,38 @@ describe("DecisionsInboxDialog", () => {
       );
     });
 
+    it("widens to every project for a question asked for outside this project's list, once per ask (#18048)", async () => {
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+
+      // A stopped delivery's notification for Beta's question, while narrowed to Alpha.
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await waitFor(() => expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true"));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+
+      // Narrowed again by the person, it stays narrowed for that ask.
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+      await act(async () => {});
+      expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      expect(rows().map(aliasOf)).not.toContain("q-6");
+    });
+
     it("narrows to this project and back, choosing afresh when the question shown isn't this project's", async () => {
       open();
       await openHistory();

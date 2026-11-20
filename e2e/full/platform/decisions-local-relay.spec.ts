@@ -823,7 +823,10 @@ test("an answer given while Daintree is closed is there when it opens again", as
   await panel.getByTestId("decisions-inbox-open").click();
   await expect(panel).toHaveCount(0, { timeout: 10_000 });
   const inbox = page.getByTestId("decisions-inbox-dialog");
-  await expect(inbox.getByText(question)).toBeVisible({ timeout: 30_000 });
+  // The detail, not only its row: the inbox opened at the stopped question.
+  await expect(
+    inbox.getByTestId("decision-question-content").getByText(question, { exact: true })
+  ).toBeVisible({ timeout: 30_000 });
   await test.info().attach("attention", {
     body: await page.screenshot(),
     contentType: "image/png",

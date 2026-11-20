@@ -76,6 +76,13 @@ describe("useDecisionsInboxStore (#17231)", () => {
     // A question asked for while open keeps the opening's own.
     open({ question: { terminalId: "t2", questionId: "q2" }, returnFocusTo: "elsewhere" });
     expect(useDecisionsInboxStore.getState().request.returnFocusTo).toBe("canopy-card-t1");
+    useDecisionsInboxStore.getState().close();
+    open({ prefer: "stopped" });
+    open({ question: { terminalId: "t3", questionId: "q3" } });
+    expect(useDecisionsInboxStore.getState().request).toMatchObject({
+      prefer: "stopped",
+      returnFocusTo: null,
+    });
   });
 
   it("keeps the request through the close, so the closing dialog still knows where it came from", () => {

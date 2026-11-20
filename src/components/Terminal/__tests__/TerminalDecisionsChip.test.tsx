@@ -540,7 +540,7 @@ describe("TerminalDecisionsChip", () => {
         ],
       })
     );
-    // Only another pane's stall is listed, and this pane's open question waits in the list.
+    // Only another pane's stall is listed, and the attention list can't be read for this one.
     listQuestions.mockResolvedValue({
       revision: 1,
       questions: [

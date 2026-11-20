@@ -28,36 +28,44 @@ export function unlistedAnswers(
 }
 
 /**
- * How many stopped answers only the attention list holds, for Settings to
- * offer that list beside the inbox: read when the section shows, each time
- * the list closes, and as the inbox's stopped count `stopped` moves, from two
- * reads that both landed. Zero until then, when either fails, and while
- * Decisions isn't delivering. An answer that stops with nothing in the inbox
- * moving shows here once Settings is opened again.
+ * The stopped answers only the attention list holds: none read yet
+ * (`unread`), how many once both reads landed (zero while Decisions isn't
+ * delivering), or `unknown` when either read failed, in which case Settings
+ * keeps the list reachable, as it did before #18048.
  */
-export function useUnlistedStoppedAnswers(stopped: number): number {
-  const [count, setCount] = useState(0);
+export type UnlistedStoppedAnswers = "unread" | "unknown" | number;
+
+/** Whether Settings offers the attention list beside the inbox. */
+export function offersUnlisted(unlisted: UnlistedStoppedAnswers): boolean {
+  return unlisted === "unknown" || (typeof unlisted === "number" && unlisted > 0);
+}
+
+/**
+ * The stopped answers only the attention list holds, for Settings to offer
+ * that list beside the inbox: read when the section shows, each time the list
+ * closes, and as the inbox's stopped count `stopped` moves; an answer that
+ * stops with nothing in the inbox moving shows here once Settings is opened
+ * again. A read made before a later one began is dropped.
+ */
+export function useUnlistedStoppedAnswers(stopped: number): UnlistedStoppedAnswers {
+  const [unlisted, setUnlisted] = useState<UnlistedStoppedAnswers>("unread");
   const listOpen = useDecisionsAttentionStore((state) => state.isOpen);
 
   useEffect(() => {
     if (listOpen) return;
     let live = true;
-    let reads: Promise<[DecisionsAttentionList, DecisionQuestionList]>;
-    try {
-      reads = Promise.all([decisionsClient.listAttention(), decisionsClient.listQuestions()]);
-    } catch {
-      // A bridge without the reads offers the inbox alone.
-      return;
-    }
-    reads.then(
+    // Async, so a bridge that throws rather than rejects fails the read the same way.
+    const read = async (): Promise<[DecisionsAttentionList, DecisionQuestionList]> =>
+      Promise.all([decisionsClient.listAttention(), decisionsClient.listQuestions()]);
+    read().then(
       ([attention, list]) => {
         if (!live) return;
-        setCount(
+        setUnlisted(
           attention.result === "listed" ? unlistedAnswers(attention.items, list.questions) : 0
         );
       },
       () => {
-        if (live) setCount(0);
+        if (live) setUnlisted("unknown");
       }
     );
     return () => {
@@ -65,5 +73,5 @@ export function useUnlistedStoppedAnswers(stopped: number): number {
     };
   }, [listOpen, stopped]);
 
-  return count;
+  return unlisted;
 }

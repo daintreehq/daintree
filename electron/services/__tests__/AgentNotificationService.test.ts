@@ -4915,6 +4915,7 @@ describe("Decisions questions (#17232)", () => {
       const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
       expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
       expect(body).toBe("The terminal that asked was closed.");
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
       options.onClick();
       expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
         stalled.reference
@@ -4983,15 +4984,18 @@ describe("Decisions questions (#17232)", () => {
       );
       for (const text of [title, body, remoteTitle, remoteBody]) expect(text).not.toMatch(/plan/i);
 
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
       options.onClick();
-      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
         question("term-1", Date.now(), closed).reference
       );
       // The Host's question opens too, its stall read and resolved through its Host.
       remoteOptions.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledTimes(2);
       expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
         remote.reference
       );
+      expect(remote.reference).not.toEqual(question("term-1", Date.now(), closed).reference);
     });
 
     it("plays and shows nothing without a stall, and names the Remote Host where the reason would say this computer (#18026)", () => {

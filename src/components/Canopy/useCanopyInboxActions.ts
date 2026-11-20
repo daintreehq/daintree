@@ -578,7 +578,11 @@ export function useCanopyInboxActions({
       const { runId, workspaceId } = placeOf(item, hostId, ownHostId);
       void openStoppedAnswers(
         { terminalId: runId, projectId: workspaceId },
-        { returnFocusTo: canopyCardDomId(item.runId) }
+        {
+          returnFocusTo: canopyCardDomId(item.runId),
+          // Shown another host by the time the reads land, the list behind it isn't this one.
+          stillWanted: () => showsHost(hostId),
+        }
       );
     },
   };

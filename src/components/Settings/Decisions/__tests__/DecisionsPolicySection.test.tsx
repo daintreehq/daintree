@@ -395,11 +395,24 @@ describe("Questions → Inbox (#17231)", () => {
       };
     }
 
+    /** Main's question-list pushes, which move the shared counts. */
+    let listPushes: Array<(list: DecisionQuestionList) => void> = [];
+
     beforeEach(() => {
       listQuestions.mockReset();
       listAttention.mockReset();
+      listPushes = [];
       Reflect.set(window.electron.decisions, "listQuestions", listQuestions);
       Reflect.set(window.electron.decisions, "listAttention", listAttention);
+      const on = window.electron.events.on;
+      Reflect.set(window.electron.events, "on", (name: string, listener: () => void) => {
+        if (name !== "decisions:questions-changed") return on(name, listener);
+        const push = listener as unknown as (list: DecisionQuestionList) => void;
+        listPushes.push(push);
+        return () => {
+          listPushes = listPushes.filter((candidate) => candidate !== push);
+        };
+      });
       useDecisionsAttentionStore.setState({
         isOpen: false,
         request: { terminalId: null, returnFocusTo: null, seq: 0 },
@@ -430,13 +443,16 @@ describe("Questions → Inbox (#17231)", () => {
       expect(useDecisionsInboxStore.getState().request.prefer).toBe("stopped");
     });
 
-    it("says nothing it hasn't counted", async () => {
+    it("says nothing it hasn't counted, and offers nothing it hasn't read", async () => {
       listQuestions.mockReturnValue(new Promise(() => {}));
       listAttention.mockReturnValue(new Promise(() => {}));
       render(<Sections />);
       await act(async () => {});
 
+      expect(listQuestions).toHaveBeenCalled();
+      expect(listAttention).toHaveBeenCalled();
       expect(row().textContent).not.toMatch(/waiting|stopped/);
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
     });
 
     it("offers the attention list, after Settings closes, for an answer the inbox can't list", async () => {
@@ -460,7 +476,8 @@ describe("Questions → Inbox (#17231)", () => {
 
       const review = screen.getByRole("button", { name: "Review other answers" });
       const described = document.getElementById(review.getAttribute("aria-describedby") ?? "");
-      expect(described?.closest("#decisions-questions-inbox")).not.toBeNull();
+      expect(described).not.toBeNull();
+      expect(row().contains(described)).toBe(true);
       fireEvent.click(review);
       expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
       act(() => afterCloses[0]!(true));
@@ -471,14 +488,57 @@ describe("Questions → Inbox (#17231)", () => {
       expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
     });
 
-    it("offers no attention list when either read fails", async () => {
+    it("keeps the attention list reachable while a read can't say, as Review did", async () => {
       listQuestions.mockRejectedValue(new Error("no list"));
       listAttention.mockResolvedValue(attention("q9"));
       render(<Sections />);
       await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+      cleanup();
 
+      // A bridge that throws rather than rejects fails the read the same way.
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      listAttention.mockImplementation(() => {
+        throw new Error("no bridge");
+      });
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+
+    it("reads again each time the attention list closes, and as the stopped count moves", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      listAttention.mockResolvedValue(attention("q9"));
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+      expect(row().querySelector("[data-settings-row-actions]")).not.toBeNull();
+
+      // Dealt with in the list: it reads again once the list closes, and the row folds back.
+      listAttention.mockResolvedValue({ result: "listed", items: [] });
+      act(() => useDecisionsAttentionStore.getState().open());
+      await act(async () => {});
+      act(() => useDecisionsAttentionStore.getState().close());
+      await act(async () => {});
       expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
-      expect(screen.getByTestId("decisions-inbox-open")).toBeTruthy();
+      expect(row().querySelector("[data-settings-row-actions]")).toBeNull();
+
+      // A delivery stopping moves the count, and the read with it finds one the inbox can't list.
+      listQuestions.mockResolvedValue({ revision: 2, questions: [listed("q3", STOPPED)] });
+      listAttention.mockResolvedValue({
+        result: "listed",
+        items: [
+          { questionId: "q3" } as DecisionsAttentionItem,
+          { questionId: "q9" } as DecisionsAttentionItem,
+        ],
+      });
+      await act(async () => {
+        for (const push of listPushes) {
+          push({ revision: 2, questions: [listed("q3", STOPPED)] });
+        }
+      });
+      expect(row().textContent).toContain("1 delivery stopped");
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
     });
   });
 });

@@ -527,11 +527,14 @@ describe("decisionsInboxModel", () => {
       deliveryStatus: "needs-attention",
     };
     const waiting = item("q1", OPEN);
+    const delivering = item("q4", { kind: "to-type" });
     const firstStopped = item("q2", stopped);
     const secondStopped = item("q3", stopped, {
       remoteHost: { hostId: "build-box", name: "Build box", connected: true },
     });
-    const groups = inboxGroups([waiting, firstStopped, secondStopped]);
+    // Needs you, then Being delivered, then Needs attention: the stopped group is third.
+    const groups = inboxGroups([waiting, delivering, firstStopped, secondStopped]);
+    expect(groups.map((group) => group.id)).toEqual(["needs-you", "delivering", "attention"]);
     const prefer = (chosen: Parameters<typeof resolveSelection>[1], opener: string | null) =>
       resolveSelection(groups, chosen, opener, "local", null, undefined, null, "stopped");
 
@@ -540,6 +543,9 @@ describe("decisionsInboxModel", () => {
     // What it opened on stays, as does the opener pane's own, and a pick.
     expect(prefer({ key: referenceKey(waiting.reference), index: 0, picked: false }, null)).toBe(
       waiting
+    );
+    expect(prefer({ key: referenceKey(delivering.reference), index: 1, picked: true }, null)).toBe(
+      delivering
     );
     expect(prefer(null, "t1")).toBe(waiting);
     // With nothing stopped, it opens where it would have.

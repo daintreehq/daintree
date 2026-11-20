@@ -18,7 +18,7 @@ import {
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
-import { useUnlistedStoppedAnswers } from "./useUnlistedStoppedAnswers";
+import { offersUnlisted, useUnlistedStoppedAnswers } from "./useUnlistedStoppedAnswers";
 
 const INBOX_TEXT =
   "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided";
@@ -91,6 +91,8 @@ export function DecisionsQuestionsSection({
   const waiting = useDecisionsWaitingCount(true);
   const stopped = useDecisionsStoppedCount(true);
   const unlisted = useUnlistedStoppedAnswers(stopped);
+  // Offered while the attention list holds an answer the inbox can't list, or a read couldn't say.
+  const reviewUnlisted = offersUnlisted(unlisted);
   const openInbox = useDecisionsInboxStore((state) => state.open);
   const openAttention = useDecisionsAttentionStore((state) => state.open);
   // Settings goes first, so nothing stacks over it; reopened before it had gone, nothing opens.
@@ -149,7 +151,7 @@ export function DecisionsQuestionsSection({
           label="Inbox"
           description={inboxDescription(waiting, stopped)}
           // Two actions would squeeze the label on the rail.
-          layout={unlisted > 0 ? "stacked" : "inline"}
+          layout={reviewUnlisted ? "stacked" : "inline"}
           control={({ descriptionId }) => {
             const open = (
               <Button
@@ -162,7 +164,7 @@ export function DecisionsQuestionsSection({
                 Open inbox
               </Button>
             );
-            if (unlisted === 0) return open;
+            if (!reviewUnlisted) return open;
             return (
               <SettingsRowActions>
                 {open}
