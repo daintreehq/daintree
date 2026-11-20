@@ -2759,11 +2759,6 @@ export class TerminalProcess {
       if (seen?.pid === observation.pid && seen.run !== run) return;
       this.agentProcessSeen = { pid: observation.pid, run };
       if (observation.agentType === "claude") {
-        // Replaced without the pane showing a shell (`/restart`): a new process
-        // opens on its own startup screen, whatever prompt the old one reached (#18014).
-        if (seen !== undefined && seen.pid !== observation.pid && seen.run === run) {
-          info.promptUnseen = true;
-        }
         noteUpdateFooterProcess(info, observation.pid, Date.now());
       }
     }

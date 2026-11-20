@@ -426,6 +426,20 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     expect(reasonUpdates(onStateChange)).toEqual(["prompt"]);
   });
 
+  it("never re-reads a prompt off an input row with a selector drawn under it", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-selector-under-composer",
+      fresh(TRUST),
+      "approval"
+    );
+
+    monitor.onData("selector under the input row");
+    show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, " ❯ 1. Allow", "   2. Deny"]));
+    vi.advanceTimersByTime(5000);
+
+    expect(reasonUpdates(onStateChange)).toEqual([]);
+  });
+
   it("never re-reads a prompt off an input row left above a newer dialog", () => {
     const { monitor, onStateChange, show } = settleOn(
       "fresh-old-composer",

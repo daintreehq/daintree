@@ -334,25 +334,6 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     expect(createTerminal().getPublicState().promptUnseen).toBeUndefined();
   });
 
-  it("awaits the prompt again when Claude's process is replaced without a shell between (#18014)", () => {
-    const terminal = createTerminal();
-    settleAtPrompt(terminal, Date.now() - 5_000);
-    const spawnedAt = terminal.getPublicState().spawnedAt;
-    const observe = (pid: number) =>
-      terminal.handleAgentProcessObservation(
-        { agentType: "claude", command: "claude", pid },
-        spawnedAt
-      );
-
-    observe(4242);
-    observe(4242);
-    expect(info(terminal).promptUnseen).toBeUndefined();
-
-    // `/restart`: the new process opens on its own startup screen.
-    observe(5151);
-    expect(info(terminal).promptUnseen).toBe(true);
-  });
-
   it("queues a guarded submission behind the turn of a CLI that queues mid-turn input", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);

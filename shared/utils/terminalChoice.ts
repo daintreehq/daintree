@@ -167,6 +167,13 @@ const HORIZONTAL_RULE = /^\s*[─━]{8,}\s*$/;
 const DIALOG_HIGHLIGHT_ROW = /^\s*[❯›▶➜→●]\s*\S/;
 /** The key hint a dialog draws under its options ("Esc to cancel", "Press enter to confirm"). */
 const KEY_HINT = /\b(?:enter|esc)\b/i;
+/**
+ * The highlights `endsOnDrawnChoiceDialog` reads, with the ASCII `>` a Windows
+ * console draws Claude's in place of `❯`: under its stricter structure a quote
+ * or an input row can't take that shape.
+ */
+const DRAWN_HIGHLIGHT = /^\s*[❯›▶➜→●>]\s*\d+[.)]\s+/;
+const DRAWN_HIGHLIGHT_ROW = /^\s*[❯›▶➜→●>]\s*\S/;
 const HINT_VERB = /\b(?:confirm|cancel|select)\b/i;
 
 /** The selection list a screen is asking about right now, as `parseChoiceList` reads it. */
@@ -288,12 +295,16 @@ export function endsOnDrawnChoiceDialog(
   const block = lines.slice(top, bottom + 1);
   if (block.some((row) => HORIZONTAL_RULE.test(row))) return false;
 
-  const numbered = readChoiceList(lines.slice(0, bottom + 1), false);
+  const numbered = readChoiceList(lines.slice(0, bottom + 1), false, DRAWN_HIGHLIGHT);
   if (numbered !== null) return numbered.rows[0]! >= top;
-  return named && block.length >= 2 && block.some((row) => DIALOG_HIGHLIGHT_ROW.test(row));
+  return named && block.length >= 2 && block.some((row) => DRAWN_HIGHLIGHT_ROW.test(row));
 }
 
-function readChoiceList(rawLines: readonly string[], requireHint: boolean): ChoiceList | null {
+function readChoiceList(
+  rawLines: readonly string[],
+  requireHint: boolean,
+  highlight: RegExp = DIALOG_HIGHLIGHT
+): ChoiceList | null {
   const lines = rawLines.map(unframe);
   let cursor = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -302,7 +313,7 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
       break;
     }
   }
-  if (cursor === -1 || !DIALOG_HIGHLIGHT.test(lines[cursor]!)) return null;
+  if (cursor === -1 || !highlight.test(lines[cursor]!)) return null;
 
   let top = cursor;
   while (top > 0 && lines[top - 1]!.trim() !== "") top--;

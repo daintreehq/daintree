@@ -67,30 +67,6 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 // snapshot — long enough for xterm's async parse of the last chunk (and any
 // resize/focus-triggered redraw) to land before a frame is latched.
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
-/** More rows than any pane has: a viewport read asks for this many and gets them all. */
-const WHOLE_VIEWPORT_ROWS = 1000;
-/** The most rows an input row's block runs to: its frame and the footer rows under it. */
-const DRAWN_COMPOSER_BLOCK_ROWS = 8;
-
-/**
- * Whether the last block drawn, however many blank rows lie under it, is the
- * agent's empty input row in its frame with its footer (#18014). Only that
- * block counts, so a frame left higher up, above a selector or later output,
- * never does.
- */
-function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): boolean {
-  let end = viewport.length;
-  while (end > 0 && viewport[end - 1]!.trim() === "") end--;
-  let start = end;
-  while (
-    start > 0 &&
-    end - start < DRAWN_COMPOSER_BLOCK_ROWS &&
-    viewport[start - 1]!.trim() !== ""
-  ) {
-    start--;
-  }
-  return findEmptyComposerRow(viewport.slice(start, end), patterns) !== undefined;
-}
 const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
 // Idle-agent polling backoff (#10906). Once a simple-output agent has settled
 // into idle and stayed silent this long, drop the polling cadence to
@@ -234,6 +210,37 @@ export interface ActivityStateMetadata {
    * it.
    */
   rereadAt?: number;
+}
+
+/** More rows than any pane has: a viewport read asks for this many and gets them all. */
+const WHOLE_VIEWPORT_ROWS = 1000;
+/** The most rows an input row's block runs to: its frame and the footer rows under it. */
+const DRAWN_COMPOSER_BLOCK_ROWS = 8;
+
+/** A selector's row: a highlighted one or a numbered option, as a footer row never is. */
+const SELECTOR_ROW = /^\s*(?:[❯›▶➜→●>]\s*\S|\d+[.)]\s)/;
+
+/**
+ * Whether the last block drawn, however many blank rows lie under it, is the
+ * agent's empty input row in its frame with its footer (#18014). Only that
+ * block counts, so a frame left higher up, above a selector or later output,
+ * never does, and nor does one with a selector drawn under it.
+ */
+function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): boolean {
+  let end = viewport.length;
+  while (end > 0 && viewport[end - 1]!.trim() === "") end--;
+  let start = end;
+  while (
+    start > 0 &&
+    end - start < DRAWN_COMPOSER_BLOCK_ROWS &&
+    viewport[start - 1]!.trim() !== ""
+  ) {
+    start--;
+  }
+  const block = viewport.slice(start, end);
+  const inputRow = findEmptyComposerRow(block, patterns);
+  if (inputRow === undefined) return false;
+  return !block.slice(inputRow + 2).some((row) => SELECTOR_ROW.test(stripAnsi(row)));
 }
 
 export class ActivityMonitor {

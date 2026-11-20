@@ -586,6 +586,16 @@ describe("endsOnDrawnChoiceDialog (#18014)", () => {
     expect(endsOnDrawnChoiceDialog(pane(unnumbered))).toBe(true);
   });
 
+  it("reads the ASCII selector a Windows console draws Claude's trust prompt with", () => {
+    const ascii = TRUST.map((row) => row.replace("❯", ">"));
+    expect(endsOnDrawnChoiceDialog(pane(ascii))).toBe(true);
+    expect(
+      endsOnDrawnChoiceDialog(
+        pane(["> No, exit", "  Yes, I trust this folder", "", "Enter to confirm · Esc to cancel"])
+      )
+    ).toBe(true);
+  });
+
   it("reads another startup selector as a dialog, by its structure alone", () => {
     const theme = [
       " Let's get started.",
