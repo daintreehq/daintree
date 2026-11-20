@@ -301,8 +301,8 @@ const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).st
 // A question id as the library mints it.
 const questionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 
-/** An attention item's token, as main minted it: ids and states only. */
-const attentionTokenSchema = z.string().min(1).max(8192);
+/** An attention item's token, as main minted it: a SHA-256 digest of ids and states. */
+const attentionTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 const reassignAnswerSchema = z
   .object({

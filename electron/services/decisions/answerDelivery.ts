@@ -1005,6 +1005,16 @@ export class AnswerDelivery {
   ): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
+    // As the engine's own test: a closure notice of a round since replaced is never typed.
+    const live = pendingEntries(row).filter(
+      (entry) => !isClosure(entry) || closureInForce(entry, row)
+    );
+    const left = new Set(live.map((entry) => entry.entry_id));
+    for (const entry of parseAnswers(row.answers_json)) {
+      if (entry.delivered) left.add(entry.entry_id);
+    }
+    // A notice sent back that is neither typed nor still to be typed was replaced or handled meanwhile.
+    const lost = tried.notices.some((id) => !left.has(id));
     const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
     const held = heldFollowUps(row);
     if (answerHeld || held.length > 0) {
@@ -1015,19 +1025,11 @@ export class AnswerDelivery {
         result: "needs-attention",
         status: uncertain ? "delivery-uncertain" : "needs-attention",
         reason: reasonOf(answerHeld ? row.error_code : (held[0]?.delivery?.error_code ?? null)),
+        // Only its follow-ups stopped: the notice sent with them was replaced, and says nothing now.
+        ...(lost && !answerHeld ? { followUpsOnly: true as const } : {}),
       };
     }
-    // As the engine's own test: a closure notice of a round since replaced is never typed.
-    const live = pendingEntries(row).filter(
-      (entry) => !isClosure(entry) || closureInForce(entry, row)
-    );
     const undelivered = parseMessages(row.messages_json).filter(isUndeliveredMessage);
-    const left = new Set(live.map((entry) => entry.entry_id));
-    for (const entry of parseAnswers(row.answers_json)) {
-      if (entry.delivered) left.add(entry.entry_id);
-    }
-    // A notice sent back that is neither typed nor still to be typed was replaced or handled meanwhile.
-    const lost = tried.notices.some((id) => !left.has(id));
     const followUpsWait = undelivered.some((message) =>
       tried.followUps.includes(message.message_id)
     );

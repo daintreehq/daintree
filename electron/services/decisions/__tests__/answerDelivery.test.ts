@@ -2507,20 +2507,25 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    const [item] = await h.delivery.attentionItems();
+    const [read] = await h.delivery.attentionItems();
+    expect(read!.token).toMatch(/^[0-9a-f]{64}$/);
 
-    await expect(h.delivery.markHandled(Q1, "a token read before a correction")).resolves.toEqual({
+    // Another window moved it to another run, and it stopped there for the same reason.
+    await h.store.updateQuestion(Q1, { origin: { ...ORIGIN, pane_id: "pane-2" } });
+    await expect(h.delivery.markHandled(Q1, read!.token)).resolves.toEqual({
       result: "refused",
       reason: "changed",
     });
-    await expect(h.delivery.reassignAnswer(Q1, PANE, "stale")).resolves.toEqual({
+    await expect(h.delivery.reassignAnswer(Q1, PANE, read!.token)).resolves.toEqual({
       result: "refused",
       reason: "changed",
     });
     expect(await h.delivery.attentionItems()).toHaveLength(1);
     expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.handled")).toBe(false);
 
-    await expect(h.delivery.markHandled(Q1, item!.token)).resolves.toEqual({ result: "handled" });
+    const [now] = await h.delivery.attentionItems();
+    expect(now!.token).not.toBe(read!.token);
+    await expect(h.delivery.markHandled(Q1, now!.token)).resolves.toEqual({ result: "handled" });
     expect(await h.delivery.attentionItems()).toEqual([]);
     await stopped(h.delivery);
   });

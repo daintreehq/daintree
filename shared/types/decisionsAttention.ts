@@ -218,6 +218,8 @@ export type DecisionsAnswerOutcome =
       result: "needs-attention";
       status: "needs-attention" | "delivery-uncertain";
       reason: string;
+      /** Only follow-ups the action sent back are left: the notice sent with them was replaced (#17944). */
+      followUpsOnly?: true;
     }
   | { result: "handled" }
   | { result: "resolved" }

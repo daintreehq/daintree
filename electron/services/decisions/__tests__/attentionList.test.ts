@@ -317,7 +317,11 @@ describe("a notice a reopen replaced (#17944)", () => {
   it("gives a confirmation's token ids and states only, and a new one once the row asks something else", () => {
     const held = attention(1);
     const token = attentionToken(held, new Map());
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(token).not.toContain(SECRET);
+    expect(
+      attentionToken({ ...held, origin: { ...held.origin, pane_id: "pane-b" } }, new Map())
+    ).not.toBe(token);
     expect(attentionToken({ ...held, error_code: "relaunched" }, new Map())).toBe(token);
     const corrected = {
       ...held,

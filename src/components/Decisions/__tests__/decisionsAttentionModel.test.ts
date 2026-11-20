@@ -224,67 +224,79 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     );
   });
 
-  it("keeps a confirmation only while the list shows the question as it asked about it", () => {
-    const base = {
-      questionId: "q",
-      alias: 7,
-      status: "needs-attention" as const,
-      reason: "pane_gone",
-      question: null,
-      askedAt: "2026-11-01T09:00:00.000Z",
-      origin: {
-        projectId: "p",
-        projectName: null,
-        worktreeId: "w",
-        worktreeName: null,
-        agentId: "claude",
-        agentName: null,
-        paneId: "pane-1",
-        paneTitle: null,
-        otherHost: null,
-      },
-      answer: null,
-      answerUnavailable: null,
-      notice: NOTICE,
-      followUps: [],
-      canResume: true,
-      canReassign: false,
-    };
-    expect(sameAttention(base, { ...base, reason: "relaunched", canResume: false })).toBe(true);
-    // Its round replaced, possibly typed since, a new answer in its place, a follow-up added.
-    expect(sameAttention(base, { ...base, notice: { ...NOTICE, revision: 1 } })).toBe(false);
+  it("keeps a confirmation only while main's token for the question is the one it asked with", () => {
     expect(
-      sameAttention(base, {
-        ...base,
-        status: "delivery-uncertain",
-        notice: { ...NOTICE, delivery: "delivery-uncertain" },
-      })
+      sameAttention({ questionId: "q", token: "t-1" }, { questionId: "q", token: "t-1" })
+    ).toBe(true);
+    // A correction, a new follow-up, a replaced round or a move in another window: a new token.
+    expect(
+      sameAttention({ questionId: "q", token: "t-1" }, { questionId: "q", token: "t-2" })
     ).toBe(false);
-    expect(sameAttention(base, { ...base, notice: null, answer: ANSWER })).toBe(false);
-    expect(sameAttention(base, { ...base, followUps: [followUp()] })).toBe(false);
-    expect(sameAttention(base, { ...base, questionId: "other" })).toBe(false);
+    expect(
+      sameAttention({ questionId: "q", token: "t-1" }, { questionId: "r", token: "t-1" })
+    ).toBe(false);
   });
 
   it("reads the question list again only for a change to what needs a person", () => {
-    const question = (questionId: string, kind: string, deliveryStatus?: string) => ({
-      reference: { hostId: "h", questionId },
-      standing: { kind, ...(deliveryStatus ? { deliveryStatus } : {}) },
+    const question = (
+      questionId: string,
+      kind: string,
+      over: {
+        deliveryStatus?: string;
+        terminalId?: string;
+        closureNotice?: { delivery: string; disposition: string | null };
+      } = {}
+    ) => ({
+      reference: {
+        hostId: "h",
+        projectId: "p",
+        terminalId: over.terminalId ?? "pane-1",
+        questionId,
+      },
+      standing: { kind, ...(over.deliveryStatus ? { deliveryStatus: over.deliveryStatus } : {}) },
       stall:
         kind === "needs-attention"
           ? { answerRevision: 0, followUpIds: [], reason: "pane_gone" }
           : null,
+      ...(over.closureNotice ? { closureNotice: over.closureNotice } : {}),
     });
-    const held = attentionFingerprint([question("a", "needs-attention", "needs-attention")]);
+    const notice = { delivery: "needs-attention", disposition: "fallback-due" };
+    const held = attentionFingerprint([
+      question("a", "needs-attention", {
+        deliveryStatus: "needs-attention",
+        closureNotice: notice,
+      }),
+    ]);
+    // A question that doesn't need a person changes nothing here.
     expect(
       attentionFingerprint([
-        question("a", "needs-attention", "needs-attention"),
+        question("a", "needs-attention", {
+          deliveryStatus: "needs-attention",
+          closureNotice: notice,
+        }),
         question("b", "waiting"),
       ])
     ).toBe(held);
     expect(attentionFingerprint([question("a", "settled")])).not.toBe(held);
-    expect(attentionFingerprint([question("a", "needs-attention", "delivery-uncertain")])).not.toBe(
-      held
-    );
+    // Moved to another pane by another window, stopped again for the same reason.
+    expect(
+      attentionFingerprint([
+        question("a", "needs-attention", {
+          deliveryStatus: "needs-attention",
+          closureNotice: notice,
+          terminalId: "pane-2",
+        }),
+      ])
+    ).not.toBe(held);
+    // Only the notice's own delivery changed.
+    expect(
+      attentionFingerprint([
+        question("a", "needs-attention", {
+          deliveryStatus: "needs-attention",
+          closureNotice: { ...notice, delivery: "uncertain" },
+        }),
+      ])
+    ).not.toBe(held);
   });
 
   it("copies nothing of the notice, only the follow-ups beside it", () => {
@@ -327,6 +339,18 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
         "timeout notice and follow-ups"
       )
     ).toBe("Follow-ups to q-7 go to its terminal, typed in at the agent's next prompt");
+    expect(
+      outcomeText(
+        7,
+        {
+          result: "needs-attention",
+          status: "needs-attention",
+          reason: "pane_gone",
+          followUpsOnly: true,
+        },
+        "timeout notice and follow-up"
+      )
+    ).toBe("Follow-up to q-7 wasn't typed in and still needs attention");
   });
 
   it("offers in Mark handled's confirmation only what a notice has", () => {

@@ -16,6 +16,7 @@ import {
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { createHash } from "node:crypto";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
 import {
   parseDecisionNotice,
@@ -180,22 +181,26 @@ export function isHandled(row: QuestionRow, handled: HandledAnswers): boolean {
 }
 
 /**
- * What a person is asked about `row` now, as an opaque token of ids and
- * states only (#17944): the answer revision, every entry still to be typed,
- * the held follow-ups and the delivery status. An action confirmed against
- * one token is refused once the row asks something else, so a confirmation
- * shown before a correction, a new follow-up or a replaced round never acts
- * on what the person didn't see.
+ * What a person is asked about `row` now, as an opaque fixed-length digest
+ * of ids and states only (#17944): the answer revision, every entry still to
+ * be typed, the held follow-ups, the delivery status, the round, and the run
+ * it goes to. An action confirmed against one token is refused once the row
+ * asks something else, so a confirmation shown before a correction, a new
+ * follow-up, a replaced round or a move from another window never acts on
+ * what the person didn't see.
  */
 export function attentionToken(row: QuestionRow, handled: HandledAnswers): string {
   const answerHeld = answerNeedsAttention(row, handled);
-  return JSON.stringify([
+  const { origin } = row;
+  const asked = JSON.stringify([
     answerHeld ? answerRevision(row) : null,
     answerHeld ? pendingEntries(row).map((entry) => entry.entry_id) : [],
     heldFollowUps(row).map((message) => [message.message_id, message.delivery?.status ?? null]),
     row.delivery_status,
     row.question_revision,
+    [origin.host_id, origin.pane_id, origin.terminal_generation, origin.agent_incarnation],
   ]);
+  return createHash("sha256").update(asked).digest("hex");
 }
 
 /** The rows as panes, Canopy and the list see them: without what a person marked handled. */

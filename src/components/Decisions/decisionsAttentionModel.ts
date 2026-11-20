@@ -180,21 +180,16 @@ export function noticeDeliveryText(notice: Pick<DecisionsTimeoutNotice, "deliver
 }
 
 /**
- * Whether two reads of a question's item ask the same of the person: the
- * same answer, notice round and follow-ups, in the same state. A confirmation
- * asked about one read is dropped once the list no longer shows it so.
+ * Whether two reads of a question's item ask the same of the person, by the
+ * token main minted for each: the same answer, notice round, follow-ups and
+ * run, in the same state. A confirmation asked about one read is dropped
+ * once the list no longer shows it so, as main would refuse it.
  */
-export function sameAttention(a: DecisionsAttentionItem, b: DecisionsAttentionItem): boolean {
-  return (
-    a.questionId === b.questionId &&
-    a.status === b.status &&
-    a.answer?.answeredAt === b.answer?.answeredAt &&
-    a.answerUnavailable === b.answerUnavailable &&
-    a.notice?.revision === b.notice?.revision &&
-    a.notice?.delivery === b.notice?.delivery &&
-    a.followUps.length === b.followUps.length &&
-    a.followUps.every((followUp, index) => followUp.messageId === b.followUps[index]?.messageId)
-  );
+export function sameAttention(
+  a: Pick<DecisionsAttentionItem, "questionId" | "token">,
+  b: Pick<DecisionsAttentionItem, "questionId" | "token">
+): boolean {
+  return a.questionId === b.questionId && a.token === b.token;
 }
 
 /**
@@ -318,9 +313,10 @@ export function outcomeText(
   outcome: DecisionsAnswerOutcome,
   asked: AttentionSubject = "answer"
 ): string {
-  // Only the follow-ups still wait when the notice sent with them was replaced (#17944).
+  // Only the follow-ups are left when the notice sent with them was replaced (#17944).
   const subject: AttentionSubject =
-    outcome.result === "waiting" && outcome.followUpsOnly === true
+    (outcome.result === "waiting" || outcome.result === "needs-attention") &&
+    outcome.followUpsOnly === true
       ? asked.endsWith("follow-ups")
         ? "follow-ups"
         : "follow-up"
