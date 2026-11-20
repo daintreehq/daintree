@@ -88,7 +88,7 @@ export class KeepAwakeKeeper {
   private held: HeldUrl | null = null;
   /**
    * A URL that reached this listener and still works, kept while the one that
-   * replaced it hasn't yet: taken back if that one is dropped.
+   * replaced it hasn't yet, or expires first: taken back if that one is dropped.
    */
   private fallback: HeldUrl | null = null;
   private problem: string | null = null;
@@ -119,10 +119,16 @@ export class KeepAwakeKeeper {
 
   status(): KeepAwakeStatus {
     const held = this.held;
+    // What covers this host longest: the URL held, or the one behind it that it goes back to.
+    const fallback = this.fallback;
+    const covering =
+      held && fallback && fallback.expiresAt > held.expiresAt && fallback.expiresAt > this.now()
+        ? fallback
+        : held;
     return {
       port: this.listener?.port ?? null,
-      expiresAt: held?.expiresAt ?? null,
-      reachedAt: held?.reachedAt ?? null,
+      expiresAt: covering?.expiresAt ?? null,
+      reachedAt: covering?.reachedAt ?? null,
       problem: held ? null : (this.problem ?? this.listenerProblem),
     };
   }
@@ -144,8 +150,8 @@ export class KeepAwakeKeeper {
    * Holds this URL in place of any other, once it is checked to reach this
    * listener: at once while the host sees work, otherwise on the first request
    * it sends. Refused, the URL it held stays; replaced by one not checked yet,
-   * a URL that reached it is taken back if the new one is dropped. Taken one
-   * at a time, in order.
+   * or by one that expires first, a URL that reached it is taken back if the
+   * new one is dropped or expires. Taken one at a time, in order.
    */
   arm(request: KeepAwakeArmRequest): Promise<KeepAwakeStatus> {
     const taken = this.arms.then(() => this.armNow(request));
@@ -194,11 +200,14 @@ export class KeepAwakeKeeper {
     if (this.disposed) throw shuttingDown();
     if (this.listener !== listener) refuse(PORT_CLOSED);
     if (outcome?.kind === "lost") refuse(outcome.problem);
+    // Behind a pass's request, or idle and never sent, it may have run out meanwhile.
+    if (request.expiresAt <= this.now()) refuse("That link has already expired.");
     const reached = outcome?.kind === "reached";
-    // Not checked yet: the last URL that reached it stays behind it, however many came between.
-    const working = this.held?.verified ? this.held : this.fallback;
+    const working = this.working();
     this.replace(candidate);
-    if (!reached && working && working.expiresAt > this.now()) this.fallback = working;
+    // Not checked yet, or checked but outlasted: the longest-lived URL that reached it stays behind
+    // it, however many came between.
+    if (working && (!reached || working.expiresAt > candidate.expiresAt)) this.fallback = working;
     if (reached) {
       candidate.verified = true;
       candidate.reachedAt = this.now();
@@ -289,6 +298,15 @@ export class KeepAwakeKeeper {
     }
   }
 
+  /** Of the URL held, once it reached this listener, and the one behind it, the live one that expires last. */
+  private working(): HeldUrl | null {
+    const now = this.now();
+    const held = this.held?.verified && this.held.expiresAt > now ? this.held : null;
+    const fallback = this.fallback && this.fallback.expiresAt > now ? this.fallback : null;
+    if (!held || !fallback) return held ?? fallback;
+    return fallback.expiresAt > held.expiresAt ? fallback : held;
+  }
+
   /** Lets go of the URL held, taking back the one it replaced if that still works. */
   private drop(problem: string): void {
     const fallback = this.fallback;
@@ -347,7 +365,8 @@ export class KeepAwakeKeeper {
     this.retryAt = Number.NEGATIVE_INFINITY;
     held.verified = true;
     held.reachedAt = this.now();
-    this.fallback = null;
+    // The URL it replaced stays behind it while that one outlasts it, to go back to once it expires.
+    if (this.fallback && this.fallback.expiresAt <= held.expiresAt) this.fallback = null;
     this.lastSentAt = startedAt;
   }
 
@@ -371,15 +390,19 @@ export class KeepAwakeKeeper {
       status = response.status;
       await response.body?.cancel().catch(() => {});
     } catch {
+      const arrived = listener.take(nonce);
+      // Run out while its answer was awaited, it can hold nothing up from now on.
+      if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
       // Arrived, its answer slow or lost on the way back: it went through the edge all the same.
-      return listener.take(nonce) ? { kind: "reached" } : { kind: "retry" };
+      return arrived ? { kind: "reached" } : { kind: "retry" };
     }
     const arrived = listener.take(nonce);
+    if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
     if (status >= 200 && status < 300) {
       return arrived ? { kind: "reached" } : { kind: "lost", problem: NOT_ARRIVED };
     }
     if (status === 401 || status === 403 || status === 410) {
-      return { kind: "lost", problem: this.now() >= held.expiresAt ? EXPIRED : REFUSED };
+      return { kind: "lost", problem: REFUSED };
     }
     if (status === 404) return { kind: "lost", problem: NOT_ARRIVED };
     // A 502 is the edge not reaching the port, perhaps for a moment; anything else may pass too.
