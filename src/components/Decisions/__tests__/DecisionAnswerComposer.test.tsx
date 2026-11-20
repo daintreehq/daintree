@@ -961,6 +961,7 @@ describe("DecisionAnswerComposer delivery notice (#18029)", () => {
         <DecisionAnswerComposer
           question={shown}
           target={paneQuestion("t1", "q-gone")}
+          unshown={{}}
           onMoved={() => {}}
           deliveryNotice="Nothing can take this answer now."
         />
@@ -986,6 +987,7 @@ describe("DecisionAnswerComposer delivery notice (#18029)", () => {
         <DecisionAnswerComposer
           question={question("q-live")}
           target={paneQuestion("t1", "q-live")}
+          unshown={{}}
           onMoved={() => {}}
         />
       </TooltipProvider>
