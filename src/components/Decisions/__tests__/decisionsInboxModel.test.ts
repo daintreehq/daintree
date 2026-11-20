@@ -488,10 +488,13 @@ describe("decisionsInboxModel", () => {
 
     it("shows it in any group, ahead of the pane's first and the first waiting", () => {
       expect(
-        resolveSelection(groups, null, "t1", "local", { terminalId: "t2", questionId: "q2" })
+        resolveSelection(groups, null, "t1", "local", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
       ).toBe(closed);
       expect(
-        resolveSelection(groups, null, null, "local", {
+        resolveSelection(groups, null, null, "local", null, undefined, {
           terminalId: "t2",
           questionId: "q2",
           reference: hostCopy.reference,
@@ -535,7 +538,10 @@ describe("decisionsInboxModel", () => {
         )
       ).toBeUndefined();
       expect(
-        resolveSelection(onlyHost, null, null, "local", { terminalId: "t2", questionId: "q2" })
+        resolveSelection(onlyHost, null, null, "local", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
       ).toBe(hostCopy);
     });
 
@@ -546,7 +552,10 @@ describe("decisionsInboxModel", () => {
       );
       expect(findAsked(ordered, { terminalId: "t2", questionId: "q2" }, "studio")).toBeUndefined();
       expect(
-        resolveSelection(groups, null, null, "build-box", { terminalId: "t2", questionId: "q2" })
+        resolveSelection(groups, null, null, "build-box", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
       ).toBe(hostCopy);
     });
 
@@ -559,6 +568,8 @@ describe("decisionsInboxModel", () => {
           { key: keyOf(waiting), index: 1, picked: false },
           null,
           "local",
+          null,
+          undefined,
           asked
         )
       ).toBe(closed);
@@ -569,24 +580,38 @@ describe("decisionsInboxModel", () => {
           { key: keyOf(waiting), index: 1, picked: true },
           null,
           "local",
+          null,
+          undefined,
           asked
         )
       ).toBe(waiting);
       expect(
-        resolveSelection(groups, { key: "gone", index: 0, picked: true }, null, "local", asked)
+        resolveSelection(
+          groups,
+          { key: "gone", index: 0, picked: true },
+          null,
+          "local",
+          null,
+          undefined,
+          asked
+        )
       ).toBe(hostCopy);
     });
 
     it("falls back as before while it isn't listed", () => {
       const missing = { terminalId: "t9", questionId: "q9" };
-      expect(resolveSelection(groups, null, "t1", "local", missing)).toBe(waiting);
-      expect(resolveSelection(groups, null, null, "local", missing)).toBe(hostCopy);
+      expect(resolveSelection(groups, null, "t1", "local", null, undefined, missing)).toBe(waiting);
+      expect(resolveSelection(groups, null, null, "local", null, undefined, missing)).toBe(
+        hostCopy
+      );
       expect(
         resolveSelection(
           groups,
           { key: keyOf(closed), index: 2, picked: false },
           null,
           "local",
+          null,
+          undefined,
           missing
         )
       ).toBe(closed);
