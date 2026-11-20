@@ -6,29 +6,25 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Button } from "@/components/ui/button";
-import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
-import { pluralize } from "@/lib/pluralize";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { decisionsObservations } from "@/components/Layout/decisionsToolbarSignal";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+} from "@/hooks/useDecisionsWaitingCount";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
-import {
-  useDecisionsAttentionCount,
-  type DecisionsAttentionCount,
-} from "./useDecisionsAttentionCount";
 
-function attentionDescription(attention: DecisionsAttentionCount): string {
-  switch (attention.state) {
-    case "counted":
-      return attention.count === 0
-        ? "None right now. Answers Daintree won't type in on its own are listed here"
-        : `${pluralize(attention.count, "answer")} Daintree won't type in on its own`;
-    case "failed":
-      return "Couldn't count them just now. Review opens the list";
-    case "not-running":
-      return "Decisions isn't delivering answers right now, so none can be read";
-    case "loading":
-      return "Answers Daintree won't type in on its own are listed here";
-  }
+const INBOX_TEXT =
+  "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided";
+
+/**
+ * The inbox row's description: what the toolbar's button observes, the
+ * questions waiting and the deliveries stopped (#18048), ahead of what the
+ * inbox holds. Nothing is counted until the list is read.
+ */
+export function inboxDescription(waiting: number, stopped: number): string {
+  const observed = decisionsObservations(waiting, stopped);
+  return observed.length === 0 ? INBOX_TEXT : `${observed.join(", ")}. ${INBOX_TEXT}.`;
 }
 import {
   DEFAULT_QUESTION_EXPIRY_MS,
@@ -65,10 +61,10 @@ interface DecisionsQuestionsSectionProps {
 /**
  * Questions: how long one waits when its agent sets no expiry (#16122), as
  * the library applies the saved choice, whether the phone may show the pane
- * that asked one (#16228), the answers that couldn't be typed in on their own
- * (#16020), and the inbox of every question (#17231). The description follows
- * what main has saved, not a choice still being saved. Snapshots ask before
- * every turn on. The phone and desktop notification settings are
+ * that asked one (#16228), and the inbox of every question (#17231), which
+ * also holds the answers that couldn't be typed in on their own (#18048). The
+ * description follows what main has saved, not a choice still being saved.
+ * Snapshots ask before every turn on. The phone and desktop notification settings are
  * Notifications' (#18061).
  */
 export function DecisionsQuestionsSection({
@@ -85,9 +81,9 @@ export function DecisionsQuestionsSection({
   const snapshotsLocked = locked || snapshots.saving;
   const snapshotsFailure = snapshots.failure;
   const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
-  const attention = useDecisionsAttentionCount();
-  const openAttention = useDecisionsAttentionStore((state) => state.open);
-  const noneToReview = attention.state === "counted" && attention.count === 0;
+  // The section shows only while Decisions is on, so the toolbar's watch is shared, not doubled.
+  const waiting = useDecisionsWaitingCount(true);
+  const stopped = useDecisionsStoppedCount(true);
   const openInbox = useDecisionsInboxStore((state) => state.open);
   const showInbox = () => {
     if (onClose === undefined) {
@@ -139,7 +135,7 @@ export function DecisionsQuestionsSection({
         <SettingsRow
           id="decisions-questions-inbox"
           label="Inbox"
-          description="Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided"
+          description={inboxDescription(waiting, stopped)}
           control={({ descriptionId }) => (
             <Button
               variant="outline"
@@ -151,28 +147,6 @@ export function DecisionsQuestionsSection({
               Open inbox
             </Button>
           )}
-        />
-        <SettingsRow
-          id="decisions-questions-attention"
-          label="Answers needing attention"
-          description={attentionDescription(attention)}
-          control={
-            <Button
-              variant="outline"
-              size="sm"
-              // Nothing to review only once a read said so; unknown still opens the list.
-              // Unavailable rather than disabled, so a list emptied from here can
-              // still hand focus back to it.
-              aria-disabled={noneToReview || undefined}
-              className={noneToReview ? ARIA_DISABLED_CLASSES : undefined}
-              onClick={() => {
-                if (!noneToReview) openAttention();
-              }}
-              data-testid="decisions-attention-review"
-            >
-              Review
-            </Button>
-          }
         />
       </SettingsGroup>
       {policy === null && loadError !== null && (
