@@ -391,14 +391,46 @@ describe("DecisionsInboxDialog", () => {
     expect(other.textContent).toContain("Beta");
     expect(other.textContent).toContain(getEffectiveAgentConfig("codex")!.name);
     expect(other.textContent).not.toContain(getEffectiveAgentConfig("claude")!.name);
-    // Each row's age is its own question's.
+    // Each row's age is its own question's: History's is when it closed, the rest's when it was asked.
     const ages = ["q-1", "q-2", "q-3"].map(
       (alias) => rowNamed(alias).querySelector("time")?.getAttribute("datetime") ?? null
     );
-    expect(ages).toEqual(LIST.questions.map((entry) => new Date(entry.askedAt).toISOString()));
+    expect(ages).toEqual(
+      LIST.questions.map((entry) => new Date(entry.settledAt ?? entry.askedAt).toISOString())
+    );
+    // The close time is named for the ear; the others stay "asked".
+    expect(nameOf(rowNamed("q-1"))).toMatch(/Closed,/);
+    expect(nameOf(rowNamed("q-2"))).toMatch(/Asked,/);
     // One read of the lines, by reference, for every row.
     expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
     expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
+  });
+
+  it("shows a History row with no close time by when it was asked, and says so (#18025)", async () => {
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        item(
+          "question-1",
+          1,
+          { kind: "settled", outcome: "expired" },
+          { askedAt: "2026-11-02T08:00:00.000Z", settledAt: null }
+        ),
+        item("question-2", 2, OPEN, {
+          askedAt: "2026-11-02T09:00:00.000Z",
+          settledAt: "2026-11-02T11:00:00Z",
+        }),
+      ],
+    });
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    const time = (alias: string) =>
+      rowNamed(alias).querySelector("time")?.getAttribute("datetime") ?? null;
+    expect(time("q-1")).toBe("2026-11-02T08:00:00.000Z");
+    expect(nameOf(rowNamed("q-1"))).toMatch(/Asked,/);
+    expect(nameOf(rowNamed("q-1"))).not.toMatch(/Closed,/);
+    // Outside History the asked time stays, whatever a stray settled time says.
+    expect(time("q-2")).toBe("2026-11-02T09:00:00.000Z");
   });
 
   it("shows the first question beside the list, read by reference", async () => {

@@ -67,6 +67,7 @@ import {
   expiresSoon,
   inboxGroupOf,
   inboxGroups,
+  closedTime,
   inboxRowNote,
   isAttention,
   isClosed,
@@ -387,6 +388,10 @@ function InboxRow({
   nowMs: number | null;
 }) {
   const note = inboxRowNote(item, nowMs);
+  const shownTime =
+    inboxGroupOf(item, nowMs) === "history"
+      ? closedTime(item)
+      : { at: item.askedAt, kind: "asked" as const };
   const cleared = inboxGroupOf(item, nowMs) === "cleared";
   const deadline = deadlineMs(item.expiresAt);
   // Within a day: when, in this computer's time, and how long is left (#17943).
@@ -449,10 +454,13 @@ function InboxRow({
             >
               {line ?? aliasLabel(item.alias)}
             </span>
-            <TimeAgo
-              timestamp={item.askedAt}
-              className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums"
-            />
+            {/* History sorts by when a question closed, so it shows that time (#18025). */}
+            <span className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums">
+              <span className="sr-only">
+                {shownTime.kind === "closed" ? "Closed, " : "Asked, "}
+              </span>
+              <TimeAgo timestamp={shownTime.at} />
+            </span>
           </span>
           {/* Only what sets this row apart from its group; the full sentence is for the ear.
               A closed row's outcome leads its where-line instead, so history stays two lines. */}
