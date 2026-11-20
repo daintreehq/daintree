@@ -336,7 +336,9 @@ describe("HostCallRuntime host.call (#13493)", () => {
           ok: true,
           value: { outcome: "ok", callId: null, result: { structured: { dispatched: false } } },
         });
-        expect(relayCall.mock.calls[0]![3]).toMatchObject({ signal: controller.signal });
+        const cancel = relayCall.mock.calls[0]![3] as { signal: AbortSignal; onCancel: unknown };
+        expect(cancel.signal).toBe(controller.signal);
+        expect(cancel.onCancel).toEqual(expect.any(Function));
       });
 
       it("gives no cancel to a resend the host will refuse as another call under the id", async () => {
@@ -423,6 +425,13 @@ describe("HostCallRuntime host.call (#13493)", () => {
           ok: true,
           value: { outcome: "ok", callId: ID, result: { structured: { dispatched: false } } },
         });
+        relayCall.mockRejectedValueOnce(
+          new RelayCancelUnconfirmedError({ status: "cancelled", dispatch: "after" })
+        );
+        const after = await runtime.call("a", CALL, { tier: "core" });
+        if (!after.ok) throw new Error("refused");
+        expect(after.value).toMatchObject({ outcome: "ambiguous", result: null });
+        expect(after.value.detail).toMatch(/told the tool to stop/);
       });
 
       it("is ambiguous, saying the host didn't confirm it stopped, when the cancel wasn't taken", async () => {

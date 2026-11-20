@@ -529,6 +529,11 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       expect(opened[0]!.calls).toHaveLength(1);
     });
 
+    it("takes no cancel once this machine's relay is gone (#17985)", () => {
+      local.dispose();
+      expect(local.cancelCall("a", "00000000-0000-4000-8000-000000000001")).toBe(false);
+    });
+
     it("answers a tool with no output schema in its structured half (#15730)", async () => {
       const value = {
         commands: [

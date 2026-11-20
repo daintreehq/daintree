@@ -827,7 +827,8 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
 
     // Cancelling the request aborts that very signal, while the call is still out.
     let heard: AbortSignal | undefined;
-    run.mockImplementationOnce(async (_toolId: unknown, _args: unknown, context: unknown) => {
+    // Widened: this answer isn't the plain `ok` the mock was first given.
+    (run as ReturnType<typeof vi.fn>).mockImplementationOnce(async (_toolId, _args, context) => {
       heard = (context as { signal: AbortSignal }).signal;
       await new Promise((resolve) => heard!.addEventListener("abort", resolve, { once: true }));
       return {

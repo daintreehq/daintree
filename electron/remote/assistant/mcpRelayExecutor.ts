@@ -711,12 +711,15 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     if (signal?.aborted) return CANCELLED_BEFORE;
     if (!hasProject) return { status: "refused", reason: "no-project" };
     const found = await sessionFor(spec);
-    if (signal?.aborted) return CANCELLED_BEFORE;
-    if (found === null) return { status: "refused", reason: "server-off" };
+    if (found === null) {
+      return signal?.aborted ? CANCELLED_BEFORE : { status: "refused", reason: "server-off" };
+    }
     const { cached, session } = found;
     cached.inFlight += 1;
     cached.usedAt = now();
     try {
+      // Inside the hold, so a session retired while it opened still closes below.
+      if (signal?.aborted) return CANCELLED_BEFORE;
       const timeoutMs = deadline - now();
       if (timeoutMs <= 0) {
         return {

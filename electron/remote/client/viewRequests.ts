@@ -335,6 +335,28 @@ function hostDeadline(
     : { holdUntil: remoteHoldUntil(receivedAt, holdBudgetMs) };
 }
 
+/**
+ * One of this Shell's own calls its assistant cancelled (#17985): nothing
+ * more of it runs here, as no approval of it is given, and nobody is asked.
+ */
+function cancelledHere(hostId: string, request: McpDispatchPayload): boolean {
+  const call = request.relayCall;
+  return (
+    call !== undefined &&
+    getRemoteService("hostCallRelayClient")?.cancelledRelayedCall(hostId, call) === true
+  );
+}
+
+const CANCELLED_HERE = {
+  result: {
+    ok: false,
+    error: {
+      code: "CONFIRMATION_REQUIRED",
+      message: "The assistant's call was cancelled on the Shell, so nothing was run.",
+    },
+  },
+} as const;
+
 async function dispatchAction(
   hostId: string,
   webContentsId: number,
@@ -360,23 +382,7 @@ async function dispatchAction(
       },
     };
   }
-  // One of this Shell's own calls its assistant cancelled (#17985): nothing
-  // more of it runs here, as no approval of it is given. Nobody is asked.
-  if (
-    request.relayCall !== undefined &&
-    getRemoteService("hostCallRelayClient")?.cancelledRelayedCall(hostId, request.relayCall) ===
-      true
-  ) {
-    return {
-      result: {
-        ok: false,
-        error: {
-          code: "CONFIRMATION_REQUIRED",
-          message: "The assistant's call was cancelled on the Shell, so nothing was run.",
-        },
-      },
-    };
-  }
+  if (cancelledHere(hostId, request)) return CANCELLED_HERE;
   const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
@@ -394,6 +400,8 @@ async function dispatchAction(
   // Settled by this view, which holds the pane (#17917).
   const nextFallback =
     !skipPreference && (own?.kind === "next-fallback" || honoursNextFallback(request));
+  // Read again past the awaits above: a cancel landing meanwhile asks nobody either.
+  if (cancelledHere(hostId, request)) return CANCELLED_HERE;
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,

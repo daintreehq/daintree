@@ -292,6 +292,18 @@ describe("view reverse requests", () => {
       });
     });
 
+    it("runs nothing when the cancel lands while the dispatch is being read", async () => {
+      // Out when it arrived; cancelled by the time it would run.
+      m.cancelledRelayedCall.mockReturnValueOnce(false).mockReturnValue(true);
+
+      const answer = await ask("mcp:dispatch-action", relayed);
+
+      expect(m.dispatchActionForHost).not.toHaveBeenCalled();
+      expect(answer).toMatchObject({
+        result: { ok: false, error: { code: "CONFIRMATION_REQUIRED" } },
+      });
+    });
+
     it("runs one still out as before", async () => {
       m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
 

@@ -120,6 +120,21 @@ describe("createMcpRelayExecutor ending a caller (#14024)", () => {
     expect(retired).toEqual([["local", "help-1"]]);
   });
 
+  it("closes the session a cancelled call was opening when its caller ended meanwhile (#17985)", async () => {
+    const opened = deferred<void>();
+    const { executor, sessions, retired } = harness({ opened: opened.promise });
+    const call = executor.call(SPEC, PAYLOAD);
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+
+    expect(executor.cancel(SPEC.senderId, PAYLOAD.helpSessionId, PAYLOAD.callId)).toBe("aborted");
+    executor.endPrincipal("local", "help-1");
+    opened.resolve();
+
+    await expect(call).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    expect(sessions[0]!.closed).toBe(true);
+    expect(retired).toEqual([["local", "help-1"]]);
+  });
+
   it("ends the hold once the last of several running calls settles", async () => {
     const first = deferred<CallToolResult>();
     const second = deferred<CallToolResult>();
