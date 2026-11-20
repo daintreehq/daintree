@@ -28,6 +28,32 @@ function target(): PluginFileDocumentTarget {
 
 const promptSave = () => useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
 
+/**
+ * An abort dispatched the way the DOM does at its target, capturing listeners
+ * first (Chromium); Node's EventTarget keeps registration order regardless.
+ */
+function specOrderedAbort(): { signal: AbortSignal; abort: () => void } {
+  const listeners: { listener: () => void; capture: boolean }[] = [];
+  const signal = {
+    addEventListener: (
+      _type: string,
+      listener: () => void,
+      options?: boolean | AddEventListenerOptions
+    ) => {
+      const capture = typeof options === "object" ? options.capture === true : options === true;
+      listeners.push({ listener, capture });
+    },
+  } as unknown as AbortSignal;
+  return {
+    signal,
+    abort: () => {
+      for (const phase of [true, false]) {
+        for (const entry of listeners) if (entry.capture === phase) entry.listener();
+      }
+    },
+  };
+}
+
 describe("scopeFileDocumentToView (#17903)", () => {
   beforeEach(() => {
     bridge.read.mockReset();
@@ -148,7 +174,7 @@ describe("scopeFileDocumentToView (#17903)", () => {
     const newView = scopeFileDocumentToView(host.document);
     newView.retain();
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "b", revision: REV_B });
-    await newView.document.read();
+    await expect(newView.document.read()).resolves.toMatchObject({ status: "ok", revision: REV_B });
     const listener = vi.fn();
     newView.document.onDidChange(listener);
 
@@ -159,25 +185,38 @@ describe("scopeFileDocumentToView (#17903)", () => {
     expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_C });
   });
 
-  it("retires a released view as its dispose signal aborts, ahead of the view's own abort listeners", () => {
-    const host = openPluginFileDocument(target());
-    host.retain();
-    const controller = new AbortController();
-    const view = scopeFileDocumentToView(host.document, controller.signal);
-    const release = view.retain();
-    // Work the view tied to its dispose signal, holding an older snapshot.
-    controller.signal.addEventListener("abort", () => {
-      view.document.setDraft("from a stale snapshot", { baseRevision: REV_A });
-    });
-    view.document.setDraft("current", { baseRevision: REV_B });
+  it.each([
+    ["an abort listener", false],
+    ["a capturing abort listener", true],
+  ])(
+    "retires a released view as its dispose signal aborts, ahead of %s of its own",
+    (_label, capture) => {
+      const host = openPluginFileDocument(target());
+      host.retain();
+      const controller = specOrderedAbort();
+      const view = scopeFileDocumentToView(host.document, controller.signal);
+      const release = view.retain();
+      // Work the view tied to its dispose signal, holding an older snapshot.
+      controller.signal.addEventListener(
+        "abort",
+        () => view.document.setDraft("from a stale snapshot", { baseRevision: REV_A }),
+        { capture }
+      );
+      const listener = vi.fn();
+      view.document.onDidChange(listener);
+      view.document.setDraft("current", { baseRevision: REV_B });
 
-    // The host's teardown releases the scope, then its queued dispose runs.
-    release();
-    view.document.setDraft("flushed on unmount", { baseRevision: REV_B });
-    controller.abort();
-    expect(host.document.getDraft()).toBe("flushed on unmount");
-    expect(host.document.getDraftBaseRevision()).toBe(REV_B);
-  });
+      // The host's teardown releases the scope, then its queued dispose runs.
+      release();
+      view.document.setDraft("flushed on unmount", { baseRevision: REV_B });
+      controller.abort();
+      expect(host.document.getDraft()).toBe("flushed on unmount");
+      expect(host.document.getDraftBaseRevision()).toBe(REV_B);
+      // Its subscriptions went with it, before any microtask ran.
+      void useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+      expect(listener).not.toHaveBeenCalled();
+    }
+  );
 
   it("keeps a view whose dispose signal aborts while it is still mounted able to flush on unmount", async () => {
     const host = openPluginFileDocument(target());
@@ -188,6 +227,7 @@ describe("scopeFileDocumentToView (#17903)", () => {
     // A new attempt aborts the outgoing signal before the commit unmounts it.
     controller.abort();
     view.document.setDraft("typed", { baseRevision: REV_A });
+    expect(host.document.getDraft()).toBe("typed");
     release();
     view.document.setDraft("flushed on unmount", { baseRevision: REV_A });
     expect(host.document.getDraft()).toBe("flushed on unmount");
@@ -202,11 +242,16 @@ describe("scopeFileDocumentToView (#17903)", () => {
     host.retain();
     const view = scopeFileDocumentToView(host.document);
     const first = view.retain();
-    view.retain();
+    const second = view.retain();
     first();
     first();
     await Promise.resolve();
     view.document.setDraft("mine", { baseRevision: REV_A });
+    expect(host.document.getDraft()).toBe("mine");
+
+    second();
+    await Promise.resolve();
+    view.document.setDraft("late", { baseRevision: REV_A });
     expect(host.document.getDraft()).toBe("mine");
   });
 
@@ -223,13 +268,15 @@ describe("scopeFileDocumentToView (#17903)", () => {
     const oldView = scopeFileDocumentToView(delegate);
     const releaseOld = oldView.retain();
     oldView.document.onDidChange(() => {});
+    oldView.document.onDidChange(() => {});
     const newView = scopeFileDocumentToView(delegate);
     newView.retain();
     newView.document.onDidChange(() => {});
     releaseOld();
     await Promise.resolve();
     expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
-    expect(unsubscribes[1]).not.toHaveBeenCalled();
+    expect(unsubscribes[1]).toHaveBeenCalledTimes(1);
+    expect(unsubscribes[2]).not.toHaveBeenCalled();
   });
 
   it("drops a retired view's change listeners, never the same function its successor subscribed", async () => {

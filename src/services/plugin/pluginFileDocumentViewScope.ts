@@ -37,12 +37,17 @@ export function scopeFileDocumentToView(
   };
   // A host tearing the whole view down aborts its dispose signal from a
   // microtask queued before this scope's own, so the view's abort listeners
-  // would run while it still looked live. Registered before any of theirs, this
-  // one retires a view already released. An abort while the view is still
-  // mounted (a new attempt replacing it) leaves its unmount flush to land.
-  disposeSignal?.addEventListener("abort", () => {
-    if (mounts === 0) retire();
-  });
+  // would run while it still looked live. Registered before any of theirs, and
+  // capturing so a capturing one can't jump it, this one retires a view already
+  // released. An abort while the view is still mounted (a new attempt replacing
+  // it, a crash) leaves its unmount flush to land.
+  disposeSignal?.addEventListener(
+    "abort",
+    () => {
+      if (mounts === 0) retire();
+    },
+    { capture: true, once: true }
+  );
   const scoped: PluginFileDocument = Object.freeze({
     ...document,
     read: () => (gone ? Promise.resolve({ status: "unavailable" } as const) : document.read()),

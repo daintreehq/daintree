@@ -333,6 +333,52 @@ describe("built-in panel views", () => {
     expect(setDraft).toHaveBeenCalledTimes(1);
   });
 
+  // Torn down whole (a plugin reload, its host closing), the content aborts the
+  // view's dispose signal from a microtask queued during that teardown. Work
+  // the view tied to it runs after the view has unmounted and must change
+  // nothing.
+  it("drops writes a torn-down file editor view tied to its dispose signal", async () => {
+    function Editor({ fileDocument, disposeSignal }: PanelViewProps) {
+      useEffect(() => {
+        disposeSignal.addEventListener("abort", () =>
+          fileDocument?.setDraft("from a stale snapshot", { baseRevision: "rev-a" })
+        );
+        return () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-b" });
+      }, [fileDocument, disposeSignal]);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/editor`;
+    registerBuiltinView(kindId, Editor, { pluginId: BUILTIN_ID, label: "Editor" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Editor fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const setDraft = vi.fn();
+    const fileDocument = {
+      fileName: "a.json",
+      readOnly: false,
+      setDraft,
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
+    const { unmount } = render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+    await screen.findByTestId("builtin-view");
+
+    unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setDraft.mock.calls).toEqual([["flushed on unmount", { baseRevision: "rev-b" }]]);
+  });
+
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {
     const seen: PanelViewProps[] = [];
     function Inspector(props: PanelViewProps) {
