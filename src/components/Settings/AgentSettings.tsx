@@ -26,6 +26,7 @@ import { ExternalLink } from "lucide-react";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSection } from "./SettingsSection";
+import { AgentUsageTrackingSection } from "./AgentUsageTrackingSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
@@ -528,6 +529,8 @@ export function AgentSettings({
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      {isGeneralActive && <AgentUsageTrackingSection />}
 
       {isGeneralActive && <AgentInputSettings />}
 

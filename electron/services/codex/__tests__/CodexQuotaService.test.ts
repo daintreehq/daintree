@@ -300,6 +300,63 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       expect(await readCodexQuotaForHomes(await homes(path.join(root, "gone")))).toEqual([]);
       expect(runSession).not.toHaveBeenCalled();
     });
+
+    describe("a background read nobody wants by its turn (#17981)", () => {
+      /** Holds the queue on a read of the default home until `open` is called. */
+      function holdQueue() {
+        let open!: () => void;
+        const gate = new Promise<void>((resolve) => (open = resolve));
+        const asked: Array<string | undefined> = [];
+        runSession.mockImplementation(
+          async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+            asked.push(options.codexHome);
+            if (options.codexHome === realpathSync.native(defaultHome)) await gate;
+            return run(async () => ({
+              rateLimits: { primary: { usedPercent: 33, windowDurationMins: 300 } },
+            }));
+          }
+        );
+        const held = readCodexHomeLimitEvidence(defaultHome);
+        return { open, held, asked };
+      }
+
+      const turn = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+      it("is dropped without starting Codex, and a later read of the home still asks", async () => {
+        const queue = holdQueue();
+        let wanted = true;
+        const background = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        await expect(background).resolves.toEqual([]);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome)]);
+
+        // Nothing was cached for it, so the next caller asks rather than reading a drop.
+        const readings = await readCodexQuotaForHomes(await homes(second));
+        expect(readings).toHaveLength(1);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
+      });
+
+      it("still runs once a caller that needs the answer has joined it", async () => {
+        presets({ id: "second", name: "Second account", env: { CODEX_HOME: second } });
+        const queue = holdQueue();
+        let wanted = true;
+        const background = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        const explicit = readCodexQuotaProfiles();
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        const [readings, profiles] = await Promise.all([background, explicit]);
+        expect(readings).toHaveLength(1);
+        expect(used(readings[0]!.result)).toBe(33);
+        expect(profiles.some((profile) => used(profile.result) === 33)).toBe(true);
+        expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
+      });
+    });
   });
 
   it("reads only the default profile when no preset sets a home", async () => {

@@ -1477,6 +1477,7 @@ export const SETTINGS_REGISTRY = [
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
       "Prompt templates": SECTION_SETTINGS.promptTemplates,
+      Usage: SECTION_SETTINGS.agentUsage,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
@@ -1527,6 +1528,26 @@ export const SETTINGS_REGISTRY = [
           "launch",
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
+        ],
+      },
+      {
+        id: "agents-usage-tracking",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Usage",
+        title: "Track agent usage",
+        description:
+          "Show each agent's usage in the sidebar, read in the background here and on linked hosts",
+        keywords: [
+          "usage",
+          "quota",
+          "limit",
+          "rate limit",
+          "sidebar",
+          "background",
+          "tracking",
+          "codex",
+          "claude",
         ],
       },
       {

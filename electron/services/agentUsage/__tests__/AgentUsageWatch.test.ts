@@ -261,6 +261,77 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  describe("tracking turned off and on again (#17981)", () => {
+    function failing(): CodexHomeQuota {
+      return {
+        ...codexQuota("/accts/work", 0),
+        result: { status: "unavailable", reason: "timeout", fetchedAt: Date.now() },
+      };
+    }
+
+    it("never shows a reading from before tracking went off in place of a read that fails after", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
+      const release = h.watch.acquire();
+      await settle();
+      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 70 });
+      release();
+      h.watch.trackingTurnedOff();
+
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      h.codexAnswers.set("/accts/work", failing);
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
+      expect(h.watch.latest()).toEqual([]);
+      h.watch.dispose();
+    });
+
+    it("still shows a reading within the cadence, without asking Codex again", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 70, START));
+      const release = h.watch.acquire();
+      await settle();
+      release();
+      h.watch.trackingTurnedOff();
+
+      await vi.advanceTimersByTimeAsync(TICK);
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
+      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 70, observedAt: START });
+      h.watch.dispose();
+    });
+
+    it("tells Codex when a read is no longer wanted, and asks again for one dropped before it started", async () => {
+      const h = harness();
+      h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+      let answer!: (value: CodexHomeQuota[]) => void;
+      let stillWanted!: () => boolean;
+      h.readCodexHomes.mockImplementationOnce((_homes, wanted) => {
+        stillWanted = wanted;
+        return new Promise<CodexHomeQuota[]>((resolve) => (answer = resolve));
+      });
+      const release = h.watch.acquire();
+      await settle();
+      expect(stillWanted()).toBe(true);
+      release();
+      expect(stillWanted()).toBe(false);
+      // Dropped in the queue: no answer for the home.
+      answer([]);
+      await settle();
+
+      h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 40));
+      h.watch.acquire();
+      await settle();
+      expect(h.readCodexHomes).toHaveBeenCalledTimes(2);
+      expect(h.watch.latest()[0]).toMatchObject({ usedPercent: 40 });
+      h.watch.dispose();
+    });
+  });
+
   it("shows only what panes printed for folders a Claude Code agent runs in now", async () => {
     const h = harness();
     h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
