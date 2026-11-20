@@ -457,6 +457,20 @@ describe("resumeSessionIntoPanel", () => {
     expect(addPanelMock).not.toHaveBeenCalled();
   });
 
+  it("hands back a pane filed under another worktree rather than opening a second (#18009)", async () => {
+    // A live move refiles the pane without touching its process, so the record
+    // can still name the worktree the conversation began in.
+    setPanels(pane("term-moved", { worktreeId: "wt-2" }));
+    const result = await resumeSessionIntoPanel(baseSession, target);
+    expect(result).toEqual({
+      terminalId: "term-moved",
+      outcome: "activatedExisting",
+      worktreeId: "wt-2",
+    });
+    expect(activateTerminalMock).toHaveBeenCalledWith("term-moved");
+    expect(addPanelMock).not.toHaveBeenCalled();
+  });
+
   it("collapses overlapping dispatches onto one spawn and one terminal id", async () => {
     // The live-pane scan cannot catch this on its own: the second caller runs it
     // inside the first one's await window, before any panel exists to find.
