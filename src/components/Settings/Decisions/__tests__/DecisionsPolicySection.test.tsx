@@ -8,7 +8,17 @@ import { DecisionsPolicySection } from "../DecisionsPolicySection";
 import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
 import { useDecisionsPolicy } from "../useDecisionsPolicy";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import type {
+  DecisionsAttentionItem,
+  DecisionsAttentionList,
+} from "@shared/types/decisionsAttention";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+  DecisionQuestionStanding,
+} from "@shared/types/decisionsQuestion";
 import {
   UNGATED_QUESTION_TEXT,
   gateDescription,
@@ -341,6 +351,135 @@ describe("Questions → Inbox (#17231)", () => {
     fireEvent.click(screen.getByTestId("decisions-inbox-open"));
     act(() => afterCloses[1]!(true));
     expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+  });
+
+  describe("what it observes (#18048)", () => {
+    const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
+    const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
+    const STOPPED: DecisionQuestionStanding = {
+      kind: "needs-attention",
+      deliveryStatus: "needs-attention",
+    };
+
+    function listed(
+      questionId: string,
+      standing: DecisionQuestionStanding,
+      over: Partial<DecisionQuestionListItem> = {}
+    ): DecisionQuestionListItem {
+      return {
+        reference: { hostId: "studio", projectId: "p1", terminalId: "t1", questionId },
+        alias: 1,
+        agentKind: "claude",
+        projectLabel: "Project",
+        worktreeId: "wt",
+        worktreeRoot: "/repo",
+        requirement: "human-required",
+        askedAt: "2026-11-20T13:00:00.000Z",
+        expiresAt: null,
+        settledAt: null,
+        standing,
+        replyRequest: null,
+        stall:
+          standing.kind === "needs-attention"
+            ? { answerRevision: 1, followUpIds: [], reason: "pane_gone" }
+            : null,
+        ...over,
+      };
+    }
+
+    /** An answer needing a person, as the attention list reads it: only its id matters here. */
+    function attention(questionId: string): DecisionsAttentionList {
+      return {
+        result: "listed",
+        items: [{ questionId } as DecisionsAttentionItem],
+      };
+    }
+
+    beforeEach(() => {
+      listQuestions.mockReset();
+      listAttention.mockReset();
+      Reflect.set(window.electron.decisions, "listQuestions", listQuestions);
+      Reflect.set(window.electron.decisions, "listAttention", listAttention);
+      useDecisionsAttentionStore.setState({
+        isOpen: false,
+        request: { terminalId: null, returnFocusTo: null, seq: 0 },
+      });
+    });
+
+    function row(): HTMLElement {
+      return document.getElementById("decisions-questions-inbox")!;
+    }
+
+    it("says the questions waiting and the deliveries stopped, and opens on the first stopped", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          listed("q1", { kind: "waiting", reason: "open" }),
+          listed("q2", { kind: "waiting", reason: "open" }),
+          listed("q3", STOPPED),
+        ],
+      });
+      listAttention.mockResolvedValue(attention("q3"));
+      render(<Sections />);
+      await act(async () => {});
+
+      expect(row().textContent).toContain("2 questions waiting, 1 delivery stopped.");
+      // Every stopped answer is listed, so the inbox is the one way in.
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+      fireEvent.click(screen.getByTestId("decisions-inbox-open"));
+      expect(useDecisionsInboxStore.getState().request.prefer).toBe("stopped");
+    });
+
+    it("says nothing it hasn't counted", async () => {
+      listQuestions.mockReturnValue(new Promise(() => {}));
+      listAttention.mockReturnValue(new Promise(() => {}));
+      render(<Sections />);
+      await act(async () => {});
+
+      expect(row().textContent).not.toMatch(/waiting|stopped/);
+    });
+
+    it("offers the attention list, after Settings closes, for an answer the inbox can't list", async () => {
+      // q9 stalled on another machine's question; the Host's row with the same id isn't it.
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          listed("q9", STOPPED, {
+            remoteHost: { hostId: "atlas", name: "Atlas", connected: true },
+          }),
+        ],
+      });
+      listAttention.mockResolvedValue(attention("q9"));
+      const afterCloses: Array<(closed: boolean) => void> = [];
+      const onClose = vi.fn<SettingsTabClose>(async (afterClose) => {
+        if (afterClose) afterCloses.push(afterClose);
+        return true;
+      });
+      render(<Sections onClose={onClose} />);
+      await act(async () => {});
+
+      const review = screen.getByRole("button", { name: "Review other answers" });
+      const described = document.getElementById(review.getAttribute("aria-describedby") ?? "");
+      expect(described?.closest("#decisions-questions-inbox")).not.toBeNull();
+      fireEvent.click(review);
+      expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
+      act(() => afterCloses[0]!(true));
+      expect(useDecisionsAttentionStore.getState()).toMatchObject({
+        isOpen: true,
+        request: { terminalId: null },
+      });
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+    });
+
+    it("offers no attention list when either read fails", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockResolvedValue(attention("q9"));
+      render(<Sections />);
+      await act(async () => {});
+
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-open")).toBeTruthy();
+    });
   });
 });
 

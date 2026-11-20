@@ -57,6 +57,27 @@ describe("useDecisionsInboxStore (#17231)", () => {
     expect(useDecisionsInboxStore.getState().request.seq).toBe(opening.seq);
   });
 
+  it("carries where the close returns and what it prefers into one opening only (#18048)", () => {
+    const { open } = useDecisionsInboxStore.getState();
+    open({ prefer: "stopped" });
+    expect(useDecisionsInboxStore.getState().request).toMatchObject({
+      prefer: "stopped",
+      returnFocusTo: null,
+    });
+    useDecisionsInboxStore.getState().close();
+    open({
+      question: { terminalId: "t1", questionId: "q1" },
+      returnFocusTo: "canopy-card-t1",
+    });
+    expect(useDecisionsInboxStore.getState().request).toMatchObject({
+      prefer: null,
+      returnFocusTo: "canopy-card-t1",
+    });
+    // A question asked for while open keeps the opening's own.
+    open({ question: { terminalId: "t2", questionId: "q2" }, returnFocusTo: "elsewhere" });
+    expect(useDecisionsInboxStore.getState().request.returnFocusTo).toBe("canopy-card-t1");
+  });
+
   it("keeps the request through the close, so the closing dialog still knows where it came from", () => {
     useDecisionsInboxStore.getState().open({ terminalId: "t1" });
     useDecisionsInboxStore.getState().close();

@@ -2624,6 +2624,42 @@ describe("DecisionsInboxDialog", () => {
       );
     });
 
+    it("goes through the window's own way to a terminal where it has one, as in the Canopy window (#18048)", async () => {
+      cleanup();
+      const goToTerminal = vi.fn();
+      render(
+        <TooltipProvider>
+          <DecisionsInboxDialog goToTerminal={goToTerminal} />
+        </TooltipProvider>
+      );
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
+      await waitFor(() =>
+        expect(goToTerminal).toHaveBeenCalledExactlyOnceWith({
+          terminalId: "t9",
+          projectId: "project-b",
+        })
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("hands focus back to the element its opener named once it closes (#18048)", async () => {
+      const card = document.createElement("button");
+      card.id = "canopy-card-t1";
+      document.body.append(card);
+      try {
+        act(() => useDecisionsInboxStore.getState().open({ returnFocusTo: "canopy-card-t1" }));
+        await screen.findByTestId("decisions-inbox-dialog");
+        act(() => useDecisionsInboxStore.getState().close());
+        await waitFor(() => expect(document.activeElement).toBe(card));
+      } finally {
+        card.remove();
+      }
+    });
+
     it("looks again before switching, and stays when the terminal has gone", async () => {
       getAllTerminals.mockResolvedValue([
         terminal({ id: "t9", projectId: "project-b", hasPty: true }),

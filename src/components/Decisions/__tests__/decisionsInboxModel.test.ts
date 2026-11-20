@@ -521,6 +521,42 @@ describe("decisionsInboxModel", () => {
     );
   });
 
+  it("opens on the first stopped delivery when the opening prefers it, else as it would (#18048)", () => {
+    const stopped: DecisionQuestionStanding = {
+      kind: "needs-attention",
+      deliveryStatus: "needs-attention",
+    };
+    const waiting = item("q1", OPEN);
+    const firstStopped = item("q2", stopped);
+    const secondStopped = item("q3", stopped, {
+      remoteHost: { hostId: "build-box", name: "Build box", connected: true },
+    });
+    const groups = inboxGroups([waiting, firstStopped, secondStopped]);
+    const prefer = (chosen: Parameters<typeof resolveSelection>[1], opener: string | null) =>
+      resolveSelection(groups, chosen, opener, "local", null, undefined, null, "stopped");
+
+    expect(resolveSelection(groups, null, null)).toBe(waiting);
+    expect(prefer(null, null)).toBe(firstStopped);
+    // What it opened on stays, as does the opener pane's own, and a pick.
+    expect(prefer({ key: referenceKey(waiting.reference), index: 0, picked: false }, null)).toBe(
+      waiting
+    );
+    expect(prefer(null, "t1")).toBe(waiting);
+    // With nothing stopped, it opens where it would have.
+    expect(
+      resolveSelection(
+        inboxGroups([waiting]),
+        null,
+        null,
+        "local",
+        null,
+        undefined,
+        null,
+        "stopped"
+      )
+    ).toBe(waiting);
+  });
+
   describe("a question the inbox is asked to show (#18047)", () => {
     const settled: DecisionQuestionStanding = {
       kind: "settled",
