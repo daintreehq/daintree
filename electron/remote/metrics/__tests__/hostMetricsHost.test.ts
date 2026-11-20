@@ -1151,7 +1151,14 @@ describe("agent stops (#17933)", () => {
         ageMs: 800,
         afterPing: null,
       },
-      { terminalId: "t1", projectId: "p1", state: null, seenAt: 4_900, ageMs: 100, afterPing: null },
+      {
+        terminalId: "t1",
+        projectId: "p1",
+        state: null,
+        seenAt: 4_900,
+        ageMs: 100,
+        afterPing: null,
+      },
     ]);
     // Each Shell's frame names that Shell's own newest ping.
     expect(heardB.map((body) => body.afterPing)).toEqual([1, 1]);
@@ -1174,9 +1181,9 @@ describe("agent stops (#17933)", () => {
     d.fireStop({ terminalId: "t1", projectId: null, state: "exited", seenAt: 0 });
     await waitFor(() => heardCurrent.length === 1);
     for (const spy of sent) {
-      expect(spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED)).toEqual(
-        []
-      );
+      expect(
+        spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED)
+      ).toEqual([]);
     }
     dispose();
   });

@@ -332,7 +332,11 @@ export class HostMetricsClient {
     };
   }
 
-  private hearAgentStop(hostId: HostId, session: LinkSession, payload: AgentStopChangePayload): void {
+  private hearAgentStop(
+    hostId: HostId,
+    session: LinkSession,
+    payload: AgentStopChangePayload
+  ): void {
     if (this.agentStopListeners.size === 0 || !session.isOpen) return;
     const live = this.liveStops.get(hostId);
     if (payload.state === null) {

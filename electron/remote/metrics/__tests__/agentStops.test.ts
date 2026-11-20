@@ -38,9 +38,9 @@ describe("agentStopChangeOf (#17933)", () => {
   });
 
   it("keeps completed then exited as the one stop, and ignores repeats and unnamed terminals", () => {
-    expect(agentStopChangeOf(change({ state: "exited", previousState: "completed" }), facts())).toBe(
-      null
-    );
+    expect(
+      agentStopChangeOf(change({ state: "exited", previousState: "completed" }), facts())
+    ).toBe(null);
     expect(agentStopChangeOf(change({ previousState: "completed" }), facts())).toBe(null);
     expect(agentStopChangeOf(change({ terminalId: undefined }), facts())).toBe(null);
   });
@@ -54,9 +54,9 @@ describe("agentStopChangeOf (#17933)", () => {
         seenAt: 1_000,
       });
     }
-    expect(agentStopChangeOf(change({ state: "working", previousState: "exited" }), facts())).toEqual(
-      expect.objectContaining({ state: null })
-    );
+    expect(
+      agentStopChangeOf(change({ state: "working", previousState: "exited" }), facts())
+    ).toEqual(expect.objectContaining({ state: null }));
   });
 
   it("says nothing of work turns no stop came before", () => {
@@ -69,9 +69,9 @@ describe("agentStopChangeOf (#17933)", () => {
   });
 
   it("never reports Daintree closing a terminal as a stop, and takes back any it had", () => {
-    expect(
-      agentStopChangeOf(change({ state: "exited", terminalClosing: true }), facts())
-    ).toEqual(expect.objectContaining({ terminalId: "t1", state: null }));
+    expect(agentStopChangeOf(change({ state: "exited", terminalClosing: true }), facts())).toEqual(
+      expect.objectContaining({ terminalId: "t1", state: null })
+    );
     expect(
       agentStopChangeOf(
         change({ state: "exited", previousState: "completed", terminalClosing: true }),

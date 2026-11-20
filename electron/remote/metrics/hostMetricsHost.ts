@@ -549,7 +549,10 @@ export async function installHostMetricsHost(
         getTerminalProjectId: projectOf,
         putAside: (id: string) => {
           const attention = getRunAttentionServiceRef();
-          return attention !== null && (attention.getParkRecord(id) !== undefined || attention.isSnoozed(id));
+          return (
+            attention !== null &&
+            (attention.getParkRecord(id) !== undefined || attention.isSnoozed(id))
+          );
         },
       };
       // Put aside after its stop was sent: the stop no longer stands, and lifting it brings none back.

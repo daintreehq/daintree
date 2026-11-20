@@ -1096,6 +1096,7 @@ describe("HostMetricsClient", () => {
           h.openSession("studio-01", {
             on: () => () => {},
             registerCallHandler: () => {},
+            onClose: () => () => {},
           } as unknown as LinkSession);
         }, 10);
         throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
@@ -1129,6 +1130,7 @@ describe("HostMetricsClient", () => {
           h.openSession("studio-01", {
             on: () => () => {},
             registerCallHandler: () => {},
+            onClose: () => () => {},
           } as unknown as LinkSession);
         }, 10);
         throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
