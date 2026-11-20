@@ -7487,8 +7487,10 @@ type PluginFileDocumentSaveResult = {
 interface PluginFileDocumentChange {
     /**
      * `"disk"`: the file changed on disk — re-read it, or keep your draft and
-     * let the conflict stand. `"saved"`: the host saved the draft (the close
-     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
+     * let the conflict stand. `"saved"`: the host saved the whole draft (the
+     * close prompt's Save); edits that landed during that save stay the draft,
+     * now based on `revision`, and arrive as `"disk"` instead. `"discarded"`:
+     * the host dropped the draft — re-read.
      */
     readonly reason: "disk" | "saved" | "discarded";
     /**

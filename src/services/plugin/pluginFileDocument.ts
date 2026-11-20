@@ -99,11 +99,20 @@ function recordKey(panelId: string, filePath: string): string {
   return `${panelId}\u0000${filePath}`;
 }
 
-function publish(record: DocumentRecord): void {
+/**
+ * Released by its view and replaced by a newer record: a late call from the
+ * view that has gone (a debounced setDraft, say) changes nothing and never
+ * speaks over the record a newer view holds. A record that is mounted again
+ * still speaks, so a live view is never silenced.
+ */
+function superseded(record: DocumentRecord): boolean {
   const owner = records.get(record.key);
-  // Released and replaced: a late call from a view that has gone (a debounced
-  // setDraft, say) never speaks over the record a newer view holds.
-  if (owner !== undefined && owner !== record) return;
+  return record.mounts === 0 && owner !== undefined && owner !== record;
+}
+
+function publish(record: DocumentRecord): void {
+  if (superseded(record)) return;
+  const owner = records.get(record.key);
   const store = useFileDocumentStore.getState();
   if (record.mounts === 0 && record.draft === null && record.pending === 0) {
     // No draft and nobody editing: the document is released. Only this
@@ -314,23 +323,22 @@ async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcom
   const result = await save(record, draft, record.revision);
   switch (result.status) {
     case "saved": {
-      const unsaved = {
-        status: "refused",
-        reason: "Edits made during the save are still unsaved",
-      } as const;
-      if (record.draftGen !== gen) {
-        // The draft it saved was replaced meanwhile, and the file moved under
-        // the new one. "saved" would tell its editor the new draft is clean.
-        reconcileDraft(record, result.revision);
-        emit(record, { reason: "disk", revision: result.revision });
-        return unsaved;
-      }
-      // Settled before anyone hears of it, so a listener's reaction can't
-      // turn edits the save didn't cover into a clean close.
-      const outcome: FileDocumentSaveOutcome =
-        record.draft === null ? { status: "saved" } : unsaved;
-      emit(record, { reason: "saved", revision: result.revision });
-      return outcome;
+      // A draft started meanwhile has its own base, which the file just moved off.
+      const replaced = record.draftGen !== gen;
+      if (replaced) reconcileDraft(record, result.revision);
+      // Nothing stands that the save didn't write. Checked before and after
+      // the editor hears of it, so its reaction can neither hide edits the
+      // save missed nor slip new ones past the close.
+      const covered = record.draft === null;
+      // "saved" tells the editor its text is on disk; with edits still
+      // standing it only hears that the file moved.
+      emit(record, {
+        reason: covered && !replaced ? "saved" : "disk",
+        revision: result.revision,
+      });
+      return covered && record.draft === null
+        ? { status: "saved" }
+        : { status: "refused", reason: "Edits made during the save are still unsaved" };
     }
     case "conflict":
       return { status: "conflict", reason: "The file changed on disk" };
@@ -374,7 +382,7 @@ function createDocument(
     getDraft: () => record.draft,
     getDraftBaseRevision: () => (record.draft === null ? null : record.revision),
     setDraft: (text: string | null, options?: { baseRevision?: string }) => {
-      if (readOnly) return;
+      if (readOnly || superseded(record)) return;
       const next = typeof text === "string" ? text : null;
       if (next === record.draft) return;
       if (next === null) {
@@ -393,7 +401,7 @@ function createDocument(
       publish(record);
     },
     setConflict: (conflict: boolean) => {
-      if (readOnly || record.viewConflict === Boolean(conflict)) return;
+      if (readOnly || superseded(record) || record.viewConflict === Boolean(conflict)) return;
       record.viewConflict = Boolean(conflict);
       publish(record);
     },

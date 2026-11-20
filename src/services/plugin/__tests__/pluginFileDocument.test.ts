@@ -215,11 +215,17 @@ describe("pluginFileDocument (#13809)", () => {
     handle.document.setDraft("first", { baseRevision: REV_A });
     const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
     handle.document.setDraft("second");
+    // An editor that treats a host save as clean.
+    const listener = vi.fn((change: { reason: string }) => {
+      if (change.reason === "saved") handle.document.setDraft(null);
+    });
+    handle.document.onDidChange(listener);
     release({ status: "saved", revision: REV_B });
     await expect(saving).resolves.toEqual({
       status: "refused",
       reason: "Edits made during the save are still unsaved",
     });
+    expect(listener.mock.calls).toEqual([[{ reason: "disk", revision: REV_B }]]);
     expect(handle.document.getDraft()).toBe("second");
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.dirty).toBe(true);
 
@@ -241,6 +247,7 @@ describe("pluginFileDocument (#13809)", () => {
     // A read the editor may or may not have applied is no base.
     await handle.document.read();
     handle.document.setDraft("mine", baseRevision === undefined ? undefined : { baseRevision });
+    handle.document.setDraft("mine more", { baseRevision: REV_A });
     await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
       status: "refused",
       reason: "The editor didn't say which version of the file these edits are based on",
@@ -248,7 +255,7 @@ describe("pluginFileDocument (#13809)", () => {
     expect(bridge.save).not.toHaveBeenCalled();
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
       dirty: true,
-      draftText: "mine",
+      draftText: "mine more",
     });
   });
 
@@ -611,17 +618,57 @@ describe("pluginFileDocument (#13809)", () => {
       expect(bridge.save).toHaveBeenLastCalledWith(
         expect.objectContaining({ text: replacement, expectedRevision: REV_C })
       );
+      expect(handle.document.getDraft()).toBe(replacement);
     }
   );
+
+  it("refuses to close when the editor starts a new draft on hearing its draft was saved", async () => {
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason === "saved")
+        handle.document.setDraft("reformatted", { baseRevision: REV_B });
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "reformatted",
+    });
+  });
+
+  it("closes when a draft started during the close prompt's Save was cleared before it landed", async () => {
+    let finishSave: (value: unknown) => void = () => {};
+    bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+    handle.document.setDraft("second", { baseRevision: REV_C });
+    handle.document.setDraft(null);
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    finishSave({ status: "saved", revision: REV_B });
+    await expect(saving).resolves.toEqual({ status: "saved" });
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
+  });
 
   it("leaves a draft on its own base when the editor saves other text", async () => {
     bridge.save.mockResolvedValueOnce({ status: "saved", revision: REV_C });
     const handle = openPluginFileDocument(target());
     handle.retain();
     handle.document.setDraft("mine", { baseRevision: REV_A });
+    handle.document.setConflict(true);
     // A merged buffer saved against B, with the draft not yet cleared.
     await handle.document.save("merged", { expectedRevision: REV_B });
     expect(handle.document.getDraftBaseRevision()).toBe(REV_A);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
 
     bridge.save.mockResolvedValue({ status: "conflict", revision: REV_C });
     await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
@@ -633,23 +680,29 @@ describe("pluginFileDocument (#13809)", () => {
     );
   });
 
-  it("doesn't flag a newer draft that matches the disk when an older save's conflict lands", async () => {
-    let finishSave: (value: unknown) => void = () => {};
-    bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
-    const handle = openPluginFileDocument(target());
-    handle.retain();
-    handle.document.setDraft("old", { baseRevision: REV_A });
-    const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
-    await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
-    handle.document.setDraft("new", { baseRevision: REV_B });
+  it.each([
+    ["is on the disk", REV_B, false],
+    ["is off the disk", REV_C, true],
+  ])(
+    "flags a newer draft whose base %s only by that, when an older save's conflict lands",
+    async (_label, newBase, conflict) => {
+      let finishSave: (value: unknown) => void = () => {};
+      bridge.save.mockImplementationOnce(() => new Promise((resolve) => (finishSave = resolve)));
+      const handle = openPluginFileDocument(target());
+      handle.retain();
+      handle.document.setDraft("old", { baseRevision: REV_A });
+      const saving = useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+      await useFileDocumentStore.getState().byPanelId["panel-1"]!.discard();
+      handle.document.setDraft("new", { baseRevision: newBase });
 
-    finishSave({ status: "conflict", revision: REV_B });
-    await saving;
-    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
-      draftText: "new",
-      conflict: false,
-    });
-  });
+      finishSave({ status: "conflict", revision: REV_B });
+      await saving;
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+        draftText: "new",
+        conflict,
+      });
+    }
+  );
 
   it("clears a draft's base and conflict with the draft, so a restart starts fresh", async () => {
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
@@ -659,6 +712,7 @@ describe("pluginFileDocument (#13809)", () => {
     handle.document.setDraft("mine", { baseRevision: REV_A });
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "theirs", revision: REV_B });
     await handle.notifyDiskChange();
+    handle.document.setConflict(true);
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
 
     handle.document.setDraft(null);
@@ -671,24 +725,52 @@ describe("pluginFileDocument (#13809)", () => {
     });
   });
 
-  it("never lets a released record's late draft replace the projection a newer view holds", () => {
-    const old = openPluginFileDocument(target());
-    old.retain()();
-    const fresh = openPluginFileDocument(target());
-    fresh.retain();
-    fresh.document.setDraft("newer", { baseRevision: REV_B });
+  it.each([
+    ["a draft", "newer"],
+    ["no draft", null],
+  ])(
+    "never lets a released record's late draft replace the projection a newer view with %s holds",
+    (_label, newer) => {
+      const old = openPluginFileDocument(target());
+      old.retain()();
+      const fresh = openPluginFileDocument(target());
+      fresh.retain();
+      if (newer !== null) fresh.document.setDraft(newer, { baseRevision: REV_B });
 
-    old.document.setDraft("late", { baseRevision: REV_A });
+      old.document.setDraft("late", { baseRevision: REV_A });
+      old.document.setConflict(true);
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+        draftText: newer,
+        dirty: newer !== null,
+        conflict: false,
+      });
+      expect(openPluginFileDocument(target()).document.getDraft()).toBe(newer);
+    }
+  );
+
+  it("still publishes a record that is mounted again after a newer one replaced it", () => {
+    const first = openPluginFileDocument(target());
+    const releaseFirst = first.retain();
+    const second = openPluginFileDocument(target());
+    releaseFirst();
+    openPluginFileDocument(target());
+    second.retain();
+
+    second.document.setDraft("kept", { baseRevision: REV_A });
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
-      draftText: "newer",
+      dirty: true,
+      draftText: "kept",
     });
-    expect(openPluginFileDocument(target()).document.getDraftBaseRevision()).toBe(REV_B);
   });
 
   it("keeps a released record's late draft for the next view when no newer one exists", () => {
     const old = openPluginFileDocument(target());
     old.retain()();
     old.document.setDraft("late", { baseRevision: REV_A });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "late",
+    });
 
     const next = openPluginFileDocument(target());
     expect(next.document.getDraft()).toBe("late");
