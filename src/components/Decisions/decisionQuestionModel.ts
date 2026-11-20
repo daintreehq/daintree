@@ -1,6 +1,8 @@
 import type { DecisionsRequirement } from "@shared/types/decisions";
+import { pluralize } from "@/lib/pluralize";
 import type {
   DecisionClosureNotice,
+  DecisionPreparation,
   DecisionQuestionContent,
   DecisionQuestionStatus,
   DecisionReplyMode,
@@ -60,6 +62,30 @@ export function questionStatusText(
 export function replyModeText(replyMode: DecisionReplyMode | undefined): string | null {
   if (replyMode === undefined) return null;
   return replyMode === "advisory" ? "Advisory" : "Reply required";
+}
+
+const PREPARATION_OUTCOME: Record<DecisionPreparation["outcome"], string> = {
+  agreed: "Agreed on a recommendation",
+  split: "Split or inconclusive",
+  "not-run": "Consultation not run",
+};
+
+/**
+ * What the agent says of its preparation (#18042), in its order: how many
+ * other agents it consulted, and how that went. A consultation that never ran
+ * says so alone, unless the agent still names agents it consulted.
+ */
+export function preparationFacts(
+  preparation: Pick<DecisionPreparation, "agentsConsulted" | "outcome">
+): string[] {
+  const outcome = PREPARATION_OUTCOME[preparation.outcome];
+  const { agentsConsulted } = preparation;
+  if (preparation.outcome === "not-run" && agentsConsulted === 0) return [outcome];
+  const consulted =
+    agentsConsulted === 0
+      ? "No other agents consulted"
+      : `${pluralize(agentsConsulted, "other agent")} consulted`;
+  return [consulted, outcome];
 }
 
 /** What heads the agent's plan: what it said it would do, while that can still come (#17943). */

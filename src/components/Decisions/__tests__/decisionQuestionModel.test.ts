@@ -11,6 +11,7 @@ import {
   closureNoticeText,
   emptyEntryText,
   planHeading,
+  preparationFacts,
   positionText,
   questionStatusText,
   replyModeText,
@@ -164,6 +165,31 @@ describe("decisionQuestionModel", () => {
   it("gives a position only when there is more than one question", () => {
     expect(positionText(0, 1)).toBeNull();
     expect(positionText(1, 3)).toBe("2 of 3");
+  });
+
+  describe("the agent's preparation (#18042)", () => {
+    it("names how many other agents were consulted, and how it went", () => {
+      const agreed = preparationFacts({ agentsConsulted: 2, outcome: "agreed" });
+      const split = preparationFacts({ agentsConsulted: 2, outcome: "split" });
+      expect(agreed).toHaveLength(2);
+      expect(agreed[0]).toBe(split[0]);
+      expect(agreed[0]).toContain("2");
+      expect(agreed[1]).not.toBe(split[1]);
+      expect(preparationFacts({ agentsConsulted: 1, outcome: "agreed" })[0]).toContain(
+        "1 other agent "
+      );
+    });
+
+    it("says a consultation that never ran alone, unless the agent still names agents", () => {
+      const notRun = preparationFacts({ agentsConsulted: 0, outcome: "not-run" });
+      expect(notRun).toHaveLength(1);
+      expect(preparationFacts({ agentsConsulted: 1, outcome: "not-run" })).toEqual([
+        expect.stringContaining("1 other agent"),
+        notRun[0],
+      ]);
+      // A split with none consulted is the agent's claim, shown as it made it.
+      expect(preparationFacts({ agentsConsulted: 0, outcome: "split" })).toHaveLength(2);
+    });
   });
 
   describe("rounds and closing notices (#17943)", () => {

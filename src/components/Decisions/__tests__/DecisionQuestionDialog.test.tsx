@@ -35,6 +35,7 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
+import { preparationFacts } from "../decisionQuestionModel";
 
 type Payload = { terminalId: string; questionId: string };
 type ByReference = { reference: DecisionQuestionReference };
@@ -408,6 +409,91 @@ describe("DecisionQuestionDialog", () => {
     expect(entries[1]!.textContent).toContain("Merged");
     expect(screen.getByRole("dialog").textContent).toContain("q-7");
     expect(screen.queryByTestId("decision-question-position")).toBeNull();
+  });
+
+  it("shows the agent's preparation before the answer form, its summary clamped behind a toggle (#18042)", async () => {
+    const SUMMARY = "Codex preferred Redis for the cache.\nGemini held out for Postgres.";
+    const split = { agentsConsulted: 2, outcome: "split" as const, summary: SUMMARY };
+    const notRun = { agentsConsulted: 0, outcome: "not-run" as const, summary: null };
+    QUESTIONS.qp = content("qp", 9, { status: "open", thread: [], preparation: split });
+    QUESTIONS.qq = content("qq", 10, { status: "open", thread: [], preparation: notRun });
+    // jsdom lays nothing out: the summary reads as running past its clamp, everything else as fitting.
+    const isSummary = (el: Element) =>
+      el.getAttribute("data-testid") === "decision-question-preparation-summary";
+    const scroll = vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (
+      this: Element
+    ) {
+      return isSummary(this) ? 120 : 0;
+    });
+    const client = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (
+      this: Element
+    ) {
+      return isSummary(this) ? 60 : 0;
+    });
+    const shown = () => screen.getByRole("region", { name: "The agent's preparation" });
+    try {
+      openView(["qp", "qq"], "qp");
+      await screen.findByTestId("decision-question-preparation");
+      const section = shown();
+      for (const fact of preparationFacts(split)) expect(section.textContent).toContain(fact);
+      expect(section.textContent).toContain("Gemini held out for Postgres.");
+      const answer = screen.getByRole("region", { name: "Your answer" });
+      expect(section.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
+        0
+      );
+
+      const more = within(section).getByRole("button", { name: "Show more" });
+      expect(more.getAttribute("aria-expanded")).toBe("false");
+      expect(more.getAttribute("aria-controls")).toBe(
+        within(section).getByTestId("decision-question-preparation-summary").id
+      );
+      fireEvent.click(more);
+      const less = within(shown()).getByRole("button", { name: "Show less" });
+      expect(less.getAttribute("aria-expanded")).toBe("true");
+
+      // A read again keeps it open.
+      const reads = getQuestionContent.mock.calls.length;
+      act(() => pushPane("t1"));
+      await waitFor(() => expect(getQuestionContent.mock.calls.length).toBeGreaterThan(reads));
+      expect(within(shown()).getByRole("button", { name: "Show less" })).toBe(less);
+
+      // Another question's preparation says only what it holds: no summary, nothing to expand.
+      fireEvent.click(screen.getByTestId("decision-question-next"));
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-10"));
+      expect(shown().textContent).toContain(preparationFacts(notRun).join(""));
+      expect(screen.queryByTestId("decision-question-preparation-summary")).toBeNull();
+      expect(within(shown()).queryByRole("button")).toBeNull();
+
+      // Back again, it starts clamped.
+      fireEvent.click(screen.getByTestId("decision-question-previous"));
+      await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-9"));
+      expect(
+        within(shown()).getByRole("button", { name: "Show more" }).getAttribute("aria-expanded")
+      ).toBe("false");
+    } finally {
+      scroll.mockRestore();
+      client.mockRestore();
+      delete QUESTIONS.qp;
+      delete QUESTIONS.qq;
+    }
+  });
+
+  it("offers no toggle for a summary that fits, and shows nothing for a question without a preparation (#18042)", async () => {
+    QUESTIONS.qp = content("qp", 9, {
+      preparation: { agentsConsulted: 1, outcome: "agreed", summary: "Short." },
+    });
+    try {
+      openView(["qa", "qp"], "qa");
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decision-question-preparation")).toBeNull();
+
+      fireEvent.click(screen.getByTestId("decision-question-next"));
+      const section = await screen.findByTestId("decision-question-preparation");
+      expect(section.textContent).toContain("Short.");
+      expect(within(section).queryByRole("button")).toBeNull();
+    } finally {
+      delete QUESTIONS.qp;
+    }
   });
 
   it("steps between the listed questions without closing, by button and arrow key", async () => {

@@ -69,6 +69,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import { DecisionsInboxDialog } from "../DecisionsInboxDialog";
+import { preparationFacts } from "../decisionQuestionModel";
 
 type ByReference = { reference: DecisionQuestionReference };
 const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
@@ -441,6 +442,32 @@ describe("DecisionsInboxDialog", () => {
     });
     expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
     expect(screen.getByTestId("decisions-inbox-detail-title").textContent).toContain("q-2");
+  });
+
+  it("shows the agent's preparation beside the list before the answer form, and none for a question without one (#18042)", async () => {
+    const preparation = {
+      agentsConsulted: 3,
+      outcome: "agreed" as const,
+      summary: "All three agreed: the cache stays in Postgres.",
+    };
+    getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => {
+      const question = CONTENT[ref.questionId];
+      if (!question) return { result: "not-found" };
+      return {
+        result: "read",
+        question: ref.questionId === "question-2" ? { ...question, preparation } : question,
+      };
+    });
+    open();
+    const section = await screen.findByRole("region", { name: "The agent's preparation" });
+    for (const fact of preparationFacts(preparation)) expect(section.textContent).toContain(fact);
+    expect(section.textContent).toContain(preparation.summary);
+    const answer = screen.getByRole("region", { name: "Your answer" });
+    expect(section.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+    fireEvent.click(rowNamed("q-1"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+    expect(screen.queryByTestId("decision-question-preparation")).toBeNull();
   });
 
   it("waits on the dialog while the list loads, then puts the keyboard on the question shown", async () => {

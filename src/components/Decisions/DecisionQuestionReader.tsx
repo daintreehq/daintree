@@ -5,7 +5,9 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { cn } from "@/lib/utils";
 import { Check, Clock } from "lucide-react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import type {
+  DecisionPreparation,
   DecisionQuestionContent,
   DecisionQuestionListItem,
   DecisionThreadEntry,
@@ -16,13 +18,14 @@ import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
 import { deliveryStalled } from "./decisionFollowUpModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
-import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
+import { targetKey, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import { imagesKey } from "./questionImageLoader";
 import {
   choiceLabels,
   closureNoticeText,
   emptyEntryText,
   planHeading,
+  preparationFacts,
   questionStatusText,
   replyModeText,
   requirementText,
@@ -126,6 +129,74 @@ function PlannedFallback({ question }: { question: DecisionQuestionContent }) {
       <p className="whitespace-pre-wrap break-words text-sm text-text-primary [text-wrap:pretty]">
         {plan}
       </p>
+    </section>
+  );
+}
+
+/**
+ * How the agent says it prepared the question (#18042): how many other agents
+ * it consulted, how that went, and its summary, clamped to three lines with a
+ * toggle while the clamp cuts it. Its own account, never checked.
+ */
+function Preparation({ preparation }: { preparation: DecisionPreparation }) {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const summaryId = useId();
+  const { summary } = preparation;
+
+  // Measured, so the toggle follows the pane's width and the summary's own line breaks.
+  useLayoutEffect(() => {
+    const el = summaryRef.current;
+    if (!el || expanded) return;
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [expanded, summary]);
+
+  return (
+    <section
+      className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"
+      aria-label="The agent's preparation"
+      data-testid="decision-question-preparation"
+    >
+      <h3 className="text-xs font-medium text-text-secondary">The agent&apos;s preparation</h3>
+      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-primary">
+        {preparationFacts(preparation).map((fact, index) => (
+          <span key={fact} className="contents">
+            {index > 0 && <FactSeparator />}
+            <span>{fact}</span>
+          </span>
+        ))}
+      </p>
+      {summary !== null && (
+        <div className="flex flex-col items-start gap-0.5">
+          <p
+            ref={summaryRef}
+            id={summaryId}
+            className={cn(
+              "w-full whitespace-pre-wrap break-words text-sm text-text-primary [text-wrap:pretty]",
+              !expanded && "line-clamp-3"
+            )}
+            data-testid="decision-question-preparation-summary"
+          >
+            {summary}
+          </p>
+          {(clamped || expanded) && (
+            <Button
+              variant="link"
+              aria-expanded={expanded}
+              aria-controls={summaryId}
+              onClick={() => setExpanded((open) => !open)}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </Button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -374,6 +445,10 @@ function QuestionBody({
         <QuestionFacts question={question} nowMs={nowMs} />
       </div>
       <PlannedFallback question={question} />
+      {question.preparation != null && (
+        // Keyed by the question, so a read again keeps it open and stepping to another closes it.
+        <Preparation key={targetKey(target)} preparation={question.preparation} />
+      )}
       {question.context !== null && (
         <section
           className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"
