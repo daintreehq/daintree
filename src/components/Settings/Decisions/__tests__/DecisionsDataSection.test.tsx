@@ -343,6 +343,7 @@ describe("DecisionsDataSection", () => {
         keysStored: true,
         recoveryKitVerifiedAt: 1,
         recoveryKitCurrent: true,
+        keysVersion: "current.none",
       },
       { onChanged }
     );
@@ -360,6 +361,7 @@ describe("DecisionsDataSection", () => {
     expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
       oneClick: true,
       relayOrigin: ORIGIN,
+      keys: "current.none",
     });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
