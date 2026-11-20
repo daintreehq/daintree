@@ -221,6 +221,13 @@ function rowNamed(alias: string) {
   return row;
 }
 
+/** What a row draws: its text without the part only a screen reader gets. */
+function drawnText(row: HTMLElement) {
+  const copy = row.cloneNode(true) as HTMLElement;
+  for (const hidden of copy.querySelectorAll(".sr-only")) hidden.remove();
+  return copy.textContent ?? "";
+}
+
 function shownBody() {
   return screen.getByTestId("decision-question-content").textContent ?? "";
 }
@@ -1364,6 +1371,80 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(clearAll);
       await act(async () => {});
       expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
+    });
+
+    it("draws a cleared row as set aside, not as a live ask, while a screen reader still hears it was cleared", async () => {
+      const asking = item("question-4", 4, OPEN, { askedAt: "2026-11-02T09:30:00.000Z" });
+      listQuestions.mockResolvedValue(marked({ ...unmarked, cleared: true }, 2, [asking]));
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
+      );
+      const cleared = rowNamed("q-2");
+      const live = rowNamed("q-4");
+      const ended = rowNamed("q-1");
+      const glyph = (row: HTMLElement) => row.querySelector("svg[data-agent-state-glyph]")!;
+      const line = (row: HTMLElement) =>
+        row.querySelector('[data-testid="decisions-inbox-row-line"]')!.getAttribute("class");
+
+      // Still the question's own mark, so it doesn't read as closed, but not the live ask's hue.
+      expect(glyph(cleared).innerHTML).toBe(glyph(live).innerHTML);
+      expect(glyph(cleared).innerHTML).not.toBe(glyph(ended).innerHTML);
+      expect(glyph(cleared).getAttribute("class")).not.toBe(glyph(live).getAttribute("class"));
+      // Its title steps down to History's weight.
+      expect(line(cleared)).toBe(line(ended));
+      expect(line(cleared)).not.toBe(line(live));
+      // The Cleared heading says it; the row doesn't repeat it, though a screen reader hears it.
+      expect(drawnText(cleared)).not.toMatch(/cleared on this computer/i);
+      expect(cleared.textContent).toMatch(/cleared on this computer/i);
+    });
+
+    it("still draws what sets a cleared row apart: a deadline inside a day, one that passed, a reply asked for", async () => {
+      const inbox = { ask: null, seen: true, cleared: true };
+      const hour = 60 * 60_000;
+      const soon = item("question-4", 4, OPEN, {
+        expiresAt: new Date(Date.now() + 3 * hour).toISOString(),
+        inbox,
+      });
+      const passed = item("question-5", 5, OPEN, {
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        inbox,
+      });
+      const reply = item("question-6", 6, { kind: "waiting", reason: "reply" }, { inbox });
+      const queued = item(
+        "question-7",
+        7,
+        { kind: "queued" },
+        {
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          inbox,
+        }
+      );
+      listQuestions.mockResolvedValue(
+        marked({ ...unmarked, cleared: true }, 2, [soon, passed, reply, queued])
+      );
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(7));
+      const group = screen.getByTestId("decisions-inbox-group-cleared");
+      for (const alias of ["q-2", "q-4", "q-5", "q-6", "q-7"]) {
+        expect(group.textContent).toContain(alias);
+      }
+
+      expect(drawnText(rowNamed("q-4"))).toMatch(/Reply by .+ · \d+ hours left/);
+      expect(drawnText(rowNamed("q-5"))).toContain("Deadline passed");
+      // To the ear it no longer waits on the person, however the list still stands it.
+      expect(rowNamed("q-5").textContent).toMatch(
+        /Deadline passed, awaiting an update, cleared on this computer/
+      );
+      expect(rowNamed("q-5").textContent).not.toMatch(/Waiting for an answer/);
+      expect(drawnText(rowNamed("q-6"))).toContain("Answered; the agent asked for a reply");
+      // A queued send past its deadline reads the same: the deadline, not "you can answer it here".
+      expect(drawnText(rowNamed("q-7"))).toContain("Deadline passed");
+      expect(rowNamed("q-7").textContent).not.toMatch(/you can answer it here/);
+      for (const alias of ["q-2", "q-4", "q-5", "q-6", "q-7"]) {
+        expect(drawnText(rowNamed(alias))).not.toMatch(/cleared on this computer/i);
+        expect(rowNamed(alias).textContent).toMatch(/cleared on this computer/i);
+      }
     });
 
     it("keeps the dialog's first focus on the question list, not on clearing it", async () => {

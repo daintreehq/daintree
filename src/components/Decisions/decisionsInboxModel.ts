@@ -138,8 +138,15 @@ export function askShownIn(
   );
 }
 
-/** What a cleared question's row says: it still waits for the agent, just not on the person. */
+/**
+ * What a cleared question says of itself to the ear: it still waits for the
+ * agent, just not on the person. Never drawn, since the Cleared heading is
+ * already above every such row.
+ */
 export const CLEARED_NOTE = "Cleared on this computer";
+
+/** What a cleared ask whose deadline passed says, the one fact its row draws beyond the heading. */
+export const CLEARED_ELAPSED_NOTE = "Deadline passed";
 
 /**
  * What Clear or Restore does, said before it's pressed (#17943): only this
@@ -302,7 +309,9 @@ export function rowNote(standing: DecisionQuestionStanding, round: ItemRound = {
 
 /**
  * `rowNote`, for a row that may have been cleared (#17895), or whose deadline
- * passed by the clock at `nowMs` (#17943): that is what sets it apart then.
+ * passed by the clock at `nowMs` (#17943): that is what sets it apart then. A
+ * cleared row doesn't say it was cleared (its group's heading does, and
+ * `CLEARED_NOTE` is for the ear), only what else is true of it.
  */
 export function inboxRowNote(
   item: Pick<
@@ -314,7 +323,7 @@ export function inboxRowNote(
   const elapsed = nowMs !== null && deadlineElapsed(item, nowMs);
   switch (inboxGroupOf(item, nowMs)) {
     case "cleared":
-      return elapsed ? `${CLEARED_NOTE}; deadline passed` : CLEARED_NOTE;
+      return elapsed ? CLEARED_ELAPSED_NOTE : rowNote(item.standing, item);
     case "awaiting":
       return ELAPSED_NOTE;
     default:
