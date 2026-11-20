@@ -8,6 +8,8 @@ import {
   type LazySettingsTabEntry,
   type SettingsTab,
 } from "../settingsTabRegistry";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import { filterSettings } from "../settingsSearchUtils";
 
 const allEntries: readonly AnySettingsTabEntry[] = SETTINGS_REGISTRY;
 const globalEntries = allEntries.filter((e) => e.scope === "global");
@@ -34,6 +36,14 @@ describe("SETTINGS_REGISTRY", () => {
       .toLowerCase();
     expect(hay).toContain(term);
   });
+
+  it.each(["agents", "ask_human", "claude", "codex"])(
+    "finds Decisions' Agents section when searching %s (#18057)",
+    (term) => {
+      const ids = filterSettings(SETTINGS_SEARCH_INDEX, term).map((entry) => entry.id);
+      expect(ids).toContain("decisions-agents");
+    }
+  );
 
   it("has no duplicate tab IDs", () => {
     const ids = SETTINGS_REGISTRY.map((e) => e.id);
