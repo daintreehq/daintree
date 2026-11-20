@@ -887,8 +887,17 @@ describe("TerminalDecisionsChip", () => {
         });
       }
 
+      const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
+
       beforeEach(() => {
         window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+        Reflect.set(window.electron.decisions, "listHosts", listHosts);
+        listHosts.mockReset().mockResolvedValue({
+          result: "listed",
+          autoEnroll: true,
+          hosts: [],
+          inboxHostIds: ["build-box"],
+        });
       });
       afterEach(() => {
         delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
@@ -923,6 +932,18 @@ describe("TerminalDecisionsChip", () => {
           "the list can't be read",
           async (): Promise<DecisionQuestionList> => {
             throw new Error("bridge gone");
+          },
+        ],
+        [
+          "main no longer lists the Host's questions in the inbox",
+          async () => {
+            listHosts.mockResolvedValue({
+              result: "listed",
+              autoEnroll: true,
+              hosts: [],
+              inboxHostIds: ["other-box"],
+            });
+            return { revision: 1, questions: [hostQuestion("build-box")] };
           },
         ],
       ])("keeps the question view, stepping through the pane's, when %s", async (_why, list) => {

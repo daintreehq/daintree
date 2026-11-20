@@ -2,6 +2,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { currentHostId, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
+import { requireHostInbox } from "./decisionsHostInbox";
 import { findAsked } from "./decisionsInboxModel";
 
 /**
@@ -25,7 +26,15 @@ export async function openPaneQuestion(
     list === null
       ? undefined
       : findAsked(list.questions, { terminalId, questionId }, currentHostId());
-  if (listed === undefined) {
+  // Asked after the list is read, as the next-question action does (#18049), so a Host that
+  // dropped out of the inbox meanwhile keeps its question in the question view.
+  const held =
+    listed !== undefined &&
+    (await requireHostInbox().then(
+      () => true,
+      () => false
+    ));
+  if (listed === undefined || !held) {
     useDecisionsQuestionViewStore.getState().open(terminalId, questionIds, questionId);
     return;
   }
