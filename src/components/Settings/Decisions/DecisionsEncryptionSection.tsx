@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { DecisionsRotateKeysDialog } from "./DecisionsRotateKeysDialog";
 import type { UseDecisionsKeyActionsResult } from "./useDecisionsKeyActions";
+import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 
 export const ENCRYPTION_SECTION_ID = "decisions-encryption";
 const ROTATE_BUTTON_ATTR = "data-decisions-rotate-keys";
@@ -14,16 +17,22 @@ export function currentRotateButton(): HTMLElement | null {
 /**
  * The key every paired phone and enrolled Remote Host holds (#16010), after
  * both of their sections because a revocation in either changes it (#16222):
- * Rotate keys without revoking anyone, and what the latest key change came to.
+ * Rotate keys without revoking anyone, once confirmed (#18064), and what the
+ * latest key change came to.
  */
 export function DecisionsEncryptionSection({
+  relayOrigin,
+  devicesRead,
   keyActions,
   locked = false,
 }: {
+  relayOrigin: string;
+  devicesRead: Pick<UseDecisionsDevicesResult, "devices" | "failure" | "loading">;
   keyActions: Pick<UseDecisionsKeyActionsResult, "pending" | "notice" | "rotate">;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
 }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <SettingsSection title="Encryption" id={ENCRYPTION_SECTION_ID}>
       <SettingsGroup>
@@ -55,7 +64,10 @@ export function DecisionsEncryptionSection({
               disabled={disabled}
               loading={keyActions.pending === "rotate"}
               aria-describedby={descriptionId}
-              onClick={keyActions.rotate}
+              onClick={() => {
+                // A rotation already running keeps its busy button; a second ask changes nothing.
+                if (keyActions.pending === null) setConfirming(true);
+              }}
               {...{ [ROTATE_BUTTON_ATTR]: "" }}
             >
               Rotate keys
@@ -63,6 +75,19 @@ export function DecisionsEncryptionSection({
           )}
         />
       </SettingsGroup>
+      <DecisionsRotateKeysDialog
+        isOpen={confirming}
+        relayOrigin={relayOrigin}
+        devicesRead={devicesRead}
+        // The switch changing, or a revocation starting, while it's open starts nothing.
+        unavailable={locked || keyActions.pending !== null}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          // The busy button and the notice beside it carry the rotation from here.
+          setConfirming(false);
+          keyActions.rotate();
+        }}
+      />
     </SettingsSection>
   );
 }

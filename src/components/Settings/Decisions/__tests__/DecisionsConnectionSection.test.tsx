@@ -10,8 +10,10 @@ import type {
 import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import { DecisionsDisconnectDialog } from "../DecisionsDisconnectDialog";
 
 const ORIGIN = "https://decisions.example.workers.dev";
+const HOST = "decisions.example.workers.dev";
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
 const startSetupCheck = vi.fn<() => Promise<DecisionsSetupCheckStartResult>>();
 
@@ -826,12 +828,35 @@ describe("DecisionsConnectionSection disconnect focus", () => {
     cleanup();
   });
 
-  it.each<[string, DecisionsStatus, string]>([
-    ["a relay", { state: "not-connected", relayOrigin: ORIGIN }, "Disconnect relay"],
-    ["an unfinished setup's keys", { state: "not-connected", keysStored: true }, "Remove keys"],
+  it.each<[string, DecisionsStatus, string, string | null]>([
+    [
+      "a relay with a current kit",
+      {
+        state: "not-connected",
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        keysVersion: "current.none",
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCurrent: true,
+      },
+      "Disconnect relay",
+      null,
+    ],
+    [
+      "a relay with no current kit",
+      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true },
+      "Disconnect relay",
+      HOST,
+    ],
+    [
+      "an unfinished setup's keys",
+      { state: "not-connected", keysStored: true, keysVersion: "staged.none" },
+      "Remove keys",
+      "Decisions keys",
+    ],
   ])(
     "hands focus to the relay URL field once removing %s takes its button away",
-    async (_, initial, label) => {
+    async (_, initial, label, typed) => {
       disconnectRelay.mockResolvedValue({ state: "not-connected" });
       render(<Section initial={initial} />);
       await act(async () => {});
@@ -842,12 +867,22 @@ describe("DecisionsConnectionSection disconnect focus", () => {
       const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
         name: label,
       });
+      if (typed !== null) {
+        fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+          target: { value: typed },
+        });
+      }
       act(() => confirm.focus());
       await act(async () => {
         fireEvent.click(confirm);
       });
 
-      expect(disconnectRelay).toHaveBeenCalledOnce();
+      // Main rechecks a one-click confirm against the keys as they are when its turn comes (#18064).
+      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({
+        oneClick: typed === null,
+        relayOrigin: initial.relayOrigin ?? null,
+        keys: initial.keysVersion ?? null,
+      });
       await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.queryByRole("button", { name: label })).toBeNull();
       await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
@@ -868,5 +903,163 @@ describe("DecisionsConnectionSection disconnect focus", () => {
     await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(disconnectRelay).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderDialog(props: { relayOrigin: string | null; kitCurrent: boolean }) {
+    const onConfirm = vi.fn();
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        keysStored
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+        {...props}
+      />
+    );
+    return { onConfirm, view };
+  }
+
+  function confirmButton(name = "Disconnect relay"): HTMLButtonElement {
+    return within(screen.getByRole("alertdialog")).getByRole("button", {
+      name,
+    }) as HTMLButtonElement;
+  }
+
+  function unavailable(element: HTMLElement): boolean {
+    return (
+      element.getAttribute("aria-disabled") === "true" ||
+      (element instanceof HTMLButtonElement && element.disabled)
+    );
+  }
+
+  it("asks for one click while a current kit holds the keys", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("asks for the relay's address with no current kit, naming what can't be got back", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: false });
+    const body = screen.getByRole("alertdialog").textContent ?? "";
+
+    expect(body).toContain(`only copy of ${HOST}'s owner keys`);
+    expect(body).toContain("sealed with a key only this computer holds can't be read again");
+    expect(body).toContain(`nobody can reconnect to ${HOST} as its owner`);
+    expect(body).toContain("Save and verify a recovery kit first");
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+
+    const field = within(screen.getByRole("alertdialog")).getByRole("textbox");
+    fireEvent.change(field, { target: { value: "decisions.example" } });
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.change(field, { target: { value: HOST } });
+    expect(unavailable(confirmButton())).toBe(false);
+    fireEvent.click(confirmButton());
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("takes back an address typed for other keys once the keys change while open", () => {
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="first.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: HOST },
+    });
+    expect(unavailable(confirmButton())).toBe(false);
+
+    view.rerender(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="second.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("offers no kit to save when the key file is gone, still asking for the address", () => {
+    render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored={false}
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("asks for the keys' name for an unfinished setup's keys, which no kit can cover", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: null, kitCurrent: true });
+
+    expect(unavailable(confirmButton("Remove keys"))).toBe(true);
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: "Decisions keys" },
+    });
+    fireEvent.click(confirmButton("Remove keys"));
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("puts the gate up while open when the kit stops covering the keys, and takes it down when one does", () => {
+    const { onConfirm, view } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+    const rerender = (kitCurrent: boolean) =>
+      view.rerender(
+        <DecisionsDisconnectDialog
+          isOpen
+          relayOrigin={ORIGIN}
+          keysStored
+          kitCurrent={kitCurrent}
+          disconnecting={false}
+          error={null}
+          onCancel={() => {}}
+          onConfirm={onConfirm}
+        />
+      );
+
+    rerender(false);
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    rerender(true);
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

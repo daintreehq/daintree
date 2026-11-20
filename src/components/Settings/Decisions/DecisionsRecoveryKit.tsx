@@ -78,6 +78,8 @@ export function DecisionsRecoveryKit({
   }, [focusRequest, busy]);
 
   const verifiedAt = status.recoveryKitVerifiedAt;
+  // A verification of keys the file no longer holds as they were (#18064).
+  const outOfDate = verifiedAt !== undefined && status.recoveryKitCurrent !== true;
 
   /** Every secret here goes as a request starts, whichever form sent it. */
   const clearSecrets = () => {
@@ -155,21 +157,29 @@ export function DecisionsRecoveryKit({
       </span>
       <SettingsRow
         id="decisions-recovery-kit-status"
-        label={verifiedAt !== undefined ? "Recovery kit verified" : "No recovery kit verified"}
+        label={
+          verifiedAt === undefined
+            ? "No recovery kit verified"
+            : outOfDate
+              ? "Recovery kit may be out of date"
+              : "Recovery kit verified"
+        }
         accessory={
-          verifiedAt === undefined ? (
+          verifiedAt === undefined || outOfDate ? (
             <SeverityMark
               severity="warning"
-              label="Not verified"
+              label={outOfDate ? "Out of date" : "Not verified"}
               className="h-3.5 w-3.5"
               decorative
             />
           ) : undefined
         }
         description={
-          verifiedAt !== undefined
-            ? `Last verified ${formatVerifiedAt(verifiedAt)}. Save and verify a new kit whenever you want another copy.`
-            : "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again."
+          verifiedAt === undefined
+            ? "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again."
+            : outOfDate
+              ? `Last verified ${formatVerifiedAt(verifiedAt)}. Daintree can't confirm that kit holds every key this computer has now (a key rotation adds one), so save a new kit and verify it.`
+              : `Last verified ${formatVerifiedAt(verifiedAt)}. Save and verify a new kit whenever you want another copy.`
         }
       />
       <SettingsRow

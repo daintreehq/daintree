@@ -939,7 +939,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisionsQuestion.js").DecisionQuestionDeclineResult;
   };
   "decisions:delete-local-data": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsLocalDeleteResult;
   };
   "decisions:delete-relay-data": {
@@ -947,7 +947,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisions.js").DecisionsRelayDeleteResult;
   };
   "decisions:disconnect-relay": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsStatus;
   };
   "decisions:enroll-host": {

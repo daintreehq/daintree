@@ -67,6 +67,7 @@ import {
   type DecisionsExportResult,
   type DecisionsKitExportResult,
   type DecisionsKitVerifyResult,
+  type DecisionsKeyErasurePayload,
   type DecisionsLocalDeleteResult,
   type DecisionsPairingApproveResult,
   type DecisionsPairingDeclineResult,
@@ -188,7 +189,7 @@ import {
   thresholdSupported,
   type DecisionModelRuntime,
 } from "./decisionModel.js";
-import { decisionsKeyFilePath } from "./keyStore.js";
+import { decisionsKeyFilePath, keyFileVersion, onKeyFileWritten } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import { RelayDeploySessions } from "./relayDeploySession.js";
@@ -206,7 +207,7 @@ import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import { deleteDecisionsRelayData } from "./relayData.js";
-import type { LocalEraseOutcome } from "./localData.js";
+import { erasingKeyFilePath, type LocalEraseOutcome } from "./localData.js";
 import {
   claimDecisionsRelay,
   restoreDecisionsIdentity,
@@ -776,6 +777,11 @@ function publishStatus(): void {
     .catch(() => {});
 }
 
+// Whether a verified kit still holds every key is read from the key file, so
+// each change to the file is pushed to Settings: a rotation's new key, from
+// any route, makes the next erasure ask for the stronger confirmation (#18064).
+onKeyFileWritten(() => publishStatus());
+
 /**
  * The relay revoked the identity a connection ran on. Recorded against that
  * identity alone, so a revocation that lands after a disconnect, or after
@@ -1152,6 +1158,11 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
+  // Only a verification of the keys as the files hold them now covers them (#18064).
+  const files = owned !== null && keyFile !== null ? await readKeyFiles(owned) : undefined;
+  const kitCurrent =
+    kitVerifiedAt !== null && keyFile === true && files !== undefined && filesCovered(files);
+  const keysVersion = files !== undefined ? versionOfKeyFiles(files) : null;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   const deploy = relayDeploys.snapshot();
@@ -1164,6 +1175,8 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
+    ...(kitCurrent ? { recoveryKitCurrent: true } : {}),
+    ...(keysVersion !== null ? { keysVersion } : {}),
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
@@ -1864,7 +1877,8 @@ async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyS
 function recordIdentity(
   running: DecisionsService,
   config: RelayConfig,
-  kitVerified: boolean
+  kitVerified: boolean,
+  kitKeys: string | null
 ): DecisionsSettings {
   const current = readDecisionsSettings(store);
   const relayOrigin = normalizeRelayOrigin(config.relayOrigin);
@@ -1886,6 +1900,7 @@ function recordIdentity(
               relayOrigin,
               installationId: config.installationId,
               deviceId: config.deviceId,
+              ...(kitKeys !== null ? { keys: kitKeys } : {}),
             }
           : null,
     });
@@ -1906,6 +1921,17 @@ function recordIdentity(
 
 type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
+/**
+ * The running lifetime's key file version in the key store's turn, or
+ * undefined when it couldn't be read, which no verification is recorded
+ * against (#18064).
+ */
+function keyVersionOf(running: DecisionsService): Promise<string | null | undefined> {
+  return Promise.resolve()
+    .then(() => running.getKeyStore().version())
+    .catch(() => undefined);
+}
+
 /** `stillWanted`, when given, is asked as the setup's turn comes, before anything starts. */
 function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<DecisionsConnectResult> {
   return serialize(async () => {
@@ -1920,10 +1946,21 @@ function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<Decisions
     const controller = new AbortController();
     setups.add(controller);
     try {
+      const before = await keyVersionOf(running);
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
+      // A restore's kit holds the keys it took up unchanged, or the ones it
+      // saved to an empty file while the file is still exactly what it wrote;
+      // no rotation runs before a relay is recorded.
+      const after = outcome.kitVerified ? await keyVersionOf(running) : undefined;
+      const kitKeys =
+        typeof after === "string" &&
+        (before === after ||
+          (before === null && after === running.getKeyStore().lastWrittenVersion()))
+          ? after
+          : null;
       if (shutDown) throw setupRefused();
-      recordIdentity(running, outcome.identity, outcome.kitVerified);
+      recordIdentity(running, outcome.identity, outcome.kitVerified, kitKeys);
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
@@ -2014,23 +2051,108 @@ function stillRecords(record: RemovedRelayRecord): boolean {
  * Removes this computer's Decisions identity: the key file, then the relay's
  * origin and ids in the setting. The switch, consent and stored rows stay,
  * and nothing is sent to the relay, so everything on it is untouched. Keys
- * that can't be removed leave the setting as it was.
+ * that can't be removed leave the setting as it was. A one-click confirm
+ * removes nothing while the keys hold one no current kit covers (#18064).
  */
-export async function disconnectRelay(): Promise<DecisionsStatus> {
-  return (await disconnectRecorded(null))!;
+/**
+ * How an erasure of the keys was confirmed (#18064). Settings always names
+ * the relay it showed; with none named, the erasure isn't bound to one.
+ */
+type KeyErasure = Pick<DecisionsKeyErasurePayload, "oneClick"> &
+  Partial<Pick<DecisionsKeyErasurePayload, "relayOrigin" | "keys">>;
+
+export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsStatus> {
+  return (await disconnectRecorded(null, payload))!;
+}
+
+/**
+ * Whether erasing the key file now loses nothing a verified kit doesn't
+ * hold: there is no file, or the recorded verification is of exactly its
+ * version (#18064).
+ */
+async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> {
+  return filesCovered(await readKeyFiles(running));
+}
+
+/**
+ * The key file's version and that of keys an interrupted deletion set aside,
+ * which come back before that deletion finishes; undefined when either
+ * couldn't be read (#18064).
+ */
+async function readKeyFiles(
+  running: DecisionsService
+): Promise<{ held: string | null; setAside: string | null }> {
+  const path = running.getKeyFilePath();
+  // A file that can't be read is named as such, so a typed confirm of it still matches.
+  const read = (at: string) => keyFileVersion(at).catch(() => "unreadable");
+  const [held, setAside] = await Promise.all([read(path), read(erasingKeyFilePath(path))]);
+  return { held, setAside };
+}
+
+/** Each key file there is is exactly what the recorded verification checked. */
+function filesCovered(files: { held: string | null; setAside: string | null }): boolean {
+  const verified = readDecisionsSettings(store).recoveryKit?.keys;
+  const covered = (version: string | null) =>
+    version === null || (verified !== undefined && version === verified);
+  return covered(files.held) && covered(files.setAside);
+}
+
+/** Both files as one opaque version for Settings to name back; null when neither exists. */
+function versionOfKeyFiles(files: { held: string | null; setAside: string | null }): string | null {
+  if (files.held === null && files.setAside === null) return null;
+  return `${files.held ?? "none"}.${files.setAside ?? "none"}`;
+}
+
+/**
+ * The key files no longer hold what the person confirmed erasing; undefined
+ * `confirmed` binds nothing (#18064).
+ */
+async function keysDifferFromConfirm(
+  running: DecisionsService,
+  confirmed: string | null | undefined
+): Promise<boolean> {
+  if (confirmed === undefined) return false;
+  return versionOfKeyFiles(await readKeyFiles(running)) !== confirmed;
+}
+
+/** Another relay is recorded than the one the person confirmed for (#18064). */
+function relayChangedSinceConfirm(expected: string | null | undefined): AppError | null {
+  if (expected === undefined || readDecisionsSettings(store).relayOrigin === expected) return null;
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message:
+      "The relay set up on this computer changed after you confirmed, so nothing was removed.",
+  });
+}
+
+function keysChangedSinceConfirm(): AppError {
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message:
+      "This computer's keys aren't what you confirmed removing: they changed, or no recovery kit verified here holds them now. Nothing was removed.",
+  });
 }
 
 /**
  * Disconnects, or with `only` set, only while the setting still records that
  * identity, checked before anything is stopped and again in its turn: null
- * when it no longer does, with nothing changed.
+ * when it no longer does, with nothing changed. With `oneClick`, the keys go
+ * only while a current kit covers them, checked once no write can land.
  */
-function disconnectRecorded(only: RemovedRelayRecord | null): Promise<DecisionsStatus | null> {
+function disconnectRecorded(
+  only: RemovedRelayRecord | null,
+  confirmed: KeyErasure
+): Promise<DecisionsStatus | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  // Refused before anything for the relay recorded now is cancelled.
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
+    if (changed) throw changed;
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
     hostEnroller.forget();
@@ -2041,7 +2163,16 @@ function disconnectRecorded(only: RemovedRelayRecord | null): Promise<DecisionsS
     // written after.
     await running.suspendConnection();
     try {
-      await running.getKeyRotations().exclusive(() => keys.clear());
+      await running.getKeyRotations().exclusive(async () => {
+        // A rotation or another setup from another window may have landed while this waited its turn.
+        if (
+          (await keysDifferFromConfirm(running, confirmed.keys)) ||
+          (confirmed.oneClick && !(await keysCoveredOrAbsent(running)))
+        ) {
+          throw keysChangedSinceConfirm();
+        }
+        await keys.clear();
+      });
     } catch (error) {
       running.resumeConnection();
       publishStatus();
@@ -2163,22 +2294,29 @@ export function deleteRelayData(
 /**
  * Deletes this computer's Decisions data (#16025): its stored history, its
  * keys and its record of the relay. Nothing is sent to the relay, so
- * everything on it stays. The switch and consent stay as they are.
+ * everything on it stays. The switch and consent stay as they are. A
+ * one-click confirm deletes nothing while the key file holds keys no current
+ * kit covers (#18064).
  */
-export async function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
-  return (await deleteLocalDataOf(null))!;
+export async function deleteLocalData(payload: KeyErasure): Promise<DecisionsLocalDeleteResult> {
+  return (await deleteLocalDataOf(null, payload))!;
 }
 
 /** Deletes local data, or with `only` set, only while the setting still records that identity (null otherwise). */
 function deleteLocalDataOf(
-  only: RemovedRelayRecord | null
+  only: RemovedRelayRecord | null,
+  confirmed: KeyErasure
 ): Promise<DecisionsLocalDeleteResult | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
+    if (changed) throw changed;
     let outcome: LocalEraseOutcome;
     // Its terminal closes and its question is cancelled in the store before the rows go.
     await checkStopped;
@@ -2187,8 +2325,15 @@ function deleteLocalDataOf(
     forgetOwnerDevices();
     hostEnroller.forget();
     try {
-      outcome = await (await runningService()).eraseLocalData();
+      const running = await runningService();
+      outcome = await running.eraseLocalData(
+        async () =>
+          !(await keysDifferFromConfirm(running, confirmed.keys)) &&
+          (!confirmed.oneClick || (await keysCoveredOrAbsent(running)))
+      );
     } finally {
+      // A device read while it ran may hold the key store it closed; the next one makes its own.
+      forgetOwnerDevices();
       // The relay record and the keys may have gone, which every window shows.
       publishStatus();
     }
@@ -2213,9 +2358,12 @@ async function forgetRemovedRelay(
   if (shutDown || !readDecisionsSettings(store).enabled) return "off";
   try {
     if (!deleteLocalHistory) {
-      return (await disconnectRecorded(record)) === null ? "changed" : "forgotten";
+      // The guided removal had its own typed confirmation of the Worker's name.
+      return (await disconnectRecorded(record, { oneClick: false })) === null
+        ? "changed"
+        : "forgotten";
     }
-    const deleted = await deleteLocalDataOf(record);
+    const deleted = await deleteLocalDataOf(record, { oneClick: false });
     if (deleted === null) return "changed";
     return deleted.result === "failed" ? "failed" : deleted.result;
   } catch (error) {
@@ -2990,6 +3138,7 @@ export function verifyRecoveryKit(
 ): Promise<DecisionsKitVerifyResult> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
+    const before = await keyVersionOf(running);
     const checked = await checkRecoveryKit(
       keys,
       readDecisionsSettings(store),
@@ -2997,13 +3146,20 @@ export function verifyRecoveryKit(
       payload.passphrase
     );
     if ("failure" in checked) return checked.failure;
+    // Equal on both sides of the check's load, so it is the version the kit
+    // was checked against; a write between leaves the kit not current.
+    const after = await keyVersionOf(running);
     if (shutDown) throw setupRefused();
     const current = readDecisionsSettings(store);
     let saved: DecisionsSettings;
     try {
       saved = writeDecisionsSettings(store, {
         ...current,
-        recoveryKit: { verifiedAt: Date.now(), ...checked.verified },
+        recoveryKit: {
+          verifiedAt: Date.now(),
+          ...checked.verified,
+          ...(typeof before === "string" && before === after ? { keys: before } : {}),
+        },
       });
     } catch {
       throw new AppError({

@@ -115,7 +115,13 @@ function recoveryKitRecord(
     relayOrigin,
     installationId: record.installationId,
     deviceId: record.deviceId,
+    ...(isKeyFileVersion(record.keys) ? { keys: record.keys } : {}),
   };
+}
+
+/** A key file version as `keyFileVersion` writes it: a SHA-256 in hex. */
+function isKeyFileVersion(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 type RecordedRelay = Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">;

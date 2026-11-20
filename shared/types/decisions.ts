@@ -165,6 +165,12 @@ export interface DecisionsRecoveryKitRecord {
   relayOrigin: string;
   installationId: string;
   deviceId: string;
+  /**
+   * The fingerprint of the stored keys the kit was checked against (#18064),
+   * dropped when the key file changes or is removed. Absent on a record from
+   * before the field, or one whose keys changed while it was checked.
+   */
+  keys?: string;
 }
 
 /** A finished setup check, recorded by the identity it checked: when, and the step that failed if one did. */
@@ -245,6 +251,21 @@ export interface DecisionsStatus {
    * identity, or its key file is known to be gone.
    */
   recoveryKitVerifiedAt?: number;
+  /**
+   * The verified kit holds every key this computer's key file holds now
+   * (#18064). A rotation, revocation or any other change to the stored keys
+   * since the verification clears it while `recoveryKitVerifiedAt` stays, so
+   * the kit row can say a new one is needed and erasing the keys asks for the
+   * stronger confirmation.
+   */
+  recoveryKitCurrent?: true;
+  /**
+   * What this computer's key file, and any keys an interrupted deletion set
+   * aside, hold now, as an opaque version; absent when neither exists or they
+   * weren't read (#18064). An erasure names the version its confirmation
+   * showed, and main erases nothing once it differs.
+   */
+  keysVersion?: string;
   /**
    * The latest setup check that ran to the end for the relay set up here
    * (#16024). Absent until one has, or while its key file is known to be gone.
@@ -681,9 +702,32 @@ export type DecisionsRelayDeleteResult =
  *   to tell which. Deleting again finishes or undoes it, and so does the next
  *   start when files were set aside. Decisions holds no store until then.
  */
+/**
+ * How the person confirmed erasing this computer's keys (#18064). `oneClick`:
+ * Settings showed no keys here, or a current recovery kit holding them, so a
+ * click was enough. Main then erases nothing while the key file holds keys no
+ * current kit covers, read once pending key writes have settled, since a
+ * rotation from another window can land between the confirm and the erase.
+ */
+export interface DecisionsKeyErasurePayload {
+  oneClick: boolean;
+  /**
+   * The relay the confirmation named, null for none. Main erases nothing once
+   * another is recorded, as when a second window disconnected and set one up
+   * while this one's dialog was open.
+   */
+  relayOrigin: string | null;
+  /** The `keysVersion` the confirmation showed, null for none. */
+  keys: string | null;
+}
+
+/**
+ * `keys-changed` (#18064): the confirm was one click, but the key file holds
+ * keys no current recovery kit covers, so nothing was deleted.
+ */
 export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }
-  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" | "keys-changed" }
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
 
 /**

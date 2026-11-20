@@ -336,22 +336,113 @@ describe("DecisionsDataSection", () => {
     const status: DecisionsStatus = { state: "not-connected", consentedAt: 5 };
     deleteLocalData.mockResolvedValue({ result: "deleted", status });
     const onChanged = vi.fn();
-    renderSection({ state: "not-connected", relayOrigin: ORIGIN, keysStored: true }, { onChanged });
+    renderSection(
+      {
+        state: "not-connected",
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCurrent: true,
+        keysVersion: "current.none",
+      },
+      { onChanged }
+    );
 
     fireEvent.click(button("Delete local data"));
     const confirmDialog = screen.getByRole("alertdialog");
     expect(confirmDialog.textContent).toContain(`Nothing on ${HOST} changes`);
     expect(confirmDialog.textContent).toContain("recovery kit");
+    // A current kit holds the keys, so a click is enough.
+    expect(within(confirmDialog).queryByRole("textbox")).toBeNull();
     await act(async () => {
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete local data" }));
     });
 
-    expect(deleteLocalData).toHaveBeenCalledOnce();
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: ORIGIN,
+      keys: "current.none",
+    });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
     expect(
       within(document.getElementById("decisions-data-outcome")!).getByText("Local data deleted")
     ).toBeTruthy();
+  });
+
+  it.each<[string, DecisionsStatus, string, string]>([
+    [
+      "a relay's keys no current kit holds",
+      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true, recoveryKitVerifiedAt: 1 },
+      HOST,
+      `only copy of ${HOST}'s owner keys`,
+    ],
+    [
+      "keys no relay is recorded for",
+      { state: "not-connected", keysStored: true },
+      "Decisions keys",
+      "only copy of a relay's owner keys",
+    ],
+    [
+      "only keys an interrupted deletion set aside",
+      { state: "not-connected", relayOrigin: ORIGIN, keysVersion: "none.set-aside" },
+      HOST,
+      `only copy of ${HOST}'s owner keys`,
+    ],
+  ])(
+    "deletes local data holding %s only once the gate is typed (#18064)",
+    async (_, status, typed, preamble) => {
+      deleteLocalData.mockResolvedValue({ result: "deleted", status: { state: "not-connected" } });
+      renderSection(status);
+
+      fireEvent.click(button("Delete local data"));
+      const confirmDialog = screen.getByRole("alertdialog");
+      const confirm = () =>
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete local data" });
+      expect(confirmDialog.textContent).toContain(preamble);
+      expect(confirmDialog.textContent).toContain(
+        "No recovery kit verified here holds every key this computer has now"
+      );
+      expect(unavailable(confirm())).toBe(true);
+      fireEvent.click(confirm());
+      expect(deleteLocalData).not.toHaveBeenCalled();
+
+      fireEvent.change(within(confirmDialog).getByRole("textbox"), { target: { value: typed } });
+      expect(unavailable(confirm())).toBe(false);
+      await act(async () => {
+        fireEvent.click(confirm());
+      });
+
+      expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+        oneClick: false,
+        relayOrigin: status.relayOrigin ?? null,
+        keys: status.keysVersion ?? null,
+      });
+    }
+  );
+
+  it("says nothing was deleted when main found keys the one-click confirm didn't cover (#18064)", async () => {
+    deleteLocalData.mockResolvedValue({ result: "failed", reason: "keys-changed" });
+    const onChanged = vi.fn();
+    renderSection({ state: "not-connected" }, { onChanged });
+
+    fireEvent.click(button("Delete local data"));
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete local data" })
+      );
+    });
+
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: null,
+      keys: null,
+    });
+    // Main's status is read afresh, so the next confirm shows the keys and the gate.
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
+    const row = document.getElementById("decisions-data-outcome")!;
+    expect(within(row).getByText(/no recovery kit verified here covers/)).toBeTruthy();
+    expect(within(row).getByText(/Nothing was deleted/)).toBeTruthy();
   });
 
   it("asks for main's status afresh when a local deletion failed", async () => {

@@ -47,6 +47,7 @@ import type {
   DecisionsSetupCheckRun,
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
+  DecisionsKeyErasurePayload,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
   ExportDecisionsRecoveryKitPayload,
@@ -252,6 +253,15 @@ const deviceIdSchema = z.string().min(1).max(128);
 const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).strict();
 
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
+
+// How the person confirmed erasing the keys (#18064); main rechecks a one-click confirm.
+const keyErasureSchema = z
+  .object({
+    oneClick: z.boolean(),
+    relayOrigin: z.string().max(2048).nullable(),
+    keys: z.string().max(256).nullable(),
+  })
+  .strict();
 
 const startRelayRemovalSchema = z
   .object({
@@ -907,12 +917,16 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.restoreIdentity(payload);
       }
     ),
-    disconnectRelay: op(CHANNELS.DECISIONS_DISCONNECT_RELAY, async (): Promise<DecisionsStatus> => {
-      refuseWhileOff("disconnect a relay");
-      const decisions = await loadDecisions();
-      if (!decisions) throw setupCancelled();
-      return decisions.disconnectRelay();
-    }),
+    disconnectRelay: opValidated(
+      CHANNELS.DECISIONS_DISCONNECT_RELAY,
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsStatus> => {
+        refuseWhileOff("disconnect a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.disconnectRelay(payload);
+      }
+    ),
     // A guided removal from Cloudflare (#16202), watched from before its pane
     // opens. Only while on: what it forgets is the running lifetime's identity.
     startRelayRemoval: opValidated(
@@ -1009,13 +1023,14 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.deleteRelayData(payload);
       }
     ),
-    deleteLocalData: op(
+    deleteLocalData: opValidated(
       CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
-      async (): Promise<DecisionsLocalDeleteResult> => {
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsLocalDeleteResult> => {
         refuseWhileOff("delete its data");
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
-        return decisions.deleteLocalData();
+        return decisions.deleteLocalData(payload);
       }
     ),
     // The trusted gates (#16013) and the default question expiry (#16122).

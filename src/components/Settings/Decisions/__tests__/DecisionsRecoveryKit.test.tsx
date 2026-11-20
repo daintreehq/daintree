@@ -110,11 +110,23 @@ describe("DecisionsRecoveryKit", () => {
     expect(screen.getByText("No recovery kit verified")).toBeTruthy();
     cleanup();
 
-    renderKit({ status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT } });
+    renderKit({
+      status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT, recoveryKitCurrent: true },
+    });
     expect(screen.getByText("Recovery kit verified")).toBeTruthy();
     expect(document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "").toContain(
       new Date(VERIFIED_AT).getFullYear().toString()
     );
+  });
+
+  it("says a verified kit may be out of date once the keys it was checked against changed (#18064)", () => {
+    renderKit({ status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT } });
+
+    const row = document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "";
+    expect(screen.getByText("Recovery kit may be out of date")).toBeTruthy();
+    expect(screen.queryByText("Recovery kit verified")).toBeNull();
+    expect(row).toContain(new Date(VERIFIED_AT).getFullYear().toString());
+    expect(row).toContain("save a new kit and verify it");
   });
 
   it("saves only with a passphrase of at least 12 characters, clearing it as the save starts", async () => {
