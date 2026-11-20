@@ -7,7 +7,26 @@ import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
  * every member small and free of paths, secrets and user content.
  */
 export type AppErrorDetails =
-  PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError | ProjectHeldElsewhereError;
+  | PluginHostError
+  | RequiredPluginToolsError
+  | HostSwitchOnScreenError
+  | ProjectHeldElsewhereError
+  | FileTooLargeError;
+
+/**
+ * A file read refused for its size, with the size it was refused at, so the
+ * renderer can tell a file another viewer still opens from one nothing will.
+ */
+export interface FileTooLargeError {
+  code: "FILE_TOO_LARGE";
+  sizeBytes: number;
+  /**
+   * The path asked for is the file's own canonical path, as a successful
+   * read's `pathIsCanonical` says, so a watcher's directories can still scope
+   * re-reads of a file only a viewer can show.
+   */
+  pathIsCanonical?: boolean;
+}
 
 /**
  * A host switch that failed and is showing why on the window's own switch

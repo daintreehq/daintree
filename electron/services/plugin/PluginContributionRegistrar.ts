@@ -1223,6 +1223,7 @@ export class PluginContributionRegistrar {
         pluginId,
         viewId: view.id,
         componentPath: buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration),
+        ...(plugin.isBuiltin && { builtin: true }),
       };
       if (view.location === "settings") {
         return [{ ...base, location: "settings", name: `${pluginName} settings` }];

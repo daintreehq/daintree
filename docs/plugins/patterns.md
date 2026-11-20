@@ -475,7 +475,7 @@ Don't build a markdown renderer or an audio player before checking what `host.di
 
 | Action | Args | What it does |
 | --- | --- | --- |
-| `file.openPanel` | `{ path, rootPath?, viewMode? }` | A persistent read-only panel in the grid. `viewMode: "rendered"` for Markdown and HTML. Audio, video and images get Daintree's own previews. Reuses an open panel for the same file |
+| `file.openPanel` | `{ path, rootPath?, viewMode? }` | A persistent read-only panel in the grid. `viewMode: "rendered"` for Markdown and HTML, and for a type a plugin viewer renders, such as CSV and TSV, which open in their table by default. Audio, video and images get Daintree's own previews. Reuses an open panel for the same file |
 | `file.view` | `{ path, rootPath?, line? }` | An ephemeral viewer dialog, never restored on restart |
 | `file.openInEditor` | `{ path, line?, col? }` | The user's configured editor |
 | `file.openInBrowser` | `{ path }` | The OS default handler for that file type, despite the name; for an `.html` deck that may be an editor rather than a browser |

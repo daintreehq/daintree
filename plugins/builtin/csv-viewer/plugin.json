@@ -1,0 +1,30 @@
+{
+  "name": "daintree.csv-viewer",
+  "version": "0.1.0",
+  "displayName": "CSV viewer",
+  "description": "Shows CSV and TSV files as a read-only table in the file panel's Rendered mode: a header row over every record, the delimiter detected from the file, and Source one click away.",
+  "tagline": "Read the fixtures and exports your agents write as a table, not a wall of commas",
+  "category": "workspace",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "views": [
+      {
+        "id": "table",
+        "componentPath": "renderer/index.js",
+        "location": "fileEditor"
+      }
+    ],
+    "fileEditors": [
+      {
+        "id": "table",
+        "view": "table",
+        "mode": "view",
+        "extensions": ["csv", "tsv"],
+        "maxBytes": 2097152
+      }
+    ]
+  }
+}

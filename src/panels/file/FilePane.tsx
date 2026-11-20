@@ -342,6 +342,8 @@ export function FilePane({
     htmlPreviewUrl,
     reloadNonce,
     byteFacts,
+    observedBytes,
+    observedInvalidText,
     canonicalFilePath,
     loadFile,
     handleMediaPlayingChange,
@@ -368,11 +370,24 @@ export function FilePane({
     effectiveRootPath,
     pluginEditorsAllowed: location !== "dialog" && isInsideGovernedRoot,
     isRenderable,
-    loadedBytes: loadState === "loaded" ? contentBytes : null,
+    // The size the latest read saw, kept through a refresh and taken from a
+    // refusal too, so an editor chosen because a smaller one didn't fit isn't
+    // swapped for that one when the file stops loading as text.
+    loadedBytes: observedBytes ?? (loadState === "loaded" ? contentBytes : null),
+    // A file the read already found isn't UTF-8 is one the document read, which
+    // is strict, would refuse: Source shows it, a viewer can't.
+    fileBytes: observedInvalidText ? null : observedBytes,
     pinnedEditor,
   });
-  const { fileDefault, editOptions, builtinEditor, pluginEditor, pluginViewer, setEditorChoice } =
-    editorChoice;
+  const {
+    fileDefault,
+    editOptions,
+    builtinEditor,
+    pluginEditor,
+    pluginViewer,
+    hasBuiltinViewer,
+    setEditorChoice,
+  } = editorChoice;
 
   // Edit joins the toggle for a file an editor claims, inside a governed
   // root, and only in the panel (the file viewer dialog stays read-only).
@@ -384,12 +399,18 @@ export function FilePane({
   // edit (binary, oversized, undecodable) itself.
   // While another screen drives the project, only what is already open keeps
   // it (see useFileEditLock).
-  const requestedMode = panel?.fileViewMode ?? "source";
+  // An unset mode opens what a viewer that ships with Daintree shows (a CSV's
+  // table, #17336) and Source otherwise; a mode anyone chose is kept.
+  const requestedMode = panel?.fileViewMode ?? (hasBuiltinViewer ? "rendered" : "source");
+  // A file refused for Source by size alone is still one an editor with room
+  // for it opens: the size filter already left only those on offer.
+  const sizeRefusedOnly =
+    loadState === "error" && errorCode === "FILE_TOO_LARGE" && observedBytes !== null;
   const canEdit =
     (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
     isInsideGovernedRoot &&
-    (loadState === "loaded" || requestedMode === "edit" || isDirty);
+    (loadState === "loaded" || sizeRefusedOnly || requestedMode === "edit" || isDirty);
   const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
     canEdit && requestedMode === "edit",
     isDirty
@@ -414,6 +435,9 @@ export function FilePane({
   );
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
   const showPluginViewer = viewMode === "rendered" && !isRenderable && pluginViewer !== null;
+  // Rendered Markdown previews a standing draft, which is document state, so a
+  // disk read that fails underneath it (the file grew too large) doesn't hide it.
+  const previewsDraft = viewMode === "rendered" && isMarkdown && draftText !== null;
 
   const editorPicker = useFileEditorPicker(filePath, viewMode, showPluginViewer, editorChoice);
   // A mode a plugin fills carries the plugin's name, so it is never mistaken
@@ -512,7 +536,7 @@ export function FilePane({
     loadFile("explicit");
   }, [loadFile]);
 
-  const { refreshing, handleToolbarRefresh, imageRefreshEpoch } = useFileRefresh({
+  const { refreshing, handleToolbarRefresh, imageRefreshEpoch, fileChangeCount } = useFileRefresh({
     panelId: id,
     location,
     isFocused,
@@ -543,6 +567,22 @@ export function FilePane({
       worktreePath: diffWorktreePath,
     }),
     [changeTick, worktreeChangeTick, gitChangeTick, changedDirs, diffWorktreePath]
+  );
+  // Rendered Markdown, the disk text's or a standing draft's.
+  const renderMarkdownDocument = (documentPath: string, text: string) => (
+    <MarkdownImageTrackingContext value={markdownImageTracking}>
+      <MarkdownViewer
+        ref={markdownViewerRef}
+        content={text}
+        filePath={documentPath}
+        rootPath={effectiveRootPath}
+        viewMode="rendered"
+        wrapLines={markdownWrapLines}
+        fontSize={markdownFontSize}
+        cacheBust={String(imageRefreshEpoch)}
+        onRendered={handleHeightHoldRendered}
+      />
+    </MarkdownImageTrackingContext>
   );
 
   const remoteFile = useRemoteFileContext();
@@ -874,10 +914,12 @@ export function FilePane({
                 <FilePanePicker
                   rootPath={pickerRoot}
                   // The pane has shown no file yet, so the picked one opens in
-                  // its type's own mode, as it would in the file browser.
-                  onOpen={(absolutePath) =>
-                    setFilePanelPath(id, absolutePath, defaultFileViewMode(absolutePath))
-                  }
+                  // its type's own mode, as it would in the file browser. Source
+                  // is left unset, so a built-in viewer can still claim it.
+                  onOpen={(absolutePath) => {
+                    const mode = defaultFileViewMode(absolutePath);
+                    setFilePanelPath(id, absolutePath, mode === "source" ? null : mode);
+                  }}
                 />
               )}
             </div>
@@ -885,6 +927,7 @@ export function FilePane({
 
           {filePath &&
             !showPluginViewer &&
+            !previewsDraft &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             loadState === "loading" && (
@@ -898,6 +941,7 @@ export function FilePane({
 
           {filePath &&
             !showPluginViewer &&
+            !previewsDraft &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             loadState === "error" &&
@@ -911,6 +955,17 @@ export function FilePane({
                 openTarget={openTarget}
                 canOpenInDefaultApp={isInsideGovernedRoot}
                 remote={remoteFile}
+                renderedBy={!isRenderable ? (pluginViewer?.pluginName ?? null) : null}
+                onShowRendered={
+                  availableModes.includes("rendered")
+                    ? (event) => {
+                        // The button unmounts with the state it leaves, so focus
+                        // goes to the toggle, as from HTML's View source.
+                        sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                        handleViewModeChange("rendered");
+                      }
+                    : undefined
+                }
                 onRetry={() => loadFile("explicit")}
                 onExternal={handleOpenExternal}
               />
@@ -1023,14 +1078,20 @@ export function FilePane({
           {filePath && showPluginViewer && pluginViewer && (
             <Suspense fallback={<EditorLoadingSkeleton />}>
               <LazyPluginFileEditorHost
-                key={`${pluginViewer.choiceId}\u0000${filePath}`}
+                // Every input the host captures at mount: a tab group reuses
+                // this pane for another panel, which must not keep this one's
+                // document.
+                key={`${id}\u0000${projectId}\u0000${pluginViewer.choiceId}\u0000${effectiveRootPath}\u0000${filePath}`}
                 panelId={id}
                 projectId={projectId}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
                 rootPath={effectiveRootPath}
                 candidate={pluginViewer}
-                changeTick={changeTick}
+                // A viewer has no draft to protect, so it re-checks only on a
+                // write that could have touched its file, not every worktree tick.
+                changeTick={fileChangeCount}
+                refreshEpoch={imageRefreshEpoch}
               />
             </Suspense>
           )}
@@ -1055,28 +1116,24 @@ export function FilePane({
             </Suspense>
           )}
 
+          {/* One place for a draft preview, whatever the disk read is doing, so a
+            refresh or a refusal underneath never remounts it. */}
+          {filePath &&
+            previewsDraft &&
+            draftText !== null &&
+            renderMarkdownDocument(filePath, draftText)}
+
           {filePath &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             !showPluginViewer &&
+            !previewsDraft &&
             loadState === "loaded" &&
             content !== null &&
             (viewMode === "rendered" && isMarkdown ? (
-              <MarkdownImageTrackingContext value={markdownImageTracking}>
-                <MarkdownViewer
-                  ref={markdownViewerRef}
-                  // The draft is document state, so Rendered previews it while one
-                  // exists and the disk text otherwise (#12323).
-                  content={draftText ?? content}
-                  filePath={filePath}
-                  rootPath={effectiveRootPath}
-                  viewMode="rendered"
-                  wrapLines={markdownWrapLines}
-                  fontSize={markdownFontSize}
-                  cacheBust={String(imageRefreshEpoch)}
-                  onRendered={handleHeightHoldRendered}
-                />
-              </MarkdownImageTrackingContext>
+              // The draft is document state, so Rendered previews it while one
+              // exists (above) and the disk text otherwise (#12323).
+              renderMarkdownDocument(filePath, content)
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the
               // min-h-full source column; the frame owns its own scrolling.

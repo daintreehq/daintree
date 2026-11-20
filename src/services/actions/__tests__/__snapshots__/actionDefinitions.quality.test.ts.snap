@@ -1857,7 +1857,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
+    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown, HTML and CSV/TSV can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     "examples": [
       {
         "args": {
