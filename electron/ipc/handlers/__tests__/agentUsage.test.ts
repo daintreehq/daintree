@@ -45,7 +45,11 @@ import {
 } from "../../../services/agentUsage/AgentUsageTracking.js";
 import { CHANNELS } from "../../channels.js";
 
-type Sender = { id: number; on: ReturnType<typeof vi.fn>; removeListener: ReturnType<typeof vi.fn> };
+type Sender = {
+  id: number;
+  on: ReturnType<typeof vi.fn>;
+  removeListener: ReturnType<typeof vi.fn>;
+};
 
 function sender(id: number): Sender {
   return { id, on: vi.fn(), removeListener: vi.fn() };
@@ -142,9 +146,10 @@ describe("agent usage tracking switch (#17981)", () => {
       null
     );
     await setTracking({ enabled: true });
-    await expect(
-      setFollowing({ event: { sender: view } }, { following: true })
-    ).resolves.toEqual({ readouts: [], revision: 1 });
+    await expect(setFollowing({ event: { sender: view } }, { following: true })).resolves.toEqual({
+      readouts: [],
+      revision: 1,
+    });
     expect(readouts.follow).toHaveBeenCalledWith(3);
   });
 });

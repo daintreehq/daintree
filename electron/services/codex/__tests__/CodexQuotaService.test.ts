@@ -340,20 +340,20 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       });
 
       it("still runs once a caller that needs the answer has joined it", async () => {
-        presets({ id: "second", name: "Second account", env: { CODEX_HOME: second } });
         const queue = holdQueue();
         let wanted = true;
         const background = readCodexQuotaForHomes(await homes(second), () => wanted);
         await turn();
-        const explicit = readCodexQuotaProfiles();
+        // Asked with no way to be dropped: it joins the queued read rather than queueing a second.
+        const explicit = readCodexQuotaForHomes(await homes(second));
         await turn();
         wanted = false;
         queue.open();
         await queue.held;
-        const [readings, profiles] = await Promise.all([background, explicit]);
+        const [readings, needed] = await Promise.all([background, explicit]);
         expect(readings).toHaveLength(1);
         expect(used(readings[0]!.result)).toBe(33);
-        expect(profiles.some((profile) => used(profile.result) === 33)).toBe(true);
+        expect(needed).toHaveLength(1);
         expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
       });
     });

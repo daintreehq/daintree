@@ -40,7 +40,9 @@ describe("AgentUsageTrackingSection (#17981)", () => {
     expect(setTracking).toHaveBeenLastCalledWith({ enabled: false });
     expect(switchEl(container).getAttribute("aria-checked")).toBe("false");
 
-    await act(async () => fireEvent.click(screen.getByLabelText("Reset Track agent usage to default")));
+    await act(async () =>
+      fireEvent.click(screen.getByLabelText("Reset Track agent usage to default"))
+    );
     expect(setTracking).toHaveBeenLastCalledWith({ enabled: true });
     expect(switchEl(container).getAttribute("aria-checked")).toBe("true");
   });
