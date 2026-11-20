@@ -65,6 +65,7 @@ import {
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions, questionAsks } from "./questionList.js";
+import type { AdvisoryHost } from "./questionRound.js";
 import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
@@ -194,9 +195,10 @@ export type DecisionsStoreOpener = (
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
   /**
-   * Whether this Daintree delivers advisory outcomes, given to the owner's
-   * connections as `advisoryDeadlines`: `DAINTREE_DELIVERS_ADVISORY_OUTCOMES`
-   * unless a test says otherwise.
+   * Whether this Daintree delivers advisory outcomes, given to every
+   * lifetime's connection, the owner's and a Remote Host's (#17942), as
+   * `advisoryDeadlines`: `DAINTREE_DELIVERS_ADVISORY_OUTCOMES` unless a test
+   * says otherwise.
    */
   advisoryOutcomes?: boolean;
   /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
@@ -821,11 +823,7 @@ export class DecisionsService {
   ): void {
     if (this.disposed || this.state === "off") return;
     const hostId = this.settings?.hostId ?? null;
-    // As the lifetime's delivery reads them before typing an advisory notice (#17944).
-    const questions = projectDecisionQuestions(rows, handled, hostId, {
-      outcomes: this.role === "owner" && this.advisoryOutcomes,
-      allowed: this.policy?.advisoryQuestions === true,
-    });
+    const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
     const waiting = new Set(
       questions
         .filter((item) => item.standing.kind === "waiting" || item.standing.kind === "queued")
@@ -834,6 +832,21 @@ export class DecisionsService {
     const asks = questionAsks(rows, waiting);
     if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
+  }
+
+  /**
+   * What the lifetime would type for an advisory question's untyped closing
+   * notice, as its list describes it: what its connection settled once it
+   * has, else what it was configured with, which the next connection uses.
+   */
+  private advisoryHost(): AdvisoryHost {
+    return {
+      outcomes:
+        this.questionSource !== null
+          ? this.questionSource.advisoryDeadlines === true
+          : this.advisoryOutcomes,
+      allowed: this.policy?.advisoryQuestions ?? false,
+    };
   }
 
   /** Nothing is listed while no store is read: the lifetime ended, or its store closed. */
@@ -1269,8 +1282,8 @@ export class DecisionsService {
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
-      // A Host's panes stay blocking until it settles its own deadlines (#17942).
-      advisoryDeadlines: role === "owner" && this.advisoryOutcomes,
+      // A Host settles its own panes' advisory questions, owner or no owner (#17942).
+      advisoryDeadlines: this.advisoryOutcomes,
       ...(snapshots
         ? {
             snapshots: {
@@ -1296,7 +1309,10 @@ export class DecisionsService {
       },
       onQuestionsReady: (source) => {
         if (this.connection !== connection) return;
+        const listed = this.advisoryHost();
         this.questionSource = source;
+        // Listed before the connection settled advisory delivery: list again if it isn't what was assumed.
+        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh();
         if (this.openQuestions !== null) {
           this.closeQuestions();
           try {
@@ -1329,7 +1345,7 @@ export class DecisionsService {
   private applyPolicy(settings: DecisionsSettings): void {
     if (!this.policy) {
       // A lifetime of the other role ends first and drops its policy, so the role never changes in place.
-      this.policy = createTrustedPolicy(settings, this.role);
+      this.policy = createTrustedPolicy(settings);
       return;
     }
     this.policy.proxyAllowlisted = settings.proxyAllowlisted;

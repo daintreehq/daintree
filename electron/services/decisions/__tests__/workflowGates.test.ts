@@ -228,7 +228,7 @@ async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> 
     hasMarker: async () => false,
   };
 
-  const policy = createTrustedPolicy({ ...SAVED, ...options }, "owner");
+  const policy = createTrustedPolicy({ ...SAVED, ...options });
   const store = new MemoryLocalStore();
   // Moved on by `expire`: 0.9.0 believes an expiry only once the signed deadline has passed here too.
   let ahead = 0;
@@ -486,9 +486,9 @@ describe("default question expiry", () => {
     expect(QUESTION_EXPIRY_CHOICES).toContain(null);
     for (const choice of QUESTION_EXPIRY_CHOICES) {
       // The registry throws on anything else, which would stop Decisions starting.
-      const policy = createTrustedPolicy({ ...SAVED, defaultQuestionExpiryMs: choice }, "owner");
+      const policy = createTrustedPolicy({ ...SAVED, defaultQuestionExpiryMs: choice });
       expect(policy.defaultQuestionExpiryMs).toBe(choice);
-      const running = createTrustedPolicy(SAVED, "owner");
+      const running = createTrustedPolicy(SAVED);
       running.defaultQuestionExpiryMs = choice;
       expect(running.defaultQuestionExpiryMs).toBe(choice);
     }
@@ -497,16 +497,13 @@ describe("default question expiry", () => {
 
 describe("advisory questions (#17940)", () => {
   it.each([true, false])(
-    "lets the owner's agents ask for advice and keeps a Remote Host's blocking, with proxy answers allowed: %s",
+    "lets agents ask for advice, the owner's and a Remote Host's alike (#17942), with proxy answers allowed: %s",
     (proxyAllowlisted) => {
-      const owner = createTrustedPolicy({ ...SAVED, proxyAllowlisted }, "owner");
-      const host = createTrustedPolicy({ ...SAVED, proxyAllowlisted }, "host");
-      expect(owner.advisoryQuestions).toBe(true);
-      expect(host.advisoryQuestions).toBe(false);
+      const policy = createTrustedPolicy({ ...SAVED, proxyAllowlisted });
+      expect(policy.advisoryQuestions).toBe(true);
       // Advice changes no requirement: proxy consent alone decides who may answer.
       const level = proxyAllowlisted ? "proxy-ok" : "human-required";
-      expect(owner.resolve({ requested: "proxy-ok" }).requirement).toBe(level);
-      expect(host.resolve({ requested: "proxy-ok" }).requirement).toBe(level);
+      expect(policy.resolve({ requested: "proxy-ok" }).requirement).toBe(level);
     }
   );
 
@@ -550,7 +547,7 @@ describe("advisory questions (#17940)", () => {
 
 describe("trusted workflow gates", () => {
   it("registers design-review/final as Settings describes it, and every gate it describes is registered", () => {
-    const policy = createTrustedPolicy(SAVED, "owner");
+    const policy = createTrustedPolicy(SAVED);
     const described = describeTrustedGates();
     expect(described.map((gate) => gate.id)).toContain(DESIGN_REVIEW_FINAL_GATE_ID);
     for (const gate of described) {
@@ -577,7 +574,7 @@ describe("trusted workflow gates", () => {
   });
 
   it("hands Settings copies: changing what it read changes no registered gate", () => {
-    const policy = createTrustedPolicy(SAVED, "owner");
+    const policy = createTrustedPolicy(SAVED);
     const read = decisionsPolicyOf({ ...SAVED, askHumanAgents: [] }, 0);
     const gate = read.gates.find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     gate.requirement = "proxy-first";
@@ -594,7 +591,7 @@ describe("trusted workflow gates", () => {
     const again = describeTrustedGates().find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     expect(again.requirement).toBe("human-required");
     expect(again.choices).toEqual(expected);
-    expect(createTrustedPolicy(SAVED, "owner").get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(
+    expect(createTrustedPolicy(SAVED).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(
       expected
     );
   });

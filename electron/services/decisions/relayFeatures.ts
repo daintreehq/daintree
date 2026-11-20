@@ -29,9 +29,8 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * phone's ticket, that it shows the deadline and the plan; on a desktop's,
  * that its host delivers advisory outcomes to its agents. It joins with the
  * work that types the advisory notice into the pane that asked (#17941), and
- * only a bridge given `advisoryDeadlines` asks to declare it: the owner's,
- * once its delivery runs. A Remote Host's bridge isn't given it until the
- * Host settles its own deadlines (#17942), so it never declares it.
+ * only a bridge given `advisoryDeadlines` asks to declare it: the owner's and
+ * each Remote Host's (#17942), once its delivery runs.
  * `agent-stopped-push-v1`, like presence, is a relay's to advertise: the owner
  * desktop asks for that push (#17319) only of a relay that lists it.
  */
@@ -53,8 +52,9 @@ export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
  * it signs one (`BridgeOptions.advisoryDeadlines`). The terminal sink reads
  * and types the advisory notice, a reopen or deletion stored for its question
  * keeps it off a pane it hasn't reached yet, and it goes only to the run that
- * asked or a resume of its session (#17941). Given to the owner's lifetimes
- * alone (`DecisionsService`), and only once their delivery runs.
+ * asked or a resume of its session (#17941). Given to every lifetime, the
+ * owner's and a Remote Host's, which settles its own panes' questions from
+ * the relay while its owner sleeps (#17942), and only once its delivery runs.
  */
 export const DAINTREE_DELIVERS_ADVISORY_OUTCOMES: boolean = true;
 

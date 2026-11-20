@@ -224,9 +224,7 @@ async function harness() {
     store,
     keys,
     policy: createTrustedPolicy(
-      { ...defaultDecisionsSettings(), proxyAllowlisted: false },
-      "owner"
-    ),
+      { ...defaultDecisionsSettings(), proxyAllowlisted: false }),
     onStatus: () => {},
     onRevoked: () => {},
     onQuestionsReady: (ready) => {

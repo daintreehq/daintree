@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { projectDecisionQuestions, questionAsks, standingOf } from "../questionList.js";
+import { NO_ADVISORY_HOST } from "../questionRound.js";
 import { threadNeedsAttention } from "../attentionList.js";
 import { DECLINE, SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
 
@@ -25,7 +26,7 @@ describe("projectDecisionQuestions", () => {
         row(2, { origin: { project_id: "project-c", pane_id: "pane-c", worktree_id: "w-2" } }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => item.reference)).toEqual([
@@ -59,7 +60,7 @@ describe("projectDecisionQuestions", () => {
         }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     expect(
       list.map(({ agentKind, requirement, worktreeId, worktreeRoot, expiresAt }) => ({
@@ -95,7 +96,7 @@ describe("projectDecisionQuestions", () => {
         row(2, { ...delivered, origin: { pane_id: "closed-pane" } }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     expect(list.map((item) => [item.reference.terminalId, item.standing.kind])).toEqual([
       ["closed-pane", "waiting"],
@@ -111,8 +112,8 @@ describe("projectDecisionQuestions", () => {
       row(4, { origin: { pane_id: "" } }),
       row(5),
     ];
-    expect(projectDecisionQuestions(rows, new Map(), HOST).map((item) => item.alias)).toEqual([5]);
-    expect(projectDecisionQuestions(rows, new Map(), null)).toEqual([]);
+    expect(projectDecisionQuestions(rows, new Map(), HOST, NO_ADVISORY_HOST).map((item) => item.alias)).toEqual([5]);
+    expect(projectDecisionQuestions(rows, new Map(), null, NO_ADVISORY_HOST)).toEqual([]);
   });
 
   it("copies ids, labels, times and statuses only: no question, answer or follow-up text", () => {
@@ -125,7 +126,7 @@ describe("projectDecisionQuestions", () => {
         }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     const [item] = list;
     expect(Object.keys(item!).sort()).toEqual(
@@ -161,7 +162,7 @@ describe("projectDecisionQuestions", () => {
         row(3, { origin: { project_label: undefined } }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     expect([named?.projectLabel, blank?.projectLabel, none?.projectLabel]).toEqual([
       "daintree",
@@ -372,7 +373,7 @@ describe("standingOf", () => {
       )
     ).toMatchObject({ kind: "needs-attention" });
     expect(
-      projectDecisionQuestions([held], new Map([[qid(1), 2]]), HOST).map((item) => item.alias)
+      projectDecisionQuestions([held], new Map([[qid(1), 2]]), HOST, NO_ADVISORY_HOST).map((item) => item.alias)
     ).toEqual([1]);
   });
 
@@ -406,7 +407,7 @@ describe("standingOf", () => {
     const list = projectDecisionQuestions(
       [answered, withdrawn, expiredNotice, expiredBare],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => [item.standing, item.settledAt])).toEqual([
@@ -459,7 +460,7 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     expect(item?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
     expect(item?.settledAt).toBe("2026-11-01T10:08:00.000Z");
@@ -524,7 +525,7 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
     expect(corrected?.settledAt).toBe("2026-11-01T10:09:00.000Z");
     expect(superseded?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
@@ -559,7 +560,7 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST
+      HOST, NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => [item.alias, item.standing, item.settledAt])).toEqual([
@@ -590,7 +591,7 @@ describe("standingOf", () => {
 
 describe("follow-up and stall events (#17235)", () => {
   const project = (r: QuestionRow, handled: ReadonlyMap<string, number> = new Map()) =>
-    projectDecisionQuestions([r], handled, HOST)[0]!;
+    projectDecisionQuestions([r], handled, HOST, NO_ADVISORY_HOST)[0]!;
   const request = (id: string, seq: number) => ({
     message_id: id,
     side: "agent" as const,

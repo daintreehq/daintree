@@ -444,9 +444,7 @@ describe("/mcp/decisions (#16011)", () => {
           ...(options.defaultQuestionExpiryMs !== undefined
             ? { defaultQuestionExpiryMs: options.defaultQuestionExpiryMs }
             : {}),
-        },
-        options.role ?? "owner"
-      ),
+        }),
       ...(options.attachments ? { attachments: options.attachments } : {}),
       ...(options.advisoryDeadlines ? { advisoryDeadlines: true } : {}),
     });
@@ -501,9 +499,7 @@ describe("/mcp/decisions (#16011)", () => {
       store,
       keys,
       policy: createTrustedPolicy(
-        { ...defaultDecisionsSettings(), proxyAllowlisted: false, ...settings },
-        "owner"
-      ),
+        { ...defaultDecisionsSettings(), proxyAllowlisted: false, ...settings }),
       onStatus: () => {},
       onRevoked: () => {},
       fetchImpl: relay.fetchImpl,
