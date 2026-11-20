@@ -804,9 +804,7 @@ describe("a timed question in the view (#17943)", () => {
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
-    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
-      /Deadline passed/
-    );
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/Deadline passed/);
 
     // Reconnected: the phone's answer committed before the deadline, so it never expired.
     await move(

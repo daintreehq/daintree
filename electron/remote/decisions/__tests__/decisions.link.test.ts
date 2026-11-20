@@ -2250,9 +2250,12 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
         reference: second.reference,
       })
     );
-    const { replyMode: _m, plannedFallback: _p, closureNotice: _n, ...legacy } = roundContent(
-      second.reference
-    );
+    const {
+      replyMode: _m,
+      plannedFallback: _p,
+      closureNotice: _n,
+      ...legacy
+    } = roundContent(second.reference);
     expect(read).toEqual({ result: "read", question: { ...legacy, closedReason: null } });
 
     // Its pushes are v2, without rounds.

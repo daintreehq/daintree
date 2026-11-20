@@ -126,9 +126,10 @@ describe("roundOf (#17943)", () => {
       ).closureNotice;
 
     // Typed: it keeps what it said.
-    expect(
-      advisoryExpiry({ advisory_disposition: "fallback-due", delivered: true })
-    ).toEqual({ delivery: "delivered", disposition: "fallback-due" });
+    expect(advisoryExpiry({ advisory_disposition: "fallback-due", delivered: true })).toEqual({
+      delivery: "delivered",
+      disposition: "fallback-due",
+    });
     // Untyped: it follows this Daintree, which lets no plan go ahead yet.
     expect(advisoryExpiry({ advisory_disposition: "fallback-due" })).toEqual({
       delivery: "pending",
