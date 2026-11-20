@@ -1475,11 +1475,11 @@ export function DecisionsInboxDialog() {
   let scope: InboxScope = opening?.scope ?? "all";
   if (opening === null) {
     if (offered) setScopeChoice({ seq: request.seq, scope, ask, widened: false });
-  } else if (opening.scope === "project" && opening.ask !== ask && asked !== null) {
+  } else if (active && opening.scope === "project" && opening.ask !== ask && asked !== null) {
     // Asked for another project's question while narrowed (#18119), the list goes back to every
     // project, once per ask, so the question is shown and Clear says how far it reaches. Not once
     // the person picked a row since the ask, which keeps the list it was picked in, nor before
-    // the question is listed.
+    // the question is listed, nor as the inbox closes.
     const match = questions === null ? undefined : findAsked(questions, asked, viewHostId);
     const picked = chosen?.picked === true;
     if (match !== undefined || picked) {
@@ -1975,6 +1975,20 @@ export function DecisionsInboxDialog() {
       announced.current = { seq: request.seq, key: selectedKey };
       return;
     }
+    // The list going back to every project for a question asked for (#18119) is said as that
+    // question is shown, once, without waiting on its reads or on it being a new question.
+    const said = widenSaid.current;
+    if (
+      widenedFor !== null &&
+      selected !== null &&
+      selectedKey !== null &&
+      (said === null || said.seq !== request.seq || said.ask !== widenedFor)
+    ) {
+      widenSaid.current = { seq: request.seq, ask: widenedFor };
+      announced.current = { seq: request.seq, key: selectedKey };
+      announce(`Showing all projects for ${aliasLabel(selected.alias)}`);
+      return;
+    }
     if (last.key === selectedKey) return;
     // Nothing shown: forgotten, so a question that comes back is said again.
     if (selected === null || selectedKey === null) {
@@ -1993,12 +2007,7 @@ export function DecisionsInboxDialog() {
     if (!onRow && line === undefined && readResult === null) return;
     announced.current = { seq: request.seq, key: selectedKey };
     const alias = aliasLabel(selected.alias);
-    const what = !onRow && line != null ? `${alias}: ${line}` : alias;
-    const said = widenSaid.current;
-    const widening =
-      widenedFor !== null && (said === null || said.seq !== request.seq || said.ask !== widenedFor);
-    if (widening) widenSaid.current = { seq: request.seq, ask: widenedFor };
-    announce(widening ? `Showing all projects for ${what}` : `Showing ${what}`);
+    announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
   }, [
     active,
     listRead.state,
