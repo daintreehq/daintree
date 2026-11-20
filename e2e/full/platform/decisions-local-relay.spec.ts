@@ -19,17 +19,17 @@
  *   DAINTREE_DECISIONS_CHECKOUT=<checkout> \
  *     npx playwright test --project=full-platform e2e/full/platform/decisions-local-relay.spec.ts
  *
- * The full path is needed: the bare name `decisions-local-relay` selects the whole bucket.
+ * The `.spec.ts` path is needed: given the bare name `decisions-local-relay`, Playwright selects
+ * every test of the project.
  */
 
 import { test, expect, chromium, type BrowserContext, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
-import { tmpdir } from "os";
+import { hostname, tmpdir } from "os";
 import path from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { machineDisplayName } from "../../../electron/utils/machineName";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -49,6 +49,7 @@ import {
   closeSettings as closeSettingsOf,
   choosePhoneOption,
   connectRelay,
+  decisionBlocks,
   DECISIONS_CHECKOUT,
   DECISIONS_SETTINGS_DIALOG as DIALOG,
   launchPhone,
@@ -384,12 +385,11 @@ test("an agent can withdraw a question it no longer needs, and the phone says so
 
   const cancelled = await mcp.callTool({ name: "cancel_question", arguments: { question_id: id } });
   expect(cancelled.isError, JSON.stringify(cancelled.content)).toBeFalsy();
-  // The phone names the computer that signed the cancel and never who asked for it.
-  await expect(
-    phone.getByText(`Withdrawn on ${machineDisplayName().replace(/\s+/g, " ").trim()}`, {
-      exact: true,
-    })
-  ).toBeVisible({ timeout: 30_000 });
+  // The phone names the computer that signed the cancel, as the hostname Daintree's Decisions route
+  // sends, and never who asked for it.
+  await expect(phone.getByText(`Withdrawn on ${hostname()}`, { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
   const read = await mcp.callTool({ name: "get_decision", arguments: { question_id: id } });
   expect(read.structuredContent).toMatchObject({ status: "cancelled" });
 });
@@ -509,7 +509,8 @@ test("answers wait behind a draft in the composer, then go in the order their qu
   });
 
   // Claude takes a line mid-turn, so its work holds nothing back: what holds an answer is a
-  // half-written reply in the pane's composer.
+  // half-written reply in the pane's composer, which the setup check's open Settings would cover.
+  if (await page.locator(DIALOG).isVisible()) await closeSettings();
   const editor = page.locator(`[data-panel-id="${paneId}"] .cm-content`).first();
   await editor.click();
   await page.keyboard.type("Half a reply to the agent");
@@ -531,12 +532,12 @@ test("answers wait behind a draft in the composer, then go in the order their qu
   await expect(pane.getByText(/delivering/).first()).toBeVisible({ timeout: 30_000 });
   expect(await agentState()).toBe("working");
   // Held and not just slow: nothing is typed over the draft for as long as it is there.
-  const heldAt = Date.now();
+  const heldAt = performance.now();
   await expect
     .poll(
       () => {
         expect(typedSince(from)).toBe("");
-        return Date.now() - heldAt > 5_000;
+        return performance.now() - heldAt > 5_000;
       },
       { timeout: 15_000, intervals: [500] }
     )
@@ -546,18 +547,22 @@ test("answers wait behind a draft in the composer, then go in the order their qu
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.press("Backspace");
   await expect(editor.locator(".cm-placeholder")).toBeVisible();
+  // Clearing the draft is what wakes delivery: well inside the minute of the periodic sweep, which
+  // would otherwise hide a wake that never came.
   await expect
-    .poll(() => typedSince(from).includes(q1) && typedSince(from).includes(q2), {
-      timeout: 90_000,
-      intervals: [1_000],
-    })
+    .poll(
+      () =>
+        decisionBlocks(typedSince(from), q1).length === 1 &&
+        decisionBlocks(typedSince(from), q2).length === 1,
+      { timeout: 30_000, intervals: [1_000] }
+    )
     .toBe(true);
   const typed = typedSince(from);
-  expect(typed.indexOf(`question_id: ${q1}`), typed).toBeLessThan(
-    typed.indexOf(`question_id: ${q2}`)
-  );
-  expect(typed).toContain("choice: connections");
-  expect(typed).toContain("choice: redirect");
+  const [firstBlock] = decisionBlocks(typed, q1);
+  const [secondBlock] = decisionBlocks(typed, q2);
+  expect(firstBlock).toContain("choice: connections");
+  expect(secondBlock).toContain("choice: redirect");
+  expect(typed.indexOf(firstBlock), typed).toBeLessThan(typed.indexOf(secondBlock));
   await settle();
 });
 
