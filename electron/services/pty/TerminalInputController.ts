@@ -34,6 +34,7 @@ import {
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { showsSelectorAtEnter } from "./guardedEnterScreen.js";
+import { markPromptUnseen, restartsRunInPlace } from "./promptUnseen.js";
 import {
   keysReachPrompt,
   stampPromptInput,
@@ -880,7 +881,14 @@ export class TerminalInputController {
     // shell command that would replace the agent's identity.
     if (identityWatcher.agentOwnsInput) identityWatcher.discardCapturedInput();
     else identityWatcher.onShellSubmit(body);
-    if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
+    if (this.writeStrict(enterSuffix)) {
+      // Before the lane takes its next line, which must wait for the new
+      // process's own prompt (#18018).
+      if (restartsRunInPlace(owner.agentId, body)) {
+        markPromptUnseen(this.host.terminalInfo, Date.now());
+      }
+      ctx?.markPtyWritten();
+    }
   }
 
   /**

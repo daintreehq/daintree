@@ -15,6 +15,7 @@ import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
 import { isDetectableAgentId } from "../ProcessDetector/registries.js";
 import { clearUpdateInstalled } from "./claudeUpdateObservation.js";
+import { markPromptUnseen } from "./promptUnseen.js";
 
 export interface TerminalAgentDetectionHost {
   readonly id: string;
@@ -98,8 +99,9 @@ export function handleAgentDetection(
       terminal.detectedAgentId = detectedAgentId;
       // Another agent took the pane: an update footer was its predecessor's (#17905),
       // and its prompt, once seen, was too (#18014).
-      clearUpdateInstalled(terminal, Date.now());
-      if (previous !== undefined) terminal.promptUnseen = true;
+      const swappedAt = Date.now();
+      clearUpdateInstalled(terminal, swappedAt);
+      if (previous !== undefined) markPromptUnseen(terminal, swappedAt);
       // A shell's mirror starts at the plain-shell ceiling; an agent gets the
       // agent size. Grown only on the identity change so a governor trim of
       // a live agent isn't undone by the next poll. Never shrunk on demotion.
@@ -123,7 +125,7 @@ export function handleAgentDetection(
         }
         // Whatever the record already says: a title report can mark the shell
         // working before detection catches up, and none of it is this run's prompt.
-        terminal.promptUnseen = true;
+        markPromptUnseen(terminal, swappedAt);
         terminal.analysisEnabled = true;
         host.startActivityMonitor();
       }

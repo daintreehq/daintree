@@ -24,6 +24,7 @@ import {
 } from "./HandbackDetector.js";
 import { reportRunHandback } from "./runHandback.js";
 import { clearUpdateInstalled } from "./claudeUpdateObservation.js";
+import { markPromptUnseen, notePromptSeen, seesPromptFirst } from "./promptUnseen.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -116,21 +117,6 @@ function noteUsageLimitProgress(
   const changedAt = terminal.lastOutputChangeAt;
   if (changedAt === undefined || changedAt - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
   terminal.usageLimitObservedAt = undefined;
-}
-
-/**
- * The run has been seen waiting at its prompt or a question (#18014), the
- * readings a guarded line may be typed at, so its working from here on is a
- * turn. Committed with the state, before the change is announced, so a send
- * gate reading the record at the announcement sees both.
- */
-function notePromptSeen(terminal: TerminalInfo): void {
-  if (
-    terminal.agentState === "waiting" &&
-    (terminal.waitingReason === "prompt" || terminal.waitingReason === "question")
-  ) {
-    delete terminal.promptUnseen;
-  }
 }
 
 // Backend-side identity used when routing agent-state events (who is this
@@ -297,7 +283,8 @@ export class AgentStateService {
     waitingReason?: WaitingReason,
     sessionCost?: number,
     sessionTokens?: number,
-    temperature?: AgentActivityObservationResult
+    temperature?: AgentActivityObservationResult,
+    promptDrawnAt?: number
   ): boolean {
     // Detection wins; fall back to the launch hint during the boot window.
     // May be undefined for runtime-detected-only flows; consumers fall back to
@@ -524,8 +511,8 @@ export class AgentStateService {
       terminal.waitingReason = undefined;
     }
     // A respawn starts a run that has shown no prompt yet (#18014).
-    if (event.type === "respawn") terminal.promptUnseen = true;
-    else notePromptSeen(terminal);
+    if (event.type === "respawn") markPromptUnseen(terminal, timestamp);
+    else notePromptSeen(terminal, promptDrawnAt);
 
     noteUsageLimitProgress(terminal, previousState, previousStateChange, newState);
 
@@ -546,13 +533,18 @@ export class AgentStateService {
    * an `approval`, sent with a dialog in that row's place (#16209), at which
    * no send is admitted. Refused unless the
    * agent is waiting, the reason differs, and nothing has settled it since.
+   * The one same-reason update is a run's first sight of its own input row
+   * (#18018), read at `promptDrawnAt`: the settle before it gave its reason
+   * off a screen the CLI hadn't drawn yet.
    */
   updateWaitingReason(
     terminal: TerminalInfo,
     waitingReason: WaitingReason,
-    observedAt: number
+    observedAt: number,
+    promptDrawnAt?: number
   ): boolean {
-    if (terminal.agentState !== "waiting" || terminal.waitingReason === waitingReason) {
+    if (terminal.agentState !== "waiting") return false;
+    if (terminal.waitingReason === waitingReason && !seesPromptFirst(terminal, promptDrawnAt)) {
       return false;
     }
     if (terminal.lastStateChange !== undefined && observedAt <= terminal.lastStateChange) {
@@ -590,7 +582,7 @@ export class AgentStateService {
 
     terminal.waitingReason = waitingReason;
     terminal.lastStateChange = observedAt;
-    notePromptSeen(terminal);
+    notePromptSeen(terminal, promptDrawnAt);
     events.emit("agent:state-changed", validated.data);
     this.emitTerminalActivity(terminal);
     return true;
@@ -775,6 +767,7 @@ export class AgentStateService {
       sessionTokens?: number;
       temperature?: AgentActivityObservationResult;
       rereadAt?: number;
+      promptDrawnAt?: number;
     }
   ): void {
     // The ActivityMonitor emits a synthetic `idle` observation with
@@ -801,7 +794,12 @@ export class AgentStateService {
 
     if (metadata?.rereadAt !== undefined) {
       if (activity === "idle" && metadata.waitingReason !== undefined) {
-        this.updateWaitingReason(terminal, metadata.waitingReason, metadata.rereadAt);
+        this.updateWaitingReason(
+          terminal,
+          metadata.waitingReason,
+          metadata.rereadAt,
+          metadata.promptDrawnAt
+        );
       }
       return;
     }
@@ -815,9 +813,11 @@ export class AgentStateService {
           ? { type: "completion" }
           : { type: "prompt" };
     const temperature = metadata?.temperature;
+    const promptDrawnAt = metadata?.promptDrawnAt;
 
+    let changed: boolean;
     if (metadata?.trigger === "timeout") {
-      this.updateAgentState(
+      changed = this.updateAgentState(
         terminal,
         event,
         "timeout",
@@ -825,11 +825,12 @@ export class AgentStateService {
         metadata?.waitingReason,
         undefined,
         undefined,
-        temperature
+        temperature,
+        promptDrawnAt
       );
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
-      this.updateAgentState(
+      changed = this.updateAgentState(
         terminal,
         event,
         "heuristic",
@@ -837,10 +838,11 @@ export class AgentStateService {
         metadata?.waitingReason,
         metadata?.sessionCost,
         metadata?.sessionTokens,
-        temperature
+        temperature,
+        promptDrawnAt
       );
     } else if (metadata?.trigger === "output") {
-      this.updateAgentState(
+      changed = this.updateAgentState(
         terminal,
         event,
         "output",
@@ -848,10 +850,11 @@ export class AgentStateService {
         metadata?.waitingReason,
         undefined,
         undefined,
-        temperature
+        temperature,
+        promptDrawnAt
       );
     } else if (metadata?.trigger === "input") {
-      this.updateAgentState(
+      changed = this.updateAgentState(
         terminal,
         event,
         "input",
@@ -859,10 +862,11 @@ export class AgentStateService {
         metadata?.waitingReason,
         undefined,
         undefined,
-        temperature
+        temperature,
+        promptDrawnAt
       );
     } else {
-      this.updateAgentState(
+      changed = this.updateAgentState(
         terminal,
         event,
         "activity",
@@ -870,8 +874,23 @@ export class AgentStateService {
         metadata?.waitingReason,
         undefined,
         undefined,
-        temperature
+        temperature,
+        promptDrawnAt
       );
+    }
+
+    // A record already waiting drops the settle as a no-op (a title report can
+    // get there first), so a run's first sight of its own input row goes the
+    // reason-update way instead, or it would wait for a settle that may never
+    // come (#18018).
+    if (
+      !changed &&
+      activity === "idle" &&
+      metadata?.waitingReason !== undefined &&
+      promptDrawnAt !== undefined &&
+      terminal.promptUnseen === true
+    ) {
+      this.updateWaitingReason(terminal, metadata.waitingReason, promptDrawnAt, promptDrawnAt);
     }
   }
 
