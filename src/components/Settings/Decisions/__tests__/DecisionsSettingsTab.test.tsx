@@ -454,7 +454,6 @@ describe("DecisionsSettingsTab", () => {
     function policy(askHumanAgents: string[], revision: number): DecisionsPolicy {
       return {
         gates: [],
-        proxyAllowlisted: false,
         defaultQuestionExpiryMs: null,
         maxQuestionExpiryMs: null,
         askHumanAgents,
