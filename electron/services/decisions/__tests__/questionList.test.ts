@@ -258,7 +258,15 @@ describe("standingOf", () => {
         })
       );
     // Taken off the wait at once; typed in, it is settled.
-    expect(reply("received")).toEqual({ kind: "to-type" });
+    expect(reply("received")).toMatchObject({
+      kind: "to-type",
+      delivery: {
+        answer: false,
+        followUps: 1,
+        first: "follow-up",
+        recordedAt: "2026-11-01T10:06:00.000Z",
+      },
+    });
     expect(reply("terminal-delivered")).toMatchObject({ kind: "settled", outcome: "answered" });
   });
 
@@ -294,7 +302,10 @@ describe("standingOf", () => {
           answers_json: answers({}),
         })
       )
-    ).toEqual({ kind: "to-type" });
+    ).toMatchObject({
+      kind: "to-type",
+      delivery: { answer: true, followUps: 0, first: "answer" },
+    });
     expect(
       standing(
         row(1, {
@@ -302,7 +313,197 @@ describe("standingOf", () => {
           messages_json: messages({ delivery: { status: "received" } }),
         })
       )
-    ).toEqual({ kind: "to-type" });
+    ).toMatchObject({
+      kind: "to-type",
+      delivery: { answer: false, followUps: 1, first: "follow-up" },
+    });
+  });
+
+  describe("what waits to be typed in (#18032)", () => {
+    const toType = (overrides: Parameters<typeof row>[1], handled = new Map<string, number>()) => {
+      const result = standing(row(1, { local_status: "human-answered", ...overrides }), handled);
+      if (result.kind !== "to-type") throw new Error(`expected to-type, got ${result.kind}`);
+      return result.delivery;
+    };
+
+    it("names an answer waiting alone, when it was recorded, and that it doesn't wait for a host", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: "2026-11-01T10:05:00.000Z" }),
+        })
+      ).toEqual({
+        answer: true,
+        followUps: 0,
+        first: "answer",
+        recordedAt: "2026-11-01T10:05:00.000Z",
+        hostAway: false,
+      });
+    });
+
+    it("times the one waiting longest, whichever kind it is", () => {
+      const both = (answerAt: string) =>
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: answerAt, event_seq: 5 }),
+          // Stored out of time order: the earliest of them is what counts.
+          messages_json: messages(
+            { message_id: "m-2", event_seq: 7, created_at: "2026-11-01T10:09:00.000Z" },
+            { message_id: "m-1", event_seq: 6, created_at: "2026-11-01T10:06:00.000Z" }
+          ),
+        });
+      expect(both("2026-11-01T10:05:00.000Z")).toMatchObject({
+        answer: true,
+        followUps: 2,
+        first: "answer",
+        recordedAt: "2026-11-01T10:05:00.000Z",
+      });
+      // A follow-up sent before the answer came back to life waits longer than the answer.
+      expect(both("2026-11-01T10:07:00.000Z")).toMatchObject({
+        first: "follow-up",
+        recordedAt: "2026-11-01T10:06:00.000Z",
+      });
+    });
+
+    it("compares the instants recorded, not how they were written", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: "2026-11-01T10:05:00.000Z", event_seq: 5 }),
+          // 10:04 UTC, written an hour ahead.
+          messages_json: messages({ event_seq: 6, created_at: "2026-11-01T11:04:00.000+01:00" }),
+        })
+      ).toMatchObject({ first: "follow-up", recordedAt: "2026-11-01T11:04:00.000+01:00" });
+    });
+
+    it("breaks a tie in time by the thread's order, an answer from before threads first", () => {
+      const at = "2026-11-01T10:05:00.000Z";
+      const tied = (seq: number | undefined) =>
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: at, event_seq: seq }),
+          messages_json: messages({ event_seq: 6, created_at: at }),
+        });
+      expect(tied(undefined)?.first).toBe("answer");
+      expect(tied(5)?.first).toBe("answer");
+      expect(tied(9)?.first).toBe("follow-up");
+    });
+
+    it("says only the correction still waits once the answer it replaces was typed in", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            { entry_id: "a-1", revision: 1, delivered: true },
+            {
+              entry_id: "a-2",
+              revision: 2,
+              correction: true,
+              created_at: "2026-11-01T11:00:00.000Z",
+            }
+          ),
+        })
+      ).toMatchObject({ answer: true, first: "answer", recordedAt: "2026-11-01T11:00:00.000Z" });
+    });
+
+    it("counts the decision model's answer as the answer", () => {
+      expect(
+        toType({
+          local_status: "proxy-answered",
+          delivery_status: "desktop-received",
+          answers_json: answers({
+            source: "proxy",
+            action: "proxy-answer",
+            created_at: "2026-11-01T10:30:00.000Z",
+          }),
+        })
+      ).toMatchObject({ answer: true, followUps: 0, recordedAt: "2026-11-01T10:30:00.000Z" });
+    });
+
+    it("says the answer waits for its terminal's host only while the store records that", () => {
+      expect(toType({ delivery_status: "pending-host", answers_json: answers({}) })?.hostAway).toBe(
+        true
+      );
+      // The library records a host wait only for an answer: a follow-up alone never says it.
+      expect(
+        toType({
+          ...delivered,
+          delivery_status: "pending-host",
+          messages_json: messages({}),
+        })?.hostAway
+      ).toBe(false);
+    });
+
+    it("leaves out a stopped answer the person handled, while their follow-up waits", () => {
+      for (const status of ["needs-attention", "delivery-uncertain"] as const) {
+        expect(
+          toType(
+            {
+              delivery_status: status,
+              answers_json: answers({}),
+              messages_json: messages({}),
+            },
+            new Map([[qid(1), 1]])
+          )
+        ).toMatchObject({ answer: false, followUps: 1, first: "follow-up" });
+      }
+    });
+
+    it("never names a notice as the answer: with only one waiting, it doesn't say what waits", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            { entry_id: "a-1", delivered: true },
+            { entry_id: "e-1", kind: "expired", action: "expire", source: "system", sealed: null }
+          ),
+        })
+      ).toBeUndefined();
+      // Beside a correction still waiting, the notice is neither counted nor timed.
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            {
+              entry_id: "e-1",
+              kind: "expired",
+              action: "expire",
+              source: "system",
+              sealed: null,
+              created_at: "2026-11-01T10:01:00.000Z",
+            },
+            {
+              entry_id: "a-2",
+              revision: 2,
+              correction: true,
+              created_at: "2026-11-01T10:20:00.000Z",
+            }
+          ),
+        })
+      ).toMatchObject({ answer: true, first: "answer", recordedAt: "2026-11-01T10:20:00.000Z" });
+    });
+
+    it("carries counts and times only through the list", () => {
+      const [item] = projectDecisionQuestions(
+        [
+          row(1, {
+            local_status: "human-answered",
+            delivery_status: "desktop-received",
+            answers_json: answers({}),
+            messages_json: messages({}),
+          }),
+        ],
+        new Map(),
+        HOST,
+        NO_ADVISORY_HOST
+      );
+      const { standing: listed } = item!;
+      if (listed.kind !== "to-type") throw new Error(`expected to-type, got ${listed.kind}`);
+      expect(Object.keys(listed.delivery!).sort()).toEqual(
+        ["answer", "first", "followUps", "hostAway", "recordedAt"].sort()
+      );
+      expect(JSON.stringify(listed)).not.toContain(SECRET);
+    });
   });
 
   it("needs attention exactly when the list of answers needing attention would show it", () => {

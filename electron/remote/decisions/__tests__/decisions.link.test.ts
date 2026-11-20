@@ -2683,6 +2683,75 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(items.map((raw) => HostQuestionItemSchema.parse(raw))).toEqual([item(1)]);
   });
 
+  /** What waits to be typed in, as this computer's own list says it (#18032); no link carries it yet. */
+  const TO_TYPE: Item["standing"] = {
+    kind: "to-type",
+    delivery: {
+      answer: true,
+      followUps: 1,
+      first: "answer",
+      recordedAt: "2026-11-01T10:05:00.000Z",
+      hostAway: false,
+    },
+  };
+
+  it("sends a question waiting to be typed in without what waits, so a v3 Shell keeps its row (#18032)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({
+      hostId: QHOST,
+      questions: [roundItem(1, { standing: TO_TYPE }), roundItem(2)],
+    });
+    serveQuestions(host, decisions);
+    const pushes = vi.spyOn(host, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([
+        roundItem(1, { standing: { kind: "to-type" } }),
+        roundItem(2),
+      ])
+    );
+
+    // Pushed the same way; one that changes only what waits pushes nothing new.
+    decisions.set({ hostId: QHOST, questions: [roundItem(1, { standing: TO_TYPE })] });
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([
+        roundItem(1, { standing: { kind: "to-type" } }),
+      ])
+    );
+    const pushed = pushes.mock.calls.filter(
+      ([method]) => method === DecisionsLinkMethod.QUESTIONS_CHANGED_V3
+    ).length;
+    decisions.set({
+      hostId: QHOST,
+      questions: [
+        roundItem(1, {
+          standing: { kind: "to-type", delivery: { ...TO_TYPE.delivery!, followUps: 2 } },
+        }),
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      pushes.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTIONS_CHANGED_V3)
+    ).toHaveLength(pushed);
+  });
+
+  it("sends a Shell from before #17943 a question waiting to be typed in as its strict read takes it (#18032)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1, { standing: TO_TYPE })] });
+    serveQuestions(host, decisions);
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+
+    const list = HostQuestionListV2Schema.parse(
+      await client.call(DecisionsLinkMethod.QUESTION_LIST_V2, {})
+    );
+    expect(list.questions.map((raw) => HostQuestionItemSchema.parse(raw))).toEqual([
+      item(1, { kind: "to-type" }),
+    ]);
+  });
+
   it("never takes a refused content read for an older Host, so later reads keep their round (#17943)", async () => {
     const { host, client } = await pair();
     host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({

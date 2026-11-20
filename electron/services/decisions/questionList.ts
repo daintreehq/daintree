@@ -2,12 +2,14 @@ import {
   isPendingMessage,
   parseAnswers,
   parseMessages,
+  type AnswerEntry,
   type QuestionRow,
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import { threadAwaitsHuman } from "@daintreehq/decisions-protocol";
 import type {
   DecisionAskerPresence,
+  DecisionPendingDelivery,
   DecisionQuestionListItem,
   DecisionQuestionStall,
   DecisionQuestionStanding,
@@ -150,9 +152,68 @@ function answeredStanding(
   const messages = parseMessages(row.messages_json);
   if (awaitsReply(row, status, messages)) return { kind: "waiting", reason: "reply" };
   // An answer delivery stopped on and a person handled is never typed in.
-  const answerPending = !attentionStatus(row.delivery_status) && pendingEntries(row).length > 0;
-  if (answerPending || messages.some(isPendingMessage)) return { kind: "to-type" };
+  const entries = attentionStatus(row.delivery_status) ? [] : pendingEntries(row);
+  const followUps = messages.filter(isPendingMessage);
+  if (entries.length > 0 || followUps.length > 0) {
+    const delivery = pendingDelivery(row, entries, followUps);
+    return delivery === null ? { kind: "to-type" } : { kind: "to-type", delivery };
+  }
   return { kind: "settled", outcome: "answered", handled: isHandled(row, handled) };
+}
+
+interface Waiting {
+  kind: DecisionPendingDelivery["first"];
+  at: string;
+  /** Its place in the thread; an answer stored before threads comes before every message. */
+  seq: number;
+}
+
+function instant(iso: string): number {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
+function recordedBefore(a: Waiting, b: Waiting): boolean {
+  const order = instant(a.at) - instant(b.at);
+  return order < 0 || (order === 0 && a.seq < b.seq);
+}
+
+/**
+ * What a question waiting to be typed in has waiting (#18032), from the
+ * entries that put it there. Only an answer counts as the answer, so a notice
+ * of a round since replaced never reads as one; null when nothing else waits.
+ */
+function pendingDelivery(
+  row: QuestionRow,
+  entries: readonly AnswerEntry[],
+  followUps: readonly StoredMessage[]
+): DecisionPendingDelivery | null {
+  const answers = entries.filter((entry) => entry.kind === "answer");
+  const waiting: Waiting[] = [
+    ...answers.map((entry) => ({
+      kind: "answer" as const,
+      at: entry.created_at,
+      seq: entry.event_seq ?? -1,
+    })),
+    ...followUps.map((message) => ({
+      kind: "follow-up" as const,
+      at: message.created_at,
+      seq: message.event_seq,
+    })),
+  ];
+  let first: Waiting | null = null;
+  for (const candidate of waiting) {
+    if (first === null || recordedBefore(candidate, first)) first = candidate;
+  }
+  if (first === null) return null;
+  return {
+    answer: answers.length > 0,
+    followUps: followUps.length,
+    first: first.kind,
+    recordedAt: first.at,
+    // The library records only an answer's wait for its host; a follow-up waits in its own state.
+    hostAway: answers.length > 0 && row.delivery_status === "pending-host",
+  };
 }
 
 function awaitsReply(

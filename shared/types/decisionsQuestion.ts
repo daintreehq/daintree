@@ -447,7 +447,8 @@ export interface DecisionQuestionReference {
  * - `waiting`: for the person, because it is `open`, or because it was
  *   answered and the agent's latest follow-up expects a `reply`;
  * - `queued`: not yet sent to the relay; `send-failed`: it never could be;
- * - `to-type`: answered, or followed up by the person, and waiting to be typed in;
+ * - `to-type`: answered, or followed up by the person, and waiting to be typed
+ *   in, with what waits when its machine says (`delivery`, #18032);
  * - `needs-attention`: an answer or a person's follow-up that delivery stopped
  *   on, as the list of answers needing attention shows it;
  * - `settled`: answered and typed in or marked handled, withdrawn, expired,
@@ -457,10 +458,27 @@ export type DecisionQuestionStanding =
   | { kind: "waiting"; reason: "open" | "reply" }
   | { kind: "queued" }
   | { kind: "send-failed" }
-  | { kind: "to-type" }
+  | { kind: "to-type"; delivery?: DecisionPendingDelivery }
   | { kind: "needs-attention"; deliveryStatus: "needs-attention" | "delivery-uncertain" }
   | { kind: "settled"; outcome: "answered"; handled: boolean }
   | { kind: "settled"; outcome: "withdrawn" | "expired" | "declined" };
+
+/**
+ * What waits to be typed into the asking terminal while a question is
+ * `to-type` (#18032), as its store records it: an answer (or its correction),
+ * how many of the person's follow-ups, which of those was recorded first and
+ * when, and whether the answer waits for the terminal's host to be back
+ * (`pending-host`). Counts and times only. Absent from a Remote Host's
+ * question, whose link doesn't carry it.
+ */
+export interface DecisionPendingDelivery {
+  answer: boolean;
+  followUps: number;
+  /** The one waiting longest, and when it was recorded, ISO 8601 as stored. */
+  first: "answer" | "follow-up";
+  recordedAt: string;
+  hostAway: boolean;
+}
 
 /**
  * A question as the list names it: who asked, where, when, and where it

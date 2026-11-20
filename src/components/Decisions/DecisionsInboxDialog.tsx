@@ -43,6 +43,7 @@ import { listStepOf } from "@/lib/listStepChord";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { hasDraftText } from "@/lib/draftKey";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -53,12 +54,14 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import { isPtyPanel } from "@shared/types/panel";
 import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -97,6 +100,7 @@ import {
   clearText,
   connectionNotice,
   DECLINE_TEXT,
+  deliveryFacts,
   dismissFate,
   ELAPSED_NOTE,
   emptyText,
@@ -121,6 +125,7 @@ import {
   questionOfKey,
   movedText,
   nextWaiting,
+  recordedLabel,
   referenceKey,
   replyLine,
   replyLineKey,
@@ -135,6 +140,8 @@ import {
   whereFacts,
   worktreeName,
   WITHDRAW_TEXT,
+  type DeliveryFacts,
+  type DeliveryPane,
   type InboxAction,
   type InboxActionFate,
   type InboxChoice,
@@ -611,6 +618,139 @@ function useTerminalReach(
   };
 }
 
+/** A terminal as the inbox looks it up: by its project, then its id. */
+function terminalKey(projectId: string, terminalId: string): string {
+  return `${projectId}\u0000${terminalId}`;
+}
+
+type SeenAgent = Pick<DeliveryPane, "detectedAgentId" | "agentState" | "waitingReason">;
+
+/** What the terminals this computer runs report of each of `keys`, out of the trash and running. */
+async function agentsOf(keys: ReadonlySet<string>): Promise<ReadonlyMap<string, SeenAgent>> {
+  const seen = new Map<string, SeenAgent>();
+  for (const terminal of await terminalClient.getAll()) {
+    const key = terminalKey(terminal.projectId ?? "", terminal.id);
+    if (!keys.has(key) || terminal.isTrashed === true || terminal.hasPty === false) continue;
+    const { detectedAgentId, agentState, waitingReason } = terminal;
+    seen.set(key, { detectedAgentId, agentState, waitingReason });
+  }
+  return seen;
+}
+
+const NOTHING_SEEN: ReadonlyMap<string, SeenAgent> = new Map();
+
+/**
+ * What the inbox observes of each Being delivered question's terminal
+ * (#18032), from what the delivery gate reads: its agent as the terminals
+ * this computer runs report it, looked at again a while after each look
+ * settles and only for this opening, and whether this view's hybrid input
+ * holds a draft for it, joined so a keystroke re-renders the inbox only when
+ * a draft comes or goes. Null for one not running here, a Remote Host's, and
+ * any from a Remote Host window.
+ */
+function useDeliveryPanes(
+  items: readonly DecisionQuestionListItem[],
+  active: boolean,
+  opening: number
+): (item: DecisionQuestionListItem) => DeliveryPane | null {
+  const remote = isRemoteWindow();
+  const view = getViewWorkspaceId();
+  const delivering = remote
+    ? []
+    : items.filter(
+        (item) =>
+          item.standing.kind === "to-type" &&
+          item.standing.delivery !== undefined &&
+          item.remoteHost === undefined
+      );
+  const watched = [
+    ...new Set(
+      delivering.map((item) => terminalKey(item.reference.projectId, item.reference.terminalId))
+    ),
+  ]
+    .sort()
+    .join("\n");
+  const here = delivering
+    .filter((item) => item.reference.projectId === view)
+    .map((item) => item.reference.terminalId);
+  const draftsHere = useTerminalInputStore((state) =>
+    here.filter((id) => hasDraftText(state.draftInputs, id)).join("\u0000")
+  );
+  // This view's own reading of its panels' agents moves first: each change looks again at once,
+  // though only the terminals' record is taken at its word.
+  const agentsHere = usePanelStore((state) =>
+    here
+      .map((id) => {
+        const panel = state.panelsById[id];
+        return panel === undefined || !isPtyPanel(panel)
+          ? ""
+          : `${id}:${panel.agentState ?? ""}:${panel.waitingReason ?? ""}`;
+      })
+      .join("\u0000")
+  );
+  const [seen, setSeen] = useState<{
+    key: string;
+    agents: ReadonlyMap<string, SeenAgent>;
+  } | null>(null);
+  const seenKey = `${opening}\n${watched}`;
+
+  // Asks the running look for another as soon as it can: at once when none is out, else once it lands.
+  const lookAgain = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!active || watched === "") return;
+    const keys = new Set(watched.split("\n"));
+    const key = `${opening}\n${watched}`;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let out = false;
+    let again = false;
+    // One look at a time, so an older answer never lands after a newer one, and each one lands.
+    const look = () => {
+      clearTimeout(timer);
+      out = true;
+      again = false;
+      const settle = (agents: ReadonlyMap<string, SeenAgent>) => {
+        if (!live) return;
+        out = false;
+        setSeen({ key, agents });
+        if (again) look();
+        else timer = setTimeout(look, REACH_RECHECK_MS);
+      };
+      agentsOf(keys).then(settle, () => settle(NOTHING_SEEN));
+    };
+    lookAgain.current = () => {
+      if (out) again = true;
+      else look();
+    };
+    look();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      lookAgain.current = null;
+    };
+  }, [active, opening, watched]);
+
+  // A burst of changes asks for one look after the one out, never a look each.
+  const agentsLookedAt = useRef(agentsHere);
+  useEffect(() => {
+    if (agentsLookedAt.current === agentsHere) return;
+    agentsLookedAt.current = agentsHere;
+    lookAgain.current?.();
+  }, [agentsHere]);
+
+  const drafts = new Set(draftsHere === "" ? [] : draftsHere.split("\u0000"));
+  // Only what this opening looked at, for the terminals it still watches.
+  const agents = active && seen !== null && seen.key === seenKey ? seen.agents : NOTHING_SEEN;
+  return (item) => {
+    if (remote || item.remoteHost !== undefined) return null;
+    const { projectId, terminalId } = item.reference;
+    const agent = agents.get(terminalKey(projectId, terminalId));
+    if (agent === undefined) return null;
+    return { ...agent, draft: projectId === view && drafts.has(terminalId) };
+  };
+}
+
 function ListSkeleton() {
   // The shape of what loads: a group's bar, then rows with their lead column and two lines.
   return (
@@ -690,6 +830,7 @@ function StandingGlyph({
 function DescribedAction({
   description,
   ref,
+  "aria-describedby": describedBy,
   ...props
 }: ButtonProps & { description: string; ref?: Ref<HTMLButtonElement> }) {
   const descriptionId = useId();
@@ -697,7 +838,14 @@ function DescribedAction({
     <>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button ref={ref} {...props} aria-describedby={descriptionId} />
+          <Button
+            ref={ref}
+            {...props}
+            // What it does, after anything the bar says it answers to (#18032).
+            aria-describedby={
+              describedBy === undefined ? descriptionId : `${describedBy} ${descriptionId}`
+            }
+          />
         </TooltipTrigger>
         <TooltipContent>{description}</TooltipContent>
       </Tooltip>
@@ -721,6 +869,7 @@ function InboxRow({
   onSelect,
   onAnswer,
   nowMs,
+  delivery,
 }: {
   item: DecisionQuestionListItem;
   rowKey: string;
@@ -735,12 +884,17 @@ function InboxRow({
   onSelect: () => void;
   onAnswer: () => void;
   nowMs: number | null;
+  /** What waits to be typed in, and on what, while it's being delivered (#18032). */
+  delivery: DeliveryFacts | null;
 }) {
-  const note = inboxRowNote(item, nowMs);
-  const shownTime =
+  const note = delivery?.text ?? inboxRowNote(item, nowMs);
+  // Being delivered shows when what waits was recorded, as History shows when it closed.
+  const shownTime: { at: string; kind: "closed" | "asked" | DeliveryFacts["first"] } =
     inboxGroupOf(item, nowMs) === "history"
       ? closedTime(item)
-      : { at: item.askedAt, kind: "asked" as const };
+      : delivery !== null
+        ? { at: delivery.recordedAt, kind: delivery.first }
+        : { at: item.askedAt, kind: "asked" };
   const cleared = inboxGroupOf(item, nowMs) === "cleared";
   const deadline = deadlineMs(item.expiresAt);
   // Within a day: when, in this computer's time, and how long is left (#17943).
@@ -755,11 +909,13 @@ function InboxRow({
   const quiet = closed || cleared;
   // Past its deadline it no longer waits on the person, and the ear hears that, not an invitation to answer.
   const spoken =
-    inboxGroupOf(item, nowMs) === "awaiting"
-      ? note
-      : note === CLEARED_ELAPSED_NOTE
-        ? ELAPSED_NOTE
-        : standingText(item.standing, item);
+    delivery !== null
+      ? delivery.text
+      : inboxGroupOf(item, nowMs) === "awaiting"
+        ? note
+        : note === CLEARED_ELAPSED_NOTE
+          ? ELAPSED_NOTE
+          : standingText(item.standing, item);
   return (
     <li>
       <button
@@ -808,7 +964,11 @@ function InboxRow({
             {/* History sorts by when a question closed, so it shows that time (#18025). */}
             <span className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums">
               <span className="sr-only">
-                {shownTime.kind === "closed" ? "Closed, " : "Asked, "}
+                {shownTime.kind === "closed"
+                  ? "Closed, "
+                  : shownTime.kind === "asked"
+                    ? "Asked, "
+                    : `${recordedLabel(shownTime.kind)}, `}
               </span>
               <TimeAgo timestamp={shownTime.at} />
             </span>
@@ -836,7 +996,17 @@ function InboxRow({
                   <span className="truncate">{expiry}</span>
                 </span>
               )}
-              {note !== null && !closed && <span className="min-w-0 truncate">{note}</span>}
+              {note !== null && !closed && (
+                // What holds a delivery is the row's news: it wraps rather than lose its reason.
+                <span
+                  className={cn(
+                    "min-w-0",
+                    delivery !== null ? "line-clamp-2 [text-wrap:pretty]" : "truncate"
+                  )}
+                >
+                  {note}
+                </span>
+              )}
               {asker !== null && (
                 <span className="min-w-0 truncate" data-testid="decisions-inbox-row-asker">
                   {asker.row}
@@ -891,6 +1061,7 @@ function InboxList({
   onSelect,
   onAnswer,
   nowMs,
+  deliveryOf,
 }: {
   listRef: RefObject<HTMLDivElement | null>;
   /** Above the groups: what the list says when it has nothing, or that nothing waits (#18022). */
@@ -908,6 +1079,7 @@ function InboxList({
   /** Show this row's question now and take the keyboard into its answer. */
   onAnswer: (key: string) => void;
   nowMs: number | null;
+  deliveryOf: (item: DecisionQuestionListItem) => DeliveryFacts | null;
 }) {
   const labelId = useId();
   const hintId = useId();
@@ -979,6 +1151,7 @@ function InboxList({
           onAnswer(key);
         }}
         nowMs={nowMs}
+        delivery={deliveryOf(item)}
       />
     );
   };
@@ -1262,6 +1435,8 @@ export function DecisionsInboxDialog() {
   // shown, and otherwise once the list holds a question from outside the window's project.
   const clearNamesReach =
     showScope || (shown ?? []).some((item) => !inWindowProject(item, windowProject));
+  const paneOf = useDeliveryPanes(ordered, active, request.seq);
+  const deliveryOf = (item: DecisionQuestionListItem) => deliveryFacts(item, paneOf(item));
 
   const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
@@ -1429,6 +1604,12 @@ export function DecisionsInboxDialog() {
     }
   }, [supersededToken, attentionScope, clearOutcome]);
   const hostAttention = useHostAttention(selected, active);
+  const selectedDelivery = selected === null ? null : deliveryOf(selected);
+  // A question waiting to be typed in whose machine didn't say what waits still says that much.
+  const deliveryLine =
+    selectedDelivery?.text ??
+    (selected?.standing.kind === "to-type" ? standingText(selected.standing) : null);
+  const deliveryLineId = useId();
   const questionHeadingId = useId();
   // `reached` once its question has been the one shown, so a later choice of another abandons it.
   const pendingFocus = useRef<{
@@ -2168,6 +2349,7 @@ export function DecisionsInboxDialog() {
                     }
                   }}
                   onAnswer={(key) => handOff(key, "answer")}
+                  deliveryOf={deliveryOf}
                 />
               )}
             </div>
@@ -2279,26 +2461,57 @@ export function DecisionsInboxDialog() {
                       >
                         Question {aliasLabel(selected.alias)}
                       </h3>
-                      {/* The pane that asked and where, as the Decisions app's bar names it; who asked heads the question. */}
-                      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-                        <span
-                          className="min-w-0 truncate"
-                          data-testid="decisions-inbox-detail-origin"
-                        >
-                          <FactRun facts={headerFacts(partsOf(selected))} />
-                        </span>
-                        <span className="shrink-0 font-mono text-2xs tabular-nums">
-                          {aliasLabel(selected.alias)}
-                        </span>
-                      </p>
+                      {/* A basis, so the buttons wrap below a long delivery line before they squeeze it. */}
+                      <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1">
+                        {/* The pane that asked and where, as the Decisions app's bar names it; who asked heads the question. */}
+                        <p className="flex min-w-0 items-center gap-2 text-xs text-text-secondary">
+                          <span
+                            className="min-w-0 truncate"
+                            data-testid="decisions-inbox-detail-origin"
+                          >
+                            <FactRun facts={headerFacts(partsOf(selected))} />
+                          </span>
+                          <span className="shrink-0 font-mono text-2xs tabular-nums">
+                            {aliasLabel(selected.alias)}
+                          </span>
+                        </p>
+                        {/* What holds its delivery (#18032), beside the way to the terminal that can clear it. */}
+                        {deliveryLine !== null && (
+                          <p
+                            id={deliveryLineId}
+                            className="text-xs text-text-primary [text-wrap:pretty]"
+                            data-testid="decisions-inbox-delivery"
+                          >
+                            <FactRun
+                              facts={[
+                                deliveryLine,
+                                ...(selectedDelivery !== null
+                                  ? [
+                                      <span key="recorded" className="text-text-secondary">
+                                        <TimeAgo
+                                          timestamp={selectedDelivery.recordedAt}
+                                          prefix={`${recordedLabel(selectedDelivery.first)} `}
+                                        />
+                                      </span>,
+                                    ]
+                                  : []),
+                              ]}
+                            />
+                          </p>
+                        )}
+                      </div>
                       {/* Ghost buttons pad their ink; pulled out by that pad so the text ends where the body does. */}
                       <div className="-mr-2 flex shrink-0 items-center gap-1">
                         {reach !== null && (
                           <DescribedAction
                             description={GO_TO_TERMINAL_TEXT}
-                            variant="ghost"
+                            // Steps up while going there is what lets delivery go on.
+                            variant={selectedDelivery?.clearable === true ? "outline" : "ghost"}
                             size="xs"
                             onClick={goToTerminal}
+                            aria-describedby={
+                              selectedDelivery?.clearable === true ? deliveryLineId : undefined
+                            }
                             data-testid="decisions-inbox-go-to-terminal"
                           >
                             Go to terminal
