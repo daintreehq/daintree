@@ -636,6 +636,67 @@ function awayHosts(groups: readonly InboxGroup[], hostsAway: readonly string[]):
   return [...names];
 }
 
+/** Which questions the inbox lists (#18051): every project's, or only the window's own. */
+export type InboxScope = "all" | "project";
+
+/**
+ * Whether the question was asked in the window's own project: one of this
+ * computer's, from the project the window shows. `windowProjectId` is null in
+ * a Remote Host window, whose projects are another computer's whatever their
+ * ids, so nothing listed there is the window's own.
+ */
+export function inWindowProject(
+  item: Pick<DecisionQuestionListItem, "reference" | "remoteHost">,
+  windowProjectId: string | null
+): boolean {
+  return (
+    windowProjectId !== null &&
+    item.remoteHost === undefined &&
+    item.reference.projectId === windowProjectId
+  );
+}
+
+/**
+ * Whether the inbox offers to narrow to the window's project (#18051): only
+ * while it lists both that project's questions and another's, so the narrowed
+ * list is never empty and never the whole list again.
+ */
+export function scopeOffered(
+  questions: readonly DecisionQuestionListItem[],
+  windowProjectId: string | null
+): boolean {
+  let own = false;
+  let other = false;
+  for (const item of questions) {
+    if (inWindowProject(item, windowProjectId)) own = true;
+    else other = true;
+    if (own && other) return true;
+  }
+  return false;
+}
+
+/** The questions the scope lists, in the list's order. */
+export function scopedQuestions(
+  questions: readonly DecisionQuestionListItem[],
+  scope: InboxScope,
+  windowProjectId: string | null
+): readonly DecisionQuestionListItem[] {
+  return scope === "project"
+    ? questions.filter((item) => inWindowProject(item, windowProjectId))
+    : questions;
+}
+
+/**
+ * What Clear Needs you is called (#18051): it clears what the list shows, so
+ * it says so whenever that is more than the window's own project, or the list
+ * is narrowed to it. `reachesOthers` is whether the list shown holds another
+ * project's question.
+ */
+export function clearAllText(scope: InboxScope, reachesOthers: boolean): string {
+  if (scope === "project") return "Clear Needs you in this project";
+  return reachesOthers ? "Clear Needs you in all projects" : "Clear Needs you";
+}
+
 /**
  * The quiet line at the top of the list while Needs you is empty (#18022):
  * that nothing waits on the person, only as far as the list can say. Not
@@ -643,19 +704,27 @@ function awayHosts(groups: readonly InboxGroup[], hostsAway: readonly string[]):
  * or a row's), it speaks for the questions shown and says what it can't
  * vouch for. Null while Needs you has a question, seen ones included, before
  * Decisions' status is read, and while its store can't be read at all.
+ * Narrowed to the window's project (#18051), it speaks for that project
+ * alone, which no Remote Host's questions are part of.
  */
 export function waitingText(
   groups: readonly InboxGroup[],
   reach: InboxReach,
-  hostsAway: readonly string[] = []
+  hostsAway: readonly string[] = [],
+  scope: InboxScope = "all"
 ): string | null {
   if (reach === "pending" || reach === "unreadable") return null;
   if (groups.some((group) => group.id === "needs-you")) return null;
-  const away = awayHosts(groups, hostsAway);
-  if (reach === "connected" && away.length === 0) return "No questions waiting on you";
+  const narrowed = scope === "project";
+  const away = narrowed ? [] : awayHosts(groups, hostsAway);
+  if (reach === "connected" && away.length === 0) {
+    return narrowed ? "No questions in this project waiting on you" : "No questions waiting on you";
+  }
   const lead =
     groups.length === 0
-      ? "No questions on this computer"
+      ? narrowed
+        ? "No questions in this project"
+        : "No questions on this computer"
       : "None of the questions here wait on you";
   const reasons = [
     // Not connected: the connection notice above says why, and what waits for it.
@@ -708,7 +777,8 @@ export function askedOnHost(item: DecisionQuestionListItem, hostId: string): boo
  * The question the inbox shows: the one chosen while it is still listed; for
  * one the person picked that went, the one that took its place; else the
  * first of the pane that opened the inbox, on the view's own machine
- * (`viewHostId`), in any group; else the first that still needs something
+ * (`viewHostId`), in any group; else the first of the window's own project
+ * that needs the person (#18051); else the first that still needs something
  * (#18022). Null when nothing does: a Cleared or History question opens only
  * when it's picked.
  */
@@ -716,7 +786,8 @@ export function resolveSelection(
   groups: readonly InboxGroup[],
   chosen: InboxChoice | null,
   openerTerminalId: string | null,
-  viewHostId: string = LOCAL_HOST_ID
+  viewHostId: string = LOCAL_HOST_ID,
+  windowProjectId: string | null = null
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
@@ -732,6 +803,10 @@ export function resolveSelection(
     );
     if (own !== undefined) return own;
   }
+  const waitingHere = groups
+    .find((group) => group.id === "needs-you")
+    ?.items.find((item) => inWindowProject(item, windowProjectId));
+  if (waitingHere !== undefined) return waitingHere;
   return groups.find((group) => AUTO_OPEN.has(group.id))?.items[0] ?? null;
 }
 
