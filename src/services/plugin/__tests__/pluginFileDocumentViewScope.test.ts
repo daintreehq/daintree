@@ -61,9 +61,9 @@ describe("scopeFileDocumentToView (#17903)", () => {
     // The old view's formatter finishes on the text it read.
     oldView.document.setDraft("a formatted", { baseRevision: REV_A });
     oldView.document.setConflict(true);
-    await expect(oldView.document.save("a formatted", { expectedRevision: REV_A })).resolves.toEqual(
-      { status: "refused", reason: "unavailable" }
-    );
+    await expect(
+      oldView.document.save("a formatted", { expectedRevision: REV_A })
+    ).resolves.toEqual({ status: "refused", reason: "unavailable" });
     expect(newView.document.getDraft()).toBe("b edited");
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
       draftText: "b edited",

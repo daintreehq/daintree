@@ -290,7 +290,10 @@ describe("built-in panel views", () => {
     setDraft.mockClear();
     crashed.setDraft("formatted late", { baseRevision: "rev-a" });
     crashed.setConflict(true);
-    await expect(crashed.save("formatted late", { expectedRevision: "rev-a" })).resolves.toEqual({ status: "refused", reason: "unavailable" });
+    await expect(crashed.save("formatted late", { expectedRevision: "rev-a" })).resolves.toEqual({
+      status: "refused",
+      reason: "unavailable",
+    });
     expect(setDraft).not.toHaveBeenCalled();
     expect(setConflict).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
