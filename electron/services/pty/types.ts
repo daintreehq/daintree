@@ -72,6 +72,12 @@ export interface TerminalPublicState {
   waitingReason?: WaitingReason;
   lastStateChange?: number;
   /**
+   * An agent run started in this PTY and hasn't yet been observed waiting at
+   * its prompt or a question (#18014): what it shows may be a startup screen
+   * such as a trust prompt, not a turn. Absent once that wait is published.
+   */
+  promptUnseen?: true;
+  /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.
    */

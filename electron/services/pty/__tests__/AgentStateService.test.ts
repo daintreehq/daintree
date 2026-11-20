@@ -517,6 +517,83 @@ describe("AgentStateService", () => {
     });
   });
 
+  describe("a run's first prompt (#18014)", () => {
+    const DECISION_GATE = { acceptWorking: true, acceptQuestion: true };
+
+    function starting() {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "idle",
+        detectedAgentId: "claude",
+        hasPty: true,
+        promptUnseen: true,
+      } as Partial<TerminalInfo>);
+      const gateAtEvent: Array<ReturnType<typeof evaluateWakeGate>> = [];
+      events.on("agent:state-changed", () =>
+        gateAtEvent.push(evaluateWakeGate(terminal, DECISION_GATE))
+      );
+      return { service, terminal, gateAtEvent };
+    }
+
+    it("holds its startup, and admits the line the moment it is first published at its prompt", () => {
+      const { service, terminal, gateAtEvent } = starting();
+
+      service.updateAgentState(terminal, { type: "busy" });
+      expect(terminal.promptUnseen).toBe(true);
+      service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, "prompt");
+
+      expect(terminal.promptUnseen).toBeUndefined();
+      // What a gate reading the record at each announcement saw.
+      expect(gateAtEvent).toEqual([{ kind: "hold", reason: "working" }, { kind: "ready" }]);
+      // Its next turn is a turn: a CLI that queues input takes the line mid-turn again.
+      service.updateAgentState(terminal, { type: "input" }, "input", 1);
+      expect(evaluateWakeGate(terminal, DECISION_GATE)).toEqual({ kind: "ready" });
+    });
+
+    it("counts a question asked in prose as its prompt", () => {
+      const { service, terminal } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, "question");
+      expect(terminal.promptUnseen).toBeUndefined();
+    });
+
+    it.each([
+      ["a startup selector", "approval"],
+      ["an error", "error"],
+      ["no classified reason", undefined],
+    ] as const)("still awaits its prompt after settling at %s", (_label, reason) => {
+      const { service, terminal } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, reason);
+
+      expect(terminal.promptUnseen).toBe(true);
+      // Answered, the selector gives way to more startup, never to a turn.
+      service.updateAgentState(terminal, { type: "input" }, "input", 1);
+      expect(evaluateWakeGate(terminal, DECISION_GATE)).toEqual({
+        kind: "hold",
+        reason: "working",
+      });
+    });
+
+    it("takes a selector re-read as its prompt, without the agent going busy", () => {
+      const { service, terminal, gateAtEvent } = starting();
+      service.updateAgentState(terminal, { type: "busy" });
+      service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, "approval");
+
+      service.updateWaitingReason(terminal, "prompt", Date.now() + 1_000);
+
+      expect(terminal.promptUnseen).toBeUndefined();
+      expect(gateAtEvent.at(-1)).toEqual({ kind: "ready" });
+    });
+
+    it("awaits the prompt again for a run that respawns in the same PTY", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "exited" });
+      service.updateAgentState(terminal, { type: "respawn" });
+      expect(terminal.promptUnseen).toBe(true);
+    });
+  });
+
   // #5773 — Runtime-detected agents (plain terminals where a CLI was detected
   // via ProcessDetector) have no persisted launch-time agentId but should still
   // flow through the state machine and emit agent events, keyed by their

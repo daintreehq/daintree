@@ -110,6 +110,7 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
     agentState: terminal.agentState,
     waitingReason: terminal.waitingReason,
     lastStateChange: terminal.lastStateChange,
+    promptUnseen: terminal.promptUnseen,
     lastTypedInputAt: terminal.lastTypedInputAt,
     detectedAgentId: terminal.detectedAgentId,
     isExited: terminal.isExited,

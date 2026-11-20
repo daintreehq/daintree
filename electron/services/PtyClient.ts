@@ -184,6 +184,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
+  promptUnseen?: true;
   /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
   lastOutputChangeAt?: number;
   lastInputTime?: number;

@@ -96,8 +96,10 @@ export function handleAgentDetection(
       }
 
       terminal.detectedAgentId = detectedAgentId;
-      // Another agent took the pane: an update footer was its predecessor's (#17905).
+      // Another agent took the pane: an update footer was its predecessor's (#17905),
+      // and its prompt, once seen, was too (#18014).
       clearUpdateInstalled(terminal, Date.now());
+      if (previous !== undefined) terminal.promptUnseen = true;
       // A shell's mirror starts at the plain-shell ceiling; an agent gets the
       // agent size. Grown only on the identity change so a governor trim of
       // a live agent isn't undone by the next poll. Never shrunk on demotion.
@@ -119,6 +121,9 @@ export function handleAgentDetection(
           terminal.agentState = "idle";
           terminal.lastStateChange = Date.now();
         }
+        // Whatever the record already says: a title report can mark the shell
+        // working before detection catches up, and none of it is this run's prompt.
+        terminal.promptUnseen = true;
         terminal.analysisEnabled = true;
         host.startActivityMonitor();
       }

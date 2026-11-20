@@ -91,6 +91,18 @@ function createIdleClaudeMonitor(
   });
 }
 
+// An input row drawn high in the pane is read as one (#18014), so a pane left
+// at it may have its waiting reason re-read once; it must never report work.
+function expectNoWorkReported(onStateChange: ReturnType<typeof vi.fn<StateChange>>): void {
+  expect(onStateChange.mock.calls.length).toBeLessThanOrEqual(1);
+  for (const [, , state, metadata] of onStateChange.mock.calls) {
+    expect(state).toBe("idle");
+    expect(metadata).toEqual(
+      expect.objectContaining({ waitingReason: "prompt", rereadAt: expect.any(Number) })
+    );
+  }
+}
+
 function tickSeconds(
   monitor: ActivityMonitor,
   viewport: Viewport,
@@ -157,7 +169,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
       vi.advanceTimersByTime(10_000);
 
       expect(monitor.getState()).toBe("idle");
-      expect(onStateChange).not.toHaveBeenCalled();
+      expectNoWorkReported(onStateChange);
       monitor.dispose();
     }
   );
@@ -173,7 +185,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     }
 
     expect(monitor.getState()).toBe("idle");
-    expect(onStateChange).not.toHaveBeenCalled();
+    expectNoWorkReported(onStateChange);
     monitor.dispose();
   });
 
@@ -191,7 +203,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
       monitor.onData(fullRepaint(viewport.content));
       vi.advanceTimersByTime(10_000);
 
-      expect(onStateChange).not.toHaveBeenCalled();
+      expectNoWorkReported(onStateChange);
       monitor.dispose();
     }
   );
@@ -223,7 +235,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     }
 
     expect(monitor.getState()).toBe("idle");
-    expect(onStateChange).not.toHaveBeenCalled();
+    expectNoWorkReported(onStateChange);
     monitor.dispose();
   });
 

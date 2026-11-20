@@ -42,6 +42,7 @@ import { BootDetector } from "./pty/BootDetector.js";
 import {
   classifyWaitingReason,
   endsOnChoiceSelector,
+  endsOnDrawnSelector,
   WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
@@ -209,6 +210,41 @@ export interface ActivityStateMetadata {
    * it.
    */
   rereadAt?: number;
+}
+
+/** More rows than any pane has: a viewport read asks for this many and gets them all. */
+const WHOLE_VIEWPORT_ROWS = 1000;
+/** The most rows an input row's block runs to: its frame and the footer rows under it. */
+const DRAWN_COMPOSER_BLOCK_ROWS = 8;
+
+/** A selector's row: a highlighted one or a numbered or lettered option, as a footer row never is. */
+const SELECTOR_ROW = /^\s*(?:[❯›▶➜→●>]\s*\S|(?:\d+|[A-Za-z])[.)]\s)/;
+/** A row's box borders, drawn on both sides of a dialog's rows. */
+const BOX_EDGES = /^\s*[│┃║]|[│┃║]\s*$/g;
+
+/**
+ * Whether the last block drawn, however many blank rows lie under it, is the
+ * agent's empty input row in its frame with its footer (#18014). Only that
+ * block counts, so a frame left higher up, above a selector or later output,
+ * never does, and nor does one with a selector drawn under it.
+ */
+function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): boolean {
+  let end = viewport.length;
+  while (end > 0 && viewport[end - 1]!.trim() === "") end--;
+  let start = end;
+  while (
+    start > 0 &&
+    end - start < DRAWN_COMPOSER_BLOCK_ROWS &&
+    viewport[start - 1]!.trim() !== ""
+  ) {
+    start--;
+  }
+  const block = viewport.slice(start, end);
+  const inputRow = findEmptyComposerRow(block, patterns);
+  if (inputRow === undefined) return false;
+  return !block
+    .slice(inputRow + 2)
+    .some((row) => SELECTOR_ROW.test(stripAnsi(row).replace(BOX_EDGES, "")));
 }
 
 export class ActivityMonitor {
@@ -1024,21 +1060,50 @@ export class ActivityMonitor {
   }
 
   // The agent's empty input row bounds the error window when it is in view,
-  // so a footer drawn below it can't label the wait.
+  // so a footer drawn below it can't label the wait. A selector drawn short of
+  // the pane's bottom, as a freshly started agent's trust prompt is (#18014),
+  // leaves that window blank or holding only its key hint, so a reading that
+  // would admit a line is checked against everything drawn.
   private readWaitingScreen(
     lines: string[],
     isPromptDetected: boolean
-  ): { reason: WaitingReason; composerRow: number | undefined; read: string[]; rows: number } {
+  ): {
+    reason: WaitingReason;
+    composerRow: number | undefined;
+    read: string[];
+    rows: number;
+    /** Everything drawn ends on a selector, wherever it stops. */
+    drawnSelector: boolean;
+    /** Everything drawn ends on the agent's empty input row, wherever it stops. */
+    drawnComposer: boolean;
+  } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
-    const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
+    const patterns = this.promptDetectorConfig.promptPatterns;
+    const composerRow = findEmptyComposerRow(read, patterns);
+    const reason = classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId);
+    let drawnSelector = false;
+    let drawnComposer = false;
+    if (
+      (reason === "prompt" || reason === "question") &&
+      composerRow === undefined &&
+      this.getVisibleLines !== undefined
+    ) {
+      // Fewer rows than were asked for: that read was already the whole viewport.
+      const viewport =
+        read !== lines && read.length < wanted ? read : this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      drawnSelector = endsOnDrawnSelector(viewport, this.agentId);
+      drawnComposer = !drawnSelector && endsOnEmptyComposer(viewport, patterns);
+    }
     return {
-      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId),
+      reason: drawnSelector ? "approval" : reason,
       composerRow,
       read,
       rows,
+      drawnSelector,
+      drawnComposer,
     };
   }
 
@@ -1081,14 +1146,14 @@ export class ActivityMonitor {
       this.getCursorLine?.() ?? null,
       { allowHistoryScan: true }
     );
-    const { reason, composerRow, read, rows } = this.readWaitingScreen(
-      lines,
-      promptResult.isPrompt
-    );
+    const { reason, composerRow, read, rows, drawnSelector, drawnComposer } =
+      this.readWaitingScreen(lines, promptResult.isPrompt);
     if (reason === this.idleWaitingReason) return;
+    // A fresh pane draws its input row as high as a dialog it replaced, out of the bottom rows.
     if (
       composerRow === undefined &&
-      !(reason === "approval" && endsOnChoiceSelector(read, rows, this.agentId))
+      !drawnComposer &&
+      !(reason === "approval" && (drawnSelector || endsOnChoiceSelector(read, rows, this.agentId)))
     ) {
       return;
     }

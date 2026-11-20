@@ -10,6 +10,13 @@ export interface WakeGateSnapshot {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /**
+   * Its agent run started and hasn't been observed waiting at its prompt or a
+   * question since (#18014). Working then is its startup, drawing a trust
+   * prompt or another startup selector, not a turn that queues a line, and a
+   * prompt reading is the previous run's.
+   */
+  promptUnseen?: boolean;
   /** Last input that could have put text in the composer; see `lastTypedInputAt`. */
   lastTypedInputAt?: number;
   detectedAgentId?: string;
@@ -140,7 +147,8 @@ export function choiceDialogRefusalMessage(terminalId: string): string {
  *
  * Fails closed. Only an agent observed waiting at a `prompt` qualifies, and
  * only if nothing that could have typed into its composer arrived since it
- * settled there. `idle` is the state before an agent's first turn or after a
+ * settled there. Mid-turn, for a CLI that queues input, only once its run has
+ * been seen at its prompt: before that it is starting up. `idle` is the state before an agent's first turn or after a
  * kill, and may be a bare shell that would run the line as a command, so it
  * never qualifies. A missing reading is never read as safe.
  */
@@ -160,7 +168,11 @@ export function evaluateWakeGate(
     return { kind: "blocked", reason: "no-agent" };
   }
   if (snapshot.agentState === "working") {
-    if (options.acceptWorking !== true || snapshot.lastStateChange === undefined) {
+    if (
+      options.acceptWorking !== true ||
+      snapshot.lastStateChange === undefined ||
+      snapshot.promptUnseen === true
+    ) {
       return { kind: "hold", reason: "working" };
     }
     // Queued behind the turn: still never on top of something typed since
@@ -183,7 +195,13 @@ export function evaluateWakeGate(
   if (reason === "approval" || reason === "question" || reason === "error") {
     return { kind: "blocked", reason };
   }
-  if (reason !== "prompt" || snapshot.lastStateChange === undefined) {
+  // A prompt read before this run began is another run's: an agent that took
+  // over the PTY keeps its predecessor's reading until it settles itself.
+  if (
+    reason !== "prompt" ||
+    snapshot.lastStateChange === undefined ||
+    snapshot.promptUnseen === true
+  ) {
     return { kind: "blocked", reason: "not-at-prompt" };
   }
   // Only a later settle clears this. Time alone never does: a draft left in

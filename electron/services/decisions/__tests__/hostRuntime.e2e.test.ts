@@ -73,6 +73,8 @@ import { DecisionsService, type HostServedQuestions } from "../DecisionsService.
 import { DECISION_FOLLOWUP_START, DECISION_THREAD_PREFACE } from "../answerNotice.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
+import { DECISION_CLOSURE_PENDING_MS } from "../decisionWake.js";
+import { NOTIFY_COALESCE_MS } from "../../../../shared/types/terminalNotify.js";
 import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { hostLifetimeSettings } from "../hostRecord.js";
@@ -1167,13 +1169,16 @@ async function runDecisions(
   settings: DecisionsSettings,
   role: "owner" | "host",
   openStore: () => DaintreeLocalStore = () => new DaintreeLocalStore(sqlite),
-  checkIntervalMs?: number
+  checkIntervalMs?: number,
+  /** The panes as this run finds them before it starts, a restart's restored ones. */
+  restore?: (terminals: HostTerminals) => void
 ) {
   /** Panes with a draft in their composer: nothing is typed over one. */
   const drafts = new Set<string>();
   const terminals = new HostTerminals();
   terminals.add("pane-1");
   terminals.add("pane-2");
+  restore?.(terminals);
   const bearers = new Map([
     ["token-pane-1", { paneId: "pane-1", principal: "principal-1", workspaceId: "project-1" }],
     ["token-pane-2", { paneId: "pane-2", principal: "principal-2", workspaceId: "project-1" }],
@@ -1263,7 +1268,28 @@ async function runDecisions(
       }
     }
   };
-  return { terminals, listener, service, turnEnds, hostLists, drafts };
+  /**
+   * The agent in `terminalId` is observed as `shown`, settled now, and the
+   * engine hears of it as it hears the pty-host announce a state change.
+   */
+  const paneShows = (terminalId: string, shown: Partial<NotifyTerminalInfo>) => {
+    const info = terminals.terminals.get(terminalId)!;
+    const previousState = info.agentState ?? "idle";
+    Object.assign(info, { lastStateChange: Date.now() }, shown);
+    for (const key of Object.keys(shown) as Array<keyof NotifyTerminalInfo>) {
+      if (shown[key] === undefined) delete info[key];
+    }
+    for (const listen of stateListeners) {
+      listen({
+        terminalId,
+        state: info.agentState!,
+        previousState,
+        timestamp: info.lastStateChange!,
+        waitingReason: info.waitingReason,
+      });
+    }
+  };
+  return { terminals, listener, service, turnEnds, paneShows, hostLists, drafts };
 }
 
 /** The owner computer's own Decisions connected to the fake relay, asking from its own panes. */
@@ -3088,5 +3114,82 @@ describe("Advice on an enrolled Remote Host, with its owner's computer asleep (#
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     expect(next.terminals.submitted).toHaveLength(1);
     expect(terminals.submitted).toHaveLength(1);
+  }, 90_000);
+
+  it("types a deadline that passed while the Host was shut down only once the resumed agent is past its trust prompt and at its prompt (#18014)", async () => {
+    const { relay, record, keys, listener, service } = await startHost(ADVICE);
+    const asked = await askAdvice(listener.port, "token-pane-2", "Which schema?", service);
+    const questionId = asked.question_id as string;
+    const deadline = asked.expires_at as string;
+    await publishedToRelay(relay, [questionId]);
+    await vi.waitFor(
+      async () => expect(await new DaintreeLocalStore(sqlite).hasPendingDelivery()).toBe(false),
+      { timeout: 15_000 }
+    );
+
+    // Shut down across the deadline.
+    await service.dispose();
+    clockPast(deadline);
+    relayExpires(relay, questionId, deadline);
+
+    // Started again, it restores the asking pane by resuming the same Claude session, which
+    // opens on its startup screen: the run is working, and hasn't been seen at its prompt.
+    const next = await runDecisions(
+      relay,
+      keys,
+      hostLifetimeSettings(record),
+      "host",
+      undefined,
+      250,
+      (terminals) =>
+        Object.assign(terminals.terminals.get("pane-2")!, {
+          agentState: "working",
+          waitingReason: undefined,
+          lastStateChange: Date.now(),
+          promptUnseen: true,
+        })
+    );
+    const pending = { delivery: "pending", disposition: "fallback-due" };
+    const closure = async () =>
+      (await readOnHost(next.service, "pane-2", questionId)).closureNotice;
+    await vi.waitFor(async () => expect(await closure()).toEqual(pending), { timeout: 20_000 });
+    // Each look outlasts the line's coalescing, after which the pane's wakes are attempted.
+    const untyped = async () => {
+      await new Promise((resolve) => setTimeout(resolve, NOTIFY_COALESCE_MS + 1_000));
+      expect(next.terminals.submitted).toEqual([]);
+      expect(await closure()).toEqual(pending);
+    };
+    await untyped();
+
+    // Its trust prompt settles as a selector on screen; nobody answers it past the closure's
+    // pending window, so the queued notice ends untyped and is offered again later.
+    next.paneShows("pane-2", { agentState: "waiting", waitingReason: "approval" });
+    await untyped();
+    vi.setSystemTime(Date.now() + DECISION_CLOSURE_PENDING_MS + 1_000);
+    next.paneShows("pane-2", { agentState: "waiting", waitingReason: "approval" });
+    await untyped();
+
+    // Someone confirms trust: the agent works through the rest of its startup.
+    next.paneShows("pane-2", { agentState: "working", waitingReason: undefined });
+    await untyped();
+
+    // It reaches its prompt: the notice is typed into that conversation, once.
+    next.paneShows("pane-2", {
+      agentState: "waiting",
+      waitingReason: "prompt",
+      promptUnseen: undefined,
+    });
+    await vi.waitFor(() => expect(next.terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    expect(next.terminals.submitted[0]!.id).toBe("pane-2");
+    expect(next.terminals.submitted[0]!.text).toContain("status: advisory-unanswered");
+    expect(next.terminals.submitted[0]!.text).toContain(`deadline: ${deadline}`);
+    await vi.waitFor(
+      async () =>
+        expect(await closure()).toEqual({ delivery: "delivered", disposition: "fallback-due" }),
+      { timeout: 15_000 }
+    );
+    next.turnEnds("pane-2");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(next.terminals.submitted).toHaveLength(1);
   }, 90_000);
 });

@@ -148,6 +148,8 @@ export interface NotifyTerminalInfo {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed at its prompt yet: starting up, not in a turn (#18014). */
+  promptUnseen?: true;
   lastTypedInputAt?: number;
   detectedAgentId?: string;
   launchAgentId?: string;
@@ -2848,6 +2850,7 @@ function gateDiagnostics(info: NotifyTerminalInfo): Record<string, unknown> {
     agentState: info.agentState,
     waitingReason: info.waitingReason,
     lastStateChange: info.lastStateChange,
+    promptUnseen: info.promptUnseen,
     lastTypedInputAt: info.lastTypedInputAt,
     detectedAgentId: info.detectedAgentId,
     hasPty: info.hasPty,

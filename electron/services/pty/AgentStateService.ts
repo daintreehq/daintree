@@ -118,6 +118,21 @@ function noteUsageLimitProgress(
   terminal.usageLimitObservedAt = undefined;
 }
 
+/**
+ * The run has been seen waiting at its prompt or a question (#18014), the
+ * readings a guarded line may be typed at, so its working from here on is a
+ * turn. Committed with the state, before the change is announced, so a send
+ * gate reading the record at the announcement sees both.
+ */
+function notePromptSeen(terminal: TerminalInfo): void {
+  if (
+    terminal.agentState === "waiting" &&
+    (terminal.waitingReason === "prompt" || terminal.waitingReason === "question")
+  ) {
+    delete terminal.promptUnseen;
+  }
+}
+
 // Backend-side identity used when routing agent-state events (who is this
 // event about?). Detection wins; during the boot window the launch hint is
 // used so a cold-launched agent's first state transitions carry a stable
@@ -508,6 +523,9 @@ export class AgentStateService {
     } else {
       terminal.waitingReason = undefined;
     }
+    // A respawn starts a run that has shown no prompt yet (#18014).
+    if (event.type === "respawn") terminal.promptUnseen = true;
+    else notePromptSeen(terminal);
 
     noteUsageLimitProgress(terminal, previousState, previousStateChange, newState);
 
@@ -572,6 +590,7 @@ export class AgentStateService {
 
     terminal.waitingReason = waitingReason;
     terminal.lastStateChange = observedAt;
+    notePromptSeen(terminal);
     events.emit("agent:state-changed", validated.data);
     this.emitTerminalActivity(terminal);
     return true;
