@@ -2,10 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import type { DecisionsPolicy, DecisionsStatus } from "@shared/types/decisions";
+import type { DecisionsStatus } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
-import { useDecisionsPolicy } from "../useDecisionsPolicy";
+import { DecisionsNotificationsSection } from "../DecisionsNotificationsSection";
+import type { UseDecisionsDevicesResult } from "../useDecisionsDevices";
+
+const dispatch = vi.hoisted(() => vi.fn());
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -20,15 +23,23 @@ function deferred<T>() {
 const setHoldPhonePushes = vi.fn<(enabled: boolean) => Promise<DecisionsStatus>>();
 const getStatus = vi.fn<() => Promise<DecisionsStatus>>();
 
+/** No devices read yet: nothing to say about phones. */
+const UNREAD: UseDecisionsDevicesResult = {
+  devices: null,
+  failure: null,
+  loading: false,
+  reload: () => {},
+};
+
 /** The tab's part: the status main last showed, an answer applied, a failure read again. */
 function Section({ initial, locked = false }: { initial: DecisionsStatus; locked?: boolean }) {
   const [status, setStatus] = useState(initial);
-  const policy = useDecisionsPolicy(true);
   return (
     <TooltipProvider>
-      <DecisionsQuestionsSection
-        policy={policy}
+      <DecisionsNotificationsSection
         status={status}
+        relayCheck={null}
+        devices={UNREAD}
         locked={locked}
         onChanged={(next) => {
           if (next) setStatus(next);
@@ -56,16 +67,22 @@ function resetButton(): HTMLButtonElement | null {
   return screen.queryByRole("button", { name: "Hold phone notifications again" });
 }
 
+function describedBy(element: HTMLElement): string {
+  return (element.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
 beforeEach(() => {
   setHoldPhonePushes.mockReset();
   getStatus.mockReset();
+  dispatch.mockReset();
   Object.defineProperty(window, "electron", {
     value: {
       decisions: {
         setHoldPhonePushes,
         getStatus,
-        // The policy read, which these tests leave unanswered.
-        getPolicy: () => new Promise<DecisionsPolicy>(() => {}),
       },
       events: { on: () => () => {} },
     },
@@ -83,10 +100,7 @@ describe("Decisions hold phone pushes switch (#17240)", () => {
     await renderSection({ state: "connected", consentedAt: 5 });
     expect(on()).toBe("true");
     expect(resetButton()).toBeNull();
-    const described = (holdSwitch().getAttribute("aria-describedby") ?? "")
-      .split(" ")
-      .map((id) => document.getElementById(id)?.textContent ?? "")
-      .join(" ");
+    const described = describedBy(holdSwitch());
     for (const promise of [
       "While desktop notifications are on",
       "tells your relay whether you're here",
@@ -175,6 +189,48 @@ describe("Decisions hold phone pushes switch (#17240)", () => {
     });
     expect(setHoldPhonePushes).toHaveBeenLastCalledWith(false);
     expect(screen.queryByText("Couldn't turn off holding phone notifications")).toBeNull();
+  });
+
+  it("says nothing is held while desktop notifications are off, keeping the choice but not taking a change (#18061)", async () => {
+    await renderSection({ state: "connected", desktopNotifications: false });
+    expect(on()).toBe("true");
+    expect(holdSwitch().disabled).toBe(true);
+    expect(describedBy(holdSwitch())).toContain(
+      "Desktop notifications are off, so Daintree isn't telling your relay you're here to hold your phone's notifications"
+    );
+    fireEvent.click(holdSwitch());
+    expect(setHoldPhonePushes).not.toHaveBeenCalled();
+    expect(document.getElementById("decisions-desktop-notifications")?.textContent).toContain(
+      "Off in Settings → Notifications"
+    );
+  });
+
+  it("takes changes, with no reason beside it, while desktop notifications are on (#18061)", async () => {
+    setHoldPhonePushes.mockResolvedValueOnce({
+      state: "connected",
+      holdPhonePushes: false,
+      revision: 1,
+    });
+    await renderSection({ state: "connected" });
+    expect(holdSwitch().disabled).toBe(false);
+    expect(describedBy(holdSwitch())).not.toContain("Desktop notifications are off");
+    await act(async () => {
+      fireEvent.click(holdSwitch());
+    });
+    expect(setHoldPhonePushes).toHaveBeenCalledExactlyOnceWith(false);
+    expect(document.getElementById("decisions-desktop-notifications")?.textContent).toContain(
+      "On in Settings → Notifications"
+    );
+  });
+
+  it("opens Settings → Notifications from the desktop notifications row (#18061)", async () => {
+    await renderSection({ state: "connected", desktopNotifications: false });
+    fireEvent.click(screen.getByRole("button", { name: "Open notification settings" }));
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
   });
 
   it("changes nothing while the Decisions switch is changing", async () => {

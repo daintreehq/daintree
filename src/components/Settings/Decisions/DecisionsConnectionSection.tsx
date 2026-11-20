@@ -7,7 +7,7 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SeverityMark } from "@/lib/statusSeverity";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import type { DecisionsRelayCheck, DecisionsStatus } from "@shared/types/decisions";
-import { useRelayCheck } from "./useRelayCheck";
+import type { UseRelayCheckResult } from "./useRelayCheck";
 import { useRelayIdentity } from "./useRelayIdentity";
 import {
   describeCompatibility,
@@ -180,10 +180,12 @@ function UnfinishedActions({
  * relay set up it also offers to deploy one (#16023); with one, in a local
  * window, to update it (#16201), checking it again once the update ends. It
  * offers to remove the relay from Cloudflare, the one set up here or one a
- * check just found (#16202).
+ * check just found (#16202). The tab owns the relay check, since
+ * Notifications reads what it saw (#18061).
  */
 export function DecisionsConnectionSection({
   status,
+  relay,
   locked = false,
   onChanged,
   onClose,
@@ -193,6 +195,8 @@ export function DecisionsConnectionSection({
   agentsOff = false,
 }: {
   status: DecisionsStatus;
+  /** The relay check this section runs and shows. */
+  relay: UseRelayCheckResult;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
   /**
@@ -223,7 +227,6 @@ export function DecisionsConnectionSection({
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
-  const relay = useRelayCheck();
   const identity = useRelayIdentity((next) => onChanged?.(next));
   const setup = useSetupCheck(status.relayOrigin);
   const checking = setup.run?.state === "running";

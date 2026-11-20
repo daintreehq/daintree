@@ -550,6 +550,81 @@ describe("DecisionsSettingsTab", () => {
     });
   });
 
+  it("groups the phone and desktop notification settings apart from Questions, from Connection's check and Devices' read (#18061)", async () => {
+    getStatus.mockResolvedValue({
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      agentStoppedPushes: true,
+      desktopNotifications: false,
+      revision: 1,
+    });
+    const versions = { protocolMin: 1, protocolMax: 1, workerVersion: "0.4.0" };
+    checkRelay.mockResolvedValue({
+      result: "claimed",
+      origin: ORIGIN,
+      compatibility: { relay: versions, daintree: versions, diverges: false },
+      advertisesAgentStoppedPushes: false,
+    });
+    listDevices.mockResolvedValue({
+      result: "listed",
+      devices: [
+        {
+          deviceId: "dev_pixel",
+          label: "Pixel 9",
+          role: "phone",
+          pairedAt: "2026-10-30T00:00:00.000Z",
+          lastSeenAt: null,
+          pushEnabled: false,
+        },
+      ],
+    });
+    await renderTab();
+    await screen.findByText("Pixel 9");
+
+    const notifications = document.getElementById("decisions-notifications")!;
+    const questions = document.getElementById("decisions-questions")!;
+    const holdSwitch = () =>
+      within(notifications).getByRole("switch", {
+        name: /Hold phone notifications/,
+      }) as HTMLButtonElement;
+    const stopped = within(notifications).getByRole("switch", {
+      name: /Notify my phone when an agent stops/,
+    });
+    expect(
+      within(questions).queryByRole("switch", { name: /Hold phone notifications/ })
+    ).toBeNull();
+    expect(
+      within(questions).queryByRole("switch", { name: /Notify my phone when an agent stops/ })
+    ).toBeNull();
+    expect(
+      within(notifications).getByRole("button", { name: "Open notification settings" })
+    ).toBeTruthy();
+    expect(holdSwitch().disabled).toBe(true);
+    // One read of the devices and one check of the relay, shared with Devices and Connection.
+    expect(listDevices).toHaveBeenCalledOnce();
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    const described = (stopped.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain(
+      "Your relay lists no paired phone or tablet with notifications turned on"
+    );
+    expect(described).toContain("Your relay didn't advertise support for them");
+
+    act(() =>
+      pushStatus({
+        state: "connected",
+        consentedAt: 1,
+        relayOrigin: ORIGIN,
+        agentStoppedPushes: true,
+        revision: 2,
+      })
+    );
+    expect(holdSwitch().disabled).toBe(false);
+  });
+
   it("closes Settings before it opens the inbox (#17231)", async () => {
     getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
     checkRelay.mockReturnValue(new Promise(() => {}));

@@ -923,6 +923,11 @@ const snapshotDeps: DecisionsSnapshotDeps = {
   watchPanes: watchSnapshotPanes,
 };
 
+/** Settings → Notifications' own switch: what lets a question show here, and so presence be reported. */
+function desktopNotificationsOn(): boolean {
+  return store.get("notificationSettings")?.enabled !== false;
+}
+
 /**
  * Whether the person's presence may be reported now (#17240): Decisions on in
  * this run, holding phone pushes on, and #17232's question notifications able
@@ -937,7 +942,7 @@ function presenceAllowed(): boolean {
       !shutDown &&
       settings.enabled &&
       settings.holdPhonePushes &&
-      store.get("notificationSettings")?.enabled !== false &&
+      desktopNotificationsOn() &&
       questionNotifier?.following === true &&
       Notification.isSupported()
     );
@@ -1069,9 +1074,14 @@ const agentStoppedDeps: DecisionsAgentStoppedDeps = {
   watchReportedStops: watchHostStops,
 };
 
-// Turning desktop notifications off ends presence at once, and on starts it.
+// Turning desktop notifications off ends presence at once, and on starts it;
+// Settings shows which (#18061). Every write pushes, since a value remembered
+// here would go stale when a configuration reload changes the store unheard.
 // This module loads only once Decisions is on, so vanilla Daintree never listens.
-onNotificationSettingsWritten(() => service?.presenceChanged());
+onNotificationSettingsWritten(() => {
+  service?.presenceChanged();
+  publishStatus();
+});
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
@@ -1174,6 +1184,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
     ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
     ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
+    ...(desktopNotificationsOn() ? {} : { desktopNotifications: false }),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(kitCurrent ? { recoveryKitCurrent: true } : {}),

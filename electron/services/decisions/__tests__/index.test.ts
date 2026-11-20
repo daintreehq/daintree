@@ -2498,6 +2498,29 @@ describe("Decisions entry", () => {
       expect(presence.allowed()).toBe(false);
     });
 
+    it("shows Settings whether desktop notifications are on, pushing with each write (#18061)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
+      // Whatever starting pushed has landed, so each push below is a write's.
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      await settle();
+
+      let pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).toMatchObject({ desktopNotifications: false });
+      expect((await getDecisionsStatus()).desktopNotifications).toBe(false);
+
+      pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("desktopNotifications");
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
+    });
+
     it("holds nothing for a lifetime whose question notifications can't follow its questions", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };

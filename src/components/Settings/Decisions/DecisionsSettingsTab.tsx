@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -8,6 +8,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { useDecisionsModel } from "./useDecisionsModel";
+import { useRelayCheck } from "./useRelayCheck";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
 import { DecisionsDevicesAndHosts } from "./DecisionsDevicesAndHosts";
@@ -19,6 +20,7 @@ import {
   useDecisionsAgentSupport,
 } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
+import { DecisionsNotificationsSection } from "./DecisionsNotificationsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsModelSection } from "./DecisionsModelSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
@@ -117,7 +119,16 @@ export function DecisionsSettingsTab({
   // One read for the sections it feeds, so one Retry recovers them all.
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
-  // One read of the relay's devices, for Devices and Remote Hosts and for Connection's facts.
+  // Connection's check of the relay (#18061), and one read of the relay's
+  // devices, for Devices and Remote Hosts and for Connection's facts; both
+  // shared with Notifications.
+  const relay = useRelayCheck();
+  // Off unmounts Connection: what it checked, or is checking, goes with it, as
+  // its own check did before the tab held it.
+  const forgetRelayCheck = useEffectEvent(() => relay.reset());
+  useEffect(() => {
+    if (!on) forgetRelayCheck();
+  }, [on]);
   const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
   const { supported } = useDecisionsAgentSupport();
   const installedRead = useCliAvailabilityStore((state) => state.hasRealData);
@@ -147,6 +158,7 @@ export function DecisionsSettingsTab({
     <Fragment key="setup">
       <DecisionsConnectionSection
         status={status}
+        relay={relay}
         locked={pending !== null}
         onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
         onClose={onClose}
@@ -173,6 +185,13 @@ export function DecisionsSettingsTab({
         locked={pending !== null}
         onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
         onClose={onClose}
+      />
+      <DecisionsNotificationsSection
+        status={status}
+        relayCheck={relay.check}
+        devices={devicesRead}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
       />
       <DecisionsPolicySection policy={policy} />
       <DecisionsModelSection model={model} />

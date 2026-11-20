@@ -9,8 +9,18 @@ import type {
 } from "@shared/types/decisions";
 import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
 import { DecisionsDisconnectDialog } from "../DecisionsDisconnectDialog";
+import { useRelayCheck } from "../useRelayCheck";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(
+  props: Omit<ComponentProps<typeof ConnectionSection>, "relay">
+) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const HOST = "decisions.example.workers.dev";
