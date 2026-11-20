@@ -58,8 +58,11 @@ import {
   agentName,
   askShownIn,
   attentionText,
+  CLEARED_ELAPSED_NOTE,
+  CLEARED_NOTE,
   clearText,
   connectionNotice,
+  ELAPSED_NOTE,
   emptyText,
   expiresSoon,
   inboxGroupOf,
@@ -324,13 +327,25 @@ const WarningGlyph = SEVERITY_GLYPH.warning;
  * Where the question stands, in the app's agent-state vocabulary: the waiting
  * ring with a question mark while it asks the person, the ring alone while an
  * answer waits to be typed in, the warning shape when delivery needs a person,
- * and the finished or ended ring once it is over.
+ * and the finished or ended ring once it is over. A question the person set
+ * aside is still an open ask, so it keeps its question mark, but not the
+ * amber that is kept for what waits on them.
  */
-function StandingGlyph({ standing }: { standing: DecisionQuestionStanding }) {
+function StandingGlyph({
+  standing,
+  cleared,
+}: {
+  standing: DecisionQuestionStanding;
+  cleared: boolean;
+}) {
   switch (standing.kind) {
     case "waiting":
     case "queued":
-      return <AskingCircle className={cn(STATE_GLYPH, "text-state-waiting")} />;
+      return (
+        <AskingCircle
+          className={cn(STATE_GLYPH, cleared ? "text-text-secondary" : "text-state-waiting")}
+        />
+      );
     case "to-type":
       return <HollowCircle className={cn(STATE_GLYPH, "text-text-secondary")} />;
     case "needs-attention":
@@ -388,6 +403,15 @@ function InboxRow({
   const stale = staleNote(item);
   const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
+  // Set aside, not over: the title steps down like History's, the question stays open.
+  const quiet = closed || cleared;
+  // Past its deadline it no longer waits on the person, and the ear hears that, not an invitation to answer.
+  const spoken =
+    inboxGroupOf(item, nowMs) === "awaiting"
+      ? note
+      : note === CLEARED_ELAPSED_NOTE
+        ? ELAPSED_NOTE
+        : standingText(item.standing, item);
   return (
     <li>
       <button
@@ -407,7 +431,7 @@ function InboxRow({
         {/* The leading column: where it stands, and whose agent asked. */}
         <span aria-hidden="true" className="flex h-5 w-10 shrink-0 items-center gap-2">
           <span className="flex size-4 items-center justify-center">
-            <StandingGlyph standing={item.standing} />
+            <StandingGlyph standing={item.standing} cleared={cleared} />
           </span>
           <span className="flex size-4 items-center justify-center">
             <AgentMark agentKind={item.agentKind} />
@@ -418,8 +442,8 @@ function InboxRow({
             <span
               className={cn(
                 "min-w-0 flex-1 text-sm leading-5 [text-wrap:pretty]",
-                // History is recognised, not triaged: one line of scent is enough.
-                closed ? "line-clamp-1 text-text-secondary" : "line-clamp-2 text-text-primary"
+                // History and Cleared are recognised, not triaged: one line of scent is enough.
+                quiet ? "line-clamp-1 text-text-secondary" : "line-clamp-2 text-text-primary"
               )}
               data-testid="decisions-inbox-row-line"
             >
@@ -443,7 +467,12 @@ function InboxRow({
               {expiry !== null && (
                 // A deadline inside a day: the one chip a waiting row wears, as on the phone.
                 <span className="flex min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-overlay-soft px-1.5 py-0.5 font-medium">
-                  <Clock className="size-3 shrink-0 text-status-warning" />
+                  <Clock
+                    className={cn(
+                      "size-3 shrink-0",
+                      cleared ? "text-text-secondary" : "text-status-warning"
+                    )}
+                  />
                   <span className="truncate">{expiry}</span>
                 </span>
               )}
@@ -453,8 +482,8 @@ function InboxRow({
           {/* A closed row's outcome is already read out with its where-line. */}
           {!(closed && note !== null) && (
             <span className="sr-only">
-              {inboxGroupOf(item, nowMs) === "awaiting" ? note : standingText(item.standing, item)}
-              {cleared && `, ${note?.toLowerCase() ?? "cleared on this computer"}`}
+              {spoken}
+              {cleared && `, ${CLEARED_NOTE.toLowerCase()}`}
               {expiry !== null && `, ${expiry.toLowerCase()}`}
             </span>
           )}

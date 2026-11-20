@@ -9,6 +9,8 @@ import type {
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
+  CLEARED_ELAPSED_NOTE,
+  CLEARED_NOTE,
   ELAPSED_NOTE,
   agentName,
   askShownIn,
@@ -323,12 +325,25 @@ describe("seen and cleared on this computer (#17895)", () => {
     expect(inboxGroupOf(marked("q2", false, true))).toBe("cleared");
   });
 
-  it("says on a cleared row that it was cleared, where an open one says nothing", () => {
-    expect(inboxRowNote(marked("q1", false, true))).not.toBeNull();
+  it("lets a cleared row's group heading say it was cleared, as Needs you's does for an open one", () => {
+    expect(inboxGroupOf(marked("q1", false, true))).toBe("cleared");
+    expect(inboxGroupOf(marked("q1", true, false))).toBe("needs-you");
+    expect(inboxRowNote(marked("q1", false, true))).toBeNull();
     expect(inboxRowNote(marked("q1", true, false))).toBeNull();
     expect(inboxRowNote(item("q1", { kind: "waiting", reason: "reply" }))).toBe(
       standingText({ kind: "waiting", reason: "reply" })
     );
+  });
+
+  it("still says what sets a cleared row apart: a reply the agent asked for, or a queued send", () => {
+    const inbox = { ask: null, seen: false, cleared: true };
+    const reply = item("q1", { kind: "waiting", reason: "reply" }, { inbox });
+    const queued = item("q2", { kind: "queued" }, { inbox });
+    expect(inboxGroupOf(reply)).toBe("cleared");
+    expect(inboxGroupOf(queued)).toBe("cleared");
+    expect(inboxRowNote(reply)).toBe(standingText({ kind: "waiting", reason: "reply" }));
+    expect(inboxRowNote(queued)).toBe(standingText({ kind: "queued" }));
+    for (const row of [reply, queued]) expect(inboxRowNote(row)).not.toBe(CLEARED_NOTE);
   });
 
   describe("seeableAsk", () => {
@@ -413,13 +428,21 @@ describe("seen and cleared on this computer (#17895)", () => {
       expect(inboxRowNote(elapsed, NOW)).toBe(ELAPSED_NOTE);
     });
 
-    it("keeps a cleared ask under Cleared past its deadline, and says it passed", () => {
-      const cleared = item("q1", OPEN, {
-        expiresAt: past,
-        inbox: { ask: null, seen: false, cleared: true },
-      });
+    it("keeps a cleared ask under Cleared past its deadline, and says only that it passed", () => {
+      const inbox = { ask: null, seen: false, cleared: true };
+      const cleared = item("q1", OPEN, { expiresAt: past, inbox });
       expect(inboxGroupOf(cleared, NOW)).toBe("cleared");
-      expect(inboxRowNote(cleared, NOW)).toMatch(/Cleared on this computer.*deadline passed/);
+      expect(inboxRowNote(cleared, NOW)).toBe(CLEARED_ELAPSED_NOTE);
+      expect(inboxRowNote(cleared, NOW)).not.toContain(CLEARED_NOTE);
+      // A queued send past it reads the same; before it, there is nothing to add.
+      const queued = item("q4", { kind: "queued" }, { expiresAt: past, inbox });
+      expect(inboxRowNote(queued, NOW)).toBe(CLEARED_ELAPSED_NOTE);
+      const upcoming = item("q2", OPEN, { expiresAt: ahead, inbox });
+      expect(inboxGroupOf(upcoming, NOW)).toBe("cleared");
+      expect(inboxRowNote(upcoming, NOW)).toBeNull();
+      // A reply asked for after an answer isn't bound by the deadline it was asked under.
+      const reply = item("q3", { kind: "waiting", reason: "reply" }, { expiresAt: past, inbox });
+      expect(inboxRowNote(reply, NOW)).toBe(standingText({ kind: "waiting", reason: "reply" }));
     });
 
     it("tells each way a question closed without an answer apart", () => {
