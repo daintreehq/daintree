@@ -1100,12 +1100,15 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
       expect(fixture.seen).toEqual([]);
     });
 
-    it("takes inline JSON and holds a session from PowerShell", async () => {
+    it("takes inline JSON from PowerShell", async () => {
       const inline = await run("powershell", `call fixture.echo --args '{\\"limit\\":5}'`);
       expect(inline.stderr).toBe("");
       expect(inline.status).toBe(0);
       expect(JSON.parse(inline.stdout)).toEqual({ limit: 5 });
+      expect(fixture.sessions.size).toBe(0);
+    });
 
+    it("holds a session across calls from PowerShell", async () => {
       const quoted = shim.replaceAll("'", "''");
       const script = [
         `$handle = & '${quoted}' session start`,

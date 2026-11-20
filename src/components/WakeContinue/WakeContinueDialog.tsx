@@ -3,6 +3,7 @@ import type { WorktreeSnapshot } from "@shared/types";
 import { GitBranch } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Textarea } from "@/components/ui/textarea";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -374,9 +375,17 @@ function WakeContinueDialogBody({
                             {title}
                             {/* A panel title can name another agent, or none: say whose session it is. */}
                             {agentName && !title.includes(agentName) && (
-                              <span className="text-text-secondary"> · {agentName}</span>
+                              <span className="text-text-secondary">
+                                {" "}
+                                <FactSeparator /> {agentName}
+                              </span>
                             )}
-                            {docked && <span className="text-text-secondary"> · in dock</span>}
+                            {docked && (
+                              <span className="text-text-secondary">
+                                {" "}
+                                <FactSeparator /> in dock
+                              </span>
+                            )}
                           </span>
                           {label && (
                             <span

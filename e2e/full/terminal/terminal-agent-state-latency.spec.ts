@@ -489,10 +489,18 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
       const blurAt = Date.now();
       await setWindowFocus(false);
       // On battery the policy is already `saving` and no event marks the blur.
+      // The window manager can restore focus after the first blur on CI.
       await expect
-        .poll(() => window.evaluate(() => document.body.dataset.motionRate ?? "unset"), {
-          timeout: T_SHORT,
-        })
+        .poll(
+          async () => {
+            if (await isFocused()) {
+              await setWindowFocus(false);
+              return "focused";
+            }
+            return window.evaluate(() => document.body.dataset.motionRate ?? "unset");
+          },
+          { timeout: T_LONG }
+        )
         .toBe("reduced");
       expect(await isFocused()).toBe(false);
       report("blurred.policy-events", (await observed(window, "power", blurAt)).length);

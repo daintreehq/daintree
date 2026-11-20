@@ -345,14 +345,20 @@ test.describe.serial("Core: Worktree Cards", () => {
         await actionsBtn.click();
       });
 
-      await test.step("Hover Launch submenu and click Terminal", async () => {
-        const launchTrigger = window.getByRole("menuitem", { name: "Launch" });
-        await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
-        await launchTrigger.hover();
-
+      await test.step("Hover Launch and activate Terminal", async () => {
+        const launchTrigger = window.getByRole("menuitem", { name: "Launch", exact: true });
         const openTerminal = window.getByRole("menuitem", { name: "Terminal", exact: true });
-        await expect(openTerminal).toBeVisible({ timeout: T_SHORT });
-        await openTerminal.click();
+        await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
+        await expect(async () => {
+          if (await openTerminal.isVisible()) return;
+          // Move within the trigger even if the pointer is already over its center.
+          await launchTrigger.hover({ position: { x: 4, y: 4 }, timeout: T_SHORT });
+          await launchTrigger.hover({ timeout: T_SHORT });
+          await expect(openTerminal).toBeVisible({ timeout: T_SHORT });
+        }).toPass({ timeout: T_LONG });
+        // Keep the pointer on the trigger so Radix's submenu grace area is not
+        // crossed by Playwright moving straight to the item.
+        await openTerminal.press("Enter");
       });
 
       await test.step("Verify panel count increased by one", async () => {

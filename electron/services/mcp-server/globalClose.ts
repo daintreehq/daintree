@@ -1,6 +1,7 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { ActionError } from "../../../shared/types/actions.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 import type { GlobalCloseTarget } from "../assistants/GlobalWorkerSteer.js";
 import type { ViewlessApprovalDecision } from "../viewless/index.js";
 import {
@@ -88,9 +89,8 @@ export function globalCloseBatchQuestion(
   targets: ReadonlyArray<{ terminalId: string; target: GlobalCloseTarget }>,
   ownCount: number
 ): { subject: string; lines: string[] } {
-  const count = targets.length;
   return {
-    subject: count === 1 ? "1 agent panel" : `${count} agent panels`,
+    subject: pluralize(targets.length, "agent panel"),
     lines: [
       ...targets.map(({ terminalId, target }) => {
         const agent = agentName(target);
@@ -99,9 +99,7 @@ export function globalCloseBatchQuestion(
       "None of their input boxes holds anything typed.",
       ...(ownCount > 0
         ? [
-            ownCount === 1
-              ? "The call also closes up to 1 panel the assistant launched itself; declining closes nothing."
-              : `The call also closes up to ${ownCount} panels the assistant launched itself; declining closes nothing.`,
+            `The call also closes up to ${pluralize(ownCount, "panel")} the assistant launched itself; declining closes nothing.`,
           ]
         : []),
       TRASH_LINE,
