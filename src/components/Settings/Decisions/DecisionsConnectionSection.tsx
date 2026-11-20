@@ -209,8 +209,8 @@ export function DecisionsConnectionSection({
   /** What was observed about the rest of Decisions, shown under the status while connected. */
   facts?: ReactNode;
   /**
-   * Main's saved policy, as last read, switches on no agent for this
-   * computer's launches (#18057). False while it is unread or stale.
+   * Main's saved policy, as last read, switches on none of the agents Agents
+   * shows for this computer's launches (#18057). False before the first read.
    */
   agentsOff?: boolean;
 }) {
