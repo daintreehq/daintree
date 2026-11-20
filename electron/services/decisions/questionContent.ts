@@ -280,6 +280,9 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
   const placed: { seq: number; entry: DecisionThreadEntry }[] = [];
   for (const entry of parseAnswers(row.answers_json)) {
     const seq = entry.event_seq ?? 0;
+    // A question that never reached the relay (0.9.0) says so by its status;
+    // the notice its agent is typed is no entry of the thread.
+    if (entry.kind === "unpublished") continue;
     // Content-free notices: nothing to open, and never an answer.
     if (entry.kind === "expired" || entry.kind === "declined") {
       placed.push({

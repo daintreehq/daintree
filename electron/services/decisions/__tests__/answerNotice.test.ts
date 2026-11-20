@@ -34,6 +34,7 @@ import {
   type AnswerBlock,
   type DecisionBlock,
 } from "../answerNotice.js";
+import { ADVISORY_TIMEOUT_NOTICE_FIXTURE } from "@daintreehq/decisions-protocol/fixtures";
 import { LANE_WAKE_ID_PATTERN } from "../../mcp-server/terminalNotify.js";
 
 const Q1 = "0190f0aa11112222333344445555aaaa";
@@ -99,6 +100,7 @@ describe("parseAnswerNotice", () => {
       source: "human",
       onComputer: false,
       expired: false,
+      neverPublished: false,
       declined: false,
       correction: false,
       modelId: null,
@@ -727,6 +729,74 @@ describe("a person's decline (#17234)", () => {
     ],
   ])("refuses a decline with %s", (_label, text) => {
     expect(parseAnswerNotice(text)).toBeNull();
+  });
+});
+
+describe("a question that never reached the relay (0.9.0, #17939)", () => {
+  const unpublished = (fallbackDue?: boolean) =>
+    answer({ kind: "unpublished", source: "system", ...(fallbackDue ? { fallbackDue } : {}) });
+
+  it("reads the library's notice as the system's, answering nothing", () => {
+    const [block] = parsed(notice(unpublished()));
+    expect(block).toMatchObject({
+      questionId: Q1,
+      revision: 1,
+      injectionId: I1,
+      source: "system",
+      neverPublished: true,
+      expired: false,
+      declined: false,
+      choice: null,
+      comment: null,
+      images: [],
+    });
+  });
+
+  it("types it as never published and authorising nothing, in Daintree's words", () => {
+    const section = renderDecisionSection(parsed(notice(unpublished())));
+    const lines = section.split("\n");
+    const source = lines.indexOf("source: system");
+    expect(lines.slice(source, source + 3)).toEqual([
+      "source: system",
+      "status: never-published",
+      "authorised: no",
+    ]);
+    expect(lines[source + 3]).toMatch(/^note: /);
+    expect(lines[source + 3]).toMatch(/never reached the person/);
+    expect(lines[source + 3]).toMatch(/not authorised to continue the gated step/);
+    expect(unpublished()).not.toContain(lines[source + 3]);
+    expect(lines[source + 4]).toBe(DECISION_BLOCK_END);
+    expect(section).toContain(markerFor(I1));
+  });
+
+  it("reads it batched with another question's answer, and copies it without its marker", () => {
+    const blocks = parsed(notice(unpublished(), answer({ questionId: Q2, injectionId: I2 })));
+    expect(blocks.map((b) => [b.questionId, b.source, b.neverPublished])).toEqual([
+      [Q1, "system", true],
+      [Q2, "human", false],
+    ]);
+    const copied = renderCopiedAnswer(parsed(notice(unpublished())));
+    expect(copied).toContain("status: never-published\nauthorised: no\nnote:");
+    expect(copied).not.toContain("[decision-injection");
+  });
+
+  it.each([
+    // Its advisory form lets a stated plan go ahead, which this Daintree doesn't offer yet (#17940).
+    ["its advisory form", notice(unpublished(true))],
+    ["an authorisation", notice(unpublished().replace("authorised: no", "authorised: yes"))],
+    ["a person's", notice(unpublished().replace("source: system", "source: human"))],
+    ["a choice", notice(unpublished().replace("authorised: no", "authorised: no\nchoice: approve"))],
+  ])("refuses %s", (_label, text) => {
+    expect(parseAnswerNotice(text)).toBeNull();
+  });
+
+  it.each([
+    ["due", ADVISORY_TIMEOUT_NOTICE_FIXTURE.due],
+    ["withheld", ADVISORY_TIMEOUT_NOTICE_FIXTURE.withheld],
+  ])("refuses the library's advisory timeout notice (%s), alone or beside an answer", (_label, text) => {
+    expect(parseDecisionNotice(text)).toBeNull();
+    const advisoryBlock = text.slice(text.indexOf(BLOCK_START));
+    expect(parseAnswerNotice(notice(answer(), advisoryBlock))).toBeNull();
   });
 });
 
