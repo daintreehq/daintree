@@ -54,6 +54,7 @@ import type {
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
@@ -112,6 +113,13 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _payload: GetDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionContentResult> => ({
+      result: "not-found",
+    })
+  ),
+  getDecisionQuestionPaneByReference: vi.fn(
+    async (
+      _payload: GetDecisionQuestionByReferencePayload
+    ): Promise<DecisionQuestionPaneResult> => ({
       result: "not-found",
     })
   ),
@@ -350,6 +358,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     cancelDecisionQuestion: decisionsEntry.cancelDecisionQuestion,
     getDecisionQuestionImage: decisionsEntry.getDecisionQuestionImage,
     getDecisionQuestionContentByReference: decisionsEntry.getDecisionQuestionContentByReference,
+    getDecisionQuestionPaneByReference: decisionsEntry.getDecisionQuestionPaneByReference,
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
@@ -450,6 +459,10 @@ const getQuestionContentByReference = decisionsNamespace.ops.getQuestionContentB
   .handler as unknown as (
   payload: GetDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionContentResult>;
+const getQuestionPaneByReference = decisionsNamespace.ops.getQuestionPaneByReference
+  .handler as unknown as (
+  payload: GetDecisionQuestionByReferencePayload
+) => Promise<DecisionQuestionPaneResult>;
 const getQuestionImageByReference = decisionsNamespace.ops.getQuestionImageByReference
   .handler as unknown as (
   payload: GetDecisionQuestionImageByReferencePayload
@@ -648,6 +661,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_CANCEL_QUESTION,
   CHANNELS.DECISIONS_LIST_QUESTIONS,
   CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,
+  CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
@@ -703,6 +717,7 @@ describe("decisions IPC", () => {
     decisionsEntry.cancelDecisionQuestion.mockClear();
     decisionsEntry.getDecisionQuestionImage.mockClear();
     decisionsEntry.getDecisionQuestionContentByReference.mockClear();
+    decisionsEntry.getDecisionQuestionPaneByReference.mockClear();
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
@@ -902,6 +917,9 @@ describe("decisions IPC", () => {
         saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
 
         await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
           result: "off",
         });
         await expect(
@@ -1636,12 +1654,15 @@ describe("decisions IPC", () => {
         summaries: [{ questionId: QUESTION_ID, result: "read", line: "Ship it?" }],
       };
       const cancel: DecisionQuestionCancelResult = { result: "refused", reason: "answered" };
+      const pane: DecisionQuestionPaneResult = { result: "closed" };
       decisionsEntry.getDecisionQuestionContentByReference.mockResolvedValueOnce(content);
+      decisionsEntry.getDecisionQuestionPaneByReference.mockResolvedValueOnce(pane);
       decisionsEntry.getDecisionQuestionImageByReference.mockResolvedValueOnce(part);
       decisionsEntry.getDecisionQuestionSummariesByReference.mockResolvedValueOnce(summaries);
       decisionsEntry.cancelDecisionQuestionByReference.mockResolvedValueOnce(cancel);
 
       await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(content);
+      await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toBe(pane);
       await expect(getQuestionImageByReference(image)).resolves.toBe(part);
       await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toBe(
         summaries
@@ -1649,6 +1670,9 @@ describe("decisions IPC", () => {
       await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toBe(cancel);
 
       expect(decisionsEntry.getDecisionQuestionContentByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: REFERENCE,
+      });
+      expect(decisionsEntry.getDecisionQuestionPaneByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,
       });
       expect(decisionsEntry.getDecisionQuestionImageByReference).toHaveBeenCalledExactlyOnceWith(
@@ -1742,9 +1766,10 @@ describe("decisions IPC", () => {
     it("takes a whole reference and nothing else", () => {
       const content = decisionsNamespace.ops.getQuestionContentByReference.schema as SafeParse;
       const cancel = decisionsNamespace.ops.cancelQuestionByReference.schema as SafeParse;
+      const pane = decisionsNamespace.ops.getQuestionPaneByReference.schema as SafeParse;
       const image = decisionsNamespace.ops.getQuestionImageByReference.schema as SafeParse;
       const summaries = decisionsNamespace.ops.getQuestionSummariesByReference.schema as SafeParse;
-      for (const schema of [content, cancel]) {
+      for (const schema of [content, cancel, pane]) {
         expect(schema.safeParse({ reference: REFERENCE }).success).toBe(true);
         for (const bad of [
           {},

@@ -554,6 +554,7 @@ import {
   exportRecoveryKit,
   getDecisionQuestionContent,
   getDecisionQuestionContentByReference,
+  getDecisionQuestionPaneByReference,
   getDecisionQuestionImage,
   getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
@@ -2004,6 +2005,56 @@ describe("Decisions entry", () => {
         }
       });
 
+      it("reads the asking pane only on the machine that owns it, with terminal snapshots off (#18037)", async () => {
+        const own = { result: "closed" } as const;
+        const questionPane = vi.fn(async () => own);
+        const current = await running({ questionPane });
+        expect(terminalSnapshotsAllowed()).toBe(false);
+        let outcome: HostCallOutcome<unknown> = { ok: true, value: { result: "unreadable" } };
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toBe(own);
+          expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+            { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+            OWN.questionId,
+            expect.any(Function)
+          );
+
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "unreadable" }
+          );
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "pane", reference: ON_HOST }],
+          ]);
+          outcome = { ok: false, failure: "needs-update" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "needs-update" }
+          );
+          outcome = { ok: false, failure: "disconnected" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "host-not-connected" }
+          );
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).rejects.toThrow(
+            /outcome-unknown/
+          );
+          // A Host's read never falls back to this computer's panes.
+          expect(questionPane).toHaveBeenCalledOnce();
+
+          current.delivery = null;
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-running",
+          });
+        } finally {
+          withdraw();
+        }
+      });
+
       it("says the Host isn't connected when its link is down or went under the read, and fails on any other answer", async () => {
         await running(null);
         let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
@@ -2213,6 +2264,9 @@ describe("Decisions entry", () => {
         await expect(
           readHostServedQuestion({ read: "summaries", references: [OWN] })
         ).resolves.toEqual({ result: "off" });
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
         await expect(cancelHostServedQuestion(OWN)).resolves.toEqual({ result: "off" });
         expect(questionContent).not.toHaveBeenCalled();
         expect(questionSummaries).not.toHaveBeenCalled();
@@ -2304,6 +2358,21 @@ describe("Decisions entry", () => {
           expected,
         });
         expect(markHandled).toHaveBeenCalledExactlyOnceWith(OWN.questionId, expected, OWN);
+      });
+
+      it("reads its own asking pane for its owner while it runs as a Host (#18037)", async () => {
+        const questionPane = vi.fn(async () => ({ result: "closed" as const }));
+        await running({ questionPane });
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "closed",
+        });
+        expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+          { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+          OWN.questionId,
+          expect.any(Function)
+        );
       });
 
       it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {

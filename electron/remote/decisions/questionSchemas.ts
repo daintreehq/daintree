@@ -554,7 +554,11 @@ const QuestionPaneSchema = z
 /** What `QUESTION_PANE` answers (#18037). */
 export const HostQuestionPaneResultSchema = z.discriminatedUnion("result", [
   z
-    .object({ result: z.literal("read"), reference: QuestionReferenceSchema, pane: QuestionPaneSchema })
+    .object({
+      result: z.literal("read"),
+      reference: QuestionReferenceSchema,
+      pane: QuestionPaneSchema,
+    })
     .strict(),
   z.object({ result: z.literal("closed") }).strict(),
   z.object({ result: z.literal("reassigned") }).strict(),

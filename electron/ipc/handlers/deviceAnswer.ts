@@ -668,7 +668,9 @@ export const decisionsNamespace = defineIpcNamespace({
     getQuestionPaneByReference: opValidated(
       CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
       questionByReferenceSchema,
-      async (payload: GetDecisionQuestionByReferencePayload): Promise<DecisionQuestionPaneResult> => {
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionPaneResult> => {
         if (!decisionsOn()) return { result: "off" };
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };

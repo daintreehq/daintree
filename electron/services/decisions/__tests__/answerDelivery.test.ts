@@ -63,6 +63,7 @@ import type { AgentPromptWaitResult } from "../../viewless/agentPromptWait.js";
 import type { AgentSessionPaneRequest } from "../../viewless/viewlessAgentResume.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
+import type { PaneSnapshotPtyClient } from "../paneSnapshots.js";
 import {
   AnswerDelivery,
   DELIVERY_CHECK_INTERVAL_MS,
@@ -3533,6 +3534,85 @@ describe("AnswerDelivery question reads (#17097)", () => {
         { questionId: Q1, result: "not-found" },
       ]);
     }
+  });
+
+  describe("the asking pane (#18037)", () => {
+    /** The harness's pty client as a screen read takes it, counting how often it is asked for. */
+    function paneClient(h: ReturnType<typeof setup>) {
+      let taken = 0;
+      const client = {
+        getTerminalProjectId: (id: string) => h.client.terminals.get(id)?.projectId ?? null,
+        getTerminalAsync: (id: string, token?: string, options?: { strict?: boolean }) =>
+          h.client.getTerminalAsync(id, token, options),
+        getSerializedStateAsync: (id: string) => h.client.getSerializedStateAsync(id),
+        getLiveGeneration: (id: string) => h.client.getLiveGeneration(id),
+        isLiveGeneration: (id: string, generation: number) =>
+          h.client.isLiveGeneration(id, generation),
+      } as unknown as PaneSnapshotPtyClient;
+      return {
+        get: () => {
+          taken += 1;
+          return client;
+        },
+        taken: () => taken,
+      };
+    }
+
+    it("reads the run that asked, answered or not, by a reference naming this machine", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.screens.set(
+        PANE,
+        "Plan ready.\nexport API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123"
+      );
+      const pty = paneClient(h);
+
+      const read = await h.delivery.questionPane({ hostId: HOST, ...OWN }, Q1, pty.get);
+
+      expect(read).toMatchObject({
+        result: "read",
+        reference: { hostId: HOST, ...OWN, questionId: Q1 },
+        pane: { agentState: "waiting", waitingReason: "prompt" },
+      });
+      if (read.result !== "read") return;
+      expect(read.pane.lines[0]).toBe("Plan ready.");
+      expect(read.pane.lines.join("\n")).not.toContain("sk-ant-abcdefghijklmnopqrstuvwxyz0123");
+    });
+
+    it("finds nothing outside its scope, nor an imported question, and touches no pane for them", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      await answered(h.store, Q2, 2, "deny", { history_only: true });
+      const pty = paneClient(h);
+
+      for (const [scope, id] of [
+        [{ ...OWN, terminalId: "pane-2" }, Q1],
+        [{ ...OWN, projectId: "project-2" }, Q1],
+        [{ ...OWN, projectId: null }, Q1],
+        [{ ...OWN, hostId: "host_elsewhere" }, Q1],
+        [OWN, Q2],
+        [OWN, CRASHED],
+      ] as const) {
+        await expect(h.delivery.questionPane(scope, id, pty.get)).resolves.toEqual({
+          result: "not-found",
+        });
+      }
+      expect(pty.taken()).toBe(0);
+      expect(h.client.screenReads).toBe(0);
+    });
+
+    it("says closed once the pane holds another run", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.generations.set(PANE, 8);
+      h.client.terminals.set(PANE, { ...atPrompt(), launchGeneration: 8 });
+      h.client.screens.set(PANE, "the next run's screen");
+
+      await expect(h.delivery.questionPane(OWN, Q1, paneClient(h).get)).resolves.toEqual({
+        result: "closed",
+      });
+      expect(h.client.screenReads).toBe(0);
+    });
   });
 
   it("names each question asked for once, in order, and only the pane's own", async () => {

@@ -23,6 +23,7 @@ import type {
   DecisionQuestionImageResult,
   DecisionQuestionList,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   MarkDecisionQuestionsPayload,
@@ -335,6 +336,16 @@ export const decisionsClient = {
     reference: DecisionQuestionReference
   ): Promise<DecisionQuestionContentResult> =>
     window.electron.decisions.getQuestionContentByReference({ reference }),
+
+  /**
+   * The pane that asked a question, as it shows now (#18037), read on the
+   * machine that owns it. Its lines are terminal output: held in memory only,
+   * never logged or kept in a persisted store.
+   */
+  getQuestionPaneByReference: (
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionPaneResult> =>
+    window.electron.decisions.getQuestionPaneByReference({ reference }),
 
   /** One of a question's images, by its reference; held as `getQuestionImage`'s are. */
   getQuestionImageByReference: (

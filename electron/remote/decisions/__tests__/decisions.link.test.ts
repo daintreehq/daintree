@@ -1823,6 +1823,119 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     ]);
   });
 
+  describe("the asking pane (#18037)", () => {
+    const PANE_READ = {
+      agentState: "waiting",
+      waitingReason: "question",
+      paneTitle: "Claude: Pick a database",
+      lines: ["Which database?", "1. Postgres", "2. SQLite"],
+      observedAt: "2026-11-20T10:00:00.000Z",
+    };
+
+    it("is asked of the Host", () => {
+      expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.QUESTION_PANE]).toBe("host");
+    });
+
+    it("reads it on the Host with terminal snapshots off, and takes none about another pane", async () => {
+      const { host, client } = await pair();
+      const decisions = questionHost();
+      decisions.set({ hostId: QHOST, questions: [item(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      const { reference } = item(1);
+      let pane: unknown = PANE_READ;
+      let answered: (read: DecisionQuestionReference) => DecisionQuestionReference = (asked) =>
+        asked;
+      decisions.answerWith((read) =>
+        read.read === "pane" ? { result: "read", reference: answered(read.reference), pane } : null
+      );
+
+      expect(OWNER.terminalSnapshots).toBe(false);
+      expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+        ok: true,
+        value: { result: "read", reference, pane: PANE_READ },
+      });
+
+      // Another pane's, another project's, or another question's read is refused.
+      for (const other of [
+        { ...reference, terminalId: "pane-other" },
+        { ...reference, projectId: "project-other" },
+        { ...reference, questionId: "q_host_other_01" },
+      ]) {
+        answered = () => other;
+        expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+          ok: false,
+          failure: "unexpected-answer",
+        });
+      }
+      answered = (asked) => asked;
+
+      // Nothing past what a terminal snapshot may carry, nor anything that could steer a terminal.
+      for (const bad of [
+        { ...PANE_READ, lines: ["\u001b[31mred"] },
+        { ...PANE_READ, paneTitle: "two\nlines" },
+        { ...PANE_READ, lines: Array.from({ length: 201 }, (_, i) => `line ${i}`) },
+        { ...PANE_READ, lines: ["x".repeat(40 * 1024)] },
+        { ...PANE_READ, agentState: "Not A Token" },
+        { ...PANE_READ, extra: true },
+      ]) {
+        pane = bad;
+        expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+          ok: false,
+          failure: "unexpected-answer",
+        });
+      }
+
+      decisions.answerWith(() => ({ result: "closed" }));
+      expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+        ok: true,
+        value: { result: "closed" },
+      });
+      expect(decisions.reads.every((read) => read.read === "pane")).toBe(true);
+      expect(decisions.reads).toHaveLength(11);
+    });
+
+    it("serves nothing of a pane to a Shell whose owner didn't enroll it", async () => {
+      const { host, client } = await pair();
+      const decisions = questionHost("dev_another_owner_01");
+      decisions.set({ hostId: QHOST, questions: [item(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() =>
+        expect(shell.client.runtimeOf(HOST)?.runtime.state).toBe("not-enrolled")
+      );
+
+      expect(
+        await client.call(DecisionsLinkMethod.QUESTION_PANE, { reference: item(1).reference })
+      ).toEqual({ result: "off" });
+      expect(decisions.reads).toEqual([]);
+    });
+
+    it("tells the owner a Host from before it needs updating", async () => {
+      const { host, client } = await pair();
+      host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+        runtime: RUNNING,
+      }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [roundItem(1)],
+        asks: [],
+        seq: 1,
+      }));
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+      expect(
+        await shell.client.readHostQuestion(QHOST, { read: "pane", reference: item(1).reference })
+      ).toEqual({ ok: false, failure: "needs-update" });
+    });
+  });
+
   it("reads a question with a long thread whole", async () => {
     const { host, client } = await pair();
     const decisions = questionHost();
