@@ -182,12 +182,12 @@ describe("Decisions actions", () => {
       expect((await dispatch(id)).ok).toBe(true);
       expect(listHosts).toHaveBeenCalledTimes(1);
       expect(notify).not.toHaveBeenCalled();
-      if (id === "decisions.openInbox") {
-        expect(opened()).toBe("inbox");
-      } else {
-        expect(opened()).toBe("question");
-        const request = useDecisionsQuestionViewStore.getState().request!;
-        expect(request.questions[request.index]).toMatchObject({ reference: theirs.reference });
+      expect(opened()).toBe("inbox");
+      if (id === "decisions.openNextQuestion") {
+        // At its Host's question, in the inbox (#18047).
+        expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(
+          theirs.reference
+        );
       }
     });
 
@@ -202,7 +202,7 @@ describe("Decisions actions", () => {
       listed(question("q1", { kind: "waiting", reason: "open" }));
       expect((await dispatch(id)).ok).toBe(true);
       expect(listHosts).toHaveBeenCalledTimes(1);
-      expect(opened()).toBe(id === "decisions.openInbox" ? "inbox" : "question");
+      expect(opened()).toBe("inbox");
       expect(notify).not.toHaveBeenCalled();
     });
 
