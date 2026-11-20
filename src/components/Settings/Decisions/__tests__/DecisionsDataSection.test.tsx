@@ -10,6 +10,10 @@ import type {
   ExportDecisionsDataPayload,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  SettingsDeepLinkProvider,
+  type SettingsDeepLink,
+} from "@/components/Settings/settingsDeepLink";
 import { DecisionsDataSection } from "../DecisionsDataSection";
 import { DecisionsExportDialog } from "../DecisionsExportDialog";
 
@@ -469,5 +473,112 @@ describe("DecisionsDataSection", () => {
     for (const name of ["Export…", "Delete relay data", "Delete local data"]) {
       expect(button(name).disabled).toBe(true);
     }
+  });
+});
+
+describe("DecisionsDataSection folded away", () => {
+  const STATUS: DecisionsStatus = {
+    state: "connected",
+    relayOrigin: ORIGIN,
+    keysStored: true,
+    recoveryKitVerifiedAt: 7,
+  };
+
+  beforeEach(() => {
+    Object.defineProperty(window, "electron", {
+      value: { decisions: { exportData, deleteRelayData, deleteLocalData } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  const details = () => screen.getByRole("button", { name: /What's sent, and where/ });
+  const listShown = () =>
+    (document.getElementById("decisions-data-sent")?.textContent ?? "").includes(
+      "Questions and answers, end-to-end encrypted."
+    );
+
+  function renderLinked(deepLink: SettingsDeepLink) {
+    const tree = (value: SettingsDeepLink) => (
+      <SettingsDeepLinkProvider value={value}>
+        <TooltipProvider>
+          <DecisionsDataSection status={STATUS} />
+        </TooltipProvider>
+      </SettingsDeepLinkProvider>
+    );
+    const view = render(tree(deepLink));
+    return {
+      clear: () =>
+        view.rerender(tree({ sectionId: null, query: null, request: null, holds: null })),
+    };
+  }
+
+  const link = (query: string | null): SettingsDeepLink => ({
+    sectionId: "decisions-data",
+    query,
+    request: {},
+    holds: null,
+  });
+
+  it("starts with the list of what's sent closed, behind a button", () => {
+    renderSection(STATUS);
+
+    expect(listShown()).toBe(false);
+    expect(details().getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector("#decisions-data-sent")?.textContent ?? "").toContain(
+      "What's sent, and where"
+    );
+  });
+
+  it("opens and closes the list from the button, which keeps its words", () => {
+    renderSection(STATUS);
+
+    fireEvent.click(details());
+    expect(listShown()).toBe(true);
+    expect(details().getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById(details().getAttribute("aria-controls") ?? "");
+    expect(panel?.textContent ?? "").toContain("Voice dictation isn't end-to-end encrypted.");
+    expect(details().textContent).toBe("Details");
+
+    fireEvent.click(details());
+    expect(listShown()).toBe(false);
+    expect(details().getAttribute("aria-expanded")).toBe("false");
+    expect(details().textContent).toBe("Details");
+  });
+
+  it.each(["privacy", "metadata"])(
+    "opens the list for a settings search (%s) that names it, and keeps it open once the link clears",
+    (query) => {
+      const { clear } = renderLinked(link(query));
+
+      expect(listShown()).toBe(true);
+      clear();
+      expect(listShown()).toBe(true);
+    }
+  );
+
+  it("leaves it closed for a search that names something else in the tab", () => {
+    renderLinked({ sectionId: "decisions-policy", query: "gates", request: {}, holds: null });
+
+    expect(listShown()).toBe(false);
+  });
+
+  it("leaves it closed for a link that didn't come from search, such as the relay-removal banner's", () => {
+    renderLinked(link(null));
+
+    expect(listShown()).toBe(false);
+  });
+
+  it("holds the note on dictating answers as a row of its own, where search lands on it", () => {
+    renderSection(STATUS);
+
+    const row = document.getElementById("decisions-voice");
+    expect(row?.textContent ?? "").toContain("Dictating answers");
+    expect(row?.textContent ?? "").toContain("isn't end-to-end encrypted");
+    expect(document.getElementById("decisions-data")?.contains(row ?? null)).toBe(true);
+    expect(screen.queryByRole("group", { name: "Voice" })).toBeNull();
   });
 });

@@ -19,7 +19,7 @@ Everything is in **Settings → Integrations → Decisions**. It's one global se
 
 Turn on **Enable Decisions**. The first time, **Turn on Decisions?** lists what Decisions sends and where it goes (the same list is under **Data → What's sent, and where**). Nothing is sent until you connect a relay. Only **Turn on Decisions** turns it on; Cancel leaves everything as it was.
 
-With it on, the page shows Connection, Devices, Questions, Policy, Voice and Data, and in a local window Agents.
+With it on, the page shows Connection, Devices, Remote Hosts, Encryption, Questions, Policy, Decision model and Data, and in a local window Agents. Until setup is finished and the relay is connected, Connection comes first. After that, Agents, Questions, Policy and Decision model come first and Connection, Devices, Remote Hosts and Encryption follow, with Data last. A page that has already shown Connection first keeps it there until Settings closes, so finishing setup doesn't move it from under you.
 
 ### 2. Deploy or enter a relay
 
@@ -49,7 +49,7 @@ Daintree seals the keys with your system keychain. On Linux without a working ke
 
 ### 4. Save and verify a recovery kit
 
-Until a recovery kit is verified, the setup check has passed and an agent is switched on (see [step 7](#7-choose-the-agents-that-can-ask-you)), Connection shows **Setup isn't finished**. Its **Save recovery kit** button takes you to the kit form under **Data**.
+Until a recovery kit is verified, the setup check has passed and an agent is switched on (see [step 7](#7-choose-the-agents-that-can-ask-you)), Connection shows **Setup isn't finished**. Its **Save recovery kit** button takes you to the kit form under **Data**. Once a kit is verified and up to date, the forms fold away behind **Save or verify a kit**.
 
 - **Save a recovery kit**: enter a passphrase of at least 12 characters and press **Save kit…**. The kit is a file holding this computer's Decisions keys, locked with that passphrase. Daintree keeps neither the file nor the passphrase.
 - **Verify a saved kit**: choose the file you saved, enter its passphrase and press **Verify kit**. Daintree checks it opens, holds this computer's identity and has every key this computer holds now. Saving alone doesn't count as verified.

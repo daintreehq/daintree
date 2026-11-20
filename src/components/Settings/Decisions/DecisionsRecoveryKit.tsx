@@ -5,6 +5,8 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SeverityMark } from "@/lib/statusSeverity";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import { DecisionsDisclosureToggle } from "./DecisionsDisclosureToggle";
+import { useLinkedDisclosure } from "./useLinkedDisclosure";
 import { useRecoveryKit } from "./useRecoveryKit";
 import {
   MIN_KIT_PASSPHRASE_LENGTH,
@@ -12,6 +14,9 @@ import {
   describeVerifyResult,
   formatVerifiedAt,
 } from "./recoveryKitCopy";
+
+/** The two forms' row ids: a settings link to either opens them when they are folded away. */
+const KIT_FORM_ROW_IDS = ["decisions-recovery-kit-save", "decisions-recovery-kit-verify"] as const;
 
 /** A kit is one identity, a few KiB; main refuses anything bigger. */
 const MAX_KIT_BYTES = 256 * 1024;
@@ -37,6 +42,12 @@ interface DecisionsRecoveryKitProps {
  * main's save dialog, and verifying a saved file against this computer's
  * identity, which setup needs before its check (#16024). Each passphrase and kit is handed
  * to main as its request starts and cleared here at once, success or not.
+ *
+ * Both forms show while no kit is verified, since setup needs one, or the
+ * verified one may be out of date, and stay folded behind a button otherwise, until it's asked for: by the button, a
+ * settings link to a form, or setup asking for the passphrase field. They stay
+ * open through a verification, so the result isn't taken away with the form
+ * that produced it.
  */
 export function DecisionsRecoveryKit({
   status,
@@ -63,9 +74,28 @@ export function DecisionsRecoveryKit({
   );
 
   const busy = disabled || recovery.pending !== null;
+  const verifiedAt = status.recoveryKitVerifiedAt;
+  // A verification of keys the file no longer holds as they were (#18064).
+  const outOfDate = verifiedAt !== undefined && status.recoveryKitCurrent !== true;
+  // No kit, or one that may be missing a key: either way a new one is wanted.
+  const kitNeeded = verifiedAt === undefined || outOfDate;
+  const [formsOpen, setFormsOpen] = useLinkedDisclosure(KIT_FORM_ROW_IDS, {
+    initial: kitNeeded,
+  });
+  // Opened by what needs the forms, and latched, so a verification that
+  // flips the kit to verified in this same update leaves them where they are.
+  // Setup's request opens them once, as it arrives: one that stays unmet
+  // (the field can't take focus while Settings is on another tab) mustn't
+  // reopen forms the person has since folded.
+  const [askedFor, setAskedFor] = useState(0);
+  if (focusRequest !== askedFor) {
+    setAskedFor(focusRequest);
+    if (focusRequest > 0 && !formsOpen) setFormsOpen(true);
+  }
+  if (kitNeeded && !formsOpen) setFormsOpen(true);
 
-  // A request waits while the field is disabled, and counts as met only once
-  // the field has focus, so one made mid-request isn't lost.
+  // A request waits while the field is disabled or folded away, and counts as
+  // met only once the field has focus, so one made mid-request isn't lost.
   const focusField = useEffectEvent(() => {
     const field = exportField.current;
     if (!field) return;
@@ -74,12 +104,8 @@ export function DecisionsRecoveryKit({
     if (document.activeElement === field) onFocused?.();
   });
   useEffect(() => {
-    if (focusRequest > 0 && !busy) focusField();
-  }, [focusRequest, busy]);
-
-  const verifiedAt = status.recoveryKitVerifiedAt;
-  // A verification of keys the file no longer holds as they were (#18064).
-  const outOfDate = verifiedAt !== undefined && status.recoveryKitCurrent !== true;
+    if (focusRequest > 0 && !busy && formsOpen) focusField();
+  }, [focusRequest, busy, formsOpen]);
 
   /** Every secret here goes as a request starts, whichever form sent it. */
   const clearSecrets = () => {
@@ -88,6 +114,15 @@ export function DecisionsRecoveryKit({
     setVerifyPassphrase("");
     setKit(null);
     setKitError(null);
+  };
+
+  // Folding the forms takes their result with them: it may point at a field that's gone.
+  const toggleForms = () => {
+    if (formsOpen) {
+      clearSecrets();
+      recovery.reset();
+    }
+    setFormsOpen(!formsOpen);
   };
 
   const submitExport = () => {
@@ -164,6 +199,21 @@ export function DecisionsRecoveryKit({
               ? "Recovery kit may be out of date"
               : "Recovery kit verified"
         }
+        control={
+          !kitNeeded
+            ? ({ labelId }) => (
+                <DecisionsDisclosureToggle
+                  open={formsOpen}
+                  onToggle={toggleForms}
+                  controls={KIT_FORM_ROW_IDS.join(" ")}
+                  labelId={labelId}
+                  disabled={recovery.pending !== null}
+                >
+                  Save or verify a kit
+                </DecisionsDisclosureToggle>
+              )
+            : undefined
+        }
         accessory={
           verifiedAt === undefined || outOfDate ? (
             <SeverityMark
@@ -182,109 +232,113 @@ export function DecisionsRecoveryKit({
               : `Last verified ${formatVerifiedAt(verifiedAt)}. Save and verify a new kit whenever you want another copy.`
         }
       />
-      <SettingsRow
-        id="decisions-recovery-kit-save"
-        label="Save a recovery kit"
-        description={`A file holding this computer's Decisions keys, locked with a passphrase of at least ${MIN_KIT_PASSPHRASE_LENGTH} characters. Keep it somewhere other than this computer, such as a password manager. Daintree keeps neither the file nor the passphrase.`}
-        layout="stacked"
-        disabled={busy}
-        control={({ labelId, descriptionId, disabled: rowDisabled }) => (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitExport();
-            }}
-          >
-            <Input
-              ref={exportField}
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              maxLength={1024}
-              value={exportPassphrase}
-              onChange={(event) => setExportPassphrase(event.target.value)}
-              placeholder="Passphrase"
-              aria-labelledby={labelId}
-              aria-describedby={descriptionId}
-              disabled={rowDisabled}
-            />
-            <Button
-              type="submit"
-              variant="outline"
-              size="sm"
-              loading={recovery.pending === "export"}
-              disabled={rowDisabled || exportPassphrase.length < MIN_KIT_PASSPHRASE_LENGTH}
-            >
-              Save kit…
-            </Button>
-          </form>
-        )}
-      />
-      <SettingsRow
-        id="decisions-recovery-kit-verify"
-        label="Verify a saved kit"
-        description="Choose the kit file and enter its passphrase. Daintree checks that it opens and holds this computer's identity with every key it has now."
-        layout="stacked"
-        disabled={busy}
-        error={kitError ?? undefined}
-        control={({ labelId, descriptionId, disabled: rowDisabled }) => (
-          <form
-            className="flex flex-wrap items-center gap-2"
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitVerify();
-            }}
-          >
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              aria-label="Recovery kit file to verify"
-              tabIndex={-1}
-              onChange={chooseKit}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={rowDisabled}
-              aria-describedby={descriptionId}
-              onClick={() => fileInput.current?.click()}
-            >
-              {kit ? "Choose another kit…" : "Choose kit…"}
-            </Button>
-            <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
-              {kit?.name ?? "No kit chosen"}
-            </span>
-            <Input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              maxLength={1024}
-              value={verifyPassphrase}
-              onChange={(event) => setVerifyPassphrase(event.target.value)}
-              placeholder="Passphrase"
-              aria-label="Passphrase of the kit to verify"
-              aria-describedby={descriptionId}
-              className="w-52"
-              disabled={rowDisabled}
-            />
-            <Button
-              type="submit"
-              variant="outline"
-              size="sm"
-              loading={recovery.pending === "verify"}
-              disabled={rowDisabled || !kit || verifyPassphrase === ""}
-            >
-              Verify kit
-            </Button>
-          </form>
-        )}
-      />
+      {formsOpen && (
+        <>
+          <SettingsRow
+            id="decisions-recovery-kit-save"
+            label="Save a recovery kit"
+            description={`A file holding this computer's Decisions keys, locked with a passphrase of at least ${MIN_KIT_PASSPHRASE_LENGTH} characters. Keep it somewhere other than this computer, such as a password manager. Daintree keeps neither the file nor the passphrase.`}
+            layout="stacked"
+            disabled={busy}
+            control={({ labelId, descriptionId, disabled: rowDisabled }) => (
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitExport();
+                }}
+              >
+                <Input
+                  ref={exportField}
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  maxLength={1024}
+                  value={exportPassphrase}
+                  onChange={(event) => setExportPassphrase(event.target.value)}
+                  placeholder="Passphrase"
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  disabled={rowDisabled}
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="sm"
+                  loading={recovery.pending === "export"}
+                  disabled={rowDisabled || exportPassphrase.length < MIN_KIT_PASSPHRASE_LENGTH}
+                >
+                  Save kit…
+                </Button>
+              </form>
+            )}
+          />
+          <SettingsRow
+            id="decisions-recovery-kit-verify"
+            label="Verify a saved kit"
+            description="Choose the kit file and enter its passphrase. Daintree checks that it opens and holds this computer's identity with every key it has now."
+            layout="stacked"
+            disabled={busy}
+            error={kitError ?? undefined}
+            control={({ labelId, descriptionId, disabled: rowDisabled }) => (
+              <form
+                className="flex flex-wrap items-center gap-2"
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitVerify();
+                }}
+              >
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  aria-label="Recovery kit file to verify"
+                  tabIndex={-1}
+                  onChange={chooseKit}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={rowDisabled}
+                  aria-describedby={descriptionId}
+                  onClick={() => fileInput.current?.click()}
+                >
+                  {kit ? "Choose another kit…" : "Choose kit…"}
+                </Button>
+                <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
+                  {kit?.name ?? "No kit chosen"}
+                </span>
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={1024}
+                  value={verifyPassphrase}
+                  onChange={(event) => setVerifyPassphrase(event.target.value)}
+                  placeholder="Passphrase"
+                  aria-label="Passphrase of the kit to verify"
+                  aria-describedby={descriptionId}
+                  className="w-52"
+                  disabled={rowDisabled}
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="sm"
+                  loading={recovery.pending === "verify"}
+                  disabled={rowDisabled || !kit || verifyPassphrase === ""}
+                >
+                  Verify kit
+                </Button>
+              </form>
+            )}
+          />
+        </>
+      )}
       {outcome && (
         <SettingsRow
           id="decisions-recovery-kit-outcome"

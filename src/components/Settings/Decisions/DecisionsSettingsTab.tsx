@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -21,21 +21,47 @@ import {
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsModelSection } from "./DecisionsModelSection";
-import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { useHoldSettingsDeepLink } from "@/components/Settings/settingsDeepLink";
 import { holdRelayUrlRequests } from "./relayUrlRequest";
+import { unfinishedReason } from "./setupCheckCopy";
+
+/**
+ * Setup is finished and the relay is up, so the page can lead with the everyday
+ * controls. Anything short of that (no relay, an unverified kit, a setup check
+ * that hasn't passed, a connection that is down or has a problem) is something
+ * Connection is for.
+ */
+function setupDone(status: DecisionsStatus): boolean {
+  return (
+    status.relayOrigin !== undefined &&
+    status.state === "connected" &&
+    status.problem === undefined &&
+    unfinishedReason(status) === null
+  );
+}
 
 /**
  * Settings → Integrations → Decisions: one switch, consent the first time it
  * turns on, and behind it a section per part of the feature. Each section is
  * its own component so the child issue that fills one doesn't touch the rest.
+ *
+ * Until setup is finished and the relay is up, Connection and what it leads to
+ * (Devices, Remote Hosts, Encryption) come first, in the order a first run
+ * needs them. After that the everyday controls (Agents, Questions, Policy,
+ * Decision model) come first and those follow, and Data is last either way.
  */
-export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose } = {}) {
+export function DecisionsSettingsTab({
+  onClose,
+  isActive = true,
+}: { onClose?: SettingsTabClose; isActive?: boolean } = {}) {
   const decisions = useDecisions();
   // A deploy pane's request for the URL field lasts as long as this opening.
   useEffect(() => holdRelayUrlRequests(), []);
   const { status, pending, saveFailure } = decisions;
+  // The sections a settings link may name aren't there until the first read lands.
+  useHoldSettingsDeepLink(status === null && decisions.loadError === null);
   const [consentOpen, setConsentOpen] = useState(false);
   // A request for the recovery kit's passphrase field, until Data has focused it.
   const [kitFocusRequest, setKitFocusRequest] = useState(0);
@@ -75,6 +101,19 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   }, [status]);
 
   const on = status !== null && status.state !== "off";
+  // Connection first stays that way once the person has seen it first, for this
+  // opening of Settings: finishing setup, or a reconnect, would otherwise move
+  // the section they're looking at a screen or two down under them. Only a
+  // visible page counts, since the tab is read ahead while hidden. Off clears it.
+  const [connectionLed, setConnectionLed] = useState(false);
+  if (status !== null) {
+    if (status.state === "off") {
+      if (connectionLed) setConnectionLed(false);
+    } else if (isActive && !setupDone(status) && !connectionLed) {
+      setConnectionLed(true);
+    }
+  }
+  const connectionFirst = connectionLed || (status !== null && !setupDone(status));
   // One read for the sections it feeds, so one Retry recovers them all.
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
@@ -102,6 +141,43 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
       void decisions.setEnabled({ enabled: true });
     }
   };
+
+  // Keyed, so moving a group keeps what each section holds (a draft, a running check).
+  const setup = on && (
+    <Fragment key="setup">
+      <DecisionsConnectionSection
+        status={status}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+        onClose={onClose}
+        onFinishSetup={askForKit}
+        onPairPhone={askForPairing}
+        facts={<DecisionsStatusFacts devices={devicesRead} policy={policy} />}
+        agentsOff={agentsOff}
+      />
+      <DecisionsDevicesAndHosts
+        status={status}
+        devicesRead={devicesRead}
+        locked={pending !== null}
+        pairFocusRequest={pairFocusRequest}
+        onPairFocused={() => setPairFocusRequest(0)}
+      />
+    </Fragment>
+  );
+  const everyday = on && (
+    <Fragment key="everyday">
+      <DecisionsAgentsSection status={status} policy={policy} />
+      <DecisionsQuestionsSection
+        policy={policy}
+        status={status}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+        onClose={onClose}
+      />
+      <DecisionsPolicySection policy={policy} />
+      <DecisionsModelSection model={model} />
+    </Fragment>
+  );
 
   return (
     <div className="space-y-8">
@@ -140,34 +216,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
 
       {on && (
         <>
-          <DecisionsConnectionSection
-            status={status}
-            locked={pending !== null}
-            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
-            onClose={onClose}
-            onFinishSetup={askForKit}
-            onPairPhone={askForPairing}
-            facts={<DecisionsStatusFacts devices={devicesRead} policy={policy} />}
-            agentsOff={agentsOff}
-          />
-          <DecisionsDevicesAndHosts
-            status={status}
-            devicesRead={devicesRead}
-            locked={pending !== null}
-            pairFocusRequest={pairFocusRequest}
-            onPairFocused={() => setPairFocusRequest(0)}
-          />
-          <DecisionsAgentsSection status={status} policy={policy} />
-          <DecisionsQuestionsSection
-            policy={policy}
-            status={status}
-            locked={pending !== null}
-            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
-            onClose={onClose}
-          />
-          <DecisionsPolicySection policy={policy} />
-          <DecisionsModelSection model={model} />
-          <DecisionsVoiceSection />
+          {connectionFirst ? [setup, everyday] : [everyday, setup]}
           <DecisionsDataSection
             status={status}
             locked={pending !== null}
