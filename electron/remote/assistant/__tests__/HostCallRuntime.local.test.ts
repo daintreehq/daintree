@@ -513,6 +513,9 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           result: null,
         },
       });
+      if (!settled.ok) throw new Error("refused");
+      // The relay here took the cancel, so this is what it saw, not an unconfirmed cancel.
+      expect(settled.value.detail).toMatch(/told the tool to stop/);
       // Its answer is held for a resend, which runs nothing again.
       await expect(
         runtime.call(

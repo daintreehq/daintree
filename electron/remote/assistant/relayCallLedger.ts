@@ -111,7 +111,14 @@ export class RelayCallLedger<T> {
     const entries = this.prune(owner);
     const existing = entries?.get(callId);
     if (existing) {
-      if (existing.digest !== digest) return { status: "conflict" };
+      if (existing.digest !== digest) {
+        // The call that cancel was for can never run under this id now, so it can't
+        // wait to stop a later one that reuses it.
+        if (!resend && helpSessionId !== undefined) {
+          this.takePendingCancel(owner, helpSessionId, callId);
+        }
+        return { status: "conflict" };
+      }
       if (existing.settled) return answer(existing.settled.outcome);
       return { status: "answered", value: await existing.running! };
     }

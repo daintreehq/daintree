@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   callsOut: new Set<string>(),
   // This Shell's runtime's verdict on a host's dispatch of one of its calls (#15698).
   skipsRelayedDispatch: vi.fn((_hostId: string, _dispatch: unknown) => false),
+  // Whether a host's dispatch names one of this Shell's calls its caller cancelled (#17985).
+  cancelledRelayedCall: vi.fn((_hostId: string, _call: unknown) => false),
   // The hand-over this Shell's runtime offers for one of its relayed calls (#16752).
   relayedDelegation: vi.fn(
     (
@@ -43,6 +45,7 @@ vi.mock("../../runtime.js", () => ({
         ? {
             hasCallInFlight: (hostId: string) => m.callsOut.has(hostId),
             skipsRelayedDispatch: m.skipsRelayedDispatch,
+            cancelledRelayedCall: m.cancelledRelayedCall,
             relayedDelegation: m.relayedDelegation,
             offersNextFallback: m.offersNextFallback,
           }
@@ -85,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.callsOut.clear();
   m.skipsRelayedDispatch.mockReturnValue(false);
+  m.cancelledRelayedCall.mockReturnValue(false);
   m.relayedDelegation.mockReturnValue(null);
   m.offersNextFallback.mockReturnValue(null);
   m.viewProjects.clear();
@@ -253,6 +257,50 @@ describe("view reverse requests", () => {
       expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
     }
   );
+
+  describe("a dispatch for a call its assistant cancelled (#17985)", () => {
+    const relayed = {
+      actionId: "terminal.restartOnPreset",
+      args: { terminalId: "t-9", presetId: "p-1" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+      relayCall: { callId: "call-1", helpSessionId: "help-a" },
+    };
+
+    beforeEach(() => {
+      installViewReverseRequests();
+      m.callsOut.add("studio");
+      m.viewProjects.set(11, toHostScopedKey("studio", "proj-2"));
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "terminal.restartOnPreset", danger: "confirm" },
+      ]);
+    });
+
+    it("runs nothing and asks nobody", async () => {
+      m.cancelledRelayedCall.mockReturnValue(true);
+
+      const answer = await ask("mcp:dispatch-action", relayed);
+
+      expect(m.cancelledRelayedCall).toHaveBeenCalledWith("studio", {
+        callId: "call-1",
+        helpSessionId: "help-a",
+      });
+      expect(m.dispatchActionForHost).not.toHaveBeenCalled();
+      expect(answer).toMatchObject({
+        result: { ok: false, error: { code: "CONFIRMATION_REQUIRED" } },
+      });
+    });
+
+    it("runs one still out as before", async () => {
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
+
+      await expect(ask("mcp:dispatch-action", relayed)).resolves.toMatchObject({
+        result: { ok: true },
+      });
+      expect(m.dispatchActionForHost).toHaveBeenCalledTimes(1);
+    });
+  });
 
   describe("a preset move the view may run unasked as the pane's next own step (#17917)", () => {
     const relayedMove = {

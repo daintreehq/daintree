@@ -844,7 +844,9 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
       expect(relayCall).toHaveBeenCalledWith(
         "studio",
         expect.objectContaining({ callId: "call-1", resend: true }),
-        expect.any(Number)
+        expect.any(Number),
+        // No cancel to carry: the caller's context had no signal (#17985).
+        undefined
       );
       expect(runtime.awaitsNotices("studio")).toBe(false);
     });

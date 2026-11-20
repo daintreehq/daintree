@@ -176,7 +176,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
       return executor.call(specFor(payload, payload.global === true), payload);
     },
     cancelCall: (helpSessionId, callId) =>
-      executor.cancel(LOCAL_RELAY_SENDER_ID, helpSessionId, callId) !== "full",
+      !disposed && executor.cancel(LOCAL_RELAY_SENDER_ID, helpSessionId, callId) !== "full",
     status: async (payload) => {
       const read = deps.readAgents;
       return readProjectStatuses(

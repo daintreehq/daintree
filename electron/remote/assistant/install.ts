@@ -57,6 +57,7 @@ declare module "../runtime.js" {
       HostCallRuntime,
       | "hasCallInFlight"
       | "skipsRelayedDispatch"
+      | "cancelledRelayedCall"
       | "relayedDelegation"
       | "offersNextFallback"
       | "awaitsNotices"

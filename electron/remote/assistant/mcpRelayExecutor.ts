@@ -706,17 +706,17 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     // comes out of its run rather than on top of it (#15699).
     const deadline = now() + payload.runMs;
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
-    if (!(await deps.hasProject(payload.projectId))) {
-      return { status: "refused", reason: "no-project" };
-    }
+    const hasProject = await deps.hasProject(payload.projectId);
+    // A cancel taken meanwhile is the answer: nothing ran either way, and its resend reads that.
     if (signal?.aborted) return CANCELLED_BEFORE;
+    if (!hasProject) return { status: "refused", reason: "no-project" };
     const found = await sessionFor(spec);
+    if (signal?.aborted) return CANCELLED_BEFORE;
     if (found === null) return { status: "refused", reason: "server-off" };
     const { cached, session } = found;
     cached.inFlight += 1;
     cached.usedAt = now();
     try {
-      if (signal?.aborted) return CANCELLED_BEFORE;
       const timeoutMs = deadline - now();
       if (timeoutMs <= 0) {
         return {
@@ -863,7 +863,9 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         release();
       }
     },
-    cancel: (senderId, helpSessionId, callId) => ledger.cancel(senderId, helpSessionId, callId),
+    // Disposed, it runs nothing more and holds nothing for a later call.
+    cancel: (senderId, helpSessionId, callId) =>
+      disposed ? "ignored" : ledger.cancel(senderId, helpSessionId, callId),
     noticeStatus,
     noticesDropped: (senderId, callIds) => {
       for (const callId of callIds) {

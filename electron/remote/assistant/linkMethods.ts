@@ -269,12 +269,13 @@ export type McpCancelPayload = z.infer<typeof McpCancelPayloadSchema>;
 /**
  * A relayed call cancelled after it went out, whose cancel the host didn't
  * take (#17985): too old to know it, or no answer to it. The call ran on to
- * its own end, so what it did is unknown.
+ * its own end, so the cancel can't be said to have held. `answer` is what the
+ * host answered the call with, when it did, for what the Shell keeps of it.
  */
 export class RelayCancelUnconfirmedError extends Error {
   readonly code = "CANCEL_UNCONFIRMED";
-  constructor(cause?: unknown) {
-    super("The host didn't confirm the cancel of a relayed call", { cause });
+  constructor(readonly answer?: McpCallAnswer) {
+    super("The host didn't confirm the cancel of a relayed call");
   }
 }
 
@@ -298,7 +299,8 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
   /**
    * Its Shell cancelled it (#17985): `before` the host handed it to the tool,
    * so nothing ran, or `after`, so the tool was told to stop and may have
-   * acted first. Only a Shell that sent MCP_CANCEL is ever answered this.
+   * acted first. Only a Shell that sent MCP_CANCEL is answered this; one
+   * downgraded since that resends the call reads it as unreadable, so unknown.
    */
   z.object({ status: z.literal("cancelled"), dispatch: z.enum(["before", "after"]) }).strip(),
   /** Refused before anything ran; a newer host may name a reason this Shell doesn't know. */

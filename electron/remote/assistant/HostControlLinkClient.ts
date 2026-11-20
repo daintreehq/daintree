@@ -81,6 +81,13 @@ export interface HostControlLinkClientDeps {
 const CALL_TIMEOUT_MS = 15_000;
 /** How long a cancel waits for the host to take it; past it the call's outcome is unknown. */
 const CANCEL_TIMEOUT_MS = 10_000;
+
+/** A relayed call's cancel (#17985): the caller's abort, and who hears that it went to the host. */
+export interface RelayCallCancel {
+  signal: AbortSignal;
+  /** Told once, when the cancel goes to the host for a call already out. */
+  onCancel?: () => void;
+}
 /** Long enough for the host to have taken this Shell's answer to the notices it sent. */
 const NOTICE_STATUS_DELAY_MS = 5_000;
 
@@ -300,19 +307,21 @@ export class HostControlLinkClient {
    * (#13493), once this Shell's sender is proven on the session. The host
    * records the call by its callId, so a resend after a lost answer is safe.
    *
-   * `signal` is the caller's cancel (#17985): before the call goes out it
+   * `cancel` is the caller's (#17985): aborted before the call goes out, it
    * goes nowhere (CANCELLED); once it has, the host is asked to stop it and
    * the call's own answer, which comes once the host has, says what came of
-   * it. A host that doesn't take the cancel lets the call run on, and its
-   * answer, whatever it is, can't say the cancel held: CANCEL_UNCONFIRMED.
+   * it. A host that doesn't take the cancel lets the call run on, so neither
+   * its answer nor a lost one can say the cancel held: CANCEL_UNCONFIRMED,
+   * carrying the answer when there is one.
    */
   async relayCall(
     hostId: HostId,
     request: RelayCallRequest,
     timeoutMs: number,
-    signal?: AbortSignal
+    cancel?: RelayCallCancel
   ): Promise<McpCallAnswer> {
     const { global, conversationId, ...payload } = request;
+    const signal = cancel?.signal;
     if (signal?.aborted) throw cancelledUnsent();
     const session = await this.open(hostId);
     try {
@@ -323,9 +332,11 @@ export class HostControlLinkClient {
       throw error;
     }
     // Whether the host took the cancel, once one is sent: asked once, however many sends.
-    const cancel: { taken: Promise<boolean> | null } = { taken: null };
+    const sent: { taken: Promise<boolean> | null } = { taken: null };
     const onAbort = () => {
-      cancel.taken ??= this.call(
+      if (sent.taken !== null) return;
+      cancel?.onCancel?.();
+      sent.taken = this.call(
         hostId,
         session,
         AssistantLinkMethod.MCP_CANCEL,
@@ -345,6 +356,12 @@ export class HostControlLinkClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       try {
         return await this.call(hostId, session, method, body, timeoutMs);
+      } catch (error) {
+        // No answer, after a cancel the host didn't take: it ran on, for all this Shell knows.
+        if (codeOf(error) === "OUTCOME_UNKNOWN" && sent.taken !== null && !(await sent.taken)) {
+          throw new RelayCancelUnconfirmedError();
+        }
+        throw error;
       } finally {
         signal?.removeEventListener("abort", onAbort);
       }
@@ -382,10 +399,12 @@ export class HostControlLinkClient {
     }
     const parsed = McpCallAnswerSchema.safeParse(answer);
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
-    if (cancel.taken !== null && !(await cancel.taken)) throw new RelayCancelUnconfirmedError();
     // A call can arm nothing, or have its notice answered by its own reply
     // wait, without a notice ever coming: ask, so its link need not wait on it.
     if (relayCallArmsNotice(payload.tool, payload.args)) this.followNoticesLater(hostId, session);
+    if (sent.taken !== null && !(await sent.taken)) {
+      throw new RelayCancelUnconfirmedError(parsed.data);
+    }
     return parsed.data;
   }
 

@@ -360,6 +360,23 @@ async function dispatchAction(
       },
     };
   }
+  // One of this Shell's own calls its assistant cancelled (#17985): nothing
+  // more of it runs here, as no approval of it is given. Nobody is asked.
+  if (
+    request.relayCall !== undefined &&
+    getRemoteService("hostCallRelayClient")?.cancelledRelayedCall(hostId, request.relayCall) ===
+      true
+  ) {
+    return {
+      result: {
+        ok: false,
+        error: {
+          code: "CONFIRMATION_REQUIRED",
+          message: "The assistant's call was cancelled on the Shell, so nothing was run.",
+        },
+      },
+    };
+  }
   const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's

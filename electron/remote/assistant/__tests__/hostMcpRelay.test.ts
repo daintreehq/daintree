@@ -2136,9 +2136,13 @@ describe("installHostMcpRelay cancels (#17985)", () => {
 
   it("stops a call cancelled while its session opens, leaving that session to the next call", async () => {
     const opening = deferred();
+    const entered = deferred();
     const calls: string[] = [];
+    let opens = 0;
     const { links, relay } = harness([["link-1", "sender-a"]], {
       openSession: async () => {
+        opens += 1;
+        entered.resolve();
         await opening.promise;
         return {
           isOpen: () => true,
@@ -2151,12 +2155,34 @@ describe("installHostMcpRelay cancels (#17985)", () => {
       },
     });
     const answer = links[0]!.call({});
+    // Past admission, and opening its session, when the cancel comes.
+    await entered.promise;
     await cancel(links[0]!);
     opening.resolve();
 
     await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "before" });
     await expect(links[0]!.call({ callId: "call-2" })).resolves.toMatchObject({ status: "done" });
     expect(calls).toEqual(["call-2"]);
+    // The next call took the session the cancelled one opened.
+    expect(opens).toBe(1);
+    relay.dispose();
+  });
+
+  it("answers a call cancelled while admitted as cancelled, whatever admission then found", async () => {
+    const project = deferred<boolean>();
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: () => project.promise,
+    });
+    const answer = links[0]!.call({});
+    await cancel(links[0]!);
+    project.resolve(false);
+
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    await expect(links[0]!.call({ resend: true })).resolves.toEqual({
+      status: "cancelled",
+      dispatch: "before",
+    });
+    expect(opened).toHaveLength(0);
     relay.dispose();
   });
 

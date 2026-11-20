@@ -181,6 +181,9 @@ describe("RelayCallLedger cancels (#17985)", () => {
   it("stops a running call for the help session that sent it, once however often asked", async () => {
     const ledger = new RelayCallLedger<string>();
     const { started, work } = stoppable();
+    // Another call of the same caller and help session runs on.
+    const sibling = stoppable();
+    const other = ledger.run("shell-a", "call-2", "d2", false, sibling.work, "help-1");
     const first = ledger.run("shell-a", "call-1", "d1", false, work, "help-1");
     const joined = ledger.run("shell-a", "call-1", "d1", true, work, "help-1");
     const signal = await started;
@@ -195,6 +198,9 @@ describe("RelayCallLedger cancels (#17985)", () => {
     await expect(joined).resolves.toEqual({ status: "answered", value: "stopped" });
     expect(heard).toHaveBeenCalledTimes(1);
     expect(work).toHaveBeenCalledTimes(1);
+    expect((await sibling.started).aborted).toBe(false);
+    ledger.cancel("shell-a", "help-1", "call-2");
+    await other;
     // Settled now: a later cancel changes nothing, and a resend reads the same answer.
     expect(ledger.cancel("shell-a", "help-1", "call-1")).toBe("ignored");
     await expect(ledger.run("shell-a", "call-1", "d1", true, work, "help-1")).resolves.toEqual({
@@ -225,6 +231,43 @@ describe("RelayCallLedger cancels (#17985)", () => {
     expect(signal!.aborted).toBe(false);
     gate.resolve("done");
     await expect(running).resolves.toEqual({ status: "answered", value: "done" });
+    // ...which its own first send then starts with.
+    const work = vi.fn(async (stop: AbortSignal) => (stop.aborted ? "stopped" : "ran"));
+    await expect(ledger.run("shell-b", "call-1", "d1", false, work, "help-1")).resolves.toEqual({
+      status: "answered",
+      value: "stopped",
+    });
+  });
+
+  it("never stops a first send with another help session's early cancel", async () => {
+    const ledger = new RelayCallLedger<string>();
+    expect(ledger.cancel("shell-a", "help-2", "call-1")).toBe("held");
+    const work = vi.fn(async (stop: AbortSignal) => (stop.aborted ? "stopped" : "ran"));
+
+    await expect(ledger.run("shell-a", "call-1", "d1", false, work, "help-1")).resolves.toEqual({
+      status: "answered",
+      value: "ran",
+    });
+    expect(ledger.pendingCancelCount).toBe(1);
+  });
+
+  it("drops an early cancel whose first send conflicts, so it can't stop a later call under the id", async () => {
+    let clock = 0;
+    const ledger = new RelayCallLedger<string>({ now: () => clock, retentionMs: 1_000 });
+    expect(ledger.cancel("shell-a", "help-2", "call-1")).toBe("held");
+    await ledger.run("shell-a", "call-1", "d1", false, async () => "first", "help-1");
+    // Its own first send is another call under a taken id, so it never runs.
+    await expect(ledger.run("shell-a", "call-1", "d2", false, vi.fn(), "help-2")).resolves.toEqual({
+      status: "conflict",
+    });
+    expect(ledger.pendingCancelCount).toBe(0);
+    clock = 5_000;
+    // Once the first call is forgotten, a new call reusing the id runs as any first send does.
+    const work = vi.fn(async (stop: AbortSignal) => (stop.aborted ? "stopped" : "ran"));
+    await expect(ledger.run("shell-a", "call-1", "d2", false, work, "help-2")).resolves.toEqual({
+      status: "answered",
+      value: "ran",
+    });
   });
 
   it("keeps a completed call's answer for its resend when the cancel comes after it", async () => {

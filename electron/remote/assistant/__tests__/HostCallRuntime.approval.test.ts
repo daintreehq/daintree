@@ -108,12 +108,21 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       callerRun: (id) => runs.get(id) ?? null,
       client: () =>
         ({
-          relayCall: vi.fn(async (_hostId: string, payload: { callId: string }) => {
-            if (duringCall) {
-              answers.push((await duringCall(runtime, payload.callId)) as RelayApproveAnswer);
+          relayCall: vi.fn(
+            async (
+              _hostId: string,
+              payload: { callId: string },
+              _timeoutMs: number,
+              // As the link client does with a call already out: the cancel goes, and says so.
+              cancel?: { signal: AbortSignal; onCancel?: () => void }
+            ) => {
+              cancel?.signal.addEventListener("abort", () => cancel.onCancel?.(), { once: true });
+              if (duringCall) {
+                answers.push((await duringCall(runtime, payload.callId)) as RelayApproveAnswer);
+              }
+              return DONE;
             }
-            return DONE;
-          }),
+          ),
         }) as never,
       hosts: () => [HOST],
       inLocalView: () => true,
@@ -560,6 +569,31 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
       expect(asked).toHaveLength(1);
       expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("leaves the call's ask good when only a resend that never went out was cancelled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      duringCall = async (r, callId) => {
+        // A resend of this very call, cancelled before it was sent.
+        await runtime.call(
+          "a",
+          {
+            hostId: "studio",
+            projectId: "proj-2",
+            tool: "worktree.delete",
+            args: { worktreeId: "/wt/feature" },
+            callId,
+          },
+          { tier: "full", signal: controller.signal }
+        );
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await deleteCall();
+
+      expect(asked).toHaveLength(1);
+      expect(answers[0]?.decision).toBe("approved");
     });
 
     it("grants no skip for a call already cancelled under the person's own Never ask", async () => {
