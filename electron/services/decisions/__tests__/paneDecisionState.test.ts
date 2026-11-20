@@ -686,7 +686,7 @@ describe("PaneDecisionStates answer attention", () => {
   });
 
   it("stops counting a question once it closes with only its notice stopped, or is withdrawn (#18021)", () => {
-    const counts: Array<Map<string, number>> = [];
+    const counts: Array<Map<string, RunDecisionAttention>> = [];
     const pushes: PaneDecisionState[] = [];
     const states = new PaneDecisionStates(
       (_projectId, state) => pushes.push(state),
@@ -716,7 +716,9 @@ describe("PaneDecisionStates answer attention", () => {
     });
 
     states.replace(paneIds.map((paneId, i) => stopped(i + 1, paneId)));
-    expect([...counts.at(-1)!]).toEqual(paneIds.map((paneId) => [paneId, 1]));
+    expect([...counts.at(-1)!]).toEqual(
+      paneIds.map((paneId) => [paneId, { answers: 1, questions: 0 }])
+    );
     const before = pushes.length;
     states.replace(closed);
     expect(counts.at(-1)?.size).toBe(0);
@@ -725,6 +727,23 @@ describe("PaneDecisionStates answer attention", () => {
       paneIds.map((paneId) => expect.objectContaining(empty(paneId)))
     );
     for (const paneId of paneIds) expect(states.get(paneId)).toBeNull();
+  });
+
+  it("tells the fleet of questions on terminals with no pane held, and of a count changed alone", () => {
+    const counts: Array<Map<string, RunDecisionAttention>> = [];
+    const pushes: string[] = [];
+    const states = new PaneDecisionStates(
+      (_projectId, state) => pushes.push(state.terminalId),
+      () => 0,
+      (next) => counts.push(new Map(next))
+    );
+    states.replace([], new Map(), new Map([["pane-z", 1]]));
+    expect(new Map(counts.at(-1))).toEqual(new Map([["pane-z", { answers: 0, questions: 1 }]]));
+
+    // A deadline passing takes a question out with no row and no pane push.
+    states.setQuestions(new Map());
+    expect(counts.at(-1)?.size).toBe(0);
+    expect(pushes).toEqual([]);
   });
 
   it("clears every count once the panes go, whether or not the views are told", () => {

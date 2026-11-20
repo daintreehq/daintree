@@ -208,6 +208,12 @@ export class PaneDecisionStates {
     this.sendAttention();
   }
 
+  /** Replaces the open question counts alone, as a deadline passing changes them. */
+  setQuestions(questions: ReadonlyMap<string, number>): void {
+    this.questions = questions;
+    this.sendAttention();
+  }
+
   /** Lets every pane go; with `notify`, each one's views first get an empty state. */
   clear(notify: boolean): void {
     const held = [...this.panes];

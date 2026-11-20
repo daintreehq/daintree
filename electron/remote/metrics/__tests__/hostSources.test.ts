@@ -237,6 +237,7 @@ describe("observeAgents", () => {
         run("asking-directing", { agentState: "directing" }),
         run("asked-and-stopped", { agentState: "completed" }),
         run("parked-at-work", { agentState: "working" }),
+        run("snoozed-at-work", { agentState: "working" }),
         run("idle", { agentState: "idle" }),
         run("prompt", { agentState: "waiting", waitingReason: "prompt" }),
       ],
@@ -245,20 +246,23 @@ describe("observeAgents", () => {
       shardsFailed: 0,
     });
     runs.attention = {
-      getActiveSnoozes: () => new Map(),
+      getActiveSnoozes: () => new Map([["snoozed-at-work", {}]]),
       getAll: () => new Map([["parked-at-work", {}]]),
     };
     setDecisionAttention(
       new Map(
-        ["asking-at-work", "asking-directing", "asked-and-stopped", "parked-at-work"].map((id) => [
-          id,
-          { answers: 0, questions: 1 },
-        ])
+        [
+          "asking-at-work",
+          "asking-directing",
+          "asked-and-stopped",
+          "parked-at-work",
+          "snoozed-at-work",
+        ].map((id) => [id, { answers: 0, questions: 1 }])
       )
     );
 
     await expect(observeAgents()).resolves.toEqual({
-      working: 2,
+      working: 3,
       waiting: 1,
       idle: 2,
       attention: { waiting: 3, blocked: 0, idle: 2 },

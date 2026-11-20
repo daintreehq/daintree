@@ -206,6 +206,43 @@ describe("unclearedQuestionsByTerminal", () => {
     );
   });
 
+  it("drops a question whose deadline passed by the clock, and only given the clock", () => {
+    const due = item(
+      1,
+      { kind: "waiting", reason: "open" },
+      { expiresAt: "2026-11-01T11:00:00.000Z" }
+    );
+    const queued = item(2, { kind: "queued" }, { expiresAt: "2026-11-01T11:00:00.000Z" });
+    // A reply its agent asked for isn't bound by the question's deadline.
+    const reply = item(
+      3,
+      { kind: "waiting", reason: "reply" },
+      { expiresAt: "2026-11-01T11:00:00.000Z" }
+    );
+    const asks = asksOf([due, null], [queued, null], [reply, null]);
+    const before = Date.parse("2026-11-01T10:59:59.000Z");
+    const after = Date.parse("2026-11-01T11:00:00.000Z");
+    expect(
+      unclearedQuestionsByTerminal([due, queued, reply], OWN, asks, new Map(), before).size
+    ).toBe(3);
+    expect(unclearedQuestionsByTerminal([due, queued, reply], OWN, asks, new Map(), after)).toEqual(
+      new Map([["pane-3", 1]])
+    );
+    expect(unclearedQuestionsByTerminal([due, queued, reply], OWN, asks, new Map()).size).toBe(3);
+  });
+
+  it("keeps a recorded null ask over a reply request, as the inbox does", () => {
+    const reply = item(1, { kind: "waiting", reason: "reply" }, { replyRequest: "m_reply" });
+    const clearedAtNull = marksOf(mark(reply, { ask: null, cleared: true }));
+    expect(
+      unclearedQuestionsByTerminal([reply], OWN, asksOf([reply, null]), clearedAtNull).size
+    ).toBe(0);
+    const clearedAtReply = marksOf(mark(reply, { ask: "m_reply", cleared: true }));
+    expect(
+      unclearedQuestionsByTerminal([reply], OWN, asksOf([reply, null]), clearedAtReply)
+    ).toEqual(new Map([["pane-1", 1]]));
+  });
+
   it("reads a question with no recorded ask at its null ask, and a missing one at its reply request", () => {
     const open = item(1);
     const cleared = marksOf(mark(open, { ask: null, cleared: true }));

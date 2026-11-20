@@ -84,11 +84,13 @@ describe("deriveWorktreeAgentBuckets", () => {
         cleanup: false,
       });
       // Carrying on after asking, it is at work and still waiting on the user.
-      expect(buckets([run("a", { agentState: "working", ...held })])).toMatchObject({
-        working: true,
-        attention: true,
-        finished: false,
-      });
+      for (const agentState of ["working", "directing"] as const) {
+        expect(buckets([run("a", { agentState, ...held })]), agentState).toMatchObject({
+          working: true,
+          attention: true,
+          finished: false,
+        });
+      }
     }
   });
 

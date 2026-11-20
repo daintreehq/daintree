@@ -518,17 +518,27 @@ export class FleetSnapshotService {
    * then degrades must not carry the rows it moved on.
    */
   private redecorate(previous: readonly FleetRunRow[]): FleetRunRow[] {
+    // The user's park and snooze as they stand too: a fresh Decisions count
+    // beside a shelf the rows predate would raise a run the user set aside.
+    const parks = this.runAttention?.getAll();
+    const snoozes = this.runAttention?.getActiveSnoozes();
     return previous.map((run) => {
       const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
       const wait =
         run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
+      const park = this.runAttention ? parks?.get(run.runId) : run.park;
+      const snooze = this.runAttention ? snoozes?.get(run.runId) : run.snooze;
       const rest = { ...run };
       delete rest.canopy;
       delete rest.wait;
       delete rest.answerAttention;
       delete rest.questionAttention;
+      delete rest.park;
+      delete rest.snooze;
       return {
         ...rest,
+        ...(park !== undefined ? { park } : {}),
+        ...(snooze !== undefined ? { snooze } : {}),
         ...(wait !== undefined ? { wait } : {}),
         ...(canopy !== undefined ? { canopy } : {}),
         ...decisionAttentionFor(run.runId),

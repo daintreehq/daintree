@@ -1852,16 +1852,21 @@ describe("buildPilotGroups — what Decisions recorded", () => {
   });
 
   it("names an agent still at work by its work, and dates it from the stint", () => {
-    const [group] = buildPilotGroups(
-      [run({ agentState: "working", since: NOW - 300_000, questionAttention: 1 })],
-      ctx()
-    );
-    expect(group!.rows[0]).toMatchObject({
-      band: "needs-you",
-      statusLabel: "Working",
-      agePhrase: "working for 5m",
-      agentReport: DECISIONS_QUESTION_EVIDENCE,
-    });
+    for (const [agentState, statusLabel] of [
+      ["working", "Working"],
+      ["directing", "Directing"],
+    ] as const) {
+      const [group] = buildPilotGroups(
+        [run({ agentState, since: NOW - 300_000, questionAttention: 1 })],
+        ctx()
+      );
+      expect(group!.rows[0], agentState).toMatchObject({
+        band: "needs-you",
+        statusLabel,
+        agePhrase: "working for 5m",
+        agentReport: DECISIONS_QUESTION_EVIDENCE,
+      });
+    }
   });
 
   it("says nothing of a question on a run set aside, failed or gone", () => {
@@ -1871,6 +1876,12 @@ describe("buildPilotGroups — what Decisions recorded", () => {
           runId: "parked",
           agentState: "completed",
           park: { parkedAt: NOW },
+          questionAttention: 1,
+        }),
+        run({
+          runId: "snoozed",
+          agentState: "completed",
+          snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 },
           questionAttention: 1,
         }),
         run({
@@ -1886,6 +1897,7 @@ describe("buildPilotGroups — what Decisions recorded", () => {
     expect(group!.rows.map((r) => [r.run?.runId, r.band, r.agentReport])).toEqual([
       ["error", "blocked", null],
       ["parked", "parked", null],
+      ["snoozed", "snoozed", null],
       ["exited", "idle", null],
     ]);
   });

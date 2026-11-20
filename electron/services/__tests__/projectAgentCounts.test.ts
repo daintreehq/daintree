@@ -1310,6 +1310,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     undefined,
     { questionAttention: 1 },
     { answerAttention: 2 },
+    { questionAttention: 1, answerAttention: 1 },
   ];
 
   const fixtures: Fixture[] = [];
@@ -1437,6 +1438,8 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
       const counts = countOf([fixture]);
       const atWork = agentState === "working" ? 1 : 0;
       if (counts.completed !== 0 || counts.active !== atWork) wrong.push(JSON.stringify(fixture));
+      if (atWork === 1 && counts.latestWorkingSince !== 1_000)
+        wrong.push(`stint ${JSON.stringify(fixture)}`);
       // A wait at work is dated from nothing: its state clock is the work's.
       if (agentState === "working" && counts.oldestWaitingSince !== null) {
         wrong.push(`dated ${JSON.stringify(fixture)}`);

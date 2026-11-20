@@ -8,7 +8,13 @@ import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
+import {
+  decisionsAttentionHolds,
+  itemAnswerAttention,
+  itemArchived,
+  itemSubject,
+  type CanopyItem,
+} from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
@@ -200,8 +206,9 @@ export function useCanopyInboxActions({
         }
         // The cursor moves on before the run leaves, as archiving does in mail —
         // only off the run it is on: a row archived from its hover button
-        // leaves the user where they were.
-        if (isSelected(item.runId)) {
+        // leaves the user where they were. A run Decisions holds something for
+        // stays listed, so the cursor stays with it.
+        if (isSelected(item.runId) && !decisionsAttentionHolds(item)) {
           const next = nextAfter(item.runId);
           if (next) focusCardNow(next.runId);
         }

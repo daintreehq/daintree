@@ -983,11 +983,15 @@ describe("FleetSnapshotService", () => {
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
 
-      // A question opening is one.
+      // A question opening is one, and so is another on the same run.
       setDecisionAttention(new Map([["t1", { answers: 2, questions: 1 }]]));
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 2);
       expect(lastSnapshot().runs[0].questionAttention).toBe(1);
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 2 }]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 3);
+      expect(lastSnapshot().runs[0].questionAttention).toBe(2);
 
       // Decisions stopping takes every count with it.
       setDecisionAttention(new Map());
@@ -1018,6 +1022,35 @@ describe("FleetSnapshotService", () => {
       expect(lastSnapshot()).toMatchObject({ degraded: true });
       expect(lastSnapshot().runs[0].runId).toBe("t1");
       expect(lastSnapshot().runs[0].questionAttention).toBeUndefined();
+    } finally {
+      setDecisionAttention(new Map());
+      service.stop();
+    }
+  });
+
+  it("carries a park made while healthy into the degraded rows beside a fresh Decisions count", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const parks = new Map<string, { parkedAt: number }>();
+    const attention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].park).toBeUndefined();
+
+      // Parked, and a question opens, before the read that would have shown it fails.
+      parks.set("t1", { parkedAt: NOW });
+      client.setFleet([], true);
+      setDecisionAttention(new Map([["t1", { answers: 0, questions: 1 }]]));
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0]).toMatchObject({
+        park: { parkedAt: NOW },
+        questionAttention: 1,
+      });
+      expect(bandForRun(lastSnapshot().runs[0])).toBe("parked");
     } finally {
       setDecisionAttention(new Map());
       service.stop();

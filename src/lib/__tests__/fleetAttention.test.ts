@@ -1054,8 +1054,13 @@ describe("Decisions attention", () => {
           const key = JSON.stringify({ hold, state, handBack });
           expect(bandForRun(row), key).toBe("needs-you");
           expect(isDecisionsNeed(row), key).toBe(true);
-          // Nothing on its screen asks, so the pane edge has no ask to mark.
-          expect(runUnseenAsk(row), key).toBeUndefined();
+          // The pane edge marks only an ask its screen shows: an unread approval
+          // or question wait, as it would without Decisions.
+          const observedWait =
+            state.agentState === "waiting" &&
+            "waitingReason" in state &&
+            (state.waitingReason === "approval" || state.waitingReason === "question");
+          expect(runUnseenAsk(row), key).toBe(observedWait ? "observed" : undefined);
         }
       }
     }
@@ -1101,6 +1106,41 @@ describe("Decisions attention", () => {
       expect(bandForRun(reported)).toBe("needs-you");
       expect(runUnseenAsk(reported)).toBe("agent");
     }
+  });
+
+  it("keeps the edge on an unread wait its screen shows, which Decisions alone would not draw", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      const wait = run({ agentState: "waiting", waitingReason, questionAttention: 1 });
+      expect(bandForRun(wait)).toBe("needs-you");
+      expect(runUnseenAsk(wait), waitingReason).toBe("observed");
+      expect(runUnseenAsk({ ...wait, wait: seen }), waitingReason).toBeUndefined();
+    }
+    // Canopy reading a question as asking nothing takes the mark away, as without Decisions.
+    const read = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      canopy: { ...notAsking, seen: false },
+    });
+    expect(runUnseenAsk(read)).toBeUndefined();
+    expect(runUnseenAsk({ ...read, questionAttention: 1 })).toBeUndefined();
+    expect(
+      runUnseenAsk(run({ agentState: "waiting", waitingReason: "prompt", questionAttention: 1 }))
+    ).toBeUndefined();
+  });
+
+  it("holds with both counts at once, and lets a snooze set aside an agent still at work", () => {
+    const both = { questionAttention: 2, answerAttention: 1 };
+    expect(bandForRun(run({ agentState: "completed", ...both }))).toBe("needs-you");
+    const snoozed = { snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 } };
+    expect(bandForRun(run({ agentState: "working", questionAttention: 1, ...snoozed }))).toBe(
+      "snoozed"
+    );
+    expect(
+      bandForRun(run({ agentState: "working", questionAttention: 1, park: { parkedAt: NOW } }))
+    ).toBe("parked");
+    expect(bandLabel("needs-you", run({ agentState: "idle", questionAttention: 1 }))).toBe(
+      "Waiting"
+    );
   });
 
   it("places nothing for an agent that is gone or never detected", () => {

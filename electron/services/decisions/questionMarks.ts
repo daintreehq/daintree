@@ -4,6 +4,7 @@ import type {
   MarkDecisionQuestionsPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { MetaStore } from "./attentionList.js";
+import { deadlineElapsed } from "../../../shared/utils/decisionDeadline.js";
 
 /**
  * What the person did with each question's ask on this computer (#17895):
@@ -122,19 +123,23 @@ export function withInbox(
  * the ask they show now, read as the inbox reads them (`withInbox`): a mark
  * made at an earlier ask clears nothing. `questions` are one machine's own,
  * asked from `hostId`, with `asks` naming each one's current ask by question
- * id. Seen alone still counts: it answers nothing.
+ * id. Seen alone still counts: it answers nothing. Given the time, one whose
+ * deadline passed by this computer's clock doesn't count either: the inbox
+ * has it awaiting an update, no longer waiting on the person (#17943).
  */
 export function unclearedQuestionsByTerminal(
   questions: readonly DecisionQuestionListItem[],
   hostId: string,
   asks: ReadonlyMap<string, string | null>,
-  marks: QuestionMarks
+  marks: QuestionMarks,
+  nowMs: number | null = null
 ): Map<string, number> {
   const byKey = new Map<string, string | null>();
   for (const [questionId, ask] of asks) byKey.set(markKey({ hostId, questionId }), ask);
   const counts = new Map<string, number>();
   for (const item of withInbox(questions, byKey, marks)) {
     if (item.inbox === undefined || item.inbox.cleared) continue;
+    if (nowMs !== null && deadlineElapsed(item, nowMs)) continue;
     const { terminalId } = item.reference;
     counts.set(terminalId, (counts.get(terminalId) ?? 0) + 1);
   }

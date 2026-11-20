@@ -39,8 +39,15 @@ describe("bulkTrashHold", () => {
       )
     ).toBe("answer");
     expect(
-      bulkTrashHold(item("a", "working", "p1", { questionAttention: 1 }), "empty", false)
+      bulkTrashHold(
+        item("a", "working", "p1", { answerAttention: 1, questionAttention: 1 }),
+        "empty",
+        false
+      )
     ).toBe("working");
+    expect(
+      bulkTrashHold(item("a", "completed", "p1", { answerAttention: 0 }), "empty", false)
+    ).toBeNull();
   });
 
   it("never holds back for the agent's own suggestion, or for an input nobody could read", () => {

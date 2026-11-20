@@ -541,6 +541,7 @@ export function CanopyRow({
     overdue ? "waiting a while" : null,
     agentNote !== null ? agentNote.toLowerCase() : null,
     answerNote !== null ? answerNote.toLowerCase() : null,
+    questionNote !== null ? questionNote.toLowerCase() : null,
     progress?.spoken ?? null,
     facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,
     compact ? null : itemContextWarning(item),

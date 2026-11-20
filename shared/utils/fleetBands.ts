@@ -218,9 +218,10 @@ export type UnseenAsk = "agent" | "canopy" | "observed";
  * Read off the band, so the park, the snooze, the agent's report and Canopy
  * keep their precedence, and the look that marks a Canopy ask or an observed
  * wait seen drops it. Only the pane edge reads it: glyphs and counts keep to
- * the band, where an observed ask is unread news and never a demand. A run
- * Decisions alone placed has no ask on its screen to mark: the pane's own
- * Decisions chip says what is open.
+ * the band, where an observed ask is unread news and never a demand. What
+ * Decisions recorded is no ask on the screen: a run it placed is marked only
+ * for an ask its screen shows as well, read as it would be without Decisions,
+ * and the pane's own Decisions chip says what is open.
  */
 export function runUnseenAsk(
   run: BandableRun,
@@ -229,7 +230,15 @@ export function runUnseenAsk(
   if (band === "needs-you") {
     if (isAgentReportedNeed(run)) return "agent";
     const canopy = runCanopyPlacement(run);
-    return canopy?.kind === "asked" && !canopy.seen ? "canopy" : undefined;
+    if (canopy !== undefined) return canopy.kind === "asked" && !canopy.seen ? "canopy" : undefined;
+    // Without Decisions this wait would sit in `review` for itself.
+    const state = run.agentState;
+    const observed =
+      state !== undefined &&
+      isObservedAskWait(state, run.waitingReason) &&
+      isWaitUnseen(run.wait) &&
+      isDecisionsNeed(run);
+    return observed ? "observed" : undefined;
   }
   if (band !== "review" || run.agentState === undefined) return undefined;
   if (!isObservedAskWait(run.agentState, run.waitingReason)) return undefined;

@@ -213,7 +213,7 @@ export function itemDecisionsAttention(item: CanopyItem): boolean {
  * put the run aside. A reply typed here or an archive answers nothing in
  * Decisions, so it holds past both, and the stored archive waits for it to clear.
  */
-function decisionsAttentionHolds(item: CanopyItem): boolean {
+export function decisionsAttentionHolds(item: CanopyItem): boolean {
   return itemDecisionsAttention(item) && !itemPutAside(item);
 }
 
