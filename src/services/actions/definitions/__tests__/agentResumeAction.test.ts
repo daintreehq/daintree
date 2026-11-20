@@ -29,6 +29,9 @@ const clientsMock = vi.hoisted(() => ({
   userAgentRegistryClient: { get: vi.fn() },
 }));
 const resumeMock = vi.hoisted(() => vi.fn());
+// What the mocked shared resume would launch: it runs the action's spawn-only
+// checks, as the real one does when no live pane holds the session.
+const spawnMock = vi.hoisted(() => vi.fn());
 const worktreeIndexMock = vi.hoisted(() => ({ getWorktreePathIndex: vi.fn() }));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
@@ -109,11 +112,17 @@ beforeEach(() => {
     ])
   );
   listMock.mockResolvedValue([record()]);
-  resumeMock.mockResolvedValue({
-    terminalId: "term-9",
-    outcome: "created",
-    worktreeId: WT_A,
-  });
+  resumeMock.mockImplementation(
+    async (
+      _session: unknown,
+      target: { worktreeId?: string },
+      options?: { validateSpawn?: () => void }
+    ) => {
+      options?.validateSpawn?.();
+      spawnMock(target);
+      return { terminalId: "term-9", outcome: "created", worktreeId: WT_A };
+    }
+  );
 });
 
 describe("agentSessionHistory.resume — schema", () => {
@@ -140,7 +149,26 @@ describe("agentSessionHistory.resume — scope isolation", () => {
     await expect(run({ worktreeId: WT_B, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
       /different directory/i
     );
-    expect(resumeMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("hands back a live pane holding the session wherever it is filed (#18009)", async () => {
+    // The record says WT_A, the caller names WT_B, and a move has since filed
+    // the pane carrying the conversation under WT_B: no new launch is asked
+    // for, so the checks that only gate one don't apply.
+    resumeMock.mockResolvedValue({
+      terminalId: "term-moved",
+      outcome: "activatedExisting",
+      worktreeId: WT_B,
+    });
+    const result = await run({ worktreeId: WT_B, sessionId: "sess-1" }, agentCtx);
+    expect(result).toEqual({
+      terminalId: "term-moved",
+      sessionId: "sess-1",
+      worktreeId: WT_B,
+      outcome: "activatedExisting",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("refuses a worktree id that is not open", async () => {
@@ -179,7 +207,7 @@ describe("agentSessionHistory.resume — launch directory containment", () => {
     await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
       /different directory/i
     );
-    expect(resumeMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("refuses a record whose recorded directory belongs to another open worktree", async () => {
@@ -202,7 +230,7 @@ describe("agentSessionHistory.resume — launch directory containment", () => {
     await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
       /walks outside/i
     );
-    expect(resumeMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("treats an empty recorded directory as absent rather than a launch path", async () => {
@@ -241,8 +269,10 @@ describe("agentSessionHistory.resume — launch target", () => {
 
   it("does not move the user's view on an agent dispatch", async () => {
     await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
-    // The spawn hook is what would switch worktrees; agents pass none.
+    // The hooks are what would switch worktrees, before a spawn or to a live
+    // pane filed elsewhere; agents pass neither.
     expect(resumeMock.mock.calls[0]?.[2]?.onBeforeSpawn).toBeUndefined();
+    expect(resumeMock.mock.calls[0]?.[2]?.showWorktree).toBeUndefined();
   });
 
   it("does not move the user's view on a plugin dispatch either", async () => {
@@ -250,6 +280,7 @@ describe("agentSessionHistory.resume — launch target", () => {
     // view, which is why this reads the shared foreground classifier instead.
     await run({ worktreeId: WT_A, sessionId: "sess-1" }, { ...agentCtx, dispatchSource: "plugin" });
     expect(resumeMock.mock.calls[0]?.[2]?.onBeforeSpawn).toBeUndefined();
+    expect(resumeMock.mock.calls[0]?.[2]?.showWorktree).toBeUndefined();
   });
 
   it("lets a foreground dispatch switch to the session's worktree before spawning", async () => {
@@ -258,6 +289,14 @@ describe("agentSessionHistory.resume — launch target", () => {
     expect(onBeforeSpawn).toBeTypeOf("function");
     onBeforeSpawn?.();
     expect(selectWorktreeMock).toHaveBeenCalledWith(WT_A, { source: "user" });
+  });
+
+  it("lets a foreground dispatch bring a live pane's own worktree on screen", async () => {
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, { ...agentCtx, dispatchSource: "user" });
+    const showWorktree = resumeMock.mock.calls[0]?.[2]?.showWorktree as
+      ((worktreeId: string) => void) | undefined;
+    showWorktree?.(WT_B);
+    expect(selectWorktreeMock).toHaveBeenCalledWith(WT_B, { source: "user" });
   });
 });
 

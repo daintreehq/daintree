@@ -20,6 +20,9 @@ const agentSettingsStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const activateTerminalMock = vi.hoisted(() => vi.fn());
 const restoreBackgroundTerminalMock = vi.hoisted(() => vi.fn());
 const addPanelMock = vi.hoisted(() => vi.fn());
+// The worktree on screen, which decides whether an existing pane can be
+// brought forward without moving the view.
+const selection = vi.hoisted(() => ({ activeWorktreeId: "wt-1" as string | null }));
 const panelState = vi.hoisted(() => ({
   panelIds: [] as string[],
   panelsById: {} as Record<string, unknown>,
@@ -74,6 +77,9 @@ vi.mock("@shared/config/agentRegistry", () => ({
 }));
 vi.mock("@/store/agentSettingsStore", () => ({ useAgentSettingsStore: agentSettingsStoreMock }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => panelState } }));
+vi.mock("@/store/storeAccessors", () => ({
+  getWorktreeSelectionSnapshot: () => ({ activeWorktreeId: selection.activeWorktreeId }),
+}));
 
 import {
   buildResumePanelOptions,
@@ -113,6 +119,7 @@ beforeEach(() => {
   buildResumeLatestCommandMock.mockReturnValue("claude --continue");
   setPanels();
   addPanelMock.mockResolvedValue("term-new");
+  selection.activeWorktreeId = "wt-1";
 });
 
 function pane(id: string, overrides: Record<string, unknown> = {}) {
@@ -375,24 +382,31 @@ describe("buildResumePanelOptions", () => {
  * `addPanel` window.
  */
 describe("findLiveResumePanelId", () => {
-  it("matches a live pane carrying the session in the same worktree", () => {
+  it("matches a live pane carrying the session", () => {
     setPanels(pane("term-1"));
-    expect(findLiveResumePanelId("s-1", "wt-1")).toBe("term-1");
+    expect(findLiveResumePanelId("s-1")).toBe("term-1");
   });
 
-  it("ignores a pane for the same session in another worktree", () => {
+  it("matches a pane for the session wherever it is filed (#18009)", () => {
+    // A live move refiles the pane under another worktree without touching the
+    // agent, which still holds the conversation.
     setPanels(pane("term-1", { worktreeId: "wt-2" }));
-    expect(findLiveResumePanelId("s-1", "wt-1")).toBeNull();
+    expect(findLiveResumePanelId("s-1")).toBe("term-1");
+  });
+
+  it("ignores a pane carrying another session", () => {
+    setPanels(pane("term-1", { agentSessionId: "s-2" }));
+    expect(findLiveResumePanelId("s-1")).toBeNull();
   });
 
   it("ignores trashed and dialog panes, which the caller cannot be handed", () => {
     setPanels(pane("term-1", { location: "trash" }), pane("term-2", { location: "dialog" }));
-    expect(findLiveResumePanelId("s-1", "wt-1")).toBeNull();
+    expect(findLiveResumePanelId("s-1")).toBeNull();
   });
 
   it("still matches a backgrounded pane, which already owns the transcript", () => {
     setPanels(pane("term-1", { location: "background" }));
-    expect(findLiveResumePanelId("s-1", "wt-1")).toBe("term-1");
+    expect(findLiveResumePanelId("s-1")).toBe("term-1");
   });
 
   it("reveals a backgrounded pane rather than reporting a focus nothing can see", async () => {
@@ -418,9 +432,9 @@ describe("findLiveResumePanelId", () => {
     expect(activateTerminalMock).toHaveBeenCalledWith("term-1");
   });
 
-  it("treats an absent worktree on both sides as the same scope", () => {
+  it("matches a pane filed under no worktree", () => {
     setPanels(pane("term-1", { worktreeId: undefined }));
-    expect(findLiveResumePanelId("s-1", null)).toBe("term-1");
+    expect(findLiveResumePanelId("s-1")).toBe("term-1");
   });
 });
 
@@ -467,7 +481,78 @@ describe("resumeSessionIntoPanel", () => {
       outcome: "activatedExisting",
       worktreeId: "wt-2",
     });
-    expect(activateTerminalMock).toHaveBeenCalledWith("term-moved");
+    expect(addPanelMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a headless caller's view alone when the live pane is in another worktree", async () => {
+    // Activating it could follow focus into its worktree; the caller gets the
+    // id and where the pane is filed, and addresses it from there.
+    setPanels(pane("term-moved", { worktreeId: "wt-2", location: "background" }));
+    const result = await resumeSessionIntoPanel(baseSession, target);
+    expect(result).toEqual({
+      terminalId: "term-moved",
+      outcome: "activatedExisting",
+      worktreeId: "wt-2",
+    });
+    expect(activateTerminalMock).not.toHaveBeenCalled();
+    expect(restoreBackgroundTerminalMock).not.toHaveBeenCalled();
+    expect(addPanelMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the live pane's own worktree first when the caller may move the view", async () => {
+    const order: string[] = [];
+    setPanels(pane("term-moved", { worktreeId: "wt-2", location: "background" }));
+    restoreBackgroundTerminalMock.mockImplementation(() => order.push("restore"));
+    activateTerminalMock.mockImplementation(() => order.push("activate"));
+    const showWorktree = vi.fn((id: string) => order.push(`show:${id}`));
+    await resumeSessionIntoPanel(baseSession, target, { showWorktree });
+    // Its own worktree, not the record's, and restored without being refiled.
+    expect(order).toEqual(["show:wt-2", "restore", "activate"]);
+    expect(restoreBackgroundTerminalMock).toHaveBeenCalledWith("term-moved");
+  });
+
+  it("runs the spawn-only checks for a new launch and never for a live pane", async () => {
+    const validateSpawn = vi.fn(() => {
+      throw new Error("refused for a new launch");
+    });
+    await expect(resumeSessionIntoPanel(baseSession, target, { validateSpawn })).rejects.toThrow(
+      "refused for a new launch"
+    );
+    expect(addPanelMock).not.toHaveBeenCalled();
+
+    validateSpawn.mockClear();
+    setPanels(pane("term-moved", { worktreeId: "wt-2" }));
+    await expect(
+      resumeSessionIntoPanel(baseSession, target, { validateSpawn })
+    ).resolves.toMatchObject({ terminalId: "term-moved", outcome: "activatedExisting" });
+    expect(validateSpawn).not.toHaveBeenCalled();
+  });
+
+  it("shares one launch between resumes aiming the session at different worktrees", async () => {
+    let settle: (id: string) => void = () => {};
+    addPanelMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        settle = resolve;
+      })
+    );
+    const first = resumeSessionIntoPanel(baseSession, target);
+    const second = resumeSessionIntoPanel(baseSession, { cwd: "/other", worktreeId: "wt-2" });
+    settle("term-new");
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+    // The joiner is told where the one pane is filed, not where it aimed.
+    expect(b).toEqual(a);
+    expect(a.worktreeId).toBe("wt-1");
+  });
+
+  it("hands back a pane that took the session while the launch was being prepared", async () => {
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockImplementationOnce(async () => {
+      setPanels(pane("term-restored", { worktreeId: "wt-2" }));
+      return undefined;
+    });
+    const result = await resumeSessionIntoPanel(baseSession, target);
+    expect(result).toMatchObject({ terminalId: "term-restored", outcome: "activatedExisting" });
     expect(addPanelMock).not.toHaveBeenCalled();
   });
 

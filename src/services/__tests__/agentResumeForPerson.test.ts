@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resumeSessionIntoPanel, selection, spawnedIn } = vi.hoisted(() => ({
   resumeSessionIntoPanel: vi.fn(),
-  spawnedIn: { worktreeId: null as string | null },
+  spawnedIn: { worktreeId: null as string | null, count: 0 },
   selection: {
     activeWorktreeId: "/repo/main" as string | null,
     selectWorktree: vi.fn((id: string) => {
@@ -42,12 +42,47 @@ describe("resumeSessionForPerson", () => {
     selection.activeWorktreeId = "/repo/main";
     resumeSessionIntoPanel.mockImplementation(
       async (_session: unknown, target: { worktreeId?: string }, options) => {
+        // As the shared resume runs them when no live pane holds the session.
+        options?.validateSpawn?.();
         options?.onBeforeSpawn?.();
         // The worktree on screen as the pane is added: a different one backgrounds it.
         spawnedIn.worktreeId = selection.activeWorktreeId;
+        spawnedIn.count += 1;
         return { terminalId: "term-9", outcome: "created", worktreeId: target.worktreeId };
       }
     );
+    spawnedIn.count = 0;
+  });
+
+  it("shows the worktree a live pane is filed under, not the record's (#18009)", async () => {
+    // The conversation began in main and its pane was moved to the feature
+    // worktree; the record still names main.
+    resumeSessionIntoPanel.mockImplementationOnce(async (_session, _target, options) => {
+      options?.showWorktree?.("/repo/feature");
+      return {
+        terminalId: "term-moved",
+        outcome: "activatedExisting",
+        worktreeId: "/repo/feature",
+      };
+    });
+    const resumed = await resumeSessionForPerson(
+      { ...session, worktreeId: "/repo/main", cwd: "/repo/main" },
+      worktrees
+    );
+    expect(resumed.terminalId).toBe("term-moved");
+    expect(selection.activeWorktreeId).toBe("/repo/feature");
+    expect(selection.selectWorktree).not.toHaveBeenCalledWith("/repo/main", expect.anything());
+  });
+
+  it("brings a joined resume into the worktree its pane is filed under", async () => {
+    // Joined a resume an agent started for the same session elsewhere.
+    resumeSessionIntoPanel.mockImplementationOnce(async () => ({
+      terminalId: "term-9",
+      outcome: "created",
+      worktreeId: "/repo/other",
+    }));
+    await resumeSessionForPerson(session, worktrees);
+    expect(selection.activeWorktreeId).toBe("/repo/other");
   });
 
   it("resumes in the session's own directory, its worktree selected before the spawn", async () => {
@@ -100,7 +135,23 @@ describe("resumeSessionForPerson", () => {
     await expect(
       resumeSessionForPerson({ ...session, worktreeId: "/repo/deleted" }, worktrees)
     ).rejects.toBeInstanceOf(ResumeWorktreeGoneError);
-    expect(resumeSessionIntoPanel).not.toHaveBeenCalled();
+    expect(spawnedIn.count).toBe(0);
     expect(selection.selectWorktree).not.toHaveBeenCalled();
+  });
+
+  it("still hands back a live pane of a session whose recorded worktree is gone", async () => {
+    // Moved out of the worktree before it was deleted: the pane holds the
+    // conversation, so there is nothing to refuse.
+    resumeSessionIntoPanel.mockImplementationOnce(async () => ({
+      terminalId: "term-moved",
+      outcome: "activatedExisting",
+      worktreeId: "/repo/feature",
+    }));
+    const resumed = await resumeSessionForPerson(
+      { ...session, worktreeId: "/repo/deleted" },
+      worktrees
+    );
+    expect(resumed.terminalId).toBe("term-moved");
+    expect(selection.activeWorktreeId).toBe("/repo/feature");
   });
 });
