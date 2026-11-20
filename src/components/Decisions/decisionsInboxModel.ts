@@ -1255,17 +1255,26 @@ export function answerFate(
 }
 
 /**
- * Where a dismissal confirmed from the inbox stands: taken, or queued to be,
- * until its record says it was refused or settled some other way.
+ * Where a dismissal confirmed from the inbox stands: taken once declined. A
+ * queued one is read again until it settles, and meanwhile a phone's
+ * dismissal of the same question would list it declined just the same.
  */
 export function dismissFate(decline: Pick<DeclineSubmission, "phase"> | null): InboxActionFate {
   const phase = decline?.phase ?? null;
   if (phase === null) return "open";
   if (phase.kind === "refused") return "failed";
   if (phase.kind !== "settled") return "open";
-  return phase.outcome.status === "declined" || phase.outcome.status === "queued"
-    ? "taken"
-    : "failed";
+  if (phase.outcome.status === "declined") return "taken";
+  return phase.outcome.status === "queued" ? "open" : "failed";
+}
+
+/**
+ * What the question asks of the person now, as the list names it: the
+ * agent's request for a reply and the ask it was shown with. One that
+ * changes while it waits is something new, not what the person acted on.
+ */
+export function askKey(item: Pick<DecisionQuestionListItem, "replyRequest" | "inbox">): string {
+  return [item.replyRequest ?? "", item.inbox?.ask ?? ""].join("\u0000");
 }
 
 const ACTED: Record<InboxAction, (label: string) => string> = {

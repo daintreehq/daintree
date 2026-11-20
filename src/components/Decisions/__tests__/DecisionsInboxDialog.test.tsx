@@ -4165,8 +4165,12 @@ describe("DecisionsInboxDialog", () => {
       await answerShown();
       // Taken, but still listed as waiting: nothing moves yet.
       await waitFor(() =>
-        expect(screen.getByTestId("decision-answer-status").textContent).not.toBe("")
+        expect(
+          useDecisionsAnswerStore.getState().records[answerKey(reference("question-2"))]?.submission
+            ?.phase
+        ).toEqual({ kind: "settled", outcome: { status: "sent" } })
       );
+      await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
 
       push(listed({ ...asked, standing: { kind: "to-type" } }, 2));
@@ -4177,11 +4181,11 @@ describe("DecisionsInboxDialog", () => {
       expect(scrolled.mock.contexts).toContain(next);
       // What was done stays findable, and is said once, by name.
       expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(document.activeElement).toBe(rowNamed("q-4"));
       expect(moved()).toEqual([
         "Answer sent for question q-2. It's in Being delivered now. Showing q-4.",
       ]);
-      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
-      expect(document.activeElement).toBe(rowNamed("q-4"));
     });
 
     it("moves on whichever comes first, the list's move or the answer's taking", async () => {
@@ -4202,6 +4206,35 @@ describe("DecisionsInboxDialog", () => {
       );
       await waitFor(() => expect(selectedAlias()).toBe("q-4"));
       expect(document.activeElement).toBe(rowNamed("q-4"));
+      expect(moved()).toEqual([
+        "Answer sent for question q-2. It's in Being delivered now. Showing q-4.",
+      ]);
+    });
+
+    it("stays on a question that asks for a reply before the list ever showed the answer land", async () => {
+      open();
+      await answerShown();
+      await waitFor(() =>
+        expect(
+          useDecisionsAnswerStore.getState().records[answerKey(reference("question-2"))]?.submission
+            ?.phase.kind
+        ).toBe("settled")
+      );
+      // A lagging list: the next snapshot already has the agent asking for a reply.
+      push(
+        listed(
+          { ...asked, standing: { kind: "waiting", reason: "reply" }, replyRequest: "ask-2" },
+          2
+        )
+      );
+      await act(async () => {});
+      push(listed({ ...asked, standing: { kind: "to-type" }, replyRequest: null }, 3));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
     });
 
     it("stays on a question the phone answered first, its answer from here turned away", async () => {
@@ -4268,12 +4301,14 @@ describe("DecisionsInboxDialog", () => {
       expect(moved()).toEqual([]);
     });
 
-    it("stays on the question while the person writes a follow-up to it", async () => {
+    it("says what happened but stays on the question while the person writes a follow-up to it", async () => {
       const reply = deferred<DecisionQuestionAnswerResult>();
       answerQuestion.mockImplementation(() => reply.promise);
       open();
       await answerShown();
-      act(() => screen.getByTestId("decision-follow-up-text").focus());
+      const field = screen.getByTestId("decision-follow-up-text");
+      act(() => field.focus());
+      fireEvent.change(field, { target: { value: "Also run the migrations" } });
 
       const answerId = answerQuestion.mock.calls[0]![0].answerId;
       await act(async () =>
@@ -4283,9 +4318,31 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() =>
         expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
       );
-      await act(async () => {});
+      await waitFor(() =>
+        expect(moved()).toEqual(["Answer sent for question q-2. It's in Being delivered now."])
+      );
       expect(selectedAlias()).toBe("q-2");
-      expect(document.activeElement).toBe(screen.getByTestId("decision-follow-up-text"));
+      expect(document.activeElement).toBe(field);
+      expect((field as HTMLTextAreaElement).value).toBe("Also run the migrations");
+    });
+
+    it("stays on a cleared question whose answer the person went on to choose", async () => {
+      const cleared = deferred<DecisionQuestionMarkResult>();
+      markQuestions.mockImplementation(({ action, questions }) =>
+        action === "clear"
+          ? cleared.promise
+          : Promise.resolve({ result: "marked", marked: questions.length })
+      );
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      fireEvent.click(await screen.findByRole("radio", { name: "Ship it" }));
+      await act(async () => cleared.resolve({ result: "marked", marked: 1 }));
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() =>
+        expect(moved()).toEqual(["Question q-2 cleared on this computer. It's in Cleared now."])
+      );
+      expect(selectedAlias()).toBe("q-2");
     });
 
     it("goes on once a clear from here lands in Cleared, saying so once", async () => {
@@ -4310,6 +4367,45 @@ describe("DecisionsInboxDialog", () => {
       ]);
     });
 
+    it("goes on from a clear pressed twice before the list moved", async () => {
+      let first = true;
+      markQuestions.mockImplementation(async ({ action, questions }) => {
+        if (action !== "clear") return { result: "marked", marked: questions.length };
+        const marked = first ? 1 : 0;
+        first = false;
+        return { result: "marked", marked };
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      const button = screen.getByTestId("decisions-inbox-clear");
+      fireEvent.click(button);
+      fireEvent.click(button);
+      await act(async () => {});
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+      expect(
+        markQuestions.mock.calls.filter(([payload]) => payload.action === "clear")
+      ).toHaveLength(1);
+    });
+
+    it("still says a clear landed once the person picked another row before the list moved", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions.mock.calls.some(([payload]) => payload.action === "clear")).toBe(true)
+      );
+      await act(async () => {});
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(said).toEqual(["1 question cleared on this computer"]));
+      push(listed({ ...asked, inbox: { ...unmarked, seen: true, cleared: true } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
+      );
+      expect(selectedAlias()).toBe("q-3");
+      expect(said).toEqual(["1 question cleared on this computer"]);
+    });
+
     it("stays on a clear that changed nothing, as when the question asked something new", async () => {
       markQuestions.mockImplementation(async ({ action, questions }) =>
         action === "clear"
@@ -4331,6 +4427,7 @@ describe("DecisionsInboxDialog", () => {
       await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
+      expect(said.filter((message) => message.includes("cleared on this computer"))).toEqual([]);
     });
 
     it("stays on the last question waiting once it's cleared, and the list says nothing else waits", async () => {
@@ -4368,15 +4465,21 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
-      // The list moves before the confirmation has finished closing.
-      declineQuestion.mockImplementationOnce(async ({ declineId }) => {
-        const closed = listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2);
-        for (const listener of [...listListeners]) listener(closed);
-        return { result: "submitted", declineId, outcome: { status: "declined" } };
-      });
+      const declined = deferred<DecisionQuestionDeclineResult>();
+      declineQuestion.mockImplementationOnce(() => declined.promise);
       await act(async () => {
         fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
       });
+      // The list moves while the dismissal is with main, before the confirmation closes.
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
+      const declineId = declineQuestion.mock.calls[0]![0].declineId;
+      await act(async () =>
+        declined.resolve({ result: "submitted", declineId, outcome: { status: "declined" } })
+      );
+      // Still on its way out: nothing moves or is said until it hands focus back.
+      expect(screen.queryByRole("alertdialog")).not.toBeNull();
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       await waitFor(() => expect(selectedAlias()).toBe("q-4"));
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
@@ -4399,12 +4502,16 @@ describe("DecisionsInboxDialog", () => {
       });
       // Offered a withdrawal instead: not yet anything done.
       expect(confirm.textContent).toContain("Withdraw question q-2?");
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
       const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
       await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
       await act(async () => {
         fireEvent.click(withdraw);
       });
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(cancelQuestionByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: reference("question-2"),
+      });
       expect(selectedAlias()).toBe("q-2");
 
       push(listed({ ...asked, standing: { kind: "settled", outcome: "withdrawn" } }, 2));
@@ -4413,7 +4520,7 @@ describe("DecisionsInboxDialog", () => {
       expect(moved()).toEqual(["Question q-2 withdrawn. It's in History now. Showing q-4."]);
     });
 
-    it("stays on a question whose deadline passes while its dismissal is confirmed", async () => {
+    it("stays on a question queued to be dismissed here that the phone dismissed first", async () => {
       open();
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
       fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
@@ -4423,6 +4530,24 @@ describe("DecisionsInboxDialog", () => {
         declineId,
         outcome: { status: "queued" },
       }));
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      push(listed({ ...asked, standing: { kind: "settled", outcome: "declined" } }, 2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-2")
+      );
+      await act(async () => {});
+      expect(selectedAlias()).toBe("q-2");
+      expect(moved()).toEqual([]);
+    });
+
+    it("stays on a question listed as closed some other way than the dismissal taken here", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
       await act(async () => {
         fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
       });

@@ -84,6 +84,7 @@ import {
   agentName,
   askerNotes,
   answerFate,
+  askKey,
   askShownIn,
   askedOnHost,
   attentionNotice,
@@ -238,6 +239,8 @@ interface InboxActed {
   /** Which press this was, so a late result of an earlier one changes nothing. */
   id: number;
   key: string;
+  /** What it asked as the person acted: a new ask while it waits is no longer theirs to move on from. */
+  ask: string;
   /** Its answer record, where an answer or a dismissal from here stands. */
   record: string;
   label: string;
@@ -248,7 +251,24 @@ interface InboxActed {
   fate: InboxActionFate;
   /** While the confirmation it was taken in closes: the keyboard moves once that has handed it back. */
   held: boolean;
+  /** The person went on to write or choose something in the question: it's said, not moved on from. */
+  stay: boolean;
 }
+
+/** Once the person's action has landed: what's said, and the question gone on to, if the inbox may. */
+interface InboxArrival {
+  id: number;
+  seq: number;
+  /** With the list and the ask (#18047) it was chosen in, so the choice holds in them. */
+  next: { key: string; index: number; scope: InboxScope; ask: number } | null;
+  /** Said when it goes on to `next`. */
+  text: string;
+  /** Said when it stays: no question after it, or the person busy elsewhere. */
+  stayText: string;
+}
+
+/** What a single clear says once it lands, when no move names it. */
+const CLEARED_ONE = markedText("clear", { result: "marked", marked: 1 });
 
 /** A text field: focus going into one means the person is writing, and stays where they are. */
 function isTextEntry(target: EventTarget): boolean {
@@ -1450,16 +1470,22 @@ export function DecisionsInboxDialog() {
       seq: request.seq,
       id,
       key: referenceKey(item.reference),
+      ask: askKey(item),
       record: answerKey(item.reference),
       label: aliasLabel(item.alias),
       action,
       prior: null,
       fate: "open",
       held: false,
+      stay: false,
       ...over,
     });
     return id;
   };
+  const stay = () =>
+    setActed((current) =>
+      current === null || current.stay ? current : { ...current, stay: true }
+    );
   // A clear's call settles it; true when the move it makes will say so instead.
   const settleClear = (id: number, taken: boolean): boolean => {
     setActed((current) =>
@@ -1912,9 +1938,7 @@ export function DecisionsInboxDialog() {
   // next question waiting and its row takes the keyboard. Anything else that moves it, a phone's
   // answer, a relay's update or the clock, leaves them where they are.
   const actedRecord = useAnswerRecord(acted?.record ?? "");
-  const [arrival, setArrival] = useState<{ id: number; key: string | null; text: string } | null>(
-    null
-  );
+  const [arrival, setArrival] = useState<InboxArrival | null>(null);
   if (acted !== null) {
     const live = acted.seq === request.seq && active && acted.key === selectedKey;
     const at = groups.find((group) =>
@@ -1932,35 +1956,45 @@ export function DecisionsInboxDialog() {
       at === undefined ||
       item === undefined ||
       fate === "failed" ||
-      (at.id !== "needs-you" && !landedBy(acted.action, item, at.id))
+      (at.id === "needs-you" ? askKey(item) !== acted.ask : !landedBy(acted.action, item, at.id))
     ) {
       setActed(null);
+      // A clear that was taken, whose move would have said so: said on its own.
+      if (acted.action === "clear" && acted.fate === "taken" && CLEARED_ONE !== null) {
+        setArrival({
+          id: acted.id,
+          seq: acted.seq,
+          next: null,
+          text: CLEARED_ONE,
+          stayText: CLEARED_ONE,
+        });
+      }
     } else if (at.id !== "needs-you" && fate === "taken" && !acted.held) {
       // Taken once: with nothing else waiting it stays shown, and a question asked later is no
       // reason to move.
       setActed(null);
       const next = nextWaiting(groups, acted.key);
-      const nextKey = next === null ? null : referenceKey(next.reference);
-      if (next !== null && nextKey !== null) {
-        setChoice({
-          seq: request.seq,
-          scope,
-          ask,
-          key: nextKey,
-          index: drawnIndexOf(nextKey),
-          picked: true,
-        });
-      }
+      const after = next === null ? waitingLine : null;
       setArrival({
         id: acted.id,
-        key: nextKey,
+        seq: acted.seq,
+        next:
+          next === null || acted.stay
+            ? null
+            : {
+                key: referenceKey(next.reference),
+                index: drawnIndexOf(referenceKey(next.reference)),
+                scope,
+                ask,
+              },
         text: movedText(
           acted.action,
           acted.label,
           at.title,
           next === null ? null : aliasLabel(next.alias),
-          next === null ? waitingLine : null
+          after
         ),
+        stayText: movedText(acted.action, acted.label, at.title, null, after),
       });
     }
   }
@@ -1968,19 +2002,36 @@ export function DecisionsInboxDialog() {
   useLayoutEffect(() => {
     if (arrival === null || arrival.id === arrived.current) return;
     arrived.current = arrival.id;
-    announce(arrival.text);
     const list = listRef.current;
-    if (arrival.key === null || list === null) return;
-    // Not from under another dialog over the inbox, or from wherever the person went.
+    const next = arrival.next;
+    const row =
+      next === null || list === null
+        ? null
+        : list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(next.key)}"]`);
+    // Never from under another dialog over the inbox, such as one of the question's images, nor
+    // from wherever else the person went: there it only says what happened.
     const focused = document.activeElement;
-    const dialog = list.closest('[role="dialog"]');
-    if (focused !== null && focused !== document.body && !dialog?.contains(focused)) return;
-    const row = list.querySelector<HTMLElement>(
-      `[data-inbox-key="${encodeURIComponent(arrival.key)}"]`
-    );
-    if (row === null) return;
+    const inside =
+      focused === null ||
+      focused === document.body ||
+      (list?.closest('[role="dialog"]')?.contains(focused) ?? false);
+    const shown = useDecisionsInboxStore.getState();
+    const showing = shown.isOpen && shown.request.seq === arrival.seq;
+    if (next === null || row === null || !inside || !showing) {
+      announce(arrival.stayText);
+      return;
+    }
     row.focus({ preventScroll: true });
     row.scrollIntoView({ block: "nearest" });
+    setChoice({
+      seq: arrival.seq,
+      scope: next.scope,
+      ask: next.ask,
+      key: next.key,
+      index: next.index,
+      picked: true,
+    });
+    announce(arrival.text);
   }, [arrival, announce]);
 
   return (
@@ -2172,9 +2223,13 @@ export function DecisionsInboxDialog() {
               }}
               aria-labelledby={selected !== null ? detailHeadingId : undefined}
               aria-label={selected === null ? "Question details" : undefined}
-              // Writing something more to it, such as a follow-up, keeps the person on it (#18035).
+              // Writing or choosing something more in it, such as a follow-up, keeps the person on it
+              // (#18035).
               onFocus={(event) => {
-                if (acted !== null && isTextEntry(event.target)) setActed(null);
+                if (acted !== null && isTextEntry(event.target)) stay();
+              }}
+              onChange={() => {
+                if (acted !== null) stay();
               }}
               // Room for the sticky bar, so whatever is scrolled to opens below it rather than under it.
               className="flex min-w-0 flex-1 scroll-pt-16 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
@@ -2257,6 +2312,10 @@ export function DecisionsInboxDialog() {
                                     markShown("restore", [selected]);
                                     return;
                                   }
+                                  // A second press while the first goes changes nothing, and mustn't
+                                  // take its place.
+                                  if (acted?.action === "clear" && acted.key === selectedKey)
+                                    return;
                                   markShown("clear", [actOn], act(actOn, "clear"));
                                 }}
                                 className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
