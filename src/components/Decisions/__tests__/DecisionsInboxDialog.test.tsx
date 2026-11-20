@@ -3812,7 +3812,12 @@ describe("DecisionsInboxDialog", () => {
       }
 
       it("shows another project's question on every project, its row taking the keyboard", async () => {
+        const said: string[] = [];
+        const announce = useAnnouncerStore.getState().announce;
+        useAnnouncerStore.setState({ announce: (message: string) => said.push(message) });
+        onTestFinished(() => useAnnouncerStore.setState({ announce }));
         await narrow();
+        const { seq } = useDecisionsInboxStore.getState().request;
         askFor(byReference(BETA_WAITING));
         await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-6", "q-2", "q-7", "q-3"]));
         expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
@@ -3822,6 +3827,16 @@ describe("DecisionsInboxDialog", () => {
         expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
           "Clear Needs you in all projects"
         );
+        // The same opening, which says the list widened, once.
+        expect(useDecisionsInboxStore.getState().request.seq).toBe(seq);
+        const widened = () => said.filter((message) => message.startsWith("Showing all projects"));
+        await waitFor(() => expect(widened()).toHaveLength(1));
+        expect(widened()[0]).toMatch(/^Showing all projects for q-6\b/);
+        fireEvent.click(rowNamed("q-2"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        fireEvent.click(rowNamed("q-6"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+        expect(widened()).toHaveLength(1);
 
         // Narrowed again by the person, it stays narrowed as the list moves.
         fireEvent.click(scopeSegment("project"));
@@ -3863,6 +3878,36 @@ describe("DecisionsInboxDialog", () => {
           "Clear Needs you in this project"
         );
         await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      });
+
+      it("keeps a row the person picked before another project's question asked for is listed", async () => {
+        const later = item("question-4", 4, OPEN, {
+          reference: reference("question-4", { projectId: "project-b", terminalId: "t4" }),
+          projectLabel: "Beta",
+        });
+        listQuestions.mockResolvedValue({
+          ...MIXED,
+          questions: [...MIXED.questions, ALPHA_CLEARED],
+        });
+        CONTENT["question-8"] = content("question-8", 8, {
+          status: "open",
+          terminalId: "t8",
+          reference: ALPHA_CLEARED.reference,
+        });
+        onTestFinished(() => {
+          delete CONTENT["question-8"];
+        });
+        await narrow();
+        askFor(byReference(later));
+        await act(async () => {});
+        unfold("cleared");
+        fireEvent.click(rowNamed("q-8"));
+        await waitFor(() => expect(rowNamed("q-8").getAttribute("aria-current")).toBe("true"));
+        push({ ...MIXED, revision: 2, questions: [...MIXED.questions, ALPHA_CLEARED, later] });
+        await act(async () => {});
+        expect(rows().map(aliasOf)).toEqual(["q-2", "q-8"]);
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+        expect(rowNamed("q-8").getAttribute("aria-current")).toBe("true");
       });
 
       it("shows another project's question listed only after it was asked for", async () => {

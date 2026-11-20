@@ -1448,16 +1448,47 @@ export function DecisionsInboxDialog() {
     viewWorkspace === null || isScratchWorkspaceId(viewWorkspace)
       ? null
       : { hostId: currentHostId(), projectId: viewWorkspace };
+  // A question asked for (#18047): on opening, or in this opening while it stays open.
+  const asked = request.question ?? null;
+  const ask = request.ask ?? 0;
+  const viewHostId = currentHostId();
+  // The question shown sticks to the one chosen, by reference, as the list moves around it. A
+  // question asked for while open starts the choice afresh.
+  const [choice, setChoice] = useState<
+    (InboxChoice & { seq: number; scope: InboxScope; ask: number }) | null
+  >(null);
+  const chosen =
+    choice !== null && choice.seq === request.seq && choice.ask === ask ? choice : null;
   // Each opening starts on every project, as the toolbar's count does. Once the list holds this
   // project and another, the switch stays for the opening, so a push that empties one side never
   // takes the switch from under the keyboard or quietly widens what Clear reaches.
   const offered = questions !== null && scopeOffered(questions, windowProject);
-  const [scopeChoice, setScopeChoice] = useState<{ seq: number; scope: InboxScope } | null>(null);
-  const openingScope =
-    scopeChoice !== null && scopeChoice.seq === request.seq ? scopeChoice.scope : null;
-  if (openingScope === null && offered) setScopeChoice({ seq: request.seq, scope: "all" });
-  const scope: InboxScope = openingScope ?? "all";
-  const showScope = questions !== null && (offered || openingScope !== null);
+  const [scopeChoice, setScopeChoice] = useState<{
+    seq: number;
+    scope: InboxScope;
+    /** The ask it was chosen at: only a later one can widen it. */
+    ask: number;
+    /** Widened for that ask's question (#18119). */
+    widened: boolean;
+  } | null>(null);
+  const opening = scopeChoice !== null && scopeChoice.seq === request.seq ? scopeChoice : null;
+  let scope: InboxScope = opening?.scope ?? "all";
+  if (opening === null) {
+    if (offered) setScopeChoice({ seq: request.seq, scope, ask, widened: false });
+  } else if (opening.scope === "project" && opening.ask !== ask && asked !== null) {
+    // Asked for another project's question while narrowed (#18119), the list goes back to every
+    // project, once per ask, so the question is shown and Clear says how far it reaches. Not once
+    // the person picked a row since the ask, which keeps the list it was picked in, nor before
+    // the question is listed.
+    const match = questions === null ? undefined : findAsked(questions, asked, viewHostId);
+    const picked = chosen?.picked === true;
+    if (match !== undefined || picked) {
+      const widened = !picked && match !== undefined && !inWindowProject(match, windowProject);
+      if (widened) scope = "all";
+      setScopeChoice({ seq: request.seq, scope, ask, widened });
+    }
+  }
+  const showScope = questions !== null && (offered || opening !== null);
   const shown = questions === null ? null : scopedQuestions(questions, scope, windowProject);
   const groups = shown === null ? [] : inboxGroups(shown, nowMs);
   const ordered = groups.flatMap((group) => group.items);
@@ -1535,17 +1566,6 @@ export function DecisionsInboxDialog() {
     };
   };
 
-  // A question asked for (#18047): on opening, or in this opening while it stays open.
-  const asked = request.question ?? null;
-  const ask = request.ask ?? 0;
-  const viewHostId = currentHostId();
-  // The question shown sticks to the one chosen, by reference, as the list moves around it. A
-  // question asked for while open starts the choice afresh.
-  const [choice, setChoice] = useState<
-    (InboxChoice & { seq: number; scope: InboxScope; ask: number }) | null
-  >(null);
-  const chosen =
-    choice !== null && choice.seq === request.seq && choice.ask === ask ? choice : null;
   // A choice made in the other list keeps its question while this one shows it, but its place
   // was in the other list: nothing here takes that place by index.
   const sameScope = chosen !== null && chosen.scope === scope;
@@ -1607,6 +1627,8 @@ export function DecisionsInboxDialog() {
 
   const askedShown =
     asked !== null && selected !== null && findAsked([selected], asked, viewHostId) !== undefined;
+  // The question the list went back to every project for (#18119), whose announcement says so.
+  const widenedFor = opening?.widened === true && opening.ask === ask && askedShown ? ask : null;
   // One target per question, so a push that only renews the list's objects doesn't start the
   // reader's reads over. A reply's question asked for while shown does start them over, so a read
   // begun before the ask, which can predate the follow-up it opens at, never paints.
@@ -1944,6 +1966,8 @@ export function DecisionsInboxDialog() {
   const announced = useRef<{ seq: number; key: string | null } | null>(null);
   /** The question the person's own action moved the inbox on to (#18035), whose move said it. */
   const movedTo = useRef<{ seq: number; key: string } | null>(null);
+  /** The ask whose widening was said: once, not again as the person comes back to its question. */
+  const widenSaid = useRef<{ seq: number; ask: number } | null>(null);
   useEffect(() => {
     if (!active || listRead.state !== "listed") return;
     const last = announced.current;
@@ -1969,8 +1993,23 @@ export function DecisionsInboxDialog() {
     if (!onRow && line === undefined && readResult === null) return;
     announced.current = { seq: request.seq, key: selectedKey };
     const alias = aliasLabel(selected.alias);
-    announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
-  }, [active, listRead.state, selected, selectedKey, request.seq, lines, readResult, announce]);
+    const what = !onRow && line != null ? `${alias}: ${line}` : alias;
+    const said = widenSaid.current;
+    const widening =
+      widenedFor !== null && (said === null || said.seq !== request.seq || said.ask !== widenedFor);
+    if (widening) widenSaid.current = { seq: request.seq, ask: widenedFor };
+    announce(widening ? `Showing all projects for ${what}` : `Showing ${what}`);
+  }, [
+    active,
+    listRead.state,
+    selected,
+    selectedKey,
+    request.seq,
+    lines,
+    readResult,
+    announce,
+    widenedFor,
+  ]);
 
   // An action that resolved the stall went with it, taking the keyboard along: it
   // waits in the detail, on the question that moved, rather than on nothing.
@@ -2444,7 +2483,9 @@ export function DecisionsInboxDialog() {
                     aria-label="Questions shown"
                     testId="decisions-inbox-scope"
                     value={scope}
-                    onChange={(next) => setScopeChoice({ seq: request.seq, scope: next })}
+                    onChange={(next) =>
+                      setScopeChoice({ seq: request.seq, scope: next, ask, widened: false })
+                    }
                     options={SCOPE_OPTIONS}
                   />
                 )}
