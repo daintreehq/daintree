@@ -1218,11 +1218,20 @@ describe("DecisionsService relay connection", () => {
       expect(made[1]!.options.role).toBe("desktop-host");
       expect(made[1]!.options.policy).toBe(host);
       expect(made[1]!.options.advisoryDeadlines).toBe(expected);
-      // What the Host reports to its owner: what it was started with, until its connection says.
+      // What the Host reports to its owner: no advice until its connection settles that it types
+      // the outcome, then what it settled.
       expect(service.getQuestionPolicy()).toEqual({
-        advisoryQuestions: expected,
+        advisoryQuestions: false,
         defaultQuestionExpiryMs: host?.defaultQuestionExpiryMs,
       });
+      made[1]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as QuestionSource["store"],
+        policy: {} as QuestionSource["policy"],
+        advisoryDeadlines: made[1]!.options.advisoryDeadlines,
+      });
+      expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(expected);
       await service.stop();
       expect(service.getQuestionPolicy()).toBeNull();
     }
@@ -1581,28 +1590,29 @@ describe("DecisionsService relay connection", () => {
 
   it("reports a Host's advice as its connection settled it, and says so when that changes it (#17942)", async () => {
     const made: RelayConnectionOptions[] = [];
-    const changed = vi.fn();
-    const service = new DecisionsService({
+    // What the Host would report each time it's told its policy changed, read as it's told.
+    const told: Array<boolean | undefined> = [];
+    const service: DecisionsService = new DecisionsService({
       openStore: async () => fakeStore(),
       keyFilePath: () => "/nonexistent/keys.bin",
-      onQuestionPolicyChanged: changed,
+      onQuestionPolicyChanged: () => told.push(service.getQuestionPolicy()?.advisoryQuestions),
       connect: (options) => {
         made.push(options);
         return { start: () => {}, stop: () => {} };
       },
     });
     await service.start(on(RELAY), "host");
-    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
-    // Settled as assumed: nothing to tell.
+    // Nothing settles advice before its connection says it types the outcome.
+    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
     made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
-    expect(changed).not.toHaveBeenCalled();
+    expect(told).toEqual([true]);
+    // The same again: nothing to tell.
+    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
+    expect(told).toEqual([true]);
     // Delivery couldn't start, so the connection gave no bridge advice: the Host says it can't take it.
     made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: false });
+    expect(told).toEqual([true, false]);
     expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(false);
-    expect(changed).toHaveBeenCalledTimes(1);
-    made[0]!.onQuestionsReady!({ ...SOURCE, advisoryDeadlines: true });
-    expect(service.getQuestionPolicy()?.advisoryQuestions).toBe(true);
-    expect(changed).toHaveBeenCalledTimes(2);
     await service.stop();
   });
 

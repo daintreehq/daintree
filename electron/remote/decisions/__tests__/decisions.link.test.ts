@@ -997,48 +997,80 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
     const answer = client.call(DecisionsLinkMethod.OWNER_STATE_V3, OWNER);
     // The Host's first report as its Decisions loads goes as v2, is refused, and is told as v1.
     await vi.waitFor(() => expect(pushed).toEqual([{ runtime: LEGACY_RUNNING }]));
+    // A v2 announcement, then a v3 one, both waiting while the first does.
+    const older = client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+    const newer = client.call(DecisionsLinkMethod.OWNER_STATE_V3, OWNER);
     release();
+    // Each is answered as the method it came by asks, whatever came after it.
     expect(await answer).toEqual({ runtime: RUNNING });
+    expect(await older).toEqual({ runtime: LEGACY_RUNNING });
+    expect(await newer).toEqual({ runtime: RUNNING });
   });
 
-  it("never falls back with an announcement a later one overtook, so an older word isn't applied last", async () => {
+  /**
+   * A Host from #16230 on but before #17942, recording what it was told, and
+   * a Shell whose v3 probes are refused as the test says, out of order or not.
+   */
+  async function probesRefusedInTurn(initial: OwnerStateAnnouncement) {
     const { host, client } = await pair();
-    // A Host from #16230 on but before #17942: it takes v2 and records what it was told.
     const told: OwnerStateAnnouncement[] = [];
     host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), (payload) => {
       told.push(payload as OwnerStateAnnouncement);
       return { runtime: LEGACY_RUNNING };
     });
-    // Each v3 probe is refused when the test says, so the refusals arrive out of order.
-    const refusals: Array<() => void> = [];
+    const refusals: Array<(code: string) => void> = [];
     const call = client.call.bind(client);
     vi.spyOn(client, "call").mockImplementation(((method: string, ...rest: unknown[]) => {
       if (method !== DecisionsLinkMethod.OWNER_STATE_V3) {
         return (call as (...args: unknown[]) => Promise<unknown>)(method, ...rest);
       }
       return new Promise((_resolve, reject) =>
-        refusals.push(() =>
-          reject(Object.assign(new Error("unsupported"), { code: "UNSUPPORTED" }))
-        )
+        refusals.push((code) => reject(Object.assign(new Error(code), { code })))
       );
     }) as typeof client.call);
-    const sharing = { ...OWNER, terminalSnapshots: true };
-    let state: OwnerStateAnnouncement = sharing;
+    let state = initial;
     const { client: shell } = shellOver(client, () => state);
     await vi.waitFor(() => expect(refusals).toHaveLength(1));
-    // The owner turns snapshots off while the first probe still waits.
-    state = OWNER;
-    shell.announceOwnerState();
-    await vi.waitFor(() => expect(refusals).toHaveLength(2));
+    return {
+      told,
+      refusals,
+      shell,
+      /** The owner's word changes, and is announced again while the first probe still waits. */
+      async change(next: OwnerStateAnnouncement) {
+        state = next;
+        shell.announceOwnerState();
+        await vi.waitFor(() => expect(refusals).toHaveLength(2));
+      },
+    };
+  }
+
+  it("falls back with what the owner says now, so an older word is never applied last", async () => {
+    const { told, refusals, shell, change } = await probesRefusedInTurn({
+      ...OWNER,
+      terminalSnapshots: true,
+    });
+    await change(OWNER);
 
     // The later announcement's refusal lands first: it falls back and is applied.
-    refusals[1]!();
+    refusals[1]!("UNSUPPORTED");
     await vi.waitFor(() => expect(told).toEqual([OWNER]));
-    // The earlier one's lands after: it was overtaken, so it never sends its older word.
-    refusals[0]!();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(told).toEqual([OWNER]);
+    // The earlier one's lands after: it falls back with the owner's word as it is now.
+    refusals[0]!("UNSUPPORTED");
+    await vi.waitFor(() => expect(told).toEqual([OWNER, OWNER]));
     expect(shell.runtimeOf(HOST)?.runtime).toEqual(LEGACY_RUNNING);
+  });
+
+  it("still tells the Host the owner's latest word when the announcement that carried it failed", async () => {
+    const { told, refusals, change } = await probesRefusedInTurn({
+      ...OWNER,
+      terminalSnapshots: true,
+    });
+    await change(OWNER);
+
+    // The later probe fails outright (a full queue); the earlier one's refusal carries the latest word.
+    refusals[1]!("RATE_LIMITED");
+    refusals[0]!("UNSUPPORTED");
+    await vi.waitFor(() => expect(told).toEqual([OWNER]));
   });
 
   /** A Host serving `session` whose key file holds an identity, and whose lifetime loads when the test says. */

@@ -277,7 +277,7 @@ export interface DecisionsServiceOptions {
   /** Something Settings shows of the decision model changed (#16027), or the model came or went. */
   onModelChanged?: () => void;
   /**
-   * What `getQuestionPolicy` answers changed without a status change: the
+   * What `getQuestionPolicy` answers changed without a status change: a
    * connection settled whether it types advisory outcomes (#17942).
    */
   onQuestionPolicyChanged?: () => void;
@@ -487,16 +487,17 @@ export class DecisionsService {
 
   /**
    * How this lifetime asks its agents' questions, as a Host reports it to its
-   * owner (#17942): advice only while its policy allows it and its connection
-   * types the outcome (what it was started with until the connection settles
-   * that), and the default expiry its policy runs with. Null while stopped.
+   * owner (#17942): advice only while its policy allows it and its running
+   * connection has settled that it types the outcome, so a lifetime whose
+   * connection hasn't got that far, or stopped, takes none; and the default
+   * expiry its policy runs with. Null while stopped.
    */
   getQuestionPolicy(): DecisionsHostQuestionPolicy | null {
     const policy = this.policy;
     if (policy === null) return null;
-    const advisory = this.advisoryHost();
     return {
-      advisoryQuestions: advisory.outcomes && advisory.allowed,
+      advisoryQuestions:
+        this.questionSource?.advisoryDeadlines === true && policy.advisoryQuestions,
       defaultQuestionExpiryMs: policy.defaultQuestionExpiryMs,
     };
   }
@@ -1334,11 +1335,12 @@ export class DecisionsService {
       onQuestionsReady: (source) => {
         if (this.connection !== connection) return;
         const listed = this.advisoryHost();
+        const reported = this.getQuestionPolicy()?.advisoryQuestions;
         this.questionSource = source;
-        // Listed and reported before the connection settled advisory delivery: again if it isn't
-        // what was assumed, as no status change need follow.
-        if (this.advisoryHost().outcomes !== listed.outcomes) {
-          void feed?.refresh();
+        // Listed before the connection settled advisory delivery: again if it isn't what was assumed.
+        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh();
+        // Reported as taking no advice until settled: told again, as no status change need follow.
+        if (this.getQuestionPolicy()?.advisoryQuestions !== reported) {
           this.onQuestionPolicyChanged();
         }
         if (this.openQuestions !== null) {
