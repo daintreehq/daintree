@@ -832,7 +832,7 @@ export function forbiddenCallSample(
  *
  * Every `*Owned` tool belongs here, so a new one is a line to add. Left out, it
  * is called by a battery that reads its correct refusal as a miss;
- * `mcpSession.test.ts` names any `OWNED_RESOURCE_TOOLS` entry missing here.
+ * `mcpSession.test.ts` probes {@link fullTierCallBattery} and names it.
  */
 export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
@@ -870,6 +870,13 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   // Validated in main and run as its create, wait and launch, the same way.
   "agent.launchInNewWorktree",
 ]);
+
+/** PERF-282's battery: every tool a full-tier session reaches, minus the self-gated ones. */
+export function fullTierCallBattery(manifest: ManifestBundle): string[] {
+  return [...expectedExposedIds(manifest, "full", false)]
+    .filter((id) => !SELF_GATED_TOOLS.has(id))
+    .sort();
+}
 
 /** The workspace a bound session is pinned to in these scenarios. */
 export const PERF_WORKSPACE_BINDING: McpWorkspaceBinding = {
