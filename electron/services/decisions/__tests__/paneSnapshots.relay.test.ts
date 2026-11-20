@@ -223,7 +223,10 @@ async function harness() {
     relay: RELAY,
     store,
     keys,
-    policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }, "owner"),
+    policy: createTrustedPolicy(
+      { ...defaultDecisionsSettings(), proxyAllowlisted: false },
+      "owner"
+    ),
     onStatus: () => {},
     onRevoked: () => {},
     onQuestionsReady: (ready) => {

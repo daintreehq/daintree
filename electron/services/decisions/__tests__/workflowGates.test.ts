@@ -51,6 +51,7 @@ import {
   type PolicySettings,
 } from "../workflowGates.js";
 import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
+import { holdingTerminalSink } from "../relayTransport.js";
 import {
   DEFAULT_QUESTION_EXPIRY_MS,
   QUESTION_EXPIRY_CHOICES,
@@ -494,6 +495,55 @@ describe("default question expiry", () => {
   });
 });
 
+describe("advisory questions (#17940)", () => {
+  it.each([true, false])(
+    "lets the owner's agents ask for advice and keeps a Remote Host's blocking, with proxy answers allowed: %s",
+    (proxyAllowlisted) => {
+      const owner = createTrustedPolicy({ ...SAVED, proxyAllowlisted }, "owner");
+      const host = createTrustedPolicy({ ...SAVED, proxyAllowlisted }, "host");
+      expect(owner.advisoryQuestions).toBe(true);
+      expect(host.advisoryQuestions).toBe(false);
+      // Advice changes no requirement: proxy consent alone decides who may answer.
+      expect(owner.resolve({ requested: "proxy-ok" }).requirement).toBe(
+        host.resolve({ requested: "proxy-ok" }).requirement
+      );
+    }
+  );
+
+  it("refuses advice from a pane its host bound to the final design review, on a bridge that delivers advisory outcomes", async () => {
+    const h = await harness();
+    // The bridge an owner lifetime would ask on once its sink types the advisory notice.
+    const bridge = new DecisionsBridge({
+      identity: h.identity,
+      store: h.store,
+      sink: holdingTerminalSink,
+      policy: h.policy,
+      advisoryDeadlines: true,
+      resolver: { resolve: async (_origin, id) => (IMAGES[id] ? { bytes: IMAGES[id] } : null) },
+      pumpIntervalMs: 0,
+    });
+    const ask = (input: Record<string, unknown>) =>
+      bridge.registerQuestion({ origin: origin(DESIGN_REVIEW_FINAL_GATE_ID), input });
+    const advice = { expires_in: "15m", planned_fallback: "Ship the current screenshots." };
+
+    // The origin's gate governs a question that doesn't name it, and needs no gate id from the agent.
+    await expect(
+      ask({ question: "Ship the final design?", attachments: REVIEW_INPUT.attachments, ...advice })
+    ).rejects.toMatchObject({
+      code: "validation_error",
+      message: expect.stringMatching(/^gated: /),
+    });
+    await expect(ask({ ...REVIEW_INPUT, ...advice })).rejects.toMatchObject({
+      code: "validation_error",
+      message: expect.stringMatching(/^gated: /),
+    });
+    expect(await h.store.listQuestions()).toEqual([]);
+
+    const asked = await ask({ ...REVIEW_INPUT, expires_in: "15m" });
+    expect(asked).toMatchObject({ replyMode: "blocking", requirement: "human-required" });
+  });
+});
+
 describe("trusted workflow gates", () => {
   it("registers design-review/final as Settings describes it, and every gate it describes is registered", () => {
     const policy = createTrustedPolicy(SAVED, "owner");
@@ -540,7 +590,9 @@ describe("trusted workflow gates", () => {
     const again = describeTrustedGates().find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     expect(again.requirement).toBe("human-required");
     expect(again.choices).toEqual(expected);
-    expect(createTrustedPolicy(SAVED, "owner").get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(expected);
+    expect(createTrustedPolicy(SAVED, "owner").get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(
+      expected
+    );
   });
 
   it.each([

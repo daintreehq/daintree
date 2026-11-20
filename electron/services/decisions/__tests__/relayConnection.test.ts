@@ -336,7 +336,10 @@ async function harness(
     relay: RELAY,
     store,
     keys,
-    policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }, "owner"),
+    policy: createTrustedPolicy(
+      { ...defaultDecisionsSettings(), proxyAllowlisted: false },
+      "owner"
+    ),
     onStatus: (status) => {
       statuses.push(status);
       for (const waiter of [...waiters]) {
@@ -526,7 +529,10 @@ describe("RelayConnection", () => {
   });
 
   it("asks every attempt's bridge to apply the one policy it was given, never a fresh one", async () => {
-    const policy = createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }, "owner");
+    const policy = createTrustedPolicy(
+      { ...defaultDecisionsSettings(), proxyAllowlisted: false },
+      "owner"
+    );
     const used: unknown[] = [];
     const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(async function (
       this: DecisionsBridge
@@ -1278,6 +1284,56 @@ describe("RelayConnection", () => {
     expect(listed).not.toHaveBeenCalled();
     await h.connection.stop();
   });
+
+  it.each([
+    ["with delivery", true],
+    ["without delivery", false],
+  ])(
+    "gives every bridge over the store advisoryDeadlines only when the lifetime delivers outcomes: %s (#17940)",
+    async (_label, withDelivery) => {
+      const bridges: DecisionsBridge[] = [];
+      const start = DecisionsBridge.prototype.start;
+      vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+        this: DecisionsBridge,
+        ...args: Parameters<DecisionsBridge["start"]>
+      ) {
+        bridges.push(this);
+        return start.apply(this, args);
+      });
+      let source: QuestionSource | null = null;
+      const h = await harness({
+        overrides: {
+          advisoryDeadlines: true,
+          ...(withDelivery ? { delivery: deliveryDeps().deps } : {}),
+          onQuestionsReady: (ready) => (source = ready),
+        },
+      });
+
+      h.connection.start();
+      await connectLive(h);
+
+      const hostSupport = (bridge: DecisionsBridge) =>
+        (bridge as unknown as { advisory: { hostSupport: boolean } }).advisory.hostSupport;
+      const ready = source as unknown as QuestionSource;
+      expect(ready.advisoryDeadlines).toBe(withDelivery);
+      expect(bridges.map(hostSupport)).toEqual([withDelivery]);
+      // The bridge agents ask on between attempts reads a question as the attempts do.
+      expect(hostSupport(new QuestionBridge({ source: ready, isCurrent: () => true }))).toBe(
+        withDelivery
+      );
+      const delivery = h.connection.getDelivery() as unknown as {
+        owner: DecisionsBridge;
+      } | null;
+      if (withDelivery) {
+        expect(hostSupport(delivery!.owner)).toBe(true);
+        // Delivery decides whether a plan may go ahead under the policy agents ask under.
+        expect(delivery!.owner.ctx.policy).toBe(bridges[0].ctx.policy);
+      } else {
+        expect(delivery).toBeNull();
+      }
+      await h.connection.stop();
+    }
+  );
 
   it("picks up from the cursor the app database kept, after the app starts again", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-connection-"));
