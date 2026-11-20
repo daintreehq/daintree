@@ -56,16 +56,16 @@ const setModelThreshold = vi.fn();
 const clearModelHistory = vi.fn<() => Promise<DecisionsModelState>>();
 const statusListeners = new Set<() => void>();
 
-function Section({ active = true, proxyAllowlisted = false }) {
+function Section({ active = true }) {
   const read = useDecisionsModel(active);
   return (
     <TooltipProvider>
-      <DecisionsModelSection model={read} proxyAllowlisted={proxyAllowlisted} />
+      <DecisionsModelSection model={read} />
     </TooltipProvider>
   );
 }
 
-async function renderSection(props: { active?: boolean; proxyAllowlisted?: boolean } = {}) {
+async function renderSection(props: { active?: boolean } = {}) {
   const view = render(<Section {...props} />);
   await act(async () => {});
   return view;
@@ -453,27 +453,77 @@ describe("Decisions → Decision model", () => {
     ]);
   });
 
-  it("says what answers now, and that questions without a gate still need the person while Policy says so", async () => {
-    getModel.mockResolvedValue(
-      state({
-        learning: true,
-        adapter: "claude",
-        consentedAt: 5,
-        history: { state: "open", count: 60 },
-        evaluation: { ...EVALUATION, autoAnswerThreshold: 0.9 },
-        answeringFrom: 0.9,
-      })
-    );
-    const { unmount } = await renderSection();
+  it("says what answers now, which questions it may reach, and offers Reset to stop it", async () => {
+    const armed = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 60 },
+      evaluation: { ...EVALUATION, autoAnswerThreshold: 0.9 },
+      answeringFrom: 0.9,
+    });
+    getModel.mockResolvedValue(armed);
+    setModelThreshold.mockResolvedValue({
+      ...armed,
+      revision: 1,
+      evaluation: EVALUATION,
+      answeringFrom: null,
+    });
+    await renderSection();
+
     const answering = row("decisions-model-answering").textContent ?? "";
     expect(answering).toContain("Answering in your place");
     expect(answering).toContain("0.90 or higher");
-    expect(answering).toContain("Allow proxy answers is off");
-    unmount();
+    expect(answering).toContain("never one only you can answer");
+    expect(answering).toContain("labelled as a proxy's");
+    expect(answering).not.toContain("Policy");
 
-    await renderSection({ proxyAllowlisted: true });
-    expect(row("decisions-model-answering").textContent).not.toContain(
-      "Allow proxy answers is off"
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reset Answer automatically to default" }));
+    });
+    expect(setModelThreshold).toHaveBeenCalledExactlyOnceWith({
+      threshold: null,
+      evaluatedAt: EVALUATION.evaluatedAt,
+    });
+    expect(row("decisions-model-answering").textContent).toContain("Not answering");
+  });
+
+  // #18062: a threshold saved while Policy's old switch was off arms nothing,
+  // and the heading and the select say what main does, not what was saved.
+  it("says it answers nothing when main isn't answering from a saved threshold, and choosing it again is what turns it on", async () => {
+    const saved = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 60 },
+      evaluation: { ...EVALUATION, autoAnswerThreshold: 0.9 },
+      answeringFrom: null,
+    });
+    getModel.mockResolvedValue(saved);
+    setModelThreshold.mockResolvedValue({ ...saved, revision: 1, answeringFrom: 0.9 });
+    await renderSection();
+
+    const answering = row("decisions-model-answering").textContent ?? "";
+    expect(answering).toContain("Not answering");
+    expect(answering).not.toContain("Answering in your place");
+    expect(answering).toContain("Choose a confidence under Answer automatically");
+    const trigger = within(row("decisions-model-threshold")).getByRole("combobox");
+    expect(trigger.textContent).toContain("Don't answer automatically");
+    expect(screen.queryByRole("button", { name: /Reset Answer automatically/ })).toBeNull();
+
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("option", { name: /0\.90 or higher/ }), { key: "Enter" });
+    });
+    expect(setModelThreshold).toHaveBeenCalledExactlyOnceWith({
+      threshold: 0.9,
+      evaluatedAt: EVALUATION.evaluatedAt,
+    });
+    expect(row("decisions-model-answering").textContent).toContain("Answering in your place");
+    expect(within(row("decisions-model-threshold")).getByRole("combobox").textContent).toContain(
+      "0.90 or higher"
     );
   });
 

@@ -54,14 +54,49 @@ describe("decision model copy", () => {
     expect(historyText({ state: "unavailable" })).toContain("couldn't be opened");
   });
 
-  it("says nothing answers unless main reports a threshold in force", () => {
-    expect(answeringText({ answeringFrom: null, adapter: "claude" }, true)).toContain(
-      "doesn't answer anything"
-    );
-    const on = answeringText({ answeringFrom: 0.8, adapter: "claude" }, false);
+  it("says nothing answers unless main reports a threshold in force, and names the next step", () => {
+    const report = {
+      adapter: "claude" as const,
+      evaluatedAt: 1,
+      report: {
+        total: 0,
+        scored: 0,
+        answered: 0,
+        matched: 0,
+        abstained: 0,
+        buckets: [],
+        abstainReasons: {},
+        byKind: {},
+        targetAccuracy: 0.9,
+        minSamples: 30,
+        recommendedThreshold: null,
+      },
+      autoAnswerThreshold: 0.8,
+      thresholds: [{ threshold: 0.8, answered: 30, matched: 30 }],
+    };
+    const unevaluated = answeringText({ answeringFrom: null, adapter: "claude", evaluation: null });
+    expect(unevaluated).toContain("doesn't answer anything");
+    expect(unevaluated).toContain("Evaluate");
+    // A threshold saved but not answered from reads as nothing answering, with the choice to make.
+    const saved = answeringText({ answeringFrom: null, adapter: "claude", evaluation: report });
+    expect(saved).toContain("doesn't answer anything");
+    expect(saved).toContain("Choose a confidence under Answer automatically");
+    const unsupported = answeringText({
+      answeringFrom: null,
+      adapter: "claude",
+      evaluation: { ...report, autoAnswerThreshold: null, thresholds: [] },
+    });
+    expect(unsupported).toContain("Evaluate again");
+    expect(unsupported).not.toContain("Choose a confidence");
+
+    const on = answeringText({ answeringFrom: 0.8, adapter: "claude", evaluation: report });
     expect(on).toContain("Claude Code");
     expect(on).toContain("0.80 or higher");
-    expect(on).toContain("labelled as a proxy's answer");
+    expect(on).toContain("labelled as a proxy's");
+    expect(on).toContain("never one only you can answer");
+    expect(answeringText({ answeringFrom: 0, adapter: "claude", evaluation: report })).toContain(
+      "at any confidence"
+    );
   });
 
   it("puts the library's reasons in words, and shows one it doesn't know as it is", () => {

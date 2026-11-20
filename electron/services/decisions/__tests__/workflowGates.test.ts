@@ -48,7 +48,7 @@ import {
   createTrustedPolicy,
   decisionsPolicyOf,
   describeTrustedGates,
-  type PolicySettings,
+  type TrustedPolicyOptions,
 } from "../workflowGates.js";
 import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
 import { holdingTerminalSink } from "../relayTransport.js";
@@ -61,7 +61,7 @@ const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 
 /** The settings a policy is made from, as saved before anyone changes them. */
-const SAVED: PolicySettings = {
+const SAVED: TrustedPolicyOptions = {
   proxyAllowlisted: false,
   defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
 };
@@ -168,7 +168,7 @@ async function certFor(
   });
 }
 
-async function harness(options: Partial<PolicySettings> = {}): Promise<Harness> {
+async function harness(options: Partial<TrustedPolicyOptions> = {}): Promise<Harness> {
   const ownerKeys = await generateDeviceKeys(true);
   const stored: StoredIdentity = {
     v: 1,
