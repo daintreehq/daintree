@@ -1751,9 +1751,10 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
       "Follow-ups are typed in here once the draft here is sent or cleared"
     );
     fireEvent.click(row);
-    expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
-      { scope: "pane", terminalId: "t1", questionId: "q42" },
-    ]);
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q42" } },
+    });
 
     act(() =>
       paneListeners[0]!(
