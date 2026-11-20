@@ -1487,9 +1487,9 @@ describe("what stopped, said once (#18026)", () => {
         )
       )
     ).toBe("The answer wasn't typed in. The answer couldn't be decrypted on Atlas.");
-    const text = attentionText(expired(UNCERTAIN, "uncertain", ["m1"], { remoteHost: ATLAS }));
-    expect(text).toMatch(/Check the terminal before anything is sent again\.$/);
-    expect(text).not.toMatch(/Choose|resolve/);
+    expect(attentionText(expired(UNCERTAIN, "uncertain", ["m1"], { remoteHost: ATLAS }))).toBe(
+      "The timeout notice and your follow-up may or may not have been typed in. The resumed agent exited before the timeout notice was typed in. Check the terminal before anything is sent again."
+    );
   });
 
   it("claims the notice only when the warning states the notice's own delivery", () => {

@@ -861,8 +861,8 @@ export const CLEAR_GONE_HINT =
  * What the shown question's warning says while delivery needs a person: what
  * stopped and why, in the words the stall's notification uses, then what to
  * do. Hedged only where the list can't say what stopped. A Remote Host's
- * question invites no choice here: whether its Host offers one is known only
- * once the Host is read, and what that read found is said beside this, once.
+ * question invites no choice and makes no claim about resolving it here: only
+ * its Host knows what it offers, so what the inbox learns of the Host says so.
  */
 export function attentionText(
   item: Pick<DecisionQuestionListItem, "standing" | "remoteHost"> & ItemRound
