@@ -16,6 +16,7 @@ import {
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
 import { logWarn } from "../../utils/logger.js";
+import type { QueuedClosing } from "./paneDecisionState.js";
 import {
   noticeAttemptOf,
   noticeTrailOf,
@@ -824,21 +825,23 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /**
-   * The questions a withdrawal or the person's decline is queued for (#18052),
-   * by question id, retrying or not: ids and kinds only, never a payload. A
-   * withdrawal outranks a decline queued beside it, as the pane's chip shows them.
+   * Every withdrawal and decline of the person's queued for the relay
+   * (#18052), retrying or not: the question's id, which, and for a decline
+   * the round it was signed for. Never anything else of a payload.
    */
-  pendingClosings(): Promise<Map<string, "withdrawing" | "declining">> {
+  pendingClosings(): Promise<QueuedClosing[]> {
     return this.enqueue("read", () => {
       const rows = this.st(
-        `SELECT question_id, kind FROM decisions_outbox WHERE kind IN ('cancel', 'owner-decline')`
-      ).all() as { question_id: string; kind: string }[];
-      const closings = new Map<string, "withdrawing" | "declining">();
-      for (const { question_id: questionId, kind } of rows) {
-        if (kind === "cancel") closings.set(questionId, "withdrawing");
-        else if (!closings.has(questionId)) closings.set(questionId, "declining");
-      }
-      return closings;
+        `SELECT question_id, kind,
+           CASE WHEN kind = 'owner-decline'
+             THEN json_extract(payload, '$.signed.record.expected_revision') END AS revision
+         FROM decisions_outbox WHERE kind IN ('cancel', 'owner-decline')`
+      ).all() as { question_id: string; kind: string; revision: unknown }[];
+      return rows.map(({ question_id: questionId, kind, revision }) => ({
+        questionId,
+        closing: kind === "cancel" ? ("withdrawing" as const) : ("declining" as const),
+        revision: kind !== "cancel" && Number.isSafeInteger(revision) ? Number(revision) : null,
+      }));
     });
   }
 

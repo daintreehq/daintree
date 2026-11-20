@@ -490,39 +490,53 @@ describe("DaintreeLocalStore", () => {
     expect(await store.hasUncertainIntent("q1")).toBe(false);
   });
 
-  it("names each question a withdrawal or decline is queued for, retrying or not (#18052)", async () => {
+  it("names each withdrawal and decline queued, retrying or not, with a decline's round (#18052)", async () => {
     const store = new DaintreeLocalStore(sqlite);
-    const queued = (id: string, kind: OutboxItem["kind"], qid: string, at = 1): OutboxItem => ({
-      ...item(id, qid, at),
-      kind,
+    const queued = (
+      id: string,
+      kind: OutboxItem["kind"],
+      qid: string,
+      payload: unknown = {},
+      at = 1
+    ): OutboxItem => ({ ...item(id, qid, at), kind, payload });
+    const decline = (revision: unknown) => ({
+      signed: { record: { expected_revision: revision, decline_id: "d1" } },
+      seq: 3,
     });
-    expect(await store.pendingClosings()).toEqual(new Map());
+    const read = async () =>
+      (await store.pendingClosings()).sort((a, b) =>
+        a.questionId === b.questionId
+          ? a.closing.localeCompare(b.closing)
+          : a.questionId.localeCompare(b.questionId)
+      );
+    expect(await store.pendingClosings()).toEqual([]);
 
     await store.putOutbox(queued("o1", "cancel", "q1"));
-    await store.putOutbox(queued("o2", "owner-decline", "q2", 50_000));
-    // A withdrawal outranks a decline queued beside it, whichever came first.
-    await store.putOutbox(queued("o3", "owner-decline", "q3"));
-    await store.putOutbox(queued("o4", "cancel", "q3", 2));
+    // Backed off well past now: still queued.
+    await store.putOutbox(queued("o2", "owner-decline", "q2", decline(2), Date.now() + 600_000));
+    await store.recordOutboxFailure("o2", "relay unreachable", Date.now() + 900_000);
+    await store.putOutbox(queued("o3", "owner-decline", "q3", decline(1)));
+    await store.putOutbox(queued("o4", "cancel", "q3"));
+    // A decline whose round can't be read is named without one.
+    await store.putOutbox(queued("o5", "owner-decline", "q4", decline("2")));
     // Nothing else closes a question.
-    await store.putOutbox(queued("o5", "create", "q4"));
-    await store.putOutbox(queued("o6", "owner-answer", "q5"));
-    await store.recordOutboxFailure("o2", "relay unreachable", 90_000);
+    await store.putOutbox(queued("o6", "create", "q5"));
+    await store.putOutbox(queued("o7", "owner-answer", "q6", decline(1)));
 
-    expect(await store.pendingClosings()).toEqual(
-      new Map([
-        ["q1", "withdrawing"],
-        ["q2", "declining"],
-        ["q3", "withdrawing"],
-      ])
-    );
+    expect(await read()).toEqual([
+      { questionId: "q1", closing: "withdrawing", revision: null },
+      { questionId: "q2", closing: "declining", revision: 2 },
+      { questionId: "q3", closing: "declining", revision: 1 },
+      { questionId: "q3", closing: "withdrawing", revision: null },
+      { questionId: "q4", closing: "declining", revision: null },
+    ]);
     await store.deleteOutbox("o1");
     await store.deleteOutbox("o4");
-    expect(await store.pendingClosings()).toEqual(
-      new Map([
-        ["q2", "declining"],
-        ["q3", "declining"],
-      ])
-    );
+    expect((await read()).map(({ questionId, closing }) => [questionId, closing])).toEqual([
+      ["q2", "declining"],
+      ["q3", "declining"],
+      ["q4", "declining"],
+    ]);
   });
 
   it("stores what a call was given, not what its caller changed afterwards", async () => {

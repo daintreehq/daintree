@@ -57,6 +57,7 @@ import {
 } from "@daintreehq/decisions-model";
 import { SqliteHistoryStore } from "@daintreehq/decisions-model/sqlite";
 import { DecisionModelRuntime } from "../decisionModel.js";
+import type { QueuedClosing } from "../paneDecisionState.js";
 import { BUSY_RESTART_DELAYS_MS, DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
 import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 
@@ -615,7 +616,7 @@ describe("DecisionsService question list (#17229)", () => {
     // The person's marks (#17895) as stored, or an error to throw reading them.
     let marks: string | Error | null = null;
     // Withdrawals and declines queued (#18052), or an error to throw reading them.
-    let closings: Map<string, "withdrawing" | "declining"> | Error = new Map();
+    let closings: QueuedClosing[] | Error = [];
     // Set to hold the next read until the test lets it land.
     let gate: Promise<void> | null = null;
     const listeners = new Set<() => void>();
@@ -642,7 +643,7 @@ describe("DecisionsService question list (#17229)", () => {
       },
       pendingClosings: async () => {
         if (closings instanceof Error) throw closings;
-        return new Map(closings);
+        return [...closings];
       },
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
@@ -683,7 +684,7 @@ describe("DecisionsService question list (#17229)", () => {
       lists,
       inboxes,
       setMarks: (next: string | Error | null) => (marks = next),
-      setClosings: (next: Map<string, "withdrawing" | "declining"> | Error) => (closings = next),
+      setClosings: (next: QueuedClosing[] | Error) => (closings = next),
       listing,
       hostLists,
       panes,
@@ -1074,40 +1075,62 @@ describe("DecisionsService question list (#17229)", () => {
 
   it("shows a withdrawal or decline queued from any view on its pane and in the list's facts, keeping the last read when one fails (#18052)", async () => {
     const { service, inboxes, panes, setRows, setClosings, commit } = listed();
-    setRows([row(1), row(2)]);
+    setRows([row(1), row(2), row(3, { question_revision: 2 })]);
     await service.start(on(HOST));
-    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(2));
+    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(3));
     expect(panes.at(-1)?.openQuestions.some((question) => "closing" in question)).toBe(false);
 
+    setClosings([
+      { questionId: qid(1), closing: "withdrawing", revision: null },
+      { questionId: qid(2), closing: "declining", revision: 1 },
+      // Signed for a round since replaced: it closes nothing now.
+      { questionId: qid(3), closing: "declining", revision: 1 },
+    ]);
     const queued = new Map([
       [qid(1), "withdrawing"],
       [qid(2), "declining"],
     ] as const);
-    setClosings(new Map(queued));
-    await commit([row(1), row(2)]);
+    await commit([row(1), row(2), row(3, { question_revision: 2 })]);
     await vi.waitFor(() =>
-      expect(panes.at(-1)?.openQuestions.map((question) => question.closing)).toEqual([
+      expect(panes.at(-1)?.openQuestions.map((question) => question.closing ?? null)).toEqual([
         "withdrawing",
         "declining",
+        null,
       ])
     );
     expect(inboxes.at(-1)?.closings).toEqual(queued);
 
     setClosings(new Error("SQLITE_BUSY"));
-    await commit([row(1), row(2), row(3)]);
-    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(3));
+    await commit([row(1), row(2), row(3, { question_revision: 2 }), row(4)]);
+    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(4));
     expect(inboxes.at(-1)?.closings).toEqual(queued);
     expect(panes.at(-1)?.openQuestions.map((question) => question.closing ?? null)).toEqual([
       "withdrawing",
       "declining",
       null,
+      null,
     ]);
 
     // Let go once the relay takes it: the question still waits until it closes.
-    setClosings(new Map());
-    await commit([row(1), row(2), row(3)]);
+    setClosings([]);
+    await commit([row(1), row(2), row(3, { question_revision: 2 }), row(4)]);
     await vi.waitFor(() =>
       expect(panes.at(-1)?.openQuestions.some((question) => "closing" in question)).toBe(false)
+    );
+    expect(inboxes.at(-1)?.closings).toEqual(new Map());
+    expect(panes.at(-1)?.openQuestions).toHaveLength(4);
+    await service.stop();
+  });
+
+  it("shows a withdrawal queued on a Remote Host's own lifetime on its pane, for its owner's Shell (#18052)", async () => {
+    const { service, panes, setRows, setClosings } = listed();
+    setRows([row(1)]);
+    setClosings([{ questionId: qid(1), closing: "withdrawing", revision: null }]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() =>
+      expect(panes.at(-1)?.openQuestions.map((question) => question.closing)).toEqual([
+        "withdrawing",
+      ])
     );
     await service.stop();
   });

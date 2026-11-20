@@ -39,6 +39,39 @@ type PaneContent = Omit<PaneDecisionState, "revision">;
  */
 export type PendingClosings = ReadonlyMap<string, NonNullable<PaneDecisionQuestion["closing"]>>;
 
+/** A withdrawal or decline queued in the outbox, as the store reads it (#18052). */
+export interface QueuedClosing {
+  questionId: string;
+  closing: NonNullable<PaneDecisionQuestion["closing"]>;
+  /** The round a decline was signed for; null for a withdrawal, signed against whatever round it finds. */
+  revision: number | null;
+}
+
+/**
+ * What each question has queued for it, from `queued` against the rows. A
+ * decline closes only the round it was signed for, so one for a round since
+ * replaced marks nothing; a question this machine holds no row for (a Remote
+ * Host's, declined here) keeps its decline. A withdrawal outranks a decline.
+ */
+export function closingsFor(
+  rows: readonly QuestionRow[],
+  queued: readonly QueuedClosing[]
+): PendingClosings {
+  if (queued.length === 0) return new Map();
+  const revisions = new Map(rows.map((row) => [row.question_id, row.question_revision]));
+  const closings = new Map<string, NonNullable<PaneDecisionQuestion["closing"]>>();
+  for (const { questionId, closing, revision } of queued) {
+    if (closing === "withdrawing") {
+      closings.set(questionId, closing);
+      continue;
+    }
+    const current = revisions.get(questionId);
+    const sameRound = current === undefined || revision === null || revision === current;
+    if (sameRound && !closings.has(questionId)) closings.set(questionId, closing);
+  }
+  return closings;
+}
+
 export interface ProjectedPane {
   projectId: string;
   content: PaneContent;
@@ -71,12 +104,13 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   question even while its notice waits to be typed.
  * - **Reply requested:** answered, and its agent asked for a reply the person
  *   hasn't given (#18052).
- * - **Follow-up waiting:** answered, with nothing of the answer left to type,
- *   and a follow-up of the person's received and not yet typed (#18052).
+ * - **Follow-up waiting:** a follow-up of the person's received and not yet
+ *   typed (#18052), on a question with nothing of an answer left to type and
+ *   nothing needing a person, open or answered.
  *
- * The last two, and which questions wait on the person, are read as the list
- * of every question reads them (`standingOf`), so the chip and the inbox never
- * disagree. Imported history is never delivered and shows nowhere, and what a
+ * A request for a reply, and which questions wait on the person, are read as
+ * the list of every question reads them (`standingOf`), so the chip and the
+ * inbox never disagree. Imported history is never delivered and shows nowhere, and what a
  * person marked handled, or a question over without an answer whose notice
  * stopped (#18021), adds no warning. Rows are taken in question order, and a
  * pane belongs to the project of its newest question, settled or not, so
@@ -118,8 +152,10 @@ export function projectPaneDecisionStates(
         : parseAnswers(row.answers_json).filter(
             (entry) => entry.deliver && !entry.delivered && entry.kind !== "declined"
           );
+    // Typed in whatever the question's standing, an open one's too; an answer still to type stands for it.
     const followUp =
-      standing.kind === "to-type" &&
+      !attention &&
+      reply === null &&
       pending.length === 0 &&
       parseMessages(row.messages_json).some(isPendingMessage);
     if (!open && !attention && reply === null && pending.length === 0 && !followUp) continue;

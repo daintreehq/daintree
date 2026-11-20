@@ -376,13 +376,35 @@ describe("usePaneClearedQuestions (#18053)", () => {
           { ...asked(4, "t1", clearedAsk), standing: { kind: "queued" } },
           asked(2, "t2", undefined),
           // A request for a reply asks the person too, so its clear steps its row down (#18052).
-          { ...asked(3, "t2", clearedAsk), standing: { kind: "waiting", reason: "reply" } },
-          { ...asked(5, "t2", seenAsk), standing: { kind: "waiting", reason: "reply" } },
+          {
+            ...asked(3, "t2", { ask: "agent-3", seen: true, cleared: true }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-3",
+          },
+          {
+            ...asked(5, "t2", { ask: "agent-5", seen: true, cleared: false }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-5",
+          },
         ],
       })
     );
     expect(lastFor("t1")).toBe("q0,q4");
     expect(lastFor("t2")).toBe("q3");
+    // The agent asks again: main marks the new ask uncleared, and the clear goes with it.
+    act(() =>
+      watch.onList?.({
+        revision: 2,
+        questions: [
+          {
+            ...asked(3, "t2", { ask: "agent-6", seen: false, cleared: false }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-6",
+          },
+        ],
+      })
+    );
+    expect(lastFor("t2")).toBe("");
   });
 
   it("keeps no clear over a stopped delivery, which can stand over a question still asking something new", () => {
@@ -701,27 +723,47 @@ describe("usePaneClosings (#18052)", () => {
           closing(0, "t1", "withdrawing"),
           closing(1, "t1", undefined),
           closing(2, "t1", "declining"),
-          closing(3, "t2", undefined),
+          closing(3, "t2", "declining"),
+          closing(4, "t2", undefined),
         ],
       })
     );
     expect(lastFor("t1")).toBe("q0:withdrawing,q2:declining");
-    expect(lastFor("t2")).toBe("");
+    expect(lastFor("t2")).toBe("q3:declining");
   });
 
   it("tells a pane only when its closings change, and lets one go once the list does", () => {
     render(<Chip terminalId="t1" />);
-    act(() => watch.onList?.({ revision: 1, questions: [closing(0, "t1", "declining")] }));
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [closing(0, "t1", "declining"), closing(1, "t1", "withdrawing")],
+      })
+    );
     const renders = read.length;
+    // The same closings, listed in another order beside a question with none.
     act(() =>
       watch.onList?.({
         revision: 2,
-        questions: [closing(0, "t1", "declining"), closing(1, "t1", undefined)],
+        questions: [
+          closing(2, "t1", undefined),
+          closing(1, "t1", "withdrawing"),
+          closing(0, "t1", "declining"),
+        ],
       })
     );
     expect(read.length).toBe(renders);
 
-    act(() => watch.onList?.({ revision: 3, questions: [closing(0, "t1", undefined)] }));
+    // The same question, closed the other way: a change.
+    act(() =>
+      watch.onList?.({
+        revision: 3,
+        questions: [closing(0, "t1", "withdrawing"), closing(1, "t1", "withdrawing")],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0:withdrawing,q1:withdrawing");
+
+    act(() => watch.onList?.({ revision: 4, questions: [closing(0, "t1", undefined)] }));
     expect(lastFor("t1")).toBe("");
   });
 
@@ -749,6 +791,23 @@ describe("usePaneClosings (#18052)", () => {
       })
     );
     expect(lastFor("t1")).toBe("q0:declining");
+  });
+
+  it("reads nothing for an inactive pane while another holds the watch", () => {
+    render(
+      <>
+        <Chip terminalId="t2" />
+        <Chip terminalId="t1" active={false} />
+      </>
+    );
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [closing(0, "t1", "withdrawing"), closing(1, "t2", "declining")],
+      })
+    );
+    expect(lastFor("t2")).toBe("q1:declining");
+    expect(lastFor("t1")).toBe("");
   });
 
   it("joins no watch while inactive, and reads afresh after the last reader goes", () => {

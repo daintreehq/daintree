@@ -723,13 +723,27 @@ describe("a question that never reached the relay (#17943)", () => {
   });
 });
 
-describe("a question waiting on the person's reply (#18052)", () => {
-  const replying = (alias: number, requestedAt = "2026-11-02T10:30:00.000Z") =>
-    ({ ...pane(), replyRequests: [{ questionId: `q${alias}`, alias, requestedAt }] }) as const;
+function replying(alias: number, requestedAt = "2026-11-02T10:30:00.000Z"): PaneDecisionState {
+  return { ...pane(), replyRequests: [{ questionId: `q${alias}`, alias, requestedAt }] };
+}
 
+function following(...aliases: number[]): PaneDecisionState {
+  return {
+    ...pane(),
+    waitingFollowUps: aliases.map((alias) => ({ questionId: `q${alias}`, alias })),
+  };
+}
+
+describe("a question waiting on the person's reply (#18052)", () => {
   it("shows as waiting on the person, with when the agent asked and no Dismiss", () => {
     const [item] = decisionItems(replying(7));
-    expect(item).toMatchObject({ label: "q-7", kind: "reply", waitsFor: null, expiresAt: null });
+    expect(item).toMatchObject({
+      label: "q-7",
+      kind: "reply",
+      status: "Waiting for your reply, here or on your phone",
+      waitsFor: null,
+      expiresAt: null,
+    });
     expect(item?.askedAt).toBe(Date.parse("2026-11-02T10:30:00.000Z"));
     expect(chipLabel([item!])).toEqual({ text: "q-7 wants a reply", detail: null });
     expect(itemSentence(item!)).toBe(
@@ -743,19 +757,38 @@ describe("a question waiting on the person's reply (#18052)", () => {
     expect(needsAttention([item!])).toBe(false);
   });
 
-  it("sorts with the questions waiting for an answer, and is counted apart from them", () => {
-    const state = { ...replying(3), openQuestions: [open(2), open(4, "queued")] };
-    const items = decisionItems({ ...state, waitingAnswers: [waiting(5)] });
-    expect(items.map((item) => [item.label, item.kind])).toEqual([
-      ["q-5", "answer"],
-      ["q-2", "open"],
-      ["q-3", "reply"],
-      ["q-4", "queued"],
+  it("sorts with the questions waiting for an answer, is counted apart from them, and steps down once cleared", () => {
+    const state: PaneDecisionState = {
+      ...pane({ open: [open(2), open(4, "queued")], waiting: [waiting(5)] }),
+      replyRequests: [
+        { questionId: "q3", alias: 3, requestedAt: "2026-11-02T10:30:00.000Z" },
+        { questionId: "q6", alias: 6, requestedAt: "2026-11-02T10:31:00.000Z" },
+      ],
+    };
+    const items = decisionItems(state, "composer", undefined, undefined, {
+      nowMs: null,
+      cleared: new Set(["q6"]),
+    });
+    expect(items.map((item) => [item.label, item.kind, setAsideOf(item)])).toEqual([
+      ["q-5", "answer", null],
+      ["q-2", "open", null],
+      ["q-3", "reply", null],
+      ["q-4", "queued", null],
+      ["q-6", "reply", "cleared"],
     ]);
     expect(chipSummary(items)).toBe(
-      "4 Decisions questions: 1 answered, typing in once the composer is empty; 1 waiting for an answer; 1 waiting for your reply; 1 queued to send"
+      "5 Decisions questions: 1\u00a0answered, typing in once the composer is empty; 1\u00a0waiting for an answer; 1\u00a0waiting for your reply; 1\u00a0queued to send; 1\u00a0cleared on this computer"
     );
+    expect(chipLabel(items)).toEqual({ text: "4 questions", detail: "· 1 delivering" });
     expect(answerNote(items)).toBe("Open a question to answer or reply here");
+    const [cleared] = decisionItems(replying(6), "composer", undefined, undefined, {
+      nowMs: null,
+      cleared: new Set(["q6"]),
+    });
+    expect(chipLabel([cleared!])).toEqual({ text: "q-6 cleared", detail: null });
+    expect(itemSentence(cleared!)).toBe("Question q-6 was cleared on this computer");
+    // Still answerable on the thread, as a cleared question is.
+    expect(answerNote([cleared!])).toBe("Open a question to reply here");
   });
 
   it("reads the drafts, so the popover can say when a reply would be typed in", () => {
@@ -763,40 +796,55 @@ describe("a question waiting on the person's reply (#18052)", () => {
     expect(deliveryNotes(decisionItems(replying(1)), "draft")).toEqual([
       "Follow-ups are typed in here once the draft here is sent or cleared",
     ]);
+    expect(deliveryNotes(decisionItems(replying(1)), "prompt")).toEqual([
+      "Follow-ups are typed in here at the agent's next prompt",
+    ]);
   });
 });
 
 describe("the person's follow-up waiting to be typed (#18052)", () => {
-  const following = (alias: number) =>
-    ({ ...pane(), waitingFollowUps: [{ questionId: `q${alias}`, alias }] }) as const;
-
   it("shows as delivering, the same as a waiting answer, by the pane's wait", () => {
-    const statuses = (["draft", "composer", "prompt"] as const).map((wait) => {
+    const expected = {
+      draft: "Follow-up received, typing it in once the draft here is sent or cleared",
+      composer: "Follow-up received, typing it in once the composer is empty",
+      prompt: "Follow-up received, typing it in at the agent's next prompt",
+    } as const;
+    for (const wait of ["draft", "composer", "prompt"] as const) {
       const [item] = decisionItems(following(4), wait);
-      expect(item).toMatchObject({ label: "q-4", kind: "follow-up", waitsFor: wait });
+      expect(item).toMatchObject({
+        label: "q-4",
+        kind: "follow-up",
+        waitsFor: wait,
+        status: expected[wait],
+      });
       expect(chipLabel([item!])).toEqual({ text: "q-4 delivering", detail: null });
-      expect(itemSentence(item!)).toBe(`${item!.status} (q-4)`);
+      expect(itemSentence(item!)).toBe(`${expected[wait]} (q-4)`);
       expect(cancelNote([item!])).toBe("Answered questions can't be dismissed");
-      return item!.status;
-    });
-    expect(new Set(statuses).size).toBe(3);
+      expect(isCancellable(item!)).toBe(false);
+    }
     expect(readsPaneWait(following(4))).toBe(true);
   });
 
   it("counts as delivering beside answers, and is summarised apart from them", () => {
-    const items = decisionItems({
-      ...following(2),
-      waitingAnswers: [waiting(3)],
-      openQuestions: [open(1)],
-    });
-    expect(items.map((item) => item.kind)).toEqual(["follow-up", "answer", "open"]);
-    expect(chipLabel(items)).toEqual({ text: "3 questions", detail: "· 2 delivering" });
-    expect(chipSummary(items)).toBe(
-      "3 Decisions questions: 1 answered, typing in once the composer is empty; 1 with your follow-up, typing in once the composer is empty; 1 waiting for an answer"
+    const items = decisionItems(
+      { ...following(2, 6), waitingAnswers: [waiting(3)], openQuestions: [open(1)] },
+      "prompt"
     );
-    expect(deliveryNotes(items)).toEqual([
-      "Answers and follow-ups are typed in here once the composer is empty",
+    expect(items.map((item) => item.kind)).toEqual(["follow-up", "answer", "follow-up", "open"]);
+    expect(chipLabel(items)).toEqual({ text: "4 questions", detail: "· 3 delivering" });
+    expect(chipSummary(items)).toBe(
+      "4 Decisions questions: 1\u00a0answered, typing in at the agent's next prompt; 2\u00a0with your follow-ups, typing in at the agent's next prompt; 1\u00a0waiting for an answer"
+    );
+    expect(deliveryNotes(items, "prompt")).toEqual([
+      "Answers and follow-ups are typed in here at the agent's next prompt",
     ]);
+  });
+
+  it("can stand beside a question still open, counted once", () => {
+    const items = decisionItems({ ...following(1), openQuestions: [open(1)] });
+    expect(items.map((item) => item.kind)).toEqual(["follow-up", "open"]);
+    expect(questionCount(items)).toBe(1);
+    expect(chipLabel(items)).toEqual({ text: "1 question", detail: "· 1 delivering" });
   });
 });
 
@@ -817,9 +865,33 @@ describe("a withdrawal or decline started from another view (#18052)", () => {
       ["q-1", "cancelling"],
     ]);
     expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-3"]);
-    const [withdrawn] = decisionItems(pane({ open: [{ ...open(1), closing: "withdrawing" }] }));
-    expect(chipLabel([withdrawn!])).toEqual({ text: "q-1 cancelling", detail: null });
-    expect(deliveryNotes([withdrawn!])).toEqual([]);
+    for (const closing of ["withdrawing", "declining"] as const) {
+      const [only] = decisionItems(pane({ open: [{ ...open(1), closing }] }));
+      expect(chipLabel([only!]).text).toBe(
+        closing === "withdrawing" ? "q-1 cancelling" : "q-1 dismissing"
+      );
+      expect(deliveryNotes([only!])).toEqual([]);
+    }
+  });
+
+  it("says it is closing over a deadline passed or a clear", () => {
+    const expiresAt = "2026-11-02T10:05:00.000Z";
+    const items = decisionItems(
+      pane({
+        open: [
+          { ...open(1), expiresAt, closing: "withdrawing" },
+          { ...open(2), closing: "declining" },
+        ],
+      }),
+      "composer",
+      undefined,
+      undefined,
+      { nowMs: Date.parse("2026-11-02T11:00:00.000Z"), cleared: new Set(["q2"]) }
+    );
+    expect(items.map((item) => [item.kind, setAsideOf(item)])).toEqual([
+      ["dismissing", null],
+      ["cancelling", null],
+    ]);
   });
 
   it("lets a withdrawal from this view outrank a decline the state names", () => {

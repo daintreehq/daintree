@@ -59,9 +59,11 @@ import {
 import type { DecisionsQuestions } from "./mcpRoute.js";
 import {
   PaneDecisionStates,
+  closingsFor,
   type AnswerAttentionPublisher,
   type PaneDecisionStatePublisher,
   type PendingClosings,
+  type QueuedClosing,
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
@@ -1659,7 +1661,7 @@ export class DecisionsService {
     // The person's marks (#17895) are an owner's alone. One that can't be read keeps the last read.
     let marks: QuestionMarks = new Map();
     // Withdrawals and declines queued for the relay (#18052), read like the marks.
-    let closings: PendingClosings = new Map();
+    let queued: readonly QueuedClosing[] = [];
     const owner = this.role === "owner";
     // The rows last listed, with what they were read with, while an asker is observed: a pane
     // event lists them again with what was observed since, without reading the store again.
@@ -1687,10 +1689,11 @@ export class DecisionsService {
       async () => {
         handled = await readHandledAnswers(store);
         if (owner) marks = await readQuestionMarks(store).catch(() => marks);
-        closings = await readPendingClosings(store).catch(() => closings);
+        queued = await readQueuedClosings(store).catch(() => queued);
         return store.listQuestions();
       },
       (rows) => {
+        const closings = closingsFor(rows, queued);
         const questions = this.listQuestions(rows, handled, marks, closings, presence);
         // Kept only while an asker is observed, the one case a pane event can change the list.
         listed = presence?.tracking === true ? { rows, handled, marks, closings } : null;
@@ -1794,6 +1797,6 @@ export class DecisionsService {
 }
 
 /** The withdrawals and declines `store` has queued; a read that fails rejects, never throws. */
-async function readPendingClosings(store: DaintreeLocalStore): Promise<PendingClosings> {
+async function readQueuedClosings(store: DaintreeLocalStore): Promise<QueuedClosing[]> {
   return store.pendingClosings();
 }

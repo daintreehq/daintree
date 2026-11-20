@@ -251,9 +251,12 @@ export function usePaneClosings(
   );
   if (joined === "") return NO_CLOSINGS;
   return new Map(
-    joined.split("\u0000").map((entry) => {
-      const [questionId, closing] = entry.split("\u0001") as [string, DecisionClosing];
-      return [questionId, closing];
+    joined.split("\u0000").map((entry): [string, DecisionClosing] => {
+      const at = entry.indexOf("\u0001");
+      return [
+        entry.slice(0, at),
+        entry.slice(at + 1) === "withdrawing" ? "withdrawing" : "declining",
+      ];
     })
   );
 }

@@ -501,7 +501,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
             >
               {items.map((item) => (
                 <DecisionRow
-                  key={item.questionId}
+                  // One question can have a row of each kind: open, and a follow-up or stall beside it.
+                  key={`${item.kind}:${item.questionId}`}
                   item={item}
                   line={lines.get(item.questionId) ?? null}
                   nowMs={nowMs}
