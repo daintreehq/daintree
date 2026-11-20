@@ -20,7 +20,8 @@ import { readUserPresence, type UserPresence } from "./userPresence.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
 import { nextAskDeadline } from "../../shared/utils/decisionDeadline.js";
-import { isWaitingOnPerson } from "../../shared/utils/decisionWaiting.js";
+import { needsPerson } from "../../shared/utils/decisionWaiting.js";
+import { toHostScopedKey } from "../../shared/types/remoteHosts.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   DecisionQuestionList,
@@ -38,6 +39,22 @@ export interface NotificationState {
    * against a waiting question.
    */
   membershipOnly?: boolean;
+}
+
+/**
+ * The workspace a question names, keyed as windows key their views: an
+ * enrolled Host's question by its host and project (#18045), since a project
+ * at the same path on two machines has the same id on both. A Host id that
+ * isn't valid keys it apart from every view, so it still counts in the Dock.
+ */
+function questionWorkspace(question: DecisionQuestionList["questions"][number]): string {
+  const { projectId } = question.reference;
+  const hostId = question.remoteHost?.hostId;
+  try {
+    return toHostScopedKey(hostId, projectId);
+  } catch {
+    return `invalid-host:${String(hostId)}:${projectId}`;
+  }
 }
 
 /** A pane named by the workspace its view holds it under and its panel (terminal) id. */
@@ -345,9 +362,11 @@ class NotificationService {
   }
 
   /**
-   * Counts each pane with a question waiting on the person once, however many
-   * it holds. One whose ask they've seen or cleared here (#17895) waits on
-   * the agent's side only, and counts no more until it asks something new.
+   * Counts each pane with a question that needs the person once, however many
+   * it holds: one to answer, or a delivery stopped on their answer (#18045),
+   * so the Dock and title never say all clear while the toolbar marks either.
+   * One whose ask they've seen or cleared here (#17895) waits on the agent's
+   * side only, and counts no more until it asks something new.
    */
   private noteDecisionQuestions(list: DecisionQuestionList): void {
     this.latestQuestions = list;
@@ -356,10 +375,11 @@ class NotificationService {
     this.armQuestionDeadline(list, now);
     const panes = new Map<string, string>();
     for (const question of list.questions) {
-      // The toolbar's rule (#18046), queued included; past its deadline by the clock (#17943) it can't be answered.
-      if (!isWaitingOnPerson(question, now)) continue;
-      const { projectId, terminalId } = question.reference;
-      panes.set(paneKey(projectId, terminalId), projectId);
+      // The toolbar's rules: one to answer, queued included (#18046), unless its deadline
+      // passed by the clock (#17943); or a delivery stopped on their answer (#18045).
+      if (!needsPerson(question, now)) continue;
+      const workspace = questionWorkspace(question);
+      panes.set(paneKey(workspace, question.reference.terminalId), workspace);
     }
     const previous = this.questionPanes;
     if (panes.size === previous.size && [...panes.keys()].every((key) => previous.has(key))) {
@@ -560,8 +580,8 @@ class NotificationService {
 
   /**
    * The workspaces each live window holds a view of, and which workspace each
-   * of its views' renderers shows. A host-qualified view's key never matches
-   * a question, which names a project of this computer's.
+   * of its views' renderers shows, by the host-scoped key a question's
+   * workspace is named by too.
    */
   private viewsByWindow(): Map<
     number,

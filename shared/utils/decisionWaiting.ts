@@ -1,12 +1,13 @@
 import type {
   DecisionQuestionInbox,
+  DecisionQuestionStall,
   DecisionQuestionStanding,
 } from "../types/decisionsQuestion.js";
 import { deadlineElapsed } from "./decisionDeadline.js";
 
 /**
- * Whether a question waits on the person: the one rule behind the toolbar
- * badge and its overflow, the window title and the Dock badge (#18046).
+ * Whether a question needs the person: the rules behind the toolbar button
+ * and its overflow, the window title and the Dock badge (#18046, #18045).
  */
 
 /**
@@ -37,4 +38,42 @@ export function isWaitingOnPerson(
     (nowMs === null ||
       !deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs))
   );
+}
+
+/**
+ * An answer or a person's follow-up that delivery stopped on, typed in or
+ * not, which only the person can decide what to do with (#18045): the inbox's
+ * Needs attention group. It stays until they do, whatever the clock says.
+ */
+export function deliveryNeedsPerson(standing: DecisionQuestionStanding): boolean {
+  return standing.kind === "needs-attention";
+}
+
+/**
+ * How many deliveries stopped on the question: its answer and each of the
+ * person's follow-ups the stall names. At least one while it needs attention,
+ * since a list without the detail (a Remote Host from before it) still holds
+ * a stop.
+ */
+export function stoppedDeliveries(item: {
+  standing: DecisionQuestionStanding;
+  stall?: DecisionQuestionStall | null;
+}): number {
+  if (!deliveryNeedsPerson(item.standing)) return 0;
+  const stall = item.stall ?? null;
+  const named =
+    stall === null ? 0 : (stall.answerRevision === null ? 0 : 1) + stall.followUpIds.length;
+  return Math.max(named, 1);
+}
+
+/**
+ * Whether anything about the question needs the person: one to answer, or a
+ * delivery stopped. The window title and Dock badge light by it, so they never
+ * say all clear while the toolbar marks either.
+ */
+export function needsPerson(
+  item: Parameters<typeof isWaitingOnPerson>[0],
+  nowMs: number | null = null
+): boolean {
+  return isWaitingOnPerson(item, nowMs) || deliveryNeedsPerson(item.standing);
 }

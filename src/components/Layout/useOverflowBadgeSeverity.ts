@@ -145,7 +145,9 @@ export function useOverflowBadgeSeverity(
   /** The Forge capsule is showing its "data unavailable" warning. */
   forgeUnavailable = false,
   /** Questions waiting on the person, for the Decisions inbox button folded into the menu. */
-  decisionsWaitingCount = 0
+  decisionsWaitingCount = 0,
+  /** Deliveries stopped on the person's answers, the inbox button's warning (#18045). */
+  decisionsStoppedCount = 0
 ): OverflowBadgeSeverity {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
@@ -224,6 +226,14 @@ export function useOverflowBadgeSeverity(
     }
 
     if (
+      overflowIds.includes("decisions-inbox") &&
+      decisionsStoppedCount > 0 &&
+      !decisionsInboxOpen
+    ) {
+      warning = true;
+    }
+
+    if (
       overflowIds.includes("notification-center") &&
       notificationUnreadCount > 0 &&
       !notificationCenterOpen
@@ -252,6 +262,7 @@ export function useOverflowBadgeSeverity(
     errorCount,
     canopyUrgentCount,
     decisionsWaitingCount,
+    decisionsStoppedCount,
     watcherUnreliable,
     forgeUnavailable,
     overflowAgentTier,

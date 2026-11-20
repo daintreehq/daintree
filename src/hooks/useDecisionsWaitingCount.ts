@@ -8,16 +8,18 @@ import type {
   DecisionQuestionList,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
-import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
+import { isWaitingOnPerson, stoppedDeliveries } from "@shared/utils/decisionWaiting";
 
 /**
- * How many of this computer's questions wait on the person, shared by every
- * reader in the view: one list watch however many ask, held while any of them
- * is mounted and asking. Zero until the list is read, and when it can't be.
- * The same list says which of each pane's questions the person cleared
- * (#18053), for the pane's chip.
+ * How many of this computer's questions wait on the person, and how many
+ * deliveries stopped on their answer (#18045), shared by every reader in the
+ * view: one list watch however many ask, held while any of them is mounted
+ * and asking. Zero until the list is read, and when it can't be. The same
+ * list says which of each pane's questions the person cleared (#18053), for
+ * the pane's chip.
  */
 let count = 0;
+let stopped = 0;
 /** By `paneKey`, the ids of the pane's questions cleared here, joined. */
 let clearedByPane: ReadonlyMap<string, string> = new Map();
 /** The same questions, each by its pane and id. */
@@ -37,9 +39,10 @@ function notifyAll(): void {
   for (const notify of [...listeners]) notify();
 }
 
-function set(next: number): void {
-  if (next === count) return;
-  count = next;
+function set(nextCount: number, nextStopped: number): void {
+  if (nextCount === count && nextStopped === stopped) return;
+  count = nextCount;
+  stopped = nextStopped;
   notifyAll();
 }
 
@@ -95,7 +98,10 @@ function recount(): void {
   deadlineTimer = undefined;
   if (latest === null) return;
   const now = Date.now();
-  set(latest.questions.filter((item) => isWaitingOnPerson(item, now)).length);
+  set(
+    latest.questions.filter((item) => isWaitingOnPerson(item, now)).length,
+    latest.questions.reduce((sum, item) => sum + stoppedDeliveries(item), 0)
+  );
   // Only a deadline passing changes the count: no timer for the minutes ticking down.
   const next = nextAskDeadline(latest.questions, now);
   if (next === null) return;
@@ -131,6 +137,7 @@ function subscribe(listener: () => void): () => void {
     latest = null;
     // The next watcher reads afresh rather than showing a count nobody kept up.
     count = 0;
+    stopped = 0;
     clearedByPane = new Map();
     clearedQuestions = new Set();
   };
@@ -142,6 +149,10 @@ function subscribeNothing(): () => void {
 
 function getCount(): number {
   return count;
+}
+
+function getStopped(): number {
+  return stopped;
 }
 
 function getZero(): number {
@@ -157,6 +168,18 @@ export function useDecisionsWaitingCount(active: boolean): number {
     active ? subscribe : subscribeNothing,
     active ? getCount : getZero,
     active ? getCount : getZero
+  );
+}
+
+/**
+ * Deliveries stopped on the person's answer or follow-up, from the same watch:
+ * read only while `active`.
+ */
+export function useDecisionsStoppedCount(active: boolean): number {
+  return useSyncExternalStore(
+    active ? subscribe : subscribeNothing,
+    active ? getStopped : getZero,
+    active ? getStopped : getZero
   );
 }
 
