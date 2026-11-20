@@ -378,7 +378,7 @@ export function attentionText(
     const what = stoppedThing(subject, closing);
     const sentence = uncertain
       ? `${capitalized(what.replace(" and ", " or "))} may or may not have been typed into the terminal. Check the terminal before anything is sent again.`
-      : `${capitalized(what)} ${plural ? "were" : "was"} recorded, but typing ${plural ? "them" : "it"} into the terminal stopped. Choose what happens to ${plural ? "them" : "it"}.`;
+      : `Typing ${what} into the terminal stopped. Choose what happens to ${plural ? "them" : "it"}.`;
     return reason === null ? sentence : `${sentence} ${reason}`;
   }
   // Without the stall, a follow-up's delivery can't be told apart from the notice's, so both are named.

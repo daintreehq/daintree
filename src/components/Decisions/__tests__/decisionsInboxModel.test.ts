@@ -694,7 +694,7 @@ describe("attentionText (#18054)", () => {
 
   it("names the answer that stopped and why, in the words the attention list uses", () => {
     expect(attentionText(STOPPED, { stall: stall() })).toBe(
-      "The answer was recorded, but typing it into the terminal stopped. Choose what happens to it. The terminal that asked was closed."
+      "Typing the answer into the terminal stopped. Choose what happens to it. The terminal that asked was closed."
     );
   });
 
@@ -704,7 +704,7 @@ describe("attentionText (#18054)", () => {
         stall: stall({ answerRevision: null, followUpIds: ["m1"], reason: "message_unreadable" }),
       })
     ).toBe(
-      "The follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it. The follow-up couldn't be decrypted on this computer."
+      "Typing the follow-up into the terminal stopped. Choose what happens to it. The follow-up couldn't be decrypted on this computer."
     );
     expect(
       attentionText(UNCERTAIN, {
@@ -720,9 +720,7 @@ describe("attentionText (#18054)", () => {
       attentionText(STOPPED, {
         stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "unspecified" }),
       })
-    ).toBe(
-      "The follow-ups were recorded, but typing them into the terminal stopped. Choose what happens to them."
-    );
+    ).toBe("Typing the follow-ups into the terminal stopped. Choose what happens to them.");
     expect(
       attentionText(UNCERTAIN, {
         stall: stall({ followUpIds: ["m1"], reason: "inject_ambiguous" }),
@@ -738,7 +736,7 @@ describe("attentionText (#18054)", () => {
       closureNotice: { delivery: "needs-attention" as const, disposition: null },
     };
     expect(attentionText(STOPPED, { ...round, stall: stall({ reason: "unspecified" }) })).toBe(
-      "The notice that the question expired unanswered was recorded, but typing it into the terminal stopped. Choose what happens to it."
+      "Typing the notice that the question expired unanswered into the terminal stopped. Choose what happens to it."
     );
     expect(
       attentionText(STOPPED, {
@@ -746,7 +744,7 @@ describe("attentionText (#18054)", () => {
         stall: stall({ followUpIds: ["m1"], reason: "unspecified" }),
       })
     ).toBe(
-      "The notice that the question expired unanswered and the follow-up were recorded, but typing them into the terminal stopped. Choose what happens to them."
+      "Typing the notice that the question expired unanswered and the follow-up into the terminal stopped. Choose what happens to them."
     );
   });
 
