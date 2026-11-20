@@ -26,6 +26,12 @@
   background-color: var(--theme-surface-sidebar);
 }
 
+/* History's and Cleared's bars fold (#18023): hover lifts them as it does
+   Canopy's folding bars, over the opaque bar so no row shows through. */
+.decisions-inbox-fold:hover {
+  background-color: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
 .decisions-inbox-row {
   position: relative;
   background: var(--sidebar-card-bg, rgba(255, 255, 255, 0.03));
@@ -86,7 +92,8 @@
   }
   /* Inset: the rows are full-bleed inside a scroller, so an outline drawn
      outside them loses its sides (the host rule sets 2px !important). */
-  .decisions-inbox-row:focus-visible {
+  .decisions-inbox-row:focus-visible,
+  .decisions-inbox-fold:focus-visible {
     outline-offset: -2px !important;
   }
 }

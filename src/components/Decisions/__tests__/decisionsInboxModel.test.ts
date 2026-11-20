@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import { decisionItems } from "@/components/Terminal/decisionsChipModel";
@@ -24,9 +25,11 @@ import {
   clearText,
   closedTime,
   connectionNotice,
+  folds,
   goneAsks,
   groupOf,
   headerFacts,
+  hiddenIn,
   inboxGroupOf,
   inboxGroups,
   inboxRowNote,
@@ -44,6 +47,7 @@ import {
   scopedQuestions,
   scopeOffered,
   seeableAsk,
+  shownItems,
   standingText,
   waitingText,
   whereFacts,
@@ -519,12 +523,103 @@ describe("decisionsInboxModel", () => {
 
     it("never moves onto a Cleared or History neighbour from a question the person didn't pick", () => {
       const groups = inboxGroups([cleared, closed]);
-      // The question it opened on by itself went: nothing takes its place.
+      // The question it opened on by itself went: nothing takes its place, drawn or not.
       expect(resolveSelection(groups, { key: "gone", index: 0, picked: false }, null)).toBeNull();
-      // One the person picked went: they were reading there, so its neighbour does.
-      expect(resolveSelection(groups, { key: "gone", index: 0, picked: true }, null)).toBe(cleared);
+      expect(
+        resolveSelection(
+          groups,
+          { key: "gone", index: 0, picked: false },
+          null,
+          LOCAL_HOST_ID,
+          null,
+          new Set(["cleared", "history"])
+        )
+      ).toBeNull();
+      // One the person picked went: they were reading there, so its neighbour does, once drawn.
+      expect(
+        resolveSelection(
+          groups,
+          { key: "gone", index: 0, picked: true },
+          null,
+          LOCAL_HOST_ID,
+          null,
+          new Set(["cleared"])
+        )
+      ).toBe(cleared);
       // Once it went, a fresh look still finds the pane's own.
       expect(resolveSelection(groups, { key: "gone", index: 0, picked: false }, "t2")).toBe(closed);
+    });
+  });
+
+  describe("folding History and Cleared (#18023)", () => {
+    const settled: DecisionQuestionStanding = { kind: "settled", outcome: "expired" };
+    const asking = item("q1", OPEN);
+    const typing = item("q2", { kind: "to-type" });
+    const cleared = item("q3", OPEN, { inbox: { ask: null, seen: true, cleared: true } });
+    const closed = item("q4", settled);
+    const older = item("q5", settled);
+    const groups = inboxGroups([asking, typing, cleared, closed, older]);
+    const keyOf = (entry: DecisionQuestionListItem) => referenceKey(entry.reference);
+
+    it("folds only what is over or set aside", () => {
+      expect(groups.map((group) => [group.id, folds(group.id)])).toEqual([
+        ["needs-you", false],
+        ["delivering", false],
+        ["cleared", true],
+        ["history", true],
+      ]);
+      expect(folds("awaiting")).toBe(false);
+      expect(folds("attention")).toBe(false);
+    });
+
+    it("draws a folding group's rows only while it is open, and says which shut group hides one", () => {
+      expect(shownItems(groups, new Set())).toEqual([asking, typing]);
+      expect(shownItems(groups, new Set(["history"]))).toEqual([asking, typing, closed, older]);
+      expect(shownItems(groups, new Set(["cleared", "history"]))).toEqual([
+        asking,
+        typing,
+        cleared,
+        closed,
+        older,
+      ]);
+      expect(hiddenIn(groups, keyOf(closed), new Set())).toBe("history");
+      expect(hiddenIn(groups, keyOf(cleared), new Set(["history"]))).toBe("cleared");
+      expect(hiddenIn(groups, keyOf(closed), new Set(["history"]))).toBeNull();
+      expect(hiddenIn(groups, keyOf(cleared), new Set(["cleared"]))).toBeNull();
+      expect(hiddenIn(groups, keyOf(asking), new Set())).toBeNull();
+      expect(hiddenIn(groups, "gone", new Set())).toBeNull();
+    });
+
+    it("keeps a chosen question a shut group hides", () => {
+      const choice = { key: keyOf(closed), index: 1, picked: true };
+      expect(resolveSelection(groups, choice, null, LOCAL_HOST_ID, null, new Set())).toBe(closed);
+      expect(
+        resolveSelection(groups, { ...choice, picked: false }, null, LOCAL_HOST_ID, null, new Set())
+      ).toBe(closed);
+    });
+
+    it("takes a picked question's place from the drawn rows, never one a shut group hides", () => {
+      // Drawn: asking, typing. A pick that went from the end lands on the last drawn row.
+      expect(resolveSelection(groups, { key: "gone", index: 2, picked: true }, null)).toBe(typing);
+      expect(
+        resolveSelection(
+          groups,
+          { key: "gone", index: 2, picked: true },
+          null,
+          LOCAL_HOST_ID,
+          null,
+          new Set(["history"])
+        )
+      ).toBe(closed);
+      expect(resolveSelection(groups, { key: "gone", index: 0, picked: true }, null)).toBe(asking);
+      expect(resolveSelection(groups, { key: "gone", index: -1, picked: true }, null)).toBe(asking);
+      // Nothing drawn: no place to take, so the pane's own, else nothing.
+      const passive = inboxGroups([cleared, closed]);
+      expect(resolveSelection(passive, { key: "gone", index: 0, picked: true }, null)).toBeNull();
+      const own = { ...closed, reference: { ...closed.reference, terminalId: "t7" } };
+      expect(
+        resolveSelection(inboxGroups([cleared, own]), { key: "gone", index: 0, picked: true }, "t7")
+      ).toBe(own);
     });
   });
 

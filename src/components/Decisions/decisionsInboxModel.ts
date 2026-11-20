@@ -60,6 +60,37 @@ const GROUP_ORDER: readonly InboxGroupId[] = [
 ];
 
 /**
+ * The groups that fold (#18023): what's over, and what the person set aside.
+ * Both grow without anything waiting on the person, so each opening starts
+ * with them shut; what still needs someone never folds.
+ */
+export function folds(id: InboxGroupId): boolean {
+  return id === "cleared" || id === "history";
+}
+
+const NONE_OPEN: ReadonlySet<InboxGroupId> = new Set();
+
+/** The questions whose rows are drawn: every group's, except a folding group's while it is shut. */
+export function shownItems(
+  groups: readonly InboxGroup[],
+  open: ReadonlySet<InboxGroupId>
+): DecisionQuestionListItem[] {
+  return groups.flatMap((group) => (folds(group.id) && !open.has(group.id) ? [] : group.items));
+}
+
+/** The shut group a listed question sits in, or null when its row is drawn (or it isn't listed). */
+export function hiddenIn(
+  groups: readonly InboxGroup[],
+  key: string,
+  open: ReadonlySet<InboxGroupId>
+): InboxGroupId | null {
+  const group = groups.find((candidate) =>
+    candidate.items.some((item) => referenceKey(item.reference) === key)
+  );
+  return group !== undefined && folds(group.id) && !open.has(group.id) ? group.id : null;
+}
+
+/**
  * A queued question still waits for the person and can be answered here; one
  * that couldn't be sent never reached anyone and is over, like a withdrawn one.
  */
@@ -973,7 +1004,7 @@ export function clearAllText(scope: InboxScope, namesReach: boolean): string {
 }
 
 /** The host and question a reference key names, whichever pane and project it is listed under. */
-function questionOfKey(key: string): string {
+export function questionOfKey(key: string): string {
   const parts = key.split("\u0000");
   return `${parts[0]}\u0000${parts[parts.length - 1]}`;
 }
@@ -1028,9 +1059,10 @@ export function waitingText(
 }
 
 /**
- * The question chosen in the inbox, where it stood in the list when chosen,
- * and whether the person picked it (a row, or Next question) rather than the
- * inbox choosing it on opening.
+ * The question chosen in the inbox, where it stood among the drawn rows (the
+ * place it was last drawn at, while a shut group hides it), and whether the
+ * person picked it (a row, or Next question) rather than the inbox choosing
+ * it on opening.
  */
 export interface InboxChoice {
   key: string;
@@ -1059,21 +1091,22 @@ export function askedOnHost(item: DecisionQuestionListItem, hostId: string): boo
 }
 
 /**
- * The question the inbox shows: the one chosen while it is still listed, even
- * under another pane once its answer was sent there (#18027); for one the
- * person picked that went, the one that took its place; else the
- * first of the pane that opened the inbox, on the view's own machine
- * (`viewHostId`), in any group; else the first of the window's own project
- * that needs the person (#18051); else the first that still needs something
- * (#18022). Null when nothing does: a Cleared or History question opens only
- * when it's picked.
+ * The question the inbox shows: the one chosen while it is still listed, under
+ * a shut group too, and even under another pane once its answer was sent there
+ * (#18027); for one the person picked that went, the drawn row that took its
+ * place, never one a shut group hides (#18023); else the first of the pane that
+ * opened the inbox, on the view's own machine (`viewHostId`), in any group;
+ * else the first of the window's own project that needs the person (#18051);
+ * else the first that still needs something (#18022). Null when nothing does:
+ * a Cleared or History question opens only when it's picked.
  */
 export function resolveSelection(
   groups: readonly InboxGroup[],
   chosen: InboxChoice | null,
   openerTerminalId: string | null,
   viewHostId: string = LOCAL_HOST_ID,
-  windowProject: WindowProject | null = null
+  windowProject: WindowProject | null = null,
+  open: ReadonlySet<InboxGroupId> = NONE_OPEN
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
@@ -1082,8 +1115,9 @@ export function resolveSelection(
       ordered.find((item) => referenceKey(item.reference) === chosen.key) ??
       ordered.find((item) => questionOfKey(referenceKey(item.reference)) === question);
     if (kept !== undefined) return kept;
-    if (chosen.picked && ordered.length > 0) {
-      return ordered[Math.min(chosen.index, ordered.length - 1)]!;
+    const shown = shownItems(groups, open);
+    if (chosen.picked && shown.length > 0) {
+      return shown[Math.min(Math.max(chosen.index, 0), shown.length - 1)]!;
     }
   }
   if (openerTerminalId !== null) {
