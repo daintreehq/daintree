@@ -2646,17 +2646,22 @@ describe("DecisionsInboxDialog", () => {
       expect(dispatch).not.toHaveBeenCalled();
     });
 
-    it("hands focus back to the element its opener named once it closes (#18048)", async () => {
+    it("hands focus to the element its opener named once the opening control has gone (#18048)", async () => {
       const card = document.createElement("button");
       card.id = "canopy-card-t1";
-      document.body.append(card);
+      const review = document.createElement("button");
+      document.body.append(card, review);
       try {
+        review.focus();
         act(() => useDecisionsInboxStore.getState().open({ returnFocusTo: "canopy-card-t1" }));
         await screen.findByTestId("decisions-inbox-dialog");
+        // A Canopy run's Review answers leaves with its last stopped delivery.
+        review.remove();
         act(() => useDecisionsInboxStore.getState().close());
         await waitFor(() => expect(document.activeElement).toBe(card));
       } finally {
         card.remove();
+        review.remove();
       }
     });
 
