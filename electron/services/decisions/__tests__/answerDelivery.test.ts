@@ -2278,7 +2278,6 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
   const trail = async (h: ReturnType<typeof setup>) =>
     (await h.store.listAudit(500))
       .filter((e) => e.event === "notice.trail")
-      .reverse()
       .map((e) => ({ step: e.result, ...e.detail }));
   const admittedWrite = (h: ReturnType<typeof setup>, questionId: string) =>
     (

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { DecisionThreadAnswer, DecisionThreadMessage } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionClosureNotice,
+  DecisionThreadAnswer,
+  DecisionThreadMessage,
+} from "@shared/types/decisionsQuestion";
+
+type DecisionClosureNoticeDelivery = DecisionClosureNotice["delivery"];
 import {
   choiceLabels,
   closureNoticeText,
@@ -214,8 +220,26 @@ describe("decisionQuestionModel", () => {
         closedReason: "expired",
         closureNotice: { delivery: "pending", disposition: "fallback-withheld" },
       });
-      expect(due).toMatch(/may go ahead/);
-      expect(withheld).toMatch(/doesn't clear the agent/);
+      expect(due).toMatch(/It told the agent it may go ahead/);
+      expect(withheld).toMatch(/Once typed, it doesn't clear the agent/);
+    });
+
+    it("never says a notice not yet typed told the agent anything (#17944)", () => {
+      const said = (delivery: DecisionClosureNoticeDelivery) =>
+        closureNoticeText({
+          closedReason: "expired",
+          closureNotice: { delivery, disposition: "fallback-due" },
+        });
+      expect(said("needs-attention")).toBe(
+        "The expiry notice stopped before it was typed into the terminal. Once typed, it tells the agent it may go ahead with its plan."
+      );
+      expect(said("pending")).toMatch(/Once typed, it tells the agent/);
+      expect(said("uncertain")).toMatch(/If it reached the terminal, it told the agent/);
+      // It will never be typed: it says nothing of the plan.
+      expect(said("stopped")).toBe("The expiry notice won't be typed into the terminal.");
+      for (const delivery of ["pending", "needs-attention", "uncertain", "stopped"] as const) {
+        expect(said(delivery)).not.toMatch(/^.*\. It told/);
+      }
     });
   });
 });

@@ -96,13 +96,35 @@ export function closureNoticeText(
   const reason = question.closedReason;
   if (notice == null || reason === null || reason === "withdrawn") return null;
   const delivery = `${NOTICE_NAME[reason]} ${NOTICE_DELIVERY[notice.delivery]}.`;
-  switch (notice.disposition) {
-    case "fallback-due":
-      return `${delivery} It tells the agent it may go ahead with its plan.`;
-    case "fallback-withheld":
-      return `${delivery} It doesn't clear the agent to go ahead with its plan.`;
+  const plan = noticePlan(notice);
+  return plan === null ? delivery : `${delivery} ${plan}`;
+}
+
+/**
+ * What an advisory notice says of the plan, in the tense of how far it got
+ * (#17944): said once typed, perhaps said when its write may have reached the
+ * terminal, and to be said while it waits. A notice never typed is never
+ * presented as having told the agent anything.
+ */
+function noticePlan(notice: DecisionClosureNotice): string | null {
+  const { delivery, disposition } = notice;
+  if (disposition === null) return null;
+  const due = disposition === "fallback-due";
+  switch (delivery) {
+    case "delivered":
+      return due
+        ? "It told the agent it may go ahead with its plan."
+        : "It didn't clear the agent to go ahead with its plan.";
+    case "uncertain":
+      return due
+        ? "If it reached the terminal, it told the agent it may go ahead with its plan."
+        : "If it reached the terminal, it didn't clear the agent to go ahead with its plan.";
+    case "stopped":
+      return null;
     default:
-      return delivery;
+      return due
+        ? "Once typed, it tells the agent it may go ahead with its plan."
+        : "Once typed, it doesn't clear the agent to go ahead with its plan.";
   }
 }
 
