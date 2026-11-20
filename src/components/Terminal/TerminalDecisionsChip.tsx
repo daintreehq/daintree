@@ -182,6 +182,7 @@ function DecisionRow({
   line,
   nowMs,
   showStatus,
+  sharedStatusId,
   onOpen,
   onDismiss,
 }: {
@@ -190,6 +191,8 @@ function DecisionRow({
   nowMs: number;
   /** False when the list says it once above every row. */
   showStatus: boolean;
+  /** The line that says it once, when the row doesn't. */
+  sharedStatusId: string;
   onOpen: () => void;
   /** Null for a question that can't be dismissed now. */
   onDismiss: (() => void) | null;
@@ -212,6 +215,8 @@ function DecisionRow({
           focusRestore?.expectHandoff();
           onOpen();
         }}
+        // The status isn't in the row's name when the list says it once, so a focused row says it.
+        aria-describedby={showStatus ? undefined : sharedStatusId}
         data-question-id={item.questionId}
         data-testid="terminal-decisions-row"
       >
@@ -388,7 +393,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const summary = chipSummary(items);
   const label = chipLabel(items);
   // Several questions in the same state say it once, above the list.
-  const sharedStatus = sharedWaitingStatus(items);
+  const sharedStatus = sharedWaitingStatus(items, nowMs);
   const answerable = sharedStatus === null ? answerNote(items) : null;
   const notes = [...(answerable !== null ? [answerable] : []), ...deliveryNotes(items, wait)];
   const unavailable = cancelNote(items);
@@ -475,7 +480,6 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
               </p>
             )}
             <ul
-              aria-describedby={sharedStatus !== null ? sharedStatusId : undefined}
               className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
               aria-label="Questions"
             >
@@ -486,6 +490,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                   line={lines.get(item.questionId) ?? null}
                   nowMs={nowMs}
                   showStatus={sharedStatus === null}
+                  sharedStatusId={sharedStatusId}
                   onOpen={() => {
                     setOpen(false);
                     openQuestion(terminalId, questionIds, item.questionId);

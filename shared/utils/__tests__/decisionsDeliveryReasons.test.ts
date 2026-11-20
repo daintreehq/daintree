@@ -6,6 +6,7 @@ import {
   deliverySubjectOf,
   deliverySubjectPlural,
   deliveryUncertainText,
+  stallSubject,
 } from "../decisionsDeliveryReasons.js";
 
 describe("decisionsDeliveryReasons", () => {
@@ -88,5 +89,41 @@ describe("decisionsDeliveryReasons", () => {
     );
     expect(deliverySubjectOf("answer", "q-3")).toBe("Answer to q-3");
     expect(deliverySubjectOf("timeout notice", "q-3")).toBe("Timeout notice for q-3");
+  });
+
+  it("reads what a listed question's stall stopped on, the timeout notice in the answer's place (#18054)", () => {
+    const stall = (answerRevision: number | null, followUpIds: string[] = []) => ({
+      answerRevision,
+      followUpIds,
+      reason: "pane_gone",
+    });
+    const notice = (delivery: "needs-attention" | "uncertain" | "delivered") => ({
+      closedReason: "expired" as const,
+      closureNotice: { delivery, disposition: null },
+    });
+    expect(stallSubject({ stall: null })).toBeNull();
+    expect(stallSubject({ stall: stall(1) })).toBe("answer");
+    expect(stallSubject({ stall: stall(null, ["m1"]) })).toBe("follow-up");
+    expect(stallSubject({ stall: stall(1, ["m1", "m2"]) })).toBe("answer and follow-ups");
+    expect(stallSubject({ stall: stall(1), ...notice("needs-attention") })).toBe("timeout notice");
+    expect(stallSubject({ stall: stall(1, ["m1"]), ...notice("uncertain") })).toBe(
+      "timeout notice and follow-up"
+    );
+    // A notice that was typed isn't what stopped; a Host from before the round reports none.
+    expect(stallSubject({ stall: stall(1), ...notice("delivered") })).toBe("answer");
+    expect(stallSubject({ stall: stall(1), closedReason: "never-published" })).toBe("answer");
+    expect(stallSubject({ stall: stall(null, ["m1"]), ...notice("needs-attention") })).toBe(
+      "follow-up"
+    );
+  });
+
+  it("says each code that names the terminal the pane's own way", () => {
+    expect(deliveryReasonText("generation_mismatch", "answer", "here")).toBe(
+      "This terminal was restarted after the question was asked."
+    );
+    expect(deliveryReasonText("unavailable_unknown_reason", "timeout notice", "here")).toBe(
+      "This terminal refused the timeout notice."
+    );
+    expect(deliveryReasonText("nothing_known", "answer", "here")).toBeNull();
   });
 });

@@ -575,6 +575,42 @@ describe("TerminalDecisionsChip", () => {
       }
       // The instruction the status already gave isn't repeated in a footer.
       expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+      // A focused row still says it: it is described by the one line.
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.getAttribute("aria-describedby")).toBe(shared.id);
+      }
+    });
+
+    it("keeps a lone question's status on its row, and the footer's instruction (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: [twoQuestions.openQuestions[0]!],
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      expect(row.textContent).toContain("Waiting for an answer, here or on your phone");
+      expect(screen.queryByTestId("terminal-decisions-shared-status")).toBeNull();
+      expect(screen.getByText("Open a question to answer it here")).toBeTruthy();
+    });
+
+    it("says a uniform queued list's status once too (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: twoQuestions.openQuestions.map((question) => ({
+          ...question,
+          status: "queued" as const,
+        })),
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Queued to send; you can answer it here");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Queued to send");
+      }
     });
 
     it("keeps a row named by alias when its line can't be read", async () => {

@@ -14,6 +14,7 @@ import {
   ELAPSED_NOTE,
   agentName,
   askShownIn,
+  attentionText,
   clearText,
   closedTime,
   connectionNotice,
@@ -674,5 +675,68 @@ describe("closedTime (#18025)", () => {
       at: asked,
       kind: "asked",
     });
+
+describe("attentionText (#18054)", () => {
+  const STOPPED: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "needs-attention",
+  };
+  const UNCERTAIN: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "delivery-uncertain",
+  };
+  const stall = (over: Partial<NonNullable<DecisionQuestionListItem["stall"]>> = {}) => ({
+    answerRevision: 1,
+    followUpIds: [] as string[],
+    reason: "pane_gone",
+    ...over,
+  });
+
+  it("names the answer that stopped and why, in the words the attention list uses", () => {
+    expect(attentionText(STOPPED, { stall: stall() })).toBe(
+      "The answer was recorded, but typing it into the terminal stopped. Choose what happens to it. The terminal that asked was closed."
+    );
+  });
+
+  it("names a follow-up apart from the answer, and says why in its own words", () => {
+    expect(
+      attentionText(STOPPED, {
+        stall: stall({ answerRevision: null, followUpIds: ["m1"], reason: "message_unreadable" }),
+      })
+    ).toBe(
+      "The follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it. The follow-up couldn't be decrypted on this computer."
+    );
+    expect(
+      attentionText(UNCERTAIN, {
+        stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "x.y" }),
+      })
+    ).toBe(
+      "The follow-ups may or may not have been typed into the terminal. Check it there before anything is sent again."
+    );
+  });
+
+  it("names a timeout notice by how the question closed, with a follow-up beside it", () => {
+    const round = {
+      closedReason: "expired" as const,
+      closureNotice: { delivery: "needs-attention" as const, disposition: null },
+    };
+    expect(attentionText(STOPPED, { ...round, stall: stall({ reason: "unspecified" }) })).toBe(
+      "The notice that the question expired unanswered was recorded, but typing it into the terminal stopped. Choose what happens to it."
+    );
+    expect(
+      attentionText(STOPPED, {
+        ...round,
+        stall: stall({ followUpIds: ["m1"], reason: "unspecified" }),
+      })
+    ).toBe(
+      "The notice that the question expired unanswered and the follow-up were recorded, but typing them into the terminal stopped. Choose what happens to them."
+    );
+  });
+
+  it("falls back to naming both when the list carries no stall", () => {
+    expect(attentionText(STOPPED)).toContain("An answer or follow-up was recorded");
+    expect(attentionText(UNCERTAIN, { closedReason: "declined" })).toContain(
+      "The notice that you declined it, or a follow-up,"
+    );
   });
 });

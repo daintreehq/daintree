@@ -1,6 +1,12 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import {
+  deliveryReasonText,
+  deliverySubjectPlural,
+  stallSubject,
+  type DeliverySubject,
+} from "@shared/utils/decisionsDeliveryReasons";
 import { pluralize } from "@shared/utils/pluralize";
 import type {
   DecisionQuestionContent,
@@ -350,19 +356,32 @@ export function staleNote(item: Pick<DecisionQuestionListItem, "remoteHost">): s
 }
 
 /**
- * What the shown question's warning says while delivery needs a person: only
- * what was recorded, since the list can't say whether an answer or a
- * follow-up stopped, nor who sent it.
+ * What the shown question's warning says while delivery needs a person
+ * (#18054): what stopped, as the list of answers needing attention and the
+ * pane's chip name it, and why when the library recorded a code Daintree
+ * knows. A Host from before its list said what stopped reads as only what was
+ * recorded, since it can't say whether an answer or a follow-up did.
  */
 export function attentionText(
   standing: DecisionQuestionStanding,
-  round: Pick<ItemRound, "closedReason"> = {}
+  item: Pick<ItemRound, "closedReason"> &
+    Partial<Pick<DecisionQuestionListItem, "stall" | "closureNotice">> = {}
 ): string {
   const uncertain =
     standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
-  // Closed without an answer (#17943): what stopped is the notice saying so, unless a
-  // follow-up's delivery did, which the list can't tell apart, so both are named.
-  const closing = closingNotice(round.closedReason ?? null);
+  // Closed without an answer (#17943): what stopped is the notice saying so.
+  const closing = closingNotice(item.closedReason ?? null);
+  const subject = stallSubject(item);
+  if (subject !== null && item.stall != null) {
+    const plural = deliverySubjectPlural(subject);
+    const reason = deliveryReasonText(item.stall.reason, subject);
+    const what = stoppedThing(subject, closing);
+    const sentence = uncertain
+      ? `${capitalized(what.replace(" and ", " or "))} may or may not have been typed into the terminal. Check it there before anything is sent again.`
+      : `${capitalized(what)} ${plural ? "were" : "was"} recorded, but typing ${plural ? "them" : "it"} into the terminal stopped. Choose what happens to ${plural ? "them" : "it"}.`;
+    return reason === null ? sentence : `${sentence} ${reason}`;
+  }
+  // Without the stall, a follow-up's delivery can't be told apart from the notice's, so both are named.
   if (closing !== null) {
     return uncertain
       ? `The notice that ${closing}, or a follow-up, may or may not have been typed into the terminal. Check it there before anything is sent again.`
@@ -371,6 +390,22 @@ export function attentionText(
   return uncertain
     ? "An answer or follow-up may or may not have been typed into the terminal. Check it there before anything is sent again."
     : "An answer or follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it.";
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The subject in a sentence: "the answer", "the follow-ups", "the notice that you declined it". */
+function stoppedThing(subject: DeliverySubject, closing: string | null): string {
+  const named = subject.startsWith("timeout notice")
+    ? subject.replace(
+        "timeout notice",
+        closing === null ? "the timeout notice" : `the notice that ${closing}`
+      )
+    : `the ${subject}`;
+  // "the answer and follow-up": the second thing needs its article too.
+  return named.replace(" and follow-up", " and the follow-up");
 }
 
 /** What a closing notice tells the agent, as the attention callout names it. */

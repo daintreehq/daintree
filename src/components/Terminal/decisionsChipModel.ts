@@ -289,11 +289,21 @@ export function cancelNote(items: readonly DecisionItem[]): string | null {
       )
       .map((item) => item.questionId)
   );
+  // A stopped timeout notice is an expired question's, not an answered one's (#18054).
+  const noticeStopped = (item: DecisionItem) =>
+    isAttention(item) && item.subject?.startsWith("timeout notice") === true;
   const answered = items.some(
-    (item) => (item.kind === "answer" || isAttention(item)) && !waiting.has(item.questionId)
+    (item) =>
+      (item.kind === "answer" || (isAttention(item) && !noticeStopped(item))) &&
+      !waiting.has(item.questionId)
   );
   // Past its deadline either way: one that never reached the relay is over too.
-  const expired = items.some((item) => item.kind === "expired" || item.kind === "never-published");
+  const expired = items.some(
+    (item) =>
+      item.kind === "expired" ||
+      item.kind === "never-published" ||
+      (noticeStopped(item) && !waiting.has(item.questionId))
+  );
   if (answered && expired) return "Answered and expired questions can't be dismissed";
   if (answered) return "Answered questions can't be dismissed";
   if (expired) return "Expired questions can't be dismissed";
@@ -379,6 +389,19 @@ function itemLabel(item: DecisionItem): ChipLabel {
   }
 }
 
+/** What the items needing attention are, as plurals: "Answers", "Answers and follow-ups". */
+function attentionNouns(items: readonly DecisionItem[]): string {
+  const held = items.filter(isAttention).map((item) => item.subject ?? "answer");
+  const nouns = [
+    held.some((subject) => subject.includes("answer")) ? "answers" : null,
+    held.some((subject) => subject.includes("follow-up")) ? "follow-ups" : null,
+    held.some((subject) => subject.startsWith("timeout notice")) ? "timeout notices" : null,
+  ].filter((noun) => noun !== null);
+  const list =
+    nouns.length > 1 ? `${nouns.slice(0, -1).join(", ")} and ${nouns.at(-1)}` : nouns[0]!;
+  return list.charAt(0).toUpperCase() + list.slice(1);
+}
+
 /**
  * What the popover's closing lines promise, in the order they apply: answers
  * that will be typed in on their own, and answers that won't.
@@ -401,7 +424,9 @@ export function deliveryNotes(
   if (items.some((item) => item.waitsFor === "host")) {
     notes.push("Answers for a host that's away are typed in once it's back");
   }
-  if (needsAttention(items)) notes.push("Answers that need attention aren't typed in on their own");
+  if (needsAttention(items)) {
+    notes.push(`${attentionNouns(items)} that need attention aren't typed in on their own`);
+  }
   return notes;
 }
 
@@ -435,17 +460,20 @@ export function deadlineNote(item: DecisionItem, nowMs: number): string | null {
 
 /**
  * The one status line a list of questions all share, said once above it
- * rather than on every row: several open questions, or several queued ones,
- * none of them set aside (#18053), which keep their own quieter status.
- * Null for a single question, a mixed list, and every other kind.
+ * rather than on every row: several open questions, or several queued ones.
+ * Null for a single question, a mixed list, every other kind, a list with a
+ * question set aside (#18053), which keeps its own quieter status, and a list
+ * in which a deadline has passed, whose row then says so rather than that it
+ * can still be answered.
  */
-export function sharedWaitingStatus(items: readonly DecisionItem[]): string | null {
+export function sharedWaitingStatus(items: readonly DecisionItem[], nowMs: number): string | null {
   if (items.length < 2) return null;
   const first = items[0]!;
   if (first.kind !== "open" && first.kind !== "queued") return null;
-  return items.every((item) => item.kind === first.kind && setAsideOf(item) === null)
-    ? first.status
-    : null;
+  if (items.some((item) => item.kind !== first.kind || setAsideOf(item) !== null)) return null;
+  return items.some((item) => item.expiresAt !== null && item.expiresAt <= nowMs)
+    ? null
+    : first.status;
 }
 
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */

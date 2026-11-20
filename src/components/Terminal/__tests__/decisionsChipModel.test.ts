@@ -128,8 +128,20 @@ describe("decisionItems", () => {
       "Timeout notice for q-3 needs attention",
       "Timeout notice and follow-up for q-4 may or may not have been delivered",
     ]);
-    // `message_unreadable` is a follow-up's code, and the shared words name it.
-    expect(items[1]?.reason).toBe("The follow-ups couldn't be decrypted on this computer.");
+    // `message_unreadable` is the first held follow-up's code, and the shared words say so.
+    expect(items[1]?.reason).toBe("The follow-up couldn't be decrypted on this computer.");
+    // The subject reaches the wording of a code that speaks of the answer.
+    const [notice] = decisionItems(
+      pane({
+        attention: [
+          {
+            ...stopped(5, "needs-attention", "inject_rejected"),
+            subject: "timeout notice and follow-ups",
+          },
+        ],
+      })
+    );
+    expect(notice?.reason).toBe("This terminal refused the timeout notice.");
   });
 
   it("reads a Host's state from before the subject as the answer, and says it from inside the terminal", () => {
@@ -632,23 +644,53 @@ describe("deadlineNote (#17943)", () => {
   });
 });
 
+const NOW = Date.parse("2026-11-20T14:00:00.000Z");
+
+describe("the footer for what stopped (#18054)", () => {
+  const held = (subject: PaneDecisionAttention["subject"]) =>
+    decisionItems(pane({ attention: [{ ...stopped(1), subject }] }));
+
+  it("calls a stopped timeout notice expired, not answered, and names what isn't typed in", () => {
+    expect(cancelNote(held("timeout notice"))).toBe("Expired questions can't be dismissed");
+    expect(cancelNote(held("answer"))).toBe("Answered questions can't be dismissed");
+    expect(deliveryNotes(held("timeout notice"))).toEqual([
+      "Timeout notices that need attention aren't typed in on their own",
+    ]);
+    expect(deliveryNotes(held("answer and follow-up"))).toEqual([
+      "Answers and follow-ups that need attention aren't typed in on their own",
+    ]);
+    expect(deliveryNotes(held(undefined))).toEqual([
+      "Answers that need attention aren't typed in on their own",
+    ]);
+  });
+});
+
 describe("sharedWaitingStatus (#18054)", () => {
   it("says a uniform list's status once", () => {
-    const [a, b] = decisionItems(pane({ open: [open(1), open(2)] }));
-    expect(sharedWaitingStatus([a!, b!])).toBe("Waiting for an answer, here or on your phone");
-    const [c, d] = decisionItems(pane({ open: [open(1, "queued"), open(2, "queued")] }));
-    expect(sharedWaitingStatus([c!, d!])).toBe("Queued to send; you can answer it here");
+    const three = decisionItems(pane({ open: [open(1), open(2), open(3)] }));
+    expect(sharedWaitingStatus(three, NOW)).toBe("Waiting for an answer, here or on your phone");
+    const queued = decisionItems(pane({ open: [open(1, "queued"), open(2, "queued")] }));
+    expect(sharedWaitingStatus(queued, NOW)).toBe("Queued to send; you can answer it here");
   });
 
   it("leaves a single question, a mixed list and other states to their rows", () => {
     const [one] = decisionItems(pane({ open: [open(1)] }));
-    expect(sharedWaitingStatus([one!])).toBeNull();
+    expect(sharedWaitingStatus([one!], NOW)).toBeNull();
+    // A third row that differs keeps every row's own status.
     expect(
-      sharedWaitingStatus(decisionItems(pane({ open: [open(1), open(2, "queued")] })))
+      sharedWaitingStatus(decisionItems(pane({ open: [open(1), open(2), open(3, "queued")] })), NOW)
     ).toBeNull();
     expect(
-      sharedWaitingStatus(decisionItems(pane({ waiting: [waiting(1), waiting(2)] })))
+      sharedWaitingStatus(decisionItems(pane({ waiting: [waiting(1), waiting(2)] })), NOW)
     ).toBeNull();
+  });
+
+  it("gives the list back to its rows once a deadline has passed, since that row no longer invites an answer", () => {
+    const items = decisionItems(
+      pane({ open: [open(1), { ...open(2), expiresAt: new Date(NOW - 1000).toISOString() }] })
+    );
+    expect(sharedWaitingStatus(items, NOW - 60_000)).not.toBeNull();
+    expect(sharedWaitingStatus(items, NOW)).toBeNull();
   });
 });
 

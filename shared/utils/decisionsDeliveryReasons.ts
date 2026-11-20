@@ -1,3 +1,9 @@
+import type {
+  DecisionClosureNotice,
+  DecisionQuestionClosedReason,
+  DecisionQuestionStall,
+} from "../types/decisionsQuestion.js";
+
 /**
  * Why Daintree stopped typing in an answer or a follow-up, in plain words:
  * the list of answers needing attention (#16020) and a stalled answer's
@@ -58,6 +64,30 @@ export function deliveryUncertainText(subject: DeliverySubject, demonstrative = 
     ? `${deliverySubjectPlural(subject) && !either.includes(" or its ") ? "These" : "This"} ${either}`
     : capitalized(either);
   return `${head} may or may not have been delivered`;
+}
+
+/**
+ * What of a listed question a person has to decide about, from what its
+ * round and stall report (#18054): the timeout notice when it is what
+ * delivery stopped on in the answer's place (#17944), as its round reports:
+ * expired, or never published, with that notice stopped or possibly typed. A
+ * Host from before #17943 reports neither, and its stall reads as an
+ * answer's. Null while nothing needs a person.
+ */
+export function stallSubject(question: {
+  stall?: DecisionQuestionStall | null;
+  closedReason?: DecisionQuestionClosedReason | null;
+  closureNotice?: Pick<DecisionClosureNotice, "delivery"> | null;
+}): DeliverySubject | null {
+  const stall = question.stall ?? null;
+  if (stall === null) return null;
+  const reason = question.closedReason;
+  const delivery = question.closureNotice?.delivery;
+  const notice =
+    stall.answerRevision !== null &&
+    (reason === "expired" || reason === "never-published") &&
+    (delivery === "needs-attention" || delivery === "uncertain");
+  return deliverySubject(stall.answerRevision !== null, stall.followUpIds.length, notice);
 }
 
 /** Whether `subject` names one thing or several. */
