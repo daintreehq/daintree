@@ -110,6 +110,22 @@ export function unavailableText(reason: DecisionsInvolvementUnavailableReason): 
   return `${UNAVAILABLE[reason]} Agents use their usual behaviour.`;
 }
 
+const UNAVAILABLE_LABEL: Record<DecisionsInvolvementUnavailableReason, string> = {
+  "not-set": "Not set",
+  "not-synced": "Not read from the relay yet",
+  unsupported: "Not supported by this relay",
+  "signer-revoked": "Set by a device that was removed",
+  "device-revoked": "This computer was removed from the relay",
+};
+
+/** Why no preference is in force, short enough for the inbox's one line. */
+export function unavailableLabel(reason: DecisionsInvolvementUnavailableReason): string {
+  return UNAVAILABLE_LABEL[reason];
+}
+
+/** Shown after a conflict while this computer waits to read the revision that won. */
+export const WAITING_TEXT = "Reading the newer preference before it can be changed again…";
+
 /**
  * Why the person can't change the preference here, or null when they can.
  * `refusedByRelay` is a save this opening sent that the relay turned away as
@@ -226,6 +242,18 @@ export function draftUntil(draft: InvolvementDraft): string | null {
   if (draft.keptUntil !== null) return draft.keptUntil;
   const ms = parseLocalDateTime(draft.until);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** Whether two drafts would save the same preference: a temporary mode's fields count only while it is on. */
+export function sameDraft(a: InvolvementDraft, b: InvolvementDraft): boolean {
+  if (
+    a.normalMode !== b.normalMode ||
+    a.consultCount !== b.consultCount ||
+    a.temporary !== b.temporary
+  ) {
+    return false;
+  }
+  return !a.temporary || (a.temporaryMode === b.temporaryMode && draftUntil(a) === draftUntil(b));
 }
 
 export interface DraftIssue {

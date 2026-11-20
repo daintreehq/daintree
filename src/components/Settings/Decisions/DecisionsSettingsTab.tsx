@@ -21,6 +21,7 @@ import {
   switchedOnCount,
   useDecisionsAgentSupport,
 } from "./DecisionsAgentsSection";
+import { DecisionsInvolvementSettingsSection } from "./DecisionsInvolvementSettingsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsNotificationsSection } from "./DecisionsNotificationsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
@@ -183,6 +184,11 @@ export function DecisionsSettingsTab({
   const everyday = on && (
     <Fragment key="everyday">
       <DecisionsAgentsSection status={status} policy={policy} />
+      <DecisionsInvolvementSettingsSection
+        active={isActive}
+        statusRevision={status.revision ?? null}
+        locked={pending !== null}
+      />
       <DecisionsQuestionsSection
         policy={policy}
         status={status}
