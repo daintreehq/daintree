@@ -1349,9 +1349,9 @@ describe("RelayConnection", () => {
         expect(bridges).toHaveLength(2);
         expect(bridges.map(hostSupport)).toEqual([expected, expected]);
         // The bridge agents ask on between attempts reads a question as the attempts do.
-        expect(hostSupport(new QuestionBridge({ source: ready, isCurrent: () => true }))).toBe(
-          expected
-        );
+        const between = new QuestionBridge({ source: ready, isCurrent: () => true });
+        expect(hostSupport(between)).toBe(expected);
+        expect(between.ctx.policy).toBe(bridges[0].ctx.policy);
         const delivery = h.connection.getDelivery() as unknown as {
           owner: DecisionsBridge;
         } | null;

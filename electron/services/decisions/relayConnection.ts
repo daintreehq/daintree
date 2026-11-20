@@ -493,12 +493,13 @@ export class RelayConnection {
       this.halt({ state: "not-connected", problem: "other-relay" });
       return;
     }
-    this.identity = identity;
-    // Made before questions can be asked: a lifetime whose delivery couldn't
-    // start types no advisory outcome, so none of its bridges is given one.
+    // Made before the identity is: no attempt starts, and no question is
+    // asked, before it's settled whether a lifetime whose delivery couldn't
+    // start, and so types no advisory outcome, gives its bridges one.
     const deliveryRequests = await this.deliveryRequests();
     if (this.ended) return;
     this.advisoryDeadlines = this.o.advisoryDeadlines === true && deliveryRequests !== null;
+    this.identity = identity;
     this.o.onQuestionsReady?.({
       identity: () => (this.ended ? null : this.identity),
       live: () => {
@@ -513,6 +514,7 @@ export class RelayConnection {
     });
     if (this.ended) return;
     this.startDelivery(identity, deliveryRequests);
+    if (this.ended) return;
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
       (this.o.watchNetwork ?? watchNetwork)((online) => {
