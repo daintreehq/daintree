@@ -40,6 +40,7 @@ const connected: DecisionsSettings = {
   terminalSnapshots: true,
   terminalSnapshotsConsentedAt: 1_761_955_270_000,
   holdPhonePushes: true,
+  agentStoppedPushes: true,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -103,6 +104,25 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore({ ...connected, holdPhonePushes: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual({ ...connected, holdPhonePushes: false });
+  });
+
+  it("tells the phone when an agent stops only once the saved value is exactly true (#17319)", () => {
+    // A setting saved before the field existed has none: it sends nothing until turned on.
+    const { agentStoppedPushes: _absent, ...beforeTheField } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheField);
+    expect(before.agentStoppedPushes).toBe(false);
+    expect(before.consentedAt).toBe(connected.consentedAt);
+    expect(defaultDecisionsSettings().agentStoppedPushes).toBe(false);
+    for (const value of [false, "true", 1, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, agentStoppedPushes: value }).agentStoppedPushes,
+        String(value)
+      ).toBe(false);
+    }
+    // Turning it on survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
   });
 
   it("switches no agent on for ask_human until one is saved, and keeps only agent ids, once each", () => {

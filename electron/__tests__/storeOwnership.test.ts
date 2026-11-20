@@ -90,6 +90,7 @@ describe("store ownership derived from the settings catalog", () => {
       terminalSnapshots: true,
       terminalSnapshotsConsentedAt: 1_761_955_600_000,
       holdPhonePushes: false,
+      agentStoppedPushes: true,
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -111,6 +112,7 @@ describe("store ownership derived from the settings catalog", () => {
       terminalSnapshots: false,
       terminalSnapshotsConsentedAt: null,
       holdPhonePushes: true,
+      agentStoppedPushes: false,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({
