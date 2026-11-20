@@ -146,7 +146,7 @@ const LIBRARY_DECLINED_NOTE =
   "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
 const LIBRARY_NEVER_PUBLISHED_NOTE =
   "note: This question never reached the relay: its deadline passed before this computer could publish it, so it never reached the person's phone and no answer to it was recorded. Nothing was decided or approved.";
-/** The blocking form's last line; the advisory form's instead lets a stated plan go ahead, which needs #17940. */
+/** The blocking form's last line; the advisory form's instead lets a stated plan go ahead, which needs #17941. */
 const LIBRARY_NEVER_PUBLISHED_BLOCKING_NOTE =
   "note: You are NOT authorised to continue the gated step; ask again if you still need an answer, or stop and report.";
 

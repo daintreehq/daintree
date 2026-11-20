@@ -121,7 +121,7 @@ describe("DaintreeRelayClient (#16229)", () => {
     for (const features of declared) expect([...features].sort()).toEqual([...asked].sort());
   });
 
-  it("cuts advisory deadlines, which a 0.9.0 bridge asks to declare once its host delivers advisory outcomes (#17940)", async () => {
+  it("cuts advisory deadlines, which a 0.9.0 bridge asks to declare once its host delivers advisory outcomes (#17941)", async () => {
     const { sent, daintree } = await clients();
     const advisory = bridgeFeatures({
       followUps: true,

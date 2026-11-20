@@ -114,7 +114,7 @@ When a launch can't reach Decisions within five seconds (no relay set up yet, a 
 
 An agent asks with `ask_human`: a self-contained question, optional context, up to 12 options, and up to 8 screenshots. It gets back `Asked as q-N. Carry on with anything that does not depend on the answer; once you cannot go further without it, end your turn. The answer arrives as a new message in this terminal, with your question quoted. The answer is final: the person may still send follow-ups, even after answering, which arrive here marked as follow-ups without changing it, so a reconsidered decision arrives as a follow-up. To clarify, reply or ask a follow-up, call send_followup with this question_id instead of asking a new question; replies arrive the same way.` followed by the deadline that applies (as `It waits for a decision until <time> (UTC); unanswered by then, it expires, and expiry authorises nothing.`), what your settings changed about it (`Policy: the deadline is the host's default.`), and how to find it again by its id with `get_decision`. The question is saved on this computer before anything is sent, so one asked while the relay is out of reach goes out when it's back, unless its deadline passes first (see [What gets typed](#what-gets-typed)). A terminal can have at most 10 open questions.
 
-An agent can give its deadline as a time (`expires_at`) or as a length of time from now (`expires_in`, such as `15m`, from 61 seconds to 365 days), under the same limits as **Default expiry** below; either way the question waits for your decision and authorises nothing when it expires. `ask_human` also lists a `planned_fallback` for an advisory question, one whose stated plan the agent may carry out if nobody answers in time. Daintree doesn't offer those yet: an ask with one that passes the usual checks is refused (`host-unsupported`) before anything is saved or sent, and the agent can ask again without it. `get_decision` reports every question as `reply_mode: blocking`, with no plan and `fallback_due: false`.
+An agent can give its deadline as a time (`expires_at`) or as a length of time from now (`expires_in`, such as `15m`, from 61 seconds to 365 days), under the same limits as **Default expiry** below; either way the question waits for your decision and authorises nothing when it expires. An agent can instead ask for advice by adding `planned_fallback`, what it will do if nobody answers by the deadline (see [Advice instead of a decision](#advice-instead-of-a-decision)). Daintree doesn't take advisory questions yet, because it can't yet type the notice that tells an agent its deadline passed unanswered: an ask with a plan that passes the usual checks is refused (`host-unsupported`) before anything is saved or sent, and the agent can ask again without it. `get_decision` reports every question as `reply_mode: blocking`, with no plan and `fallback_due: false`.
 
 The tools tell agents to attach screenshots whenever a decision is about something visual. Screenshots are given as paths relative to the folder the agent's terminal was launched in, and must stay inside it once symlinks are followed. Each must be a PNG, JPEG or WebP image of up to 20 MiB, 64 MiB in total per question; SVG is refused.
 
@@ -240,6 +240,23 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 ```
 
 `reviewed_digests_match` is true only when your phone's answer names exactly the images attached, so an approval of earlier screenshots doesn't carry over to new ones, even under the same `correlation_id`. The gate needs at least one image, not exactly a before and an after. It says the images reached your phone with your answer, not that you studied them, and it checks the answer, not the agent: a workflow that skips step 4 isn't stopped by Daintree. Only an answer counts: a follow-up in the question's thread approves nothing.
+
+### Advice instead of a decision
+
+The final review is a decision: the workflow waits for your answer, and an expired question authorises nothing. A step the agent could take on its own can ask for advice instead, with a deadline and the plan it follows if you don't answer by then:
+
+```markdown
+## Fixture choice
+
+1. Call `ask_human` with:
+   - `question`: "Which fixture should I use for the parser tests?"
+   - `expires_in`: `"15m"`.
+   - `planned_fallback`: "Use the in-memory fixture."
+2. Note the `expires_at` (UTC) and `question_id` it returns, carry on with anything that doesn't depend on the answer, then end your turn.
+3. An answer given before the deadline is typed into this terminal as usual: follow it. If none is, a notice arrives saying the deadline passed unanswered: nothing was decided or approved, and the plan is yours to carry out at your discretion. Act on that notice, or on `get_decision`'s `fallback_due: true`, never on the time alone.
+```
+
+The two differ only in what an unanswered deadline means, so advice is never asked for an approval. It's refused with `gated` under `design-review/final` or any other gate, whether the agent names it or not; with `approval` for a question of kind `approval`; and with `no-deadline` when it gives no time under a **Default expiry** of Never (given no time otherwise, it takes your default, under the same limits as any question). It's also refused when your relay (`relay-unsupported`) or none of your phones (`no-capable-reader`) can show the deadline and the plan, and with `support-unknown` until Daintree has checked, shortly after it connects. Each refusal saves and sends nothing, and tells the agent to ask again without `planned_fallback` to have you decide. Neither **Allow proxy answers** nor how involved you want to be turns a question into advice or lets its deadline answer it: who may answer is decided as for any other question. Agents on a Remote Host can't ask for advice. Until Daintree types the deadline notice into the agent's terminal, every advisory ask is refused with `host-unsupported` (see [Asking](#asking)).
 
 ## Remote Hosts
 

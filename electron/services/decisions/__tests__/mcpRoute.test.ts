@@ -973,7 +973,7 @@ describe("/mcp/decisions (#16011)", () => {
     }
   });
 
-  it("keeps the saved default and Never for questions given no time, and asks advice under Never only for a stated time (#17940)", async () => {
+  it("keeps Never for a question given no time, and refuses advice under it without a stated time (#17940)", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute({ advisoryDeadlines: true, defaultQuestionExpiryMs: null });
