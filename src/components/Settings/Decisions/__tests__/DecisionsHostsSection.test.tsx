@@ -469,7 +469,11 @@ describe("Remote Host copy", () => {
     const off = hostEnrollmentText(
       {
         ...enrolled,
-        runtime: { runtime: { state: "owner-off", deviceId: "dev_x", since: 1 }, at: 1, live: true },
+        runtime: {
+          runtime: { state: "owner-off", deviceId: "dev_x", since: 1 },
+          at: 1,
+          live: true,
+        },
       },
       true
     );

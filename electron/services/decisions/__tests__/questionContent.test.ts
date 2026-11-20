@@ -256,7 +256,11 @@ describe("readQuestionContent", () => {
   });
 
   it("fills what the agent left out with the protocol's defaults", async () => {
-    const read = await readQuestionContent(ctx(), await question({ question: "Ship it?" }), NO_ADVISORY_HOST);
+    const read = await readQuestionContent(
+      ctx(),
+      await question({ question: "Ship it?" }),
+      NO_ADVISORY_HOST
+    );
 
     expect(read).toMatchObject({
       result: "read",
@@ -509,10 +513,14 @@ describe("readQuestionContent", () => {
       kind: "approval",
       planned_fallback: "Ship it anyway",
     });
-    expect(await readQuestionContent(ctx(), approval, NO_ADVISORY_HOST)).toEqual({ result: "unreadable" });
+    expect(await readQuestionContent(ctx(), approval, NO_ADVISORY_HOST)).toEqual({
+      result: "unreadable",
+    });
     // No plan: blank plans are dropped by the content parse, so this is the same as none.
     const planless = await advisory({ ...CONTENT, planned_fallback: "   " });
-    expect(await readQuestionContent(ctx(), planless, NO_ADVISORY_HOST)).toEqual({ result: "unreadable" });
+    expect(await readQuestionContent(ctx(), planless, NO_ADVISORY_HOST)).toEqual({
+      result: "unreadable",
+    });
   });
 
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {
@@ -568,7 +576,11 @@ describe("readQuestionContent", () => {
     };
     const fromAgent = await message("msg_agent_01", "agent", "Still needed?", 4);
     const read = async (over: Partial<QuestionRow>) => {
-      const result = await readQuestionContent(ctx(), await question(CONTENT, over), NO_ADVISORY_HOST);
+      const result = await readQuestionContent(
+        ctx(),
+        await question(CONTENT, over),
+        NO_ADVISORY_HOST
+      );
       if (result.result !== "read") throw new Error(result.result);
       return result.question;
     };
@@ -679,7 +691,9 @@ describe("readQuestionContent", () => {
       await question({ question: "" }),
       await question({ ...CONTENT, kind: "poll" }),
     ]) {
-      await expect(readQuestionContent(ctx(), row, NO_ADVISORY_HOST)).resolves.toEqual({ result: "unreadable" });
+      await expect(readQuestionContent(ctx(), row, NO_ADVISORY_HOST)).resolves.toEqual({
+        result: "unreadable",
+      });
     }
   });
 
@@ -693,8 +707,12 @@ describe("readQuestionContent", () => {
       },
     };
 
-    await expect(readQuestionContent(missingKey, row, NO_ADVISORY_HOST)).resolves.toEqual({ result: "unreadable" });
-    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(RetiredAttemptError);
+    await expect(readQuestionContent(missingKey, row, NO_ADVISORY_HOST)).resolves.toEqual({
+      result: "unreadable",
+    });
+    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(
+      RetiredAttemptError
+    );
     await expect(readQuestionSummary(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
   });
 
@@ -724,7 +742,9 @@ describe("readQuestionContent", () => {
       result: "read",
       question: { thread: [{ entryId: "entry-9", unreadable: true }] },
     });
-    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(RetiredAttemptError);
+    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(
+      RetiredAttemptError
+    );
   });
 });
 

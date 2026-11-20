@@ -591,9 +591,7 @@ describe("trusted workflow gates", () => {
     const again = describeTrustedGates().find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
     expect(again.requirement).toBe("human-required");
     expect(again.choices).toEqual(expected);
-    expect(createTrustedPolicy(SAVED).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(
-      expected
-    );
+    expect(createTrustedPolicy(SAVED).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(expected);
   });
 
   it.each([

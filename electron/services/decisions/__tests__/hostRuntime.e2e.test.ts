@@ -2816,9 +2816,9 @@ describe("Advice on an enrolled Remote Host, with its owner's computer asleep (#
       (event) => event.event_type === "decision.created" && event.question_id === questionId
     )!;
     expect((created.data.record as { expires_at: string }).expires_at).toBe(deadline);
-    expect(
-      (created.data.envelope as { aad: { reply_mode?: string } }).aad.reply_mode
-    ).toBe("advisory");
+    expect((created.data.envelope as { aad: { reply_mode?: string } }).aad.reply_mode).toBe(
+      "advisory"
+    );
     expect(created.data.target_host_id).toBe(await hostRef(record.hostId));
     const store = new DaintreeLocalStore(sqlite);
     expect(await store.getQuestion(questionId)).toMatchObject({

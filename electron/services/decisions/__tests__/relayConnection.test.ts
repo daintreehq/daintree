@@ -354,8 +354,7 @@ async function harness(
     relay: RELAY,
     store,
     keys,
-    policy: createTrustedPolicy(
-      { ...defaultDecisionsSettings(), proxyAllowlisted: false }),
+    policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }),
     onStatus: (status) => {
       statuses.push(status);
       for (const waiter of [...waiters]) {
@@ -550,8 +549,7 @@ describe("RelayConnection", () => {
   });
 
   it("asks every attempt's bridge to apply the one policy it was given, never a fresh one", async () => {
-    const policy = createTrustedPolicy(
-      { ...defaultDecisionsSettings(), proxyAllowlisted: false });
+    const policy = createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false });
     const used: unknown[] = [];
     const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(async function (
       this: DecisionsBridge

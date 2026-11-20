@@ -26,7 +26,8 @@ describe("projectDecisionQuestions", () => {
         row(2, { origin: { project_id: "project-c", pane_id: "pane-c", worktree_id: "w-2" } }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => item.reference)).toEqual([
@@ -60,7 +61,8 @@ describe("projectDecisionQuestions", () => {
         }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     expect(
       list.map(({ agentKind, requirement, worktreeId, worktreeRoot, expiresAt }) => ({
@@ -96,7 +98,8 @@ describe("projectDecisionQuestions", () => {
         row(2, { ...delivered, origin: { pane_id: "closed-pane" } }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     expect(list.map((item) => [item.reference.terminalId, item.standing.kind])).toEqual([
       ["closed-pane", "waiting"],
@@ -112,7 +115,9 @@ describe("projectDecisionQuestions", () => {
       row(4, { origin: { pane_id: "" } }),
       row(5),
     ];
-    expect(projectDecisionQuestions(rows, new Map(), HOST, NO_ADVISORY_HOST).map((item) => item.alias)).toEqual([5]);
+    expect(
+      projectDecisionQuestions(rows, new Map(), HOST, NO_ADVISORY_HOST).map((item) => item.alias)
+    ).toEqual([5]);
     expect(projectDecisionQuestions(rows, new Map(), null, NO_ADVISORY_HOST)).toEqual([]);
   });
 
@@ -126,7 +131,8 @@ describe("projectDecisionQuestions", () => {
         }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     const [item] = list;
     expect(Object.keys(item!).sort()).toEqual(
@@ -162,7 +168,8 @@ describe("projectDecisionQuestions", () => {
         row(3, { origin: { project_label: undefined } }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     expect([named?.projectLabel, blank?.projectLabel, none?.projectLabel]).toEqual([
       "daintree",
@@ -373,7 +380,9 @@ describe("standingOf", () => {
       )
     ).toMatchObject({ kind: "needs-attention" });
     expect(
-      projectDecisionQuestions([held], new Map([[qid(1), 2]]), HOST, NO_ADVISORY_HOST).map((item) => item.alias)
+      projectDecisionQuestions([held], new Map([[qid(1), 2]]), HOST, NO_ADVISORY_HOST).map(
+        (item) => item.alias
+      )
     ).toEqual([1]);
   });
 
@@ -407,7 +416,8 @@ describe("standingOf", () => {
     const list = projectDecisionQuestions(
       [answered, withdrawn, expiredNotice, expiredBare],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => [item.standing, item.settledAt])).toEqual([
@@ -460,7 +470,8 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     expect(item?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
     expect(item?.settledAt).toBe("2026-11-01T10:08:00.000Z");
@@ -525,7 +536,8 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
     expect(corrected?.settledAt).toBe("2026-11-01T10:09:00.000Z");
     expect(superseded?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
@@ -560,7 +572,8 @@ describe("standingOf", () => {
         }),
       ],
       new Map(),
-      HOST, NO_ADVISORY_HOST
+      HOST,
+      NO_ADVISORY_HOST
     );
 
     expect(list.map((item) => [item.alias, item.standing, item.settledAt])).toEqual([

@@ -25,7 +25,10 @@ const RECORD = {
 };
 
 /** How the Host's lifetime asks its agents' questions (#17942). */
-const POLICY = { advisoryQuestions: true, defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS };
+const POLICY = {
+  advisoryQuestions: true,
+  defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
+};
 
 function memoryStore(initial?: unknown) {
   let value = initial;
