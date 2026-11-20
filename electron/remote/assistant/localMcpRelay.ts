@@ -34,7 +34,14 @@ export const LOCAL_RELAY_LINK_SESSION_ID = LOCAL_HOST_ID;
 
 export interface LocalMcpRelayDeps extends Pick<
   McpRelayExecutorDeps,
-  "hasProject" | "openSession" | "retirePrincipal" | "now" | "idleMs"
+  | "hasProject"
+  | "openSession"
+  | "retirePrincipal"
+  | "forgetConversation"
+  | "keptConversations"
+  | "noteConversationCall"
+  | "now"
+  | "idleMs"
 > {
   /** This machine's name, as the prompts its assistants send say where they came from. */
   machineName(): string;
@@ -100,6 +107,9 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     hasProject: deps.hasProject,
     openSession: deps.openSession,
     ...(deps.retirePrincipal ? { retirePrincipal: deps.retirePrincipal } : {}),
+    ...(deps.forgetConversation ? { forgetConversation: deps.forgetConversation } : {}),
+    ...(deps.keptConversations ? { keptConversations: deps.keptConversations } : {}),
+    ...(deps.noteConversationCall ? { noteConversationCall: deps.noteConversationCall } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {}),
   });
@@ -116,12 +126,18 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
   let disposed = false;
   // One spec for each principal and project, whichever call opens its session first.
   const specFor = (
-    target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+    target: {
+      helpSessionId: string;
+      conversationId?: string;
+      projectId: string;
+      tier: "core" | "full";
+    },
     global: boolean
   ): RelayMcpSessionSpec => ({
     linkSessionId: LOCAL_RELAY_LINK_SESSION_ID,
     senderId: LOCAL_RELAY_SENDER_ID,
     helpSessionId: target.helpSessionId,
+    ...(target.conversationId !== undefined ? { conversationId: target.conversationId } : {}),
     projectId: target.projectId,
     tier: target.tier,
     shellName: deps.machineName(),

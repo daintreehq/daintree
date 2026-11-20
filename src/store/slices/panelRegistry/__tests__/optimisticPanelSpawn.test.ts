@@ -1091,7 +1091,8 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
     await drainMicrotasks(300);
 
     expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killsAtClose);
-    expect(terminalClient.kill).toHaveBeenLastCalledWith("lost-closed");
+    // The pane is gone for good, so main drops what was chosen for it (#17912).
+    expect(terminalClient.kill).toHaveBeenLastCalledWith("lost-closed", { closesPane: true });
     expect(usePanelStore.getState().panelsById["lost-closed"]).toBeUndefined();
   });
 

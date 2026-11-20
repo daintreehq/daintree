@@ -32,6 +32,8 @@ export interface ClientSettingsControlDeps {
   holdHost?(hostId: HostId): () => void;
   isKnownHost(hostId: HostId): boolean;
   hostLabel(hostId: HostId): string;
+  /** A change that landed on the host, as it now stands there: by its reply, or a readback. */
+  onApplied?(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -299,6 +301,18 @@ export class ClientSettingsControl {
    * and its own state says whether the change landed. Nothing is resent.
    */
   async update(payload: HostSettingsUpdatePayload): Promise<HostSettingsUpdateResult> {
+    const result = await this.send(payload);
+    if (result.outcome === "applied") {
+      try {
+        this.deps.onApplied?.(result.hostId, result.settings);
+      } catch {
+        // What follows a change on this side never undoes the host's word that it landed.
+      }
+    }
+    return result;
+  }
+
+  private async send(payload: HostSettingsUpdatePayload): Promise<HostSettingsUpdateResult> {
     const hostId = this.requireHost(payload?.hostId);
     const parsedPatch = HostSettingsPatchSchema.safeParse(payload.patch);
     if (!parsedPatch.success) {

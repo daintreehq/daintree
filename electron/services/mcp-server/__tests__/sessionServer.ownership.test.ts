@@ -12,7 +12,11 @@ import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
-import { relayOwnershipPrincipal } from "../resourceOwnership.js";
+import {
+  helpConversationKey,
+  helpOwnershipPrincipal,
+  relayOwnershipPrincipal,
+} from "../resourceOwnership.js";
 import { noteClosedTerminals } from "../sessionCallOwnership.js";
 import type { TerminalProcessRecord, WorktreeLiveTerminal } from "../worktreeProcessGuard.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
@@ -1072,6 +1076,118 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  // #17919: a resumed Assistant is a new bearer on the same conversation, and
+  // what that conversation launched before the resume is still its own.
+  describe("a resumed Assistant's conversation (#17919)", () => {
+    function launchedBeforeResume() {
+      const h = harness("s-help-a", {
+        "agent.launch": {
+          result: { ok: true, result: { launched: true, terminalId: "terminal-1" } },
+        },
+        "worktree.createWithRecipe": {
+          result: {
+            ok: true,
+            result: { worktreeId: "/tmp/wt", spawnedTerminalIds: [], spawnedTerminalCount: 0 },
+          },
+        },
+        "terminal.restartOnPreset": {
+          result: { ok: true, result: { terminalId: "terminal-1", agentPresetId: "work" } },
+        },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      const ownership = h.store.resourceOwnership;
+      ownership.bindPrincipal("s-help-a", helpOwnershipPrincipal("help-a"));
+      ownership.attachConversation(helpOwnershipPrincipal("help-a"), helpConversationKey("conv-1"));
+      return h;
+    }
+
+    function bearer(
+      h: ReturnType<typeof launchedBeforeResume>,
+      sessionId: string,
+      helpSessionId: string,
+      conversationId: string
+    ) {
+      seedLiveSession(h.store, sessionId, "external");
+      h.store.sessionOriginMap.set(sessionId, "external");
+      h.store.resourceOwnership.bindPrincipal(sessionId, helpOwnershipPrincipal(helpSessionId));
+      h.store.resourceOwnership.attachConversation(
+        helpOwnershipPrincipal(helpSessionId),
+        helpConversationKey(conversationId)
+      );
+      return createSessionServer(sessionId, h.deps);
+    }
+
+    it("lets the resumed bearer restart, close and delete what it launched before the resume", async () => {
+      const h = launchedBeforeResume();
+      await callTool(h.server, { name: "agent.launch", arguments: { agentId: "claude" } });
+      await callTool(h.server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+      h.store.resourceOwnership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+      const revoked = await callTool(h.server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(toolErrorPayload(revoked).code).toBe("RESOURCE_NOT_OWNED");
+
+      const resumed = bearer(h, "s-help-b", "help-b", "conv-1");
+      const restarted = await callTool(resumed, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "work" },
+      });
+      expect(restarted.isError).toBeUndefined();
+      const closed = await callTool(resumed, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(closed.isError).toBeUndefined();
+      const deleted = await callTool(resumed, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+      expect(deleted.isError).toBeUndefined();
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false
+      );
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        expect.objectContaining({ terminalId: "terminal-1" }),
+        false
+      );
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.objectContaining({ worktreeId: "/tmp/wt" }),
+        false
+      );
+      expect(h.store.resourceOwnership.list(h.store.resourceOwnership.ownerOf("s-help-b"))).toEqual(
+        []
+      );
+    });
+
+    it("gives a fresh conversation's bearer none of it", async () => {
+      const h = launchedBeforeResume();
+      await callTool(h.server, { name: "agent.launch", arguments: { agentId: "claude" } });
+      h.store.resourceOwnership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+      const fresh = bearer(h, "s-help-c", "help-c", "conv-2");
+      const refused = await callTool(fresh, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+      expect(h.dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+
   describe("terminal.restartOnPresetOwned (#14369)", () => {
     const RESTART_RESULT = {
       terminalId: "terminal-1",

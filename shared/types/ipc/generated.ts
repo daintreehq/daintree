@@ -788,6 +788,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { accountId: string }];
     result: import("../cloudHosts.js").CloudAccountSummary;
   };
+  "codex-limit-continue:list": {
+    args: [];
+    result: import("../codexLimitContinuation.js").CodexLimitContinueEntry[];
+  };
+  "codex-limit-continue:set": {
+    args: [terminalId: string, enabled: boolean];
+    result: void;
+  };
   "codex:find-sessions": {
     args: [__0: { cwd: string; codexHome?: string | undefined }];
     result: import("./agentSubagents.js").CodexFolderSessionsResult;
@@ -5016,6 +5024,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        fallbackChainIndex?: number | undefined;
         handbackCode?: string | undefined;
         whenDone?: "background" | "close" | undefined;
         hasFirstPrompt?: boolean | undefined;

@@ -21,7 +21,7 @@ import type {
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 let decisionsOn = true;
@@ -692,6 +692,146 @@ describe("DecisionsInboxDialog", () => {
     fireEvent.click(rowNamed("q-1"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
     expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
+  });
+
+  describe("a Remote Host's question while its Host is away (#17946)", () => {
+    const AWAY_REFERENCE = reference("question-9", { hostId: "qhost_studio_0001" });
+    const AWAY = {
+      ...item("question-9", 9, OPEN, {
+        reference: AWAY_REFERENCE,
+        remoteHost: { hostId: "studio", name: "Studio", connected: false },
+      }),
+      inbox: { ask: null, seen: true, cleared: false },
+    };
+
+    beforeEach(() => {
+      listQuestions.mockResolvedValue({ revision: 2, questions: [AWAY] });
+    });
+
+    it("dismisses it from what was last read of it, and never offers withdrawing in its place", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() - 60_000 },
+      });
+      declineQuestion.mockImplementation(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      }));
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
+          /isn't connected.*last read it 1 minute ago, so you can still dismiss it/
+        )
+      );
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm.textContent).toContain("Dismiss question q-9?");
+      expect(confirm.textContent).toMatch(/dismissed as this computer last read it/);
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() =>
+        expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
+          reference: AWAY_REFERENCE,
+          declineId: expect.any(String),
+          expectedRevision: 4,
+        })
+      );
+
+      // Not taken: said plainly, with nothing withdrawn and no withdrawal offered instead.
+      await waitFor(() =>
+        expect(confirm.textContent).toMatch(
+          /Daintree on the computer that asked q-9 needs an update/
+        )
+      );
+      expect(within(confirm).queryByRole("button", { name: "Withdraw question" })).toBeNull();
+      fireEvent.click(within(confirm).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
+    it("never offers withdrawing for a dismissal signed from the last read once the Host went away under the confirmation", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      declineQuestion.mockImplementation(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "relay" },
+      }));
+      open();
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      // The Host goes away while the person reads the confirmation opened on a live read.
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() },
+      });
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() =>
+        expect(confirm.textContent).toMatch(/Your relay needs an update.*q-9 wasn't dismissed/)
+      );
+      expect(declineQuestion).toHaveBeenCalledOnce();
+      expect(confirm.textContent).not.toContain("Withdraw question");
+      expect(confirm.textContent).not.toMatch(/withdraw it instead/);
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
+    it("offers no withdrawal for a dismissal signed from the last read once the Host is back", async () => {
+      const declineId = "0190f0aa-1111-4222-8333-44445555ee01";
+      useDecisionsAnswerStore.getState().update(answerKey(AWAY_REFERENCE), (record) => ({
+        ...record,
+        decline: {
+          declineId,
+          payload: { reference: AWAY_REFERENCE, declineId, expectedRevision: 4 },
+          phase: { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+          resubmitted: false,
+          lastReadAt: 1_000,
+        },
+      }));
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(
+          /^Your relay needs an update.*q-9 wasn't dismissed\.$/
+        )
+      );
+      expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
+      // A new Dismiss, from the live read, is its own decision.
+      expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
+    });
+
+    it("says why it can't be dismissed when nothing read here says where it stands, and keeps Clear", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "not-read" },
+      });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
+          /isn't connected.*can't be dismissed until the Host is back/
+        )
+      );
+      expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-clear").textContent).toBe("Clear from Needs you");
+      expect(declineQuestion).not.toHaveBeenCalled();
+    });
   });
 
   describe("going to the terminal that asked", () => {

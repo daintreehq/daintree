@@ -756,6 +756,24 @@ export interface StoreSchema {
   >;
 
   /**
+   * The panes each Assistant conversation launched on this machine, by
+   * terminal id (#16845): what lets that conversation close them again after
+   * an app restart. Written and read only by `assistantPaneCreations.ts`,
+   * which treats every entry as untrusted on load. Additive key with no
+   * numbered migration, like `pluginLaunchedAgents`.
+   */
+  assistantPaneCreations?: Record<
+    string,
+    {
+      scope: "help" | "localRelay";
+      conversationId: string;
+      projectId: string;
+      seenAt: number;
+      lastCallAt?: number;
+    }
+  >;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.

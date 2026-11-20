@@ -56,9 +56,9 @@ import {
   codexBannerResetCandidates,
   codexLaunchZone,
   codexSystemZone,
+  locateCodexLimitBanner,
   readCodexLimitEvidence,
   resolveCodexLimitReset,
-  scanCodexLimitBanner,
   type CodexLimitObservation,
 } from "./CodexUsageLimit.js";
 import type {
@@ -66,6 +66,12 @@ import type {
   CodexLimitQuery,
   CodexLimitUnknownReason,
 } from "../../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitContinueSkipReason,
+  CodexLimitStopRef,
+} from "../../../shared/types/codexLimitContinuation.js";
+import { codexStopContext, judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -118,6 +124,16 @@ import {
   type VisibleContentSnapshot,
 } from "./SustainedChangeTracker.js";
 
+/** What has happened to a pane since its Codex stop first showed (#17909). */
+interface CodexStopGuard {
+  /** The banner it was for, and the history rows just above it. */
+  key: string;
+  /** The terminal's input count when it first showed: any later write is input since the stop. */
+  inputSeq: number;
+  /** A choice dialog was observed since, whatever the screen shows now. */
+  dialogSeen: boolean;
+}
+
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 /**
@@ -125,6 +141,11 @@ const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
  * seen when it comes back: a repaint, not a new print (#17906).
  */
 const CODEX_LIMIT_REPAINT_GRACE_MS = 5_000;
+/**
+ * How long a continuation may wait for the input lane before it counts as not
+ * delivered (#17909): a lane cancelled or disposed under it never answers.
+ */
+const CODEX_CONTINUE_LANE_TIMEOUT_MS = 30_000;
 /**
  * How long a rate-limit banner must sit unchanged, with no output at all,
  * before the pane counts as stopped at it and may fall over (#14370).
@@ -306,7 +327,21 @@ export class TerminalProcess {
     /** When a look last showed it, and when one first stopped showing it (null while shown). */
     lastSeenAt: number;
     hiddenSince: number | null;
+    /** What has happened to the pane since this stop first showed (#17909). */
+    guard: CodexStopGuard;
   } | null = null;
+  /**
+   * The guard of the stop last seen, kept for a redisplay of it after it was
+   * off screen a while (a transcript or picker closed): the same banner under
+   * the same history (as text, so a rewrap after a resize is the same) is the
+   * same stop, so what happened since it first showed still counts. A stop a
+   * new turn ran into sits under other history and starts afresh.
+   */
+  private codexStopGuard: CodexStopGuard | null = null;
+  /** Bumped by every arm and disarm, so a continuation asked for under one is refused after another. */
+  private codexContinueArmGeneration = 0;
+  /** The continuation in the input lane, so a disarm or a dialog can take back its Enter. */
+  private codexContinueToken: string | null = null;
   /** Whether the latest look showed a readable stop, a half-drawn or unreadable one, or none. */
   private codexLimitLook: "banner" | "unreadable" | "none" = "none";
   private codexLimitSeq = 0;
@@ -319,6 +354,16 @@ export class TerminalProcess {
    * that shows next was printed after it. A half-drawn one doesn't count.
    */
   private codexSettledLookAt: number | null = null;
+  /** When the pane's screen was last read for a Codex banner at all. */
+  private codexLimitLookAt = 0;
+  /**
+   * Main armed this pane to continue at its limit's reset (#17909): its Codex
+   * stop is reported once it settles, one report per sighting. Off, nothing
+   * here runs.
+   */
+  private codexContinueArmed = false;
+  private codexStopReportedSeq: number | null = null;
+  private codexStopSettleTimer: NodeJS.Timeout | null = null;
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -484,6 +529,7 @@ export class TerminalProcess {
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalAgentPresetId: options.originalAgentPresetId ?? options.agentPresetId,
+      fallbackChainIndex: options.fallbackChainIndex,
       launchGeneration: options.launchGeneration,
       spawnArgs,
     };
@@ -801,6 +847,20 @@ export class TerminalProcess {
     }
     this.flushAgentOutput();
     this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+    this.noteCodexStopState();
+  }
+
+  /**
+   * Every state the pane is observed in, whenever it arrives (#17909): a
+   * choice dialog marks the stop on screen, and takes back a continuation
+   * whose Enter hasn't been written yet.
+   */
+  private noteCodexStopState(): void {
+    const t = this.terminalInfo;
+    if (t.agentState !== "waiting" || t.waitingReason !== "approval") return;
+    if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
+    if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
+    this.withdrawCodexContinue();
   }
 
   private handleAnalysisWaitingTimeout(spawnedAt: number): void {
@@ -970,6 +1030,7 @@ export class TerminalProcess {
     this.flushAgentOutput();
     this.inThreadAnalysis?.cancelAgentOutputNote();
     this.cancelRateLimitSettle();
+    this.cancelCodexStopSettle();
     // The run is over however it ended, an idle kill the state machine
     // ignores included (#17905).
     clearUpdateInstalled(this.terminalInfo, Date.now());
@@ -2216,19 +2277,27 @@ export class TerminalProcess {
     const printedAfter = this.codexSettledLookAt ?? t.spawnedAt;
     const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
     const cols = live ? (readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined) : undefined;
-    const banner = live ? scanCodexLimitBanner(lines, cols) : null;
+    const located = live ? locateCodexLimitBanner(lines, cols) : null;
+    const banner = located?.banner ?? null;
+    this.codexLimitLookAt = now;
     if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
     if (!live) {
       this.codexLimit = null;
+      this.codexStopGuard = null;
       this.codexLimitLook = "none";
+      this.trackCodexStop();
       return;
     }
     const held = this.codexLimit;
+    // A dialog that came and went leaves the same screen behind, so the
+    // sighting remembers it.
+    this.noteCodexStopState();
     // A half-drawn or unreadable stop answers for itself, but doesn't replace
     // the one held: a repaint that passes through it may bring that one back.
     if (banner === null || banner.kind === "unreadable") {
       this.codexLimitLook = banner === null ? "none" : "unreadable";
       if (held) held.hiddenSince ??= now;
+      this.trackCodexStop();
       return;
     }
     this.codexLimitLook = "banner";
@@ -2254,6 +2323,7 @@ export class TerminalProcess {
     ) {
       held.hiddenSince = null;
       held.lastSeenAt = now;
+      this.trackCodexStop();
       return;
     }
     const launchZone = codexLaunchZone({ TZ: this.launchTz });
@@ -2265,6 +2335,10 @@ export class TerminalProcess {
       observedSince,
       lastSeenAt: now,
       hiddenSince: null,
+      guard: this.codexStopGuardFor(
+        // Narrowed by the readable-banner branch above.
+        `${key}\u0000${codexStopContext(lines, located!.start)}`
+      ),
       observation: {
         banner,
         observedAt: now,
@@ -2276,6 +2350,7 @@ export class TerminalProcess {
         attributed: t.launchAgentId === "codex" && incarnation === 0,
       },
     };
+    this.trackCodexStop();
   }
 
   /**
@@ -2307,6 +2382,7 @@ export class TerminalProcess {
       return unknown("not-observed");
     }
     const { observation } = held;
+    const stamp = { seq: held.seq, run: this.codexLimitRun, observedAt: observation.observedAt };
     if (query.seq === undefined) {
       const { banner, candidates } = observation;
       // A printed minute already begun is answered as it stands: no reading
@@ -2319,14 +2395,220 @@ export class TerminalProcess {
             (candidates?.length ?? 0) > 0 &&
             candidates!.every((candidate) => candidate > now)));
       return wantsReading
-        ? { stamp: { seq: held.seq, run: this.codexLimitRun, observedAt: observation.observedAt } }
-        : { reset: resolveCodexLimitReset(observation, null, now) };
+        ? { stamp }
+        : { reset: resolveCodexLimitReset(observation, null, now), stamp };
     }
     if (query.seq !== held.seq || query.run !== this.codexLimitRun) {
       return unknown("banner-changed");
     }
     const evidence = readCodexLimitEvidence(query.evidence);
-    return { reset: resolveCodexLimitReset(observation, evidence, Date.now()) };
+    return { reset: resolveCodexLimitReset(observation, evidence, Date.now()), stamp };
+  }
+
+  /** The guard for a new sighting of `key`: the last stop's when it is the same banner again. */
+  private codexStopGuardFor(key: string): CodexStopGuard {
+    const kept = this.codexStopGuard;
+    if (kept && kept.key === key) return kept;
+    const guard = { key, inputSeq: this.inputController.inputSequence, dialogSeen: false };
+    this.codexStopGuard = guard;
+    return guard;
+  }
+
+  /**
+   * Arm or disarm this pane's continuation at its limit's reset (#17909). Armed
+   * after the stop, the stop already on screen is reported as first seen once
+   * it has settled; disarmed, nothing more is reported.
+   */
+  setCodexLimitContinueArmed(armed: boolean): void {
+    if (armed === this.codexContinueArmed) return;
+    this.codexContinueArmed = armed;
+    this.codexContinueArmGeneration++;
+    if (!armed) this.withdrawCodexContinue();
+    this.codexStopReportedSeq = null;
+    this.trackCodexStop();
+  }
+
+  /**
+   * Report an armed pane's Codex stop once it has settled: on screen, the
+   * output quiet and read, and the agent not working. One report per sighting,
+   * so a banner that stays is reported once and one that comes back after a
+   * prompt is a new stop.
+   */
+  private trackCodexStop(): void {
+    const held = this.codexLimit;
+    if (
+      !this.codexContinueArmed ||
+      this.samplingFinalFrame ||
+      held === null ||
+      this.codexLimitLook !== "banner" ||
+      held.hiddenSince !== null ||
+      held.seq === this.codexStopReportedSeq
+    ) {
+      this.cancelCodexStopSettle();
+      return;
+    }
+    if (this.codexStopSettleTimer === null) this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS);
+  }
+
+  private armCodexStopSettle(delayMs: number): void {
+    if (this.codexStopSettleTimer) clearTimeout(this.codexStopSettleTimer);
+    this.codexStopSettleTimer = setTimeout(() => {
+      this.codexStopSettleTimer = null;
+      this.settleCodexStop();
+    }, delayMs);
+    this.codexStopSettleTimer.unref?.();
+  }
+
+  private cancelCodexStopSettle(): void {
+    if (this.codexStopSettleTimer) {
+      clearTimeout(this.codexStopSettleTimer);
+      this.codexStopSettleTimer = null;
+    }
+  }
+
+  private settleCodexStop(): void {
+    const held = this.codexLimit;
+    const t = this.terminalInfo;
+    if (
+      !this.codexContinueArmed ||
+      held === null ||
+      this.codexLimitLook !== "banner" ||
+      held.hiddenSince !== null ||
+      held.seq === this.codexStopReportedSeq ||
+      !this.isAgentLive ||
+      t.isExited ||
+      getLiveAgentId(t) !== "codex"
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const quietFor = now - t.lastOutputTime;
+    if (quietFor < RATE_LIMIT_SETTLE_MS) {
+      this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS - quietFor);
+      return;
+    }
+    // A byte the last look hasn't caught up with, or a turn still running.
+    if (t.lastOutputTime > this.codexLimitLookAt || t.agentState === "working") {
+      this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS);
+      return;
+    }
+    this.codexStopReportedSeq = held.seq;
+    events.emit("agent:codex-limit-stopped", {
+      terminalId: this.id,
+      run: this.codexLimitRun,
+      seq: held.seq,
+      timestamp: now,
+    });
+  }
+
+  /** Take back a continuation in the lane before its Enter: its text stays as a draft, unsent. */
+  private withdrawCodexContinue(): void {
+    if (this.codexContinueToken !== null) {
+      this.writeQueue.withdrawGuardedSubmission(this.codexContinueToken);
+    }
+  }
+
+  /**
+   * What stops a continuation for `stop` right now, or null (#17909). `inLane`
+   * is the lane's own admission, where the continuation itself is the
+   * submission in flight.
+   */
+  private codexContinueBlocker(
+    stop: CodexLimitStopRef,
+    inLane: boolean,
+    hostBlocker: () => CodexLimitContinueSkipReason | null
+  ): CodexLimitContinueSkipReason | null {
+    const t = this.terminalInfo;
+    const held = this.codexLimit;
+    if (stop.run !== this.codexLimitRun) return "process-changed";
+    // Disarmed since main asked: the disarm reaches the host ahead of the write.
+    if (!this.codexContinueArmed) return "disarmed";
+    if (!this.lifecycle.isAlive || t.isExited || !this.isAgentLive) return "agent-gone";
+    if (getLiveAgentId(t) !== "codex") return "agent-gone";
+    if (held === null || held.seq !== stop.seq || held.incarnation !== (t.agentIncarnation ?? 0)) {
+      return "banner-changed";
+    }
+    if (this.codexLimitLook !== "banner" || held.hiddenSince !== null) return "banner-gone";
+    // A banner seen before a gap in the read may have been replaced unseen.
+    if (this.analysis.observedSince() !== held.observedSince) return "not-observed";
+    if (this.inputController.inputSequence !== held.guard.inputSeq) return "input-since";
+    if (held.guard.dialogSeen || (t.agentState === "waiting" && t.waitingReason === "approval")) {
+      return "dialog-since";
+    }
+    if (this.inputController.isInputLocked) return "input-locked";
+    if (!inLane && this.writeQueue.hasPendingSubmission()) return "input-pending";
+    if (t.agentState === "working") return "agent-working";
+    return hostBlocker();
+  }
+
+  /**
+   * Type the line that continues this pane's Codex run after its usage limit
+   * reset (#17909), only if the pane is still where the limit left it: the
+   * same process and sighting, no input written and no choice dialog seen
+   * since, the banner the last thing above an empty composer, and no byte
+   * printed between that look and the write. The line goes through the input lane as a guarded
+   * submission, so the checks run again the moment it takes the lane and input
+   * arriving between its text and its Enter abandons the Enter.
+   */
+  async continueAtCodexLimit(
+    stop: CodexLimitStopRef,
+    outerBlocker: () => CodexLimitContinueSkipReason | null = () => null
+  ): Promise<CodexLimitContinueResult> {
+    const skipped = (reason: CodexLimitContinueSkipReason): CodexLimitContinueResult => ({
+      status: "skipped",
+      reason,
+    });
+    // Disarmed and armed again meanwhile is another arming, not this one.
+    const generation = this.codexContinueArmGeneration;
+    const hostBlocker = () =>
+      this.codexContinueArmGeneration === generation ? outerBlocker() : "disarmed";
+    const before = this.codexContinueBlocker(stop, false, hostBlocker);
+    if (before !== null) return skipped(before);
+    const streamOffset = this.emittedBytes;
+    // The whole buffer, so the read carries its continuation: proof the
+    // mirror parsed every byte emitted before it, which a capped read lacks.
+    const snapshot = await this.getSerializedStateAsync().catch(() => null);
+    const after = this.codexContinueBlocker(stop, false, hostBlocker);
+    if (after !== null) return skipped(after);
+    if (this.emittedBytes !== streamOffset) return skipped("output-since");
+    if (snapshot?.continuation?.streamOffset !== streamOffset) return skipped("unreadable-screen");
+    const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
+    const held = this.codexLimit;
+    if (held === null) return skipped("banner-changed");
+    const verdict = judgeCodexLimitScreen(snapshot.data, cols, held.key);
+    if ("skip" in verdict) return skipped(verdict.skip);
+    const { line } = verdict;
+    return new Promise<CodexLimitContinueResult>((resolve) => {
+      let settled = false;
+      const token = randomUUID();
+      const settle = (result: CodexLimitContinueResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.codexContinueToken === token) this.codexContinueToken = null;
+        resolve(result);
+      };
+      const timer = setTimeout(
+        () => settle(skipped("not-delivered")),
+        CODEX_CONTINUE_LANE_TIMEOUT_MS
+      );
+      timer.unref?.();
+      const admit = () => {
+        // Already answered (the lane took too long): it must not type after all.
+        if (settled) return false;
+        const blocker =
+          this.codexContinueBlocker(stop, true, hostBlocker) ??
+          (this.emittedBytes !== streamOffset ? "output-since" : null);
+        if (blocker === null) return true;
+        settle(skipped(blocker));
+        return false;
+      };
+      this.codexContinueToken = token;
+      this.writeQueue.submit(line, token, () => settle({ status: "continued", line }), admit);
+      // Runs once the lane is past the line, however it ended: refused,
+      // abandoned before its Enter, or written (already settled).
+      this.writeQueue.stage(() => settle(skipped("not-delivered")));
+    });
   }
 
   /**

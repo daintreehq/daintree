@@ -32,18 +32,24 @@ function errorCode(error: unknown): string | null {
  * can see it in time. A call that fails or times out throws and claims nothing
  * here, though the host may have granted it with the answer lost: that idle
  * time is spent, and nobody acts on it until new work restarts the host's clock.
+ *
+ * `standIn` asks as a Shell standing in for the machine's own refused idle
+ * stop (#17924): the host refuses it while one of its keepers would stop the
+ * machine itself.
  */
 export async function withHostIdleClaim<T>(
   hostId: HostId,
   session: LinkSession,
   sessionFor: (hostId: HostId) => LinkSession | null,
-  act: () => T
+  act: () => T,
+  options: { standIn?: boolean } = {}
 ): Promise<HostIdleClaimOutcome<Awaited<T>>> {
   const reaches = () => session.isOpen && sessionFor(hostId) === session;
   if (!reaches()) return { kind: "superseded" };
+  const method = options.standIn ? LinkMethod.CLAIM_IDLE_STAND_IN : LinkMethod.CLAIM_IDLE;
   let answer: unknown;
   try {
-    answer = await session.call(LinkMethod.CLAIM_IDLE, null, { timeoutMs: CLAIM_TIMEOUT_MS });
+    answer = await session.call(method, null, { timeoutMs: CLAIM_TIMEOUT_MS });
   } catch (error) {
     if (errorCode(error) !== "UNSUPPORTED") throw error;
     // An older build on a link since replaced says nothing of the host now.

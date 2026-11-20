@@ -432,13 +432,75 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     });
     h.identity.result = { ok: true };
     h.probe.problem = "needs a password";
+    // Confirmed as that machine, refused only the power-off: said, so a Shell may stop it instead (#17924).
     await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
       armed: false,
       problem: "needs a password",
+      powerOffProbeRefused: true,
     });
     expect(h.stored()).toBeNull();
     await h.idleOut();
     expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("says only of a confirmed machine whose OS refused the power-off that the power-off alone was refused (#17924)", async () => {
+    const said = async (h: ReturnType<typeof make>) =>
+      (await h.keeper.set({ target: TARGET, enabled: true })).powerOffProbeRefused === true;
+
+    const noSystemctl = make();
+    noSystemctl.probe.problem = "This machine has no systemctl to power itself off with.";
+    expect(await said(noSystemctl)).toBe(true);
+    noSystemctl.keeper.dispose();
+    noSystemctl.tracker.dispose();
+
+    const unreadable = make();
+    unreadable.identity.result = { ok: false, definite: false, problem: "unreadable" };
+    unreadable.probe.problem = "needs a password";
+    expect(await said(unreadable)).toBe(false);
+    expect(unreadable.system.probePowerOff).not.toHaveBeenCalled();
+    unreadable.keeper.dispose();
+    unreadable.tracker.dispose();
+
+    const otherOs = make();
+    otherOs.system.unsupported.mockReturnValue(
+      "Only a Linux machine can power itself off when idle."
+    );
+    expect(await said(otherOs)).toBe(false);
+    otherOs.keeper.dispose();
+    otherOs.tracker.dispose();
+
+    // Armed, then the OS refused the launch: the host keeps its own claim to retry, so nothing more is said.
+    const armed = make();
+    await armed.keeper.set({ target: TARGET, enabled: true });
+    armed.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+    await armed.idleOut();
+    expect(armed.keeper.status()).toEqual({
+      armed: true,
+      problem: "This machine refused to power itself off.",
+    });
+    expect(await said(armed)).toBe(false);
+    expect(armed.keeper.status().powerOffProbeRefused).toBeUndefined();
+  });
+
+  it("says nothing more of a refusal a take-back overtook while the old permission was removed", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    h.probe.problem = "needs a password";
+    let releaseSave!: () => void;
+    h.system.saveArm.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+    const granting = h.keeper.set({ target: TARGET, enabled: true });
+    await vi.waitFor(() => expect(h.system.saveArm).toHaveBeenCalledTimes(2));
+    const revoking = h.keeper.set({ target: TARGET, enabled: false });
+    releaseSave();
+    const answer = await granting;
+    expect(answer.powerOffProbeRefused).toBeUndefined();
+    expect(answer.armed).toBe(false);
+    await revoking;
   });
 
   it("keeps a permission it holds when its metadata can't be read for a repeat, and drops it when it names another machine", async () => {

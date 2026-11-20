@@ -20,9 +20,14 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
 }));
 
 import { BOAT_PRODUCTION_API_URL } from "../../cloud/boat/BoatClient.js";
-import { GUEST_POWER_OFF_METHOD, MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
+import {
+  GUEST_POWER_OFF_METHOD,
+  KeepAwakeLinkMethod,
+  MachineKeeperLinkMethod,
+} from "../../cloud/machineKeeperLink.js";
 import type { GuestPowerOffSystem, StoredGuestPowerOff } from "../guestPowerOffSystem.js";
 import { HostIdleTracker, type HostWorkReading } from "../HostIdleTracker.js";
+import type { KeepAwakeListener } from "../KeepAwakeKeeper.js";
 import { LinkMethod } from "../linkMethods.js";
 import type { LinkSession } from "../../link/session.js";
 import {
@@ -34,7 +39,10 @@ import { installMachineKeeperHost } from "../machineKeeperHost.js";
 
 type Handler = (payload: unknown) => unknown;
 
-function linkedHost(guestSystem?: GuestPowerOffSystem) {
+function linkedHost(
+  guestSystem?: GuestPowerOffSystem,
+  keepAwake?: { listen: () => Promise<KeepAwakeListener>; fetch?: typeof fetch }
+) {
   const handlers = new Map<
     string,
     { schema: { safeParse(v: unknown): { success: boolean; data?: unknown } }; handler: Handler }
@@ -54,7 +62,7 @@ function linkedHost(guestSystem?: GuestPowerOffSystem) {
         return () => (listener = null);
       },
     },
-    guestSystem ? { guestSystem } : {}
+    { ...(guestSystem ? { guestSystem } : {}), ...(keepAwake ? { keepAwake } : {}) }
   );
   listener!({ session });
   /** As the link would: the payload checked against the method's schema, then handled. */
@@ -389,6 +397,128 @@ describe("the idle claim a Shell makes over its link (#17922)", () => {
     await expect(host.link().claim({ owner: "keeper" })).rejects.toThrow("VALIDATION");
     await expect(host.link().claim({ claimId: "old" })).rejects.toThrow("VALIDATION");
     await expect(host.link().claim({})).resolves.toEqual({ granted: true });
+  });
+});
+
+describe("the claim a Shell makes standing in for a refused self-stop (#17924)", () => {
+  const hosts: Array<ReturnType<typeof claimingHost>> = [];
+  const make = (system?: GuestPowerOffSystem) => {
+    const host = claimingHost(undefined, system);
+    hosts.push(host);
+    return host;
+  };
+  afterEach(() => {
+    for (const host of hosts.splice(0)) {
+      host.dispose();
+      host.tracker.dispose();
+    }
+  });
+  const standIn = (link: ReturnType<ReturnType<typeof claimingHost>["link"]>) =>
+    link.call(LinkMethod.CLAIM_IDLE_STAND_IN, null);
+
+  it("is granted while no keeper here stops the machine, and holds the idle time like any claim", async () => {
+    const host = make();
+    await host.idleOut();
+    const shell = host.link();
+    await expect(standIn(shell)).resolves.toEqual({ granted: true });
+    await expect(standIn(shell)).resolves.toEqual({ granted: false });
+    await expect(host.link().claim()).resolves.toEqual({ granted: false });
+  });
+
+  it("leaves the idle time to the machine's own keeper once another device gave it a working key", async () => {
+    const stop = vi.fn(async () => null);
+    driver.stop = stop;
+    const host = make();
+    // Armed while the host still had work, so its keeper has claimed nothing when the Shell asks.
+    await host.link().call(MachineKeeperLinkMethod.ARM, request());
+    await getRemoteService("machineKeeper")!.tick();
+    await host.idleOut();
+    await expect(standIn(host.link())).resolves.toEqual({ granted: false });
+    expect(stop).not.toHaveBeenCalled();
+    await getRemoteService("machineKeeper")!.tick();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the idle time to the power-off keeper once its host may power the machine off", async () => {
+    const launch = vi.fn(async () => ({ kind: "accepted" as const }));
+    const host = make({ ...guestSystem(), preparePowerOff: vi.fn(async () => launch) });
+    const shell = host.link();
+    await host.idleOut();
+    await shell.call(GUEST_POWER_OFF_METHOD, {
+      target: {
+        provider: "aws",
+        accountId: "123456789012",
+        region: "eu-west-1",
+        instanceId: "i-0abc0000000000001",
+      },
+      enabled: true,
+    });
+    await expect(standIn(shell)).resolves.toEqual({ granted: false });
+    await getRemoteService("guestPowerOff")!.tick();
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes no payload", async () => {
+    const host = make();
+    await host.idleOut();
+    await expect(
+      host.link().call(LinkMethod.CLAIM_IDLE_STAND_IN, { owner: "keeper" })
+    ).rejects.toThrow("VALIDATION");
+  });
+});
+
+describe("installMachineKeeperHost keep-awake (#17918)", () => {
+  it("opens no port until a Shell asks, then takes a URL for it over the link and lets it go on dispose", async () => {
+    let closed = 0;
+    const listener: KeepAwakeListener = {
+      port: 40_100,
+      expect: () => {},
+      take: () => true,
+      close: () => {
+        closed += 1;
+      },
+    };
+    const listen = vi.fn(async () => listener);
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const { call, dispose } = linkedHost(undefined, {
+      listen,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+    expect(listen).not.toHaveBeenCalled();
+    expect(getRemoteService("keepAwake")).toBeTruthy();
+    await expect(call(KeepAwakeLinkMethod.STATUS, null)).resolves.toMatchObject({ port: 40_100 });
+    expect(listen).toHaveBeenCalledTimes(1);
+
+    const url = "https://ab12cd34ef-40100.agent37.app/?a37_token=tok_secret_value";
+    // Nothing the schema doesn't name, and nothing past its bounds.
+    await expect(
+      call(KeepAwakeLinkMethod.ARM, {
+        resourceId: "ab12cd34ef",
+        url,
+        expiresAt: Date.now() + 86_400_000,
+        apiKey: "x",
+      })
+    ).rejects.toThrow("VALIDATION");
+    await expect(
+      call(KeepAwakeLinkMethod.ARM, {
+        resourceId: "ab12cd34ef",
+        url: `${url}&pad=${"x".repeat(2048)}`,
+        expiresAt: Date.now() + 86_400_000,
+      })
+    ).rejects.toThrow("VALIDATION");
+    expect(fetch).not.toHaveBeenCalled();
+    const status = await call(KeepAwakeLinkMethod.ARM, {
+      resourceId: "ab12cd34ef",
+      url,
+      expiresAt: Date.now() + 86_400_000,
+    });
+    expect(status).toMatchObject({ port: 40_100, problem: null });
+    expect(JSON.stringify(status)).not.toContain("tok_secret_value");
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    dispose();
+    expect(closed).toBe(1);
+    expect(getRemoteService("keepAwake")).toBeFalsy();
   });
 });
 

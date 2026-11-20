@@ -8,6 +8,7 @@ import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
 import { parseDiscoveryInfo, type HostDiscoveryInfo } from "../host/discoveryFile.js";
 import {
   maxSocketPathBytes,
+  PID1_COMM_PATH,
   remoteHostSocketLocation,
   type SocketPlatform,
 } from "../host/hostSocketPath.js";
@@ -410,28 +411,50 @@ const DISCOVERY_END = "@@dt:discovery-end";
 /** The read's status for a missing file: cat's message for it is in the host's locale. */
 const NO_DISCOVERY_FILE_EXIT = 3;
 
+const DISCOVERY_FROM = "@@dt:discovery-from";
+
 /**
  * Prints the file between marker lines, so whatever the user's shell startup
  * files print around it is left out. The path arrives as `$1`, never spliced
  * into the script, so it is quoted once for the login shell, whichever it is.
+ * A Linux host's second path (`$2`) is where it listens when PID 1 isn't
+ * systemd, the same test the host makes (host/hostSocketPath.ts); which one
+ * was read is printed first. Nothing restarts a host there, so a file whose
+ * process has gone (killed outright, or left a zombie) reads as none, and the
+ * dial starts it again rather than meeting a dead socket.
  */
-const DISCOVERY_READ_SCRIPT = `if [ -e "$1" ]; then echo; echo ${DISCOVERY_START}; cat -- "$1" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
+const DISCOVERY_READ_SCRIPT = `f=$1; n=1; if [ $# -gt 1 ]; then c=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$c" ] && [ "$c" != systemd ]; then f=$2; n=2; fi; fi; if [ "$n" = 2 ] && [ -e "$f" ]; then p=$(sed -n "s/.*\\"pid\\":\\([0-9][0-9]*\\).*/\\1/p" "$f"); w=$(sed -n "s/.*\\"startedAt\\":\\"\\([^\\"]*\\)\\".*/\\1/p" "$f"); t=""; if [ -n "$p" ]; then t=$(sed "s/.*) //" "/proc/$p/stat" 2>/dev/null); fi; set -- $t; if [ -z "$t" ] || [ "$1" = Z ] || { [ -n "$w" ] && [ "\${20:-}" != "$w" ]; }; then exit ${NO_DISCOVERY_FILE_EXIT}; fi; fi; if [ -e "$f" ]; then echo; echo "${DISCOVERY_FROM} $n"; echo ${DISCOVERY_START}; cat -- "$f" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
 
 export function buildCatArgs(
   target: string,
   controlPath: string,
-  filePath: string,
+  filePaths: string | readonly string[],
   persist?: string
 ): string[] {
-  if (!isSafeRemotePath(filePath)) {
-    throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
+  const paths = typeof filePaths === "string" ? [filePaths] : filePaths;
+  for (const filePath of paths) {
+    if (!isSafeRemotePath(filePath)) {
+      throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
+    }
   }
   return [
     ...sshCommonArgs(controlPath, persist),
     "--",
     target,
-    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${shellQuote(filePath)}`,
+    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${paths.map(shellQuote).join(" ")}`,
   ];
+}
+
+/**
+ * Which of the paths given the read read: 0 for the first, 1 for the second.
+ * Only the marker right before the file counts, so a startup file printing
+ * something like it can't move the socket check to the other place.
+ */
+export function discoveryReadFrom(stdout: string): number {
+  const marker = new RegExp(`(?:^|\n)${DISCOVERY_FROM} ([12])\r?\n${DISCOVERY_START}\r?\n`, "g");
+  let from = 0;
+  for (const match of stdout.matchAll(marker)) from = Number(match[1]) - 1;
+  return from;
 }
 
 /** The discovery file from the read's output; null unless it arrived whole between its markers. */
@@ -974,13 +997,24 @@ export class SshTransport implements LinkTransport {
     }
     onReached();
     this.lastHopDiagnosis = null;
-    const location = remoteHostSocketLocation({
-      ...remote,
-      macAppDirName: this.options.macAppDirName,
-      linuxDirName: this.options.linuxDirName,
-    });
+    const located = (startsOnConnect: boolean) =>
+      remoteHostSocketLocation({
+        ...remote,
+        macAppDirName: this.options.macAppDirName,
+        linuxDirName: this.options.linuxDirName,
+        startsOnConnect,
+      });
+    // Which a Linux host uses is the host's to tell (by its PID 1), and the read's.
+    const candidates =
+      remote.platform === "linux" ? [located(false), located(true)] : [located(false)];
+    let location = candidates[0]!;
     const cat = await this.run(
-      buildCatArgs(target, controlPath, location.discoveryPath, persist),
+      buildCatArgs(
+        target,
+        controlPath,
+        candidates.map((candidate) => candidate.discoveryPath),
+        persist
+      ),
       signal
     ).catch((error: unknown) => {
       // The host answered, and Daintree writes this file while it listens: none there is no Host mode.
@@ -991,6 +1025,7 @@ export class SshTransport implements LinkTransport {
       }
       throw error;
     });
+    location = candidates[discoveryReadFrom(cat.stdout)] ?? location;
     const info = parseDiscoveryRead(cat.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);
     // The host writes its socket beside the discovery file, so anything else

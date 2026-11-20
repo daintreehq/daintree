@@ -151,8 +151,16 @@ export interface CloudProvider {
     resourceId: string,
     options: { lifetimeSeconds?: number | null }
   ): Promise<ProviderResource | null>;
-  /** A normal, saving stop. Never forced. */
-  stop(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource | null>;
+  /**
+   * A normal, saving stop. Never forced. `once` sends it a single time, for a
+   * stop whose reason has to be checked again before any second try: an idle
+   * stop, whose idle time new work may have ended by the time a resend went.
+   */
+  stop(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    options?: { once?: boolean }
+  ): Promise<ProviderResource | null>;
   /**
    * Moves the machine's automatic stop to `lifetimeSeconds` from now. Only a
    * provider whose lifetime is `renewable` has it, and that one must.
@@ -198,6 +206,47 @@ export interface CloudProvider {
     credentials: ProviderCredentials,
     resourceId: string
   ): Promise<GuestPowerOffCheck>;
+  /**
+   * Present only for a provider whose `idle-sleep` lifetime this device can
+   * drive (#17916): puts a running machine to sleep now, keeping its memory.
+   * Sends one request and never repeats it, since whoever calls it acts on its
+   * host's idleness once; a machine already asleep is the same outcome.
+   */
+  sleepIdle?(credentials: ProviderCredentials, resourceId: string): Promise<void>;
+  /**
+   * Present with {@link sleepIdle}: sets how long the machine may go without
+   * activity before its provider sleeps it, and turns that sleep on when
+   * `enable`. Applies at once, whatever the machine is doing.
+   */
+  setIdleSleep?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    idleSeconds: number,
+    enable: boolean
+  ): Promise<ProviderResource>;
+  /**
+   * Present only for a provider whose idle timer counts traffic on the
+   * machine's own URLs, Agent 37's (#17918): a URL reaching `port` of the
+   * machine alone, with no account key, that its host sends requests to
+   * itself through while it sees work. `expiresAt` is epoch milliseconds.
+   */
+  keepAwakeUrl?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }>;
+}
+
+/** A provider that can put its idle machines to sleep for this device, and set when they would by themselves. */
+export type IdleSleepingCloudProvider = CloudProvider &
+  Required<Pick<CloudProvider, "sleepIdle" | "setIdleSleep">>;
+
+export function canSleepIdle(provider: CloudProvider): provider is IdleSleepingCloudProvider {
+  return (
+    provider.info(process.platform).capabilities.lifetime.kind === "idle-sleep" &&
+    typeof provider.sleepIdle === "function" &&
+    typeof provider.setIdleSleep === "function"
+  );
 }
 
 /** A provider that can move a running machine's automatic stop. */

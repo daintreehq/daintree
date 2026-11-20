@@ -273,6 +273,32 @@ function admitRestoredPluginLaunchesFor(
     });
 }
 
+/**
+ * Give back what an Assistant's conversation launched before a restart
+ * (#16845), for the panes this hydrate restores in its own workspace. The
+ * records live with the MCP server, off the startup graph, so they load only
+ * once one exists for it to restore.
+ */
+function admitRestoredAssistantPanesFor(
+  workspaceId: string | null | undefined,
+  terminals: ReadonlyArray<{ id?: unknown; spawnedBy?: unknown }>
+): void {
+  if (!workspaceId || terminals.length === 0) return;
+  const kept = store.get("assistantPaneCreations");
+  if (kept === null || typeof kept !== "object" || Object.keys(kept).length === 0) return;
+  const panes = terminals.flatMap(({ id, spawnedBy }) =>
+    typeof id === "string" ? [{ id, spawnedBy }] : []
+  );
+  if (panes.length === 0) return;
+  void import("../../../services/mcp-server/assistantPaneCreationStore.js")
+    .then(({ admitRestoredAssistantPanesFromStore }) =>
+      admitRestoredAssistantPanesFromStore(workspaceId, panes)
+    )
+    .catch((error: unknown) => {
+      console.error("[AppHydrate] Failed to restore Assistant pane records:", error);
+    });
+}
+
 function isLayoutSeedUndecided(projectId: string): boolean {
   try {
     return getProjectLayoutSeed(projectId) === null;
@@ -922,6 +948,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     typedHandleWithContext(CHANNELS.APP_HYDRATE, async (ctx: IpcContext) => {
       const hydrate = await handleAppHydrate(ctx);
       admitRestoredPluginLaunchesFor(hydrate.appState.terminals);
+      admitRestoredAssistantPanesFor(hydrate.workspaceId, hydrate.appState.terminals);
       return hydrate;
     })
   );
@@ -930,7 +957,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     const boot = composeBootResult(await handleAppHydrate(ctx));
     // A pending crash throws this payload away and restores from the hydrate
     // that follows the user's choice, so only that one hands panes back.
-    if (boot.crashPending === null) admitRestoredPluginLaunchesFor(boot.appState.terminals);
+    if (boot.crashPending === null) {
+      admitRestoredPluginLaunchesFor(boot.appState.terminals);
+      admitRestoredAssistantPanesFor(boot.workspaceId, boot.appState.terminals);
+    }
     return boot;
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));

@@ -12,6 +12,8 @@ import {
 import type {
   DecisionQuestionContent,
   DecisionQuestionDeclineResult,
+  DecisionQuestionReference,
+  DecisionQuestionStatus,
 } from "@shared/types/decisionsQuestion";
 import { isDeclineCommitted, withDeadline } from "./decisionAnswerSend";
 import { readTargetContent, type DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -270,7 +272,7 @@ export function followDecline(key: string, retry = false): Promise<void> {
 }
 
 /** Whether the question still waits for an answer, and so can be dismissed. */
-export function isWaitingQuestion(question: DecisionQuestionContent): boolean {
+export function isWaitingQuestion(question: Pick<DecisionQuestionContent, "status">): boolean {
   return question.status === "queued" || question.status === "open";
 }
 
@@ -299,7 +301,9 @@ export function dismissingQuestionIds(
  * - `gone`, the read found it no longer kept, or not waiting any more;
  * - `changed`, it moved on from the revision the person read;
  * - `busy`, an answer from here is under way;
- * - `submitted`, handed to main, with where it stands now.
+ * - `submitted`, handed to main, with where it stands now, and when this
+ *   computer last read the question (`lastReadAt`) when it was dismissed
+ *   from that read while its Remote Host was away (#17946); null otherwise.
  */
 export type DismissAttempt =
   | {
@@ -309,7 +313,7 @@ export type DismissAttempt =
   | { kind: "gone" }
   | { kind: "changed" }
   | { kind: "busy" }
-  | { kind: "submitted"; key: string; phase: DeclinePhase };
+  | { kind: "submitted"; key: string; phase: DeclinePhase; lastReadAt?: number | null };
 
 function settledAttempt(key: string, claim: Claim): DismissAttempt {
   if (useDecisionsAnswerStore.getState().generation !== claim.generation) {
@@ -318,7 +322,31 @@ function settledAttempt(key: string, claim: Claim): DismissAttempt {
   // Another dismissal of the question took over meanwhile: say where that one stands.
   const decline = readAnswerRecord(key).decline;
   if (decline === null) return { kind: "failed", reason: "off" };
-  return { kind: "submitted", key, phase: decline.phase };
+  const { lastReadAt } = decline;
+  return {
+    kind: "submitted",
+    key,
+    phase: decline.phase,
+    ...(lastReadAt !== undefined ? { lastReadAt } : {}),
+  };
+}
+
+/**
+ * Whether the relay already turned away a dismissal at `revision` for a
+ * reason that holds for that revision whatever is sent again: answered,
+ * moved on, expired, or closed first. Not one it doesn't hold, nor one a
+ * relay or computer too old turned away, which an update can change.
+ */
+function ruledOut(decline: DeclineSubmission | null, revision: number): boolean {
+  if (decline === null || decline.payload.expectedRevision !== revision) return false;
+  const { phase } = decline;
+  if (phase.kind !== "settled") return false;
+  const { outcome } = phase;
+  return (
+    outcome.status === "already-answered" ||
+    outcome.status === "changed" ||
+    (outcome.status === "closed" && outcome.reason !== "not-found")
+  );
 }
 
 /** Reads the in-flight dismissal of `key` again by its id, as a Retry. */
@@ -333,11 +361,13 @@ async function recover(key: string): Promise<DismissAttempt> {
  * Dismisses the question `target` names: reads it again first, and signs
  * nothing unless it still waits, at `revision` when the person read one
  * (the view), or at the revision it is open at now (a row naming it only by
- * alias). A dismissal of it already under way is read again instead, by its
- * id: first from `known`, the record the last try was kept under, without
- * reading the question again, since the computer that asked may be out of
- * reach while this one holds the answer. A second Dismiss never signs a
- * second decline.
+ * alias). A Remote Host's question whose Host is away is dismissed at the
+ * revision this computer last read it open at (#17946), which the relay
+ * refuses if it has moved on. A dismissal of it already under way is read
+ * again instead, by its id: first from `known`, the record the last try was
+ * kept under, without reading the question again, since the computer that
+ * asked may be out of reach while this one holds the answer. A second
+ * Dismiss never signs a second decline.
  */
 export async function dismissQuestion(
   target: DecisionQuestionTarget,
@@ -355,23 +385,40 @@ export async function dismissQuestion(
   if (useDecisionsAnswerStore.getState().generation !== generation) {
     return { kind: "failed", reason: "off" };
   }
+  let question: {
+    reference: DecisionQuestionReference;
+    revision: number;
+    status: DecisionQuestionStatus;
+  };
+  let lastReadAt: number | null = null;
   switch (read.result) {
     case "read":
+      question = read.question;
+      break;
+    case "host-not-connected":
+      // Only a question read by its reference: that reference is what the last read was kept by.
+      if (read.lastRead?.result !== "read" || target.scope !== "reference") {
+        return { kind: "failed", reason: read.result };
+      }
+      question = { reference: target.reference, revision: read.lastRead.revision, status: "open" };
+      lastReadAt = read.lastRead.readAt;
       break;
     case "not-found":
       return { kind: "gone" };
     case "off":
     case "not-running":
     case "unreadable":
-    case "host-not-connected":
       return { kind: "failed", reason: read.result };
   }
-  const question = read.question;
   const key = answerKey(question.reference);
   const record = readAnswerRecord(key);
   if (isDeclineInFlight(record)) return recover(key);
   // Taken already, and the question hasn't closed here yet.
   if (isDeclineCommitted(record)) return settledAttempt(key, claimOf(key)!);
+  // The last read can't show what the relay said of its revision: say it again rather than sign again.
+  if (lastReadAt !== null && ruledOut(record.decline, question.revision)) {
+    return settledAttempt(key, claimOf(key)!);
+  }
   if (!isWaitingQuestion(question)) return { kind: "gone" };
   if (revision !== null && question.revision !== revision) return { kind: "changed" };
   if (!canStartDecline(key)) return { kind: "busy" };
@@ -387,6 +434,7 @@ export async function dismissQuestion(
       },
       phase: { kind: "sending" },
       resubmitted: false,
+      ...(lastReadAt !== null ? { lastReadAt } : {}),
     },
   }));
   await exclusive(key, claim, async () => {

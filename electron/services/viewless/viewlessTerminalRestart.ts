@@ -218,6 +218,7 @@ export async function restartTerminalWithoutView(
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
+              fallbackChainIndex: snapshot.fallbackChainIndex,
               ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
               // Still the scheduled run's pane, so its next session names the
               // run (#15977).

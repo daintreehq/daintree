@@ -3,7 +3,11 @@ import {
   globalAssistantMayRelay,
   isGlobalAssistantId,
 } from "../../../shared/config/globalAssistant.js";
-import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
+import {
+  ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
+  ASSISTANT_GLOBAL_CLOSE_TOOL,
+  ASSISTANT_PRESET_MOVE_DELEGATE,
+} from "../../../shared/config/assistantConfirmationDelegation.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
@@ -199,6 +203,11 @@ export interface OpenRun {
   sessionId: string;
   terminalId: string;
   launchGeneration: number;
+  /**
+   * The conversation its lane runs, as main minted it (#17919): a host holds
+   * what the run makes there under it, so the conversation resumed keeps it.
+   */
+  conversationOwnershipId?: string;
 }
 
 export interface HostCallRuntimeDeps {
@@ -443,6 +452,18 @@ interface RelayedDispatch {
  */
 const RELAY_APPROVABLE: ReadonlySet<string> = new Set(["worktree.delete"]);
 
+/**
+ * The global Assistant's close of finished agents it didn't launch (#16750),
+ * by the action a host asks about and the tool the call must have been: one
+ * owned close, asked about as the close it stands in for, or a batch asked
+ * about whole. Only a host's ask that says how it read each stop is one of
+ * these, and only about a call the global Assistant made.
+ */
+const GLOBAL_CLOSE_ASKS: ReadonlyMap<string, string> = new Map([
+  ["terminal.close", ASSISTANT_GLOBAL_CLOSE_TOOL],
+  ["terminal.closeMany", "terminal.closeMany"],
+]);
+
 /** What a host's MCP server runs a call with: its arguments less the request's own keys. */
 function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
   const { _meta: _ignored, requestKey: _requestKey, ...actionArgs } = args;
@@ -506,7 +527,18 @@ function runsAsCall(call: CallInFlight, actionId: string, args: unknown): boolea
  * in for, on the same id and nothing else.
  */
 function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
-  if (!RELAY_APPROVABLE.has(payload.actionId)) return false;
+  const closeTool = GLOBAL_CLOSE_ASKS.get(payload.actionId);
+  if (closeTool !== undefined) {
+    if (
+      payload.closeClass === undefined ||
+      call.tool !== closeTool ||
+      !isGlobalAssistantId(call.run.projectId)
+    ) {
+      return false;
+    }
+  } else if (payload.closeClass !== undefined || !RELAY_APPROVABLE.has(payload.actionId)) {
+    return false;
+  }
   if (canonicalArgsHash(payload.actionId, payload.args) !== payload.argsHash) return false;
   return runsAsCall(call, payload.actionId, payload.args);
 }
@@ -653,7 +685,7 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, and closes, restarts or deletes only what it launched there. Ask the user to do it.";
+  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, and restarts or deletes only what it launched there. Ask the user to do it.";
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -1277,8 +1309,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * while the call is still the one out under `callId`, from a run still
    * running, with the host's control switch on.
    */
-  private callDelegation(call: CallInFlight, callId: string): PreparedAssistantDelegation | null {
-    const prepared = this.prepareDelegation(call.helpSessionId, call.tool);
+  private callDelegation(
+    call: CallInFlight,
+    callId: string,
+    calledActionId: string = call.tool
+  ): PreparedAssistantDelegation | null {
+    const prepared = this.prepareDelegation(call.helpSessionId, calledActionId);
     if (prepared === null) return null;
     return {
       offer: prepared.offer,
@@ -1320,10 +1356,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * hand over that. Callers have already matched the dispatch to the call. A
    * failed read keeps the dialog.
    */
-  private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
+  private skipsConfirmations(
+    call: CallInFlight,
+    actionId: string,
+    calledActionId: string = call.tool
+  ): boolean {
     if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
     try {
-      return this.deps.confirmationsSkipped?.(call.helpSessionId, call.tool) === true;
+      return this.deps.confirmationsSkipped?.(call.helpSessionId, calledActionId) === true;
     } catch (error) {
       logger.warn("Couldn't read the assistant's confirmations preference", { error });
       return false;
@@ -1487,15 +1527,24 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     call.asked = true;
+    // A close of finished agents is one kind of action however it was called
+    // (#16750), so a batch answers to the same tick as one close. One the host saw
+    // stopped on an error is the person's alone: no skip and no tick reach
+    // it, and its dialog offers none.
+    const personOnly = payload.closeClass === "requires-person";
+    const calledActionId =
+      payload.closeClass !== undefined ? ASSISTANT_GLOBAL_CLOSE_CONFIRMATION : call.tool;
     // The person's own "Never ask" covers their assistant's call on a host as
     // it does one here (#15698): nobody is asked, and the host is told so.
-    if (this.skipsConfirmations(call, payload.actionId)) {
+    if (!personOnly && this.skipsConfirmations(call, payload.actionId, calledActionId)) {
       this.grantSkip(call);
       return answer("skip-preference");
     }
     // Settled on the tool the assistant called (#16752), never the action
     // the host asks about: an owned delete is asked about as `worktree.delete`.
-    const delegation = this.callDelegation(call, payload.callId);
+    const delegation = personOnly
+      ? null
+      : this.callDelegation(call, payload.callId, calledActionId);
     let reply: WindowApprovalAnswer | null;
     try {
       reply = await ask({
@@ -1867,6 +1916,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         runMs,
         // From the runtime's own lane, so no argument the model passes can set or clear it.
         ...(isGlobalAssistantId(caller.projectId) ? { global: true as const } : {}),
+        ...(caller.conversationOwnershipId !== undefined
+          ? { conversationId: caller.conversationOwnershipId }
+          : {}),
       };
       const noted = resend
         ? NOTHING_NOTED

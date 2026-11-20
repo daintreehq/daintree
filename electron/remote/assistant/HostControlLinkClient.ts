@@ -131,6 +131,8 @@ export class HostControlLinkClient {
   private readonly authenticated = new WeakSet<LinkSession>();
   /** Sessions to a host from before GLOBAL_MCP_CALL; one session is always one host build. */
   private readonly noGlobalCalls = new WeakSet<LinkSession>();
+  /** Sessions to a host from before CONVERSATION_MCP_CALL. */
+  private readonly noConversationCalls = new WeakSet<LinkSession>();
   private readonly follows = new Map<LinkSession, NoticeFollow>();
   private readonly disposers: Array<() => void> = [];
   private disposed = false;
@@ -293,7 +295,7 @@ export class HostControlLinkClient {
     request: RelayCallRequest,
     timeoutMs: number
   ): Promise<McpCallAnswer> {
-    const { global, ...payload } = request;
+    const { global, conversationId, ...payload } = request;
     const session = await this.open(hostId);
     try {
       await this.authenticate(hostId, session);
@@ -304,7 +306,24 @@ export class HostControlLinkClient {
     }
     let answer: unknown;
     let answered = false;
-    if (global === true && !this.noGlobalCalls.has(session)) {
+    if (conversationId !== undefined && !this.noConversationCalls.has(session)) {
+      try {
+        answer = await this.call(
+          hostId,
+          session,
+          AssistantLinkMethod.CONVERSATION_MCP_CALL,
+          { ...payload, conversationId, ...(global === true ? { global } : {}) },
+          timeoutMs
+        );
+        answered = true;
+      } catch (error) {
+        // Refused before anything ran, as GLOBAL_MCP_CALL's is: the same call
+        // goes again the way an older host takes it.
+        if (codeOf(error) !== "UNSUPPORTED") throw error;
+        this.noConversationCalls.add(session);
+      }
+    }
+    if (!answered && global === true && !this.noGlobalCalls.has(session)) {
       try {
         answer = await this.call(
           hostId,

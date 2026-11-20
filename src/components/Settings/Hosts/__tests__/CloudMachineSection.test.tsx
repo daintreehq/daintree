@@ -51,7 +51,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 import { CloudMachineSection } from "../CloudMachineSection";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
-import { clockTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
+import { clockTime, dayTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
 import { ClientAppError } from "@/utils/clientAppError";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
@@ -851,7 +851,7 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
     );
   });
 
-  it("leaves an Agent 37 instance's own idle sleep to its row, and says the host's idle time doesn't stop it", () => {
+  it("says which timer puts an Agent 37 instance to sleep: its own with no link, the host's while connected (#17916)", async () => {
     const agent37 = {
       ...provider({
         name: "Agent 37",
@@ -861,14 +861,107 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
       }),
       id: "agent37",
     };
-    show(running("agent37", { lifetime: { kind: "idle-sleep", idleSeconds: 1800 } }), [agent37]);
+    const sleeper = (overrides: Partial<CloudHostStatus> = {}) =>
+      running("agent37", {
+        lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+        linkedIdleStop: { kind: "sleeps" },
+        idleTimeFollowsHost: true,
+        ...overrides,
+      });
+    show(sleeper(), [agent37]);
     expect(idleRow()).toContain(
-      "On Agent 37, the machine doesn't stop when the host's idle time ends."
+      "Agent 37's own idle timer (15 minutes) is in charge while no device is connected: it puts the machine to sleep after 15 minutes without activity."
     );
+    expect(idleRow()).not.toContain("doesn't stop");
     expect(idleRow()).not.toContain("bills");
+    // Its own idle sleep is still said on its own row.
     expect(screen.getByText("Sleeps when idle")).toBeTruthy();
     expect(screen.getByTestId("cloud-machine-lifetime").textContent).toContain(
-      "Agent 37 puts it to sleep by itself after 30 minutes without activity"
+      "Agent 37 puts it to sleep by itself after 15 minutes without activity"
+    );
+
+    cleanup();
+    Object.defineProperty(window, "electron", {
+      value: {
+        hostSettings: {
+          read: vi.fn(async () => ({
+            hostId: "build",
+            hostName: "build",
+            scope: "host",
+            instanceId: "launch-1",
+            unavailable: [],
+            settings: [{ key: "hostIdle.idleAfterMinutes", value: 30, revision: "r-30" }],
+          })),
+          update: vi.fn(),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
+    const summary = {
+      hostId: "build",
+      sampledAt: lastWorkAt + 60_000,
+      idle: { idleAfterMinutes: 30, lastWorkAt, busy: false, idleEndsAt: lastWorkAt + 30 * 60_000 },
+    } as unknown as HostMetricsSummary;
+    cloud.snapshot = {
+      providers: [agent37],
+      accounts: [],
+      hosts: [sleeper({ idleTimeFollowsHost: false })],
+    };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain(
+      "The host's idle time is in charge while this device is connected, since the connection keeps Agent 37's own idle timer (15 minutes) from running"
+    );
+    // Imported, its own timer keeps its own length until an idle time is picked here.
+    expect(idleRow()).toContain(
+      "Agent 37 keeps its own idle timer until you pick an idle time here."
+    );
+
+    // One that follows the host is on its way to the host's: nothing is said of the gap.
+    cleanup();
+    cloud.snapshot = { providers: [agent37], accounts: [], hosts: [sleeper()] };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain("The host's idle time is in charge while this device is connected");
+    expect(idleRow()).not.toContain("keeps its own idle timer");
+
+    // With no device connected, the host's hold on it and when that runs out (#17918).
+    cleanup();
+    show(
+      sleeper({
+        keepAwake: {
+          kind: "held",
+          expiresAt: Date.UTC(2026, 10, 26, 15),
+          confirmedAt: Date.UTC(2026, 10, 19, 15),
+          reached: true,
+        },
+      }),
+      [agent37]
+    );
+    expect(idleRow()).toContain(
+      `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(Date.UTC(2026, 10, 26, 15))} (as the host said ${dayTime(Date.UTC(2026, 10, 19, 15))}).`
+    );
+    expect(idleRow()).not.toContain("is in charge while no device is connected");
+    cleanup();
+    show(sleeper({ keepAwake: { kind: "expired", expiredAt: Date.UTC(2026, 10, 26, 15) } }), [
+      agent37,
+    ]);
+    expect(idleRow()).toContain(
+      "Agent 37's own idle timer (15 minutes) is in charge while no device is connected, even while the host sees work"
+    );
+
+    cleanup();
+    show(sleeper({ lifetime: { kind: "none" } }), [agent37]);
+    expect(idleRow()).toContain(
+      "Sleeping when idle is off for this machine on Agent 37, so nothing puts it to sleep. Picking an idle time turns it on."
     );
   });
 

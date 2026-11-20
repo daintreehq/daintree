@@ -17,6 +17,7 @@ import {
   type PluginPresetLaunchSummary,
 } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import { applyPresetBehaviorOverrides } from "../../../shared/utils/agentPresets.js";
+import { canContinueAtLimitReset } from "../../../shared/types/codexLimitContinuation.js";
 
 /** The three layers a launch merges presets from, as main reads them. */
 export interface PresetLaunchSources {
@@ -146,6 +147,12 @@ export async function gatePluginPresetLaunch(
       ];
     }),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true,
+    // Read from the person's own presets alone, as a launch reads it.
+    ...(source === "custom" &&
+    preset.continueAtLimitReset === true &&
+    canContinueAtLimitReset(agentId)
+      ? { continuesAtLimitReset: true }
+      : {}),
   };
 
   await deps.ensurePresetLaunchAllowed(

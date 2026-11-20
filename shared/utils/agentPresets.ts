@@ -147,10 +147,39 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
     keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
+    continueAtLimitReset: preset.continueAtLimitReset === true ? true : undefined,
     // Kept even when no account answers to it any more: a launch refuses a
     // pin it can't find rather than running on another login.
     accountId: isAccountId(preset.accountId) ? preset.accountId : undefined,
   };
+}
+
+/**
+ * A preset list from a writer that may not change whether a preset's panes
+ * continue at their usage limit's reset (#17912): each preset keeps what the
+ * stored preset with its id holds and its own value is dropped, so a new id
+ * starts off and replacing a preset wholesale turns it neither on nor off.
+ * Read as a launch reads presets: the first valid stored preset of an id wins.
+ */
+export function keepStoredLimitResets(incoming: unknown[], stored: unknown): unknown[] {
+  const on = new Map<string, boolean>();
+  for (const preset of Array.isArray(stored) ? stored : []) {
+    if (preset === null || typeof preset !== "object") continue;
+    // An entry an import let through malformed answers nothing, and mustn't
+    // stop the write that replaces it.
+    const { id, name } = preset as Record<string, unknown>;
+    if (typeof id !== "string" || typeof name !== "string") continue;
+    const valid = sanitizePreset(preset as AgentPreset);
+    if (!valid || on.has(valid.id)) continue;
+    on.set(valid.id, valid.continueAtLimitReset === true);
+  }
+  return incoming.map((preset) => {
+    if (preset === null || typeof preset !== "object" || Array.isArray(preset)) return preset;
+    const { continueAtLimitReset: _written, ...rest } = preset as Record<string, unknown>;
+    return typeof rest.id === "string" && on.get(rest.id) === true
+      ? { ...rest, continueAtLimitReset: true }
+      : rest;
+  });
 }
 
 /**

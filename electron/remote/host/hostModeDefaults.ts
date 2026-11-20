@@ -12,6 +12,7 @@ import { HostAdvertiser } from "./advertise.js";
 import { clearAdvertRecord, saveAdvertRecord } from "./advertRecord.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
+import { hostStartsOnConnect } from "./hostLocation.js";
 import { HostModeService } from "./HostModeService.js";
 import { readHostModeSettings } from "./hostModeSettings.js";
 import { readHostModeStatusFile, writeHostModeStatusFile } from "./hostModeStatusFile.js";
@@ -48,7 +49,8 @@ function startAtLoginController(): StartAtLoginController | null {
       target: launchTarget(),
     });
   }
-  if (process.platform === "linux") {
+  // No init system to run a unit under: a Shell's connection starts the host instead.
+  if (process.platform === "linux" && !hostStartsOnConnect()) {
     return createSystemdUserController({
       homeDir,
       packaged: app.isPackaged,
@@ -94,6 +96,7 @@ export function createHostModeService(
     socketPath,
     startListener: (signal) => startHostListener({ signal, location }),
     startAtLogin: startAtLoginController(),
+    startsOnConnect: hostStartsOnConnect(),
     createAdvertiser: (onChange) =>
       new HostAdvertiser({
         platform: process.platform,

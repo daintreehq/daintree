@@ -2,6 +2,10 @@ import type {
   BroadcastWriteTargetResult,
   ExactPromptGuard,
 } from "../../../shared/types/pty-host.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitStopRef,
+} from "../../../shared/types/codexLimitContinuation.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 /**
@@ -10,6 +14,17 @@ import type { HandlerMap, HostContext } from "./types.js";
  * terms.
  */
 const REFUSING_GUARD: ExactPromptGuard = { kind: "settled-prompt-exact", agentIncarnation: -1 };
+
+/** How long after a PTY's reads resume before its screen counts as caught up (#17909). */
+const READS_RESUME_SETTLE_MS = 2_000;
+
+/** The stop main named (#17909), or null for one with a field missing or malformed. */
+function codexLimitStopOf(value: unknown): CodexLimitStopRef | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { run, seq } = value as Partial<Record<keyof CodexLimitStopRef, unknown>>;
+  if (typeof run !== "string" || run.length === 0 || !Number.isInteger(seq)) return null;
+  return { run, seq: seq as number };
+}
 
 /** Whose an input is, as main named it (#16094): a non-empty string or nobody's. */
 function inputOwnerOf(value: unknown): string | undefined {
@@ -96,6 +111,33 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
 
     "cancel-pending-input": (msg) => {
       ptyManager.cancelPendingInput(msg.id);
+    },
+
+    "set-codex-limit-continue": (msg) => {
+      ptyManager.setCodexLimitContinueArmed(msg.id, msg.armed === true);
+    },
+
+    // Answered once the line is typed or refused: the lane may hold it a while.
+    "continue-codex-limit": (msg) => {
+      const stop = codexLimitStopOf(msg.stop);
+      const send = (result: CodexLimitContinueResult) =>
+        sendEvent({ type: "continue-codex-limit-result", requestId: msg.requestId, result });
+      if (stop === null) {
+        send({ status: "skipped", reason: "process-changed" });
+        return;
+      }
+      // Bytes the PTY holds unread may already say the pane moved on: asked
+      // at every check up to the write, as reads pause and resume meanwhile.
+      const readsPaused = () => {
+        const pause = ctx.getPauseCoordinator(msg.id);
+        if (!pause) return null;
+        const resumedAt = pause.readsResumedAt;
+        const settling = resumedAt !== null && Date.now() - resumedAt < READS_RESUME_SETTLE_MS;
+        return pause.isReadPaused || settling ? ("reads-paused" as const) : null;
+      };
+      void ptyManager
+        .continueAtCodexLimit(msg.id, stop, readsPaused)
+        .then(send, () => send({ status: "skipped", reason: "not-delivered" }));
     },
 
     "withdraw-submission": (msg) => {

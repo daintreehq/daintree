@@ -270,6 +270,22 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-idle-pause": {
+        const policy = await workspaceService.getIdlePausePolicy(msg.payload.worktreeId);
+        result = { policy };
+        break;
+      }
+
+      case "set-idle-pause": {
+        await workspaceService.setIdlePause(
+          msg.payload.worktreeId,
+          msg.payload.enabled,
+          msg.payload.fingerprint
+        );
+        result = { ok: true };
+        break;
+      }
+
       case "switch-worktree-environment": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(
@@ -691,6 +707,23 @@ port.on("message", async (rawMsg: any) => {
           request.deleteBranch
         );
         break;
+
+      case "idle-pause-check": {
+        const check = await workspaceService.checkIdlePause(request.worktreeId);
+        sendEvent({ type: "idle-pause-result", requestId: request.requestId, check });
+        break;
+      }
+
+      case "idle-pause-run": {
+        // The executor reports on its own requestId, which no broker entry owns.
+        const outcome = await workspaceService.runIdlePause(
+          `${request.requestId}-pause`,
+          request.worktreeId,
+          request.guard
+        );
+        sendEvent({ type: "idle-pause-result", requestId: request.requestId, outcome });
+        break;
+      }
 
       case "remove-merged-worktree":
         await workspaceService.deleteWorktree(

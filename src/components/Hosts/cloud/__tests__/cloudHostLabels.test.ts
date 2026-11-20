@@ -9,6 +9,7 @@ import {
   cloudCostFacts,
   cloudStatusLabel,
   clockTime,
+  dayTime,
   idleClockSentence,
   idleEndSentence,
   IDLE_STOP_UNKNOWN,
@@ -17,9 +18,11 @@ import {
   formatHourly,
   lifetimeSentence,
   providerStopSentence,
+  startBillingSentence,
   stopKeepsSentence,
   stoppedBillingSentence,
   machineSpecLabel,
+  idleSleepTimerSentence,
 } from "../cloudHostLabels";
 import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
 
@@ -367,6 +370,57 @@ describe("idleEndSentence (#17921)", () => {
     expect(billed).toContain("Acme keeps billing a stopped machine for compute");
   });
 
+  it("says a plugin's machine is stopped by this device while it's linked, and keeps running with every device away (#17923)", () => {
+    const acme = provider({ name: "Acme", stoppedComputeBilled: false });
+    const said = idleEndSentence(idle, acme, null, { kind: "stops" })!;
+    expect(said).toContain("While this device is linked to the host, it stops the machine");
+    expect(said).toContain("With every device away, the machine keeps running.");
+    // Known from this device's own findings: the same before any summary, or with no link.
+    expect(idleEndSentence(undefined, acme, null, { kind: "stops" })).toBe(said);
+    // The host's word that it stops the machine itself still settles it.
+    expect(idleEndSentence(armed, acme, null, { kind: "stops" })).toBeNull();
+  });
+
+  it("says why this device doesn't stop a plugin's machine, or that it can't tell yet", () => {
+    const acme = provider({ name: "Acme", stoppedComputeBilled: false });
+    const problem =
+      "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it.";
+    expect(idleEndSentence(idle, acme, null, { kind: "blocked", problem })).toBe(problem);
+    expect(idleEndSentence(idle, acme, null, { kind: "unknown" })).toBe(IDLE_STOP_UNKNOWN);
+    // An unregistered provider promises nothing, whatever was found before it left.
+    expect(idleEndSentence(idle, null, null, { kind: "stops" })).toBe(IDLE_STOP_UNKNOWN);
+  });
+
+  it("says why a machine can't stop itself, then that this device stops it instead while linked (#17924)", () => {
+    const said = idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "stops" })!;
+    expect(said.startsWith(refused)).toBe(true);
+    expect(said).toContain("While this device is linked to the host, it stops the machine");
+    // A machine with a runtime limit still stops once it runs out, so nothing is said of every device away.
+    expect(said).not.toContain("keeps running");
+    // Known from this device's own findings: the same before any summary.
+    expect(idleEndSentence(undefined, BOAT_PROVIDER, refused, { kind: "stops" })).toBe(said);
+    // The host's word that it stops the machine itself settles it.
+    expect(idleEndSentence(armed, BOAT_PROVIDER, refused, { kind: "stops" })).toBeNull();
+    // A reason with no closing stop still reads as two sentences.
+    expect(idleEndSentence(idle, BOAT_PROVIDER, "It can't stop itself", { kind: "stops" })).toMatch(
+      /^It can't stop itself\. While this device/
+    );
+  });
+
+  it("says why a machine can't stop itself, then why this device doesn't either, or the reason alone (#17924)", () => {
+    const problem =
+      "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it.";
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "blocked", problem })).toBe(
+      `${refused} ${problem}`
+    );
+    // Not yet known whether a stop from here keeps the disk, or no stop from here at all: the reason alone.
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "unknown" })).toBe(refused);
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, null)).toBe(refused);
+    // An unregistered provider promises nothing beyond the reason.
+    expect(idleEndSentence(idle, null, refused, { kind: "stops" })).toBe(refused);
+    expect(idleEndSentence(idle, null, refused, { kind: "blocked", problem })).toBe(refused);
+  });
+
   it("doesn't imply a stop where it can't be known", () => {
     // A provider whose hosts can stop it, before or without the host's word: an older host, no summary, no link.
     expect(idleEndSentence(idle, BOAT_PROVIDER, null)).toBe(IDLE_STOP_UNKNOWN);
@@ -378,6 +432,89 @@ describe("idleEndSentence (#17921)", () => {
     expect(idleEndSentence(idle, null, null)).toBe(IDLE_STOP_UNKNOWN);
     const { hostIdleStop: _said, ...undeclared } = BOAT_PROVIDER;
     expect(idleEndSentence(idle, undeclared, null)).toBe(IDLE_STOP_UNKNOWN);
+  });
+});
+
+describe("what holds an Agent 37 instance awake with no device connected (#17918)", () => {
+  const agent37 = provider({ name: "Agent 37" });
+  const lifetime = { kind: "idle-sleep" as const, idleSeconds: 1800 };
+  const expiresAt = Date.UTC(2026, 10, 26, 15, 0);
+  const confirmedAt = Date.UTC(2026, 10, 19, 15, 0);
+  const sentence = (
+    keepAwake: Parameters<typeof idleSleepTimerSentence>[2]["keepAwake"],
+    connected = false
+  ) =>
+    idleSleepTimerSentence(agent37, undefined, {
+      connected,
+      lifetime,
+      followsHost: true,
+      keepAwake,
+    });
+
+  it("says the host keeps it awake while it sees work through a link it holds until its expiry, and the timer after", () => {
+    const held = { kind: "held" as const, expiresAt, confirmedAt, reached: true };
+    const offline = sentence(held);
+    // Two different moments, each in its own place.
+    expect(dayTime(expiresAt)).not.toBe(dayTime(confirmedAt));
+    expect(offline).toContain(
+      `the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(expiresAt)} (as the host said ${dayTime(confirmedAt)}).`
+    );
+    // Away, what this device knows is what the host said when it last asked.
+    expect(offline).toContain(`(as the host said ${dayTime(confirmedAt)})`);
+    expect(offline).toContain(
+      "Once the host is idle, Agent 37's own idle timer (30 minutes) puts it to sleep after 30 minutes without activity."
+    );
+    expect(offline).not.toContain("is in charge while no device is connected");
+
+    const linked = sentence(held, true);
+    expect(linked).toContain("The host's idle time is in charge while this device is connected");
+    expect(linked).toContain(`holds that link until ${dayTime(expiresAt)}.`);
+    expect(linked).not.toContain("as the host said");
+    expect(linked).not.toContain("no request through it");
+
+    expect(sentence({ ...held, reached: false }, true)).toContain(
+      "though no request through it has reached the host yet."
+    );
+    // Taken while the host was idle, it hasn't been tried: said so, not taken for protection.
+    expect(sentence({ ...held, reached: false })).toContain(
+      `holds that link until ${dayTime(expiresAt)}, though no request through it has reached the host yet (as the host said ${dayTime(confirmedAt)}).`
+    );
+  });
+
+  it("says Agent 37's own timer is in charge once the link expired, was refused, or was never given", () => {
+    const expired = sentence({ kind: "expired", expiredAt: expiresAt });
+    expect(expired).toContain(
+      "Agent 37's own idle timer (30 minutes) is in charge while no device is connected, even while the host sees work"
+    );
+    expect(expired).toContain(`expired ${dayTime(expiresAt)}. Connecting renews it.`);
+
+    const refused = sentence({
+      kind: "none",
+      problem: "The host refused the link Daintree gave it",
+    });
+    expect(refused).toContain(
+      "is in charge while no device is connected, even while the host sees work: The host refused the link Daintree gave it."
+    );
+    const refusedLinked = sentence({ kind: "none", problem: "Refused." }, true);
+    expect(refusedLinked).toContain(
+      "The host's idle time is in charge while this device is connected"
+    );
+    expect(refusedLinked).toContain("even while the host sees work: Refused.");
+    expect(refusedLinked).not.toContain("Refused..");
+    expect(sentence({ kind: "none", problem: "Refused!" })).toContain("work: Refused! ");
+
+    // Nothing handed over yet, or a status from before it: the timer, as before.
+    for (const nothing of [{ kind: "none" as const, problem: null }, null, undefined]) {
+      expect(sentence(nothing)).toBe(
+        "Agent 37's own idle timer (30 minutes) is in charge while no device is connected: it puts the machine to sleep after 30 minutes without activity. The host's idle time takes over while this device is connected."
+      );
+    }
+    // Linked, a host that said it holds none still leaves the machine to Agent 37's timer once
+    // this device goes; a status from before keep-awake adds nothing.
+    expect(sentence({ kind: "none", problem: null }, true)).toContain(
+      "Agent 37's own idle timer (30 minutes) is in charge while no device is connected: it puts the machine to sleep after 30 minutes without activity."
+    );
+    expect(sentence(null, true)).not.toContain("no device is connected");
   });
 });
 
@@ -495,5 +632,30 @@ describe("a machine that sleeps when idle and bills its disk while parked (#1734
       "$0.036/h",
       "sleeps when idle",
     ]);
+  });
+});
+
+describe("startBillingSentence", () => {
+  const billed = provider({ stoppedComputeBilled: true, deletion: true });
+
+  it("says what a start bills, and that a stopped machine already bills where it does", () => {
+    expect(startBillingSentence(status({ machine: "stopped" }), billed)).toBe(
+      "It bills Personal about $0.036 an hour while it runs. Acme keeps billing a stopped machine for compute until it's deleted. To stop paying for it, remove the host and delete its machine."
+    );
+  });
+
+  it("claims no stopped billing for a machine that isn't stopped, or a provider that has none", () => {
+    expect(startBillingSentence(status({ machine: "error" }), billed)).toBe(
+      "Starting it bills Personal about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "running", accountName: "Team" }), billed)).toBe(
+      "Starting it bills Team about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "stopped" }), BOAT_PROVIDER)).toBe(
+      "Starting it bills Personal about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "stopped", hourlyDollars: null }), null)).toBe(
+      "Starting it bills Personal for the time it runs while it runs."
+    );
   });
 });

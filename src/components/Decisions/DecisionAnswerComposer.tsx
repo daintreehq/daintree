@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   answerKey,
-  isInFlight,
   useAnswerRecord,
   useDecisionsAnswerStore,
   type AnswerRecord,
@@ -106,12 +105,6 @@ export interface DecisionAnswerComposerProps {
   onMoved: () => void;
   /** Said beside Send once it would go, when an answer sent now won't go at once. */
   sendNote?: string | null;
-}
-
-/** An answer from here whose fate isn't known yet: the question isn't offered for withdrawal meanwhile. */
-export function useAnswerInFlight(question: DecisionQuestionContent | null): boolean {
-  const record = useAnswerRecord(question === null ? "" : answerKey(question.reference));
-  return isInFlight(record);
 }
 
 /** Whether this question shows its composer rather than the plain list of its options. */

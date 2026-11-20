@@ -226,9 +226,12 @@ export class GuestPowerOffKeeper {
       if (holds(this.armed) || holds(this.restoring)) {
         this.dropArm();
         await this.removeSaved();
+        if (this.disposed || this.revokedSince(target, seq)) return this.status();
       }
       this.armProblem = refused;
-      return this.status();
+      const status = this.status();
+      // Confirmed as this machine, refused only the power-off: the Shell's API stop still fits.
+      return status.armed ? status : { ...status, powerOffProbeRefused: true };
     }
     const boot = await this.deps.system.bootId();
     if (this.disposed || this.revokedSince(target, seq)) return this.status();

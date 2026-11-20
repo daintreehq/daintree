@@ -544,6 +544,7 @@ import {
   cancelSetupCheck,
   cancelDecisionsModelEvaluation,
   clearDecisionsModelHistory,
+  declineDecisionQuestion,
   getDecisionsModel,
   getDecisionsService,
   getDecisionsStatus,
@@ -577,6 +578,7 @@ import type { AnswerDelivery } from "../answerDelivery.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionLastRead,
   DecisionQuestionReference,
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -825,6 +827,7 @@ describe("Decisions entry", () => {
       },
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
+      lastHostRead: () => null,
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(
@@ -1627,6 +1630,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          lastHostRead: () => null,
           ...over,
         });
       }
@@ -1723,6 +1727,157 @@ describe("Decisions entry", () => {
             result: "cancelling",
           });
           expect(cancelHostQuestion.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("answers a read while the Host's link is down with what this computer last read of it (#17946)", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const read: DecisionQuestionLastRead = {
+          result: "read",
+          revision: 3,
+          alias: 7,
+          readAt: 1_000,
+        };
+        let last: DecisionQuestionLastRead | null = read;
+        const lastHostRead = vi.fn((_reference: DecisionQuestionReference) => last);
+        const withdraw = publishHostPort({
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          lastHostRead,
+        });
+        try {
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected", lastRead: read });
+          // Why it can't be dismissed travels with it too.
+          for (const why of [{ result: "not-read" }, { result: "not-sent" }] as const) {
+            last = why;
+            await expect(
+              getDecisionQuestionContentByReference({ reference: ON_HOST })
+            ).resolves.toEqual({ result: "host-not-connected", lastRead: why });
+          }
+          last = null;
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected" });
+          // A read that went out and got no answer says nothing of the Host being away.
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
+          outcome = { ok: true, value: { result: "unreadable" } };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "unreadable" });
+          expect(lastHostRead.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("signs an owner's decline of a Host's question only while a Host reported to this owner names it (#17946)", async () => {
+        await running(null);
+        const declineQuestion = vi
+          .spyOn(peekDecisionsService()!, "declineQuestion")
+          .mockResolvedValue({
+            result: "submitted",
+            declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+            outcome: { status: "queued" },
+          });
+        let hosts: DecisionsHostQuestions[] = [];
+        const withdraw = publishHostPort({ hostQuestions: () => hosts });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+          expectedRevision: 3,
+        };
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        try {
+          // A Host removed, or reported to another owner identity than this one: nothing is signed.
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // Another Host reported here names other questions.
+          hosts = [{ ...studio, hostId: "lab-01", questionHostId: "qhost_lab_0001" }];
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          expect(declineQuestion).not.toHaveBeenCalled();
+
+          // Reported to this owner, connected or not: the relay holds it to its own record.
+          hosts = [studio];
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // This computer's own question is its store's to check, whatever its Hosts report.
+          hosts = [];
+          const own = { ...decline, reference: OWN };
+          await expect(declineDecisionQuestion(own)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [own]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never sends a Host question's decline again under another owner identity than it was first sent under (#17946)", async () => {
+        await running(null);
+        const current = peekDecisionsService()!;
+        const declineQuestion = vi.spyOn(current, "declineQuestion").mockResolvedValue({
+          result: "submitted",
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          outcome: { status: "queued" },
+        });
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        // The same Host, under the same id, is reported to whichever identity this computer holds.
+        const withdraw = publishHostPort({ hostQuestions: () => [studio] });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          expectedRevision: 3,
+        };
+        try {
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Local data deleted and another installation set up, with the old dismissal still followed.
+          const settings = current.getSettings()!;
+          const getSettings = vi
+            .spyOn(current, "getSettings")
+            .mockReturnValue({ ...settings, installationId: "inst_87654321" });
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // A dismissal made under this identity goes as any other.
+          const fresh = { ...decline, declineId: "0190f0aa-1111-4222-8333-44445555aaac" };
+          await expect(declineDecisionQuestion(fresh)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Back under the first identity, its own decline may be sent again, as the same decline.
+          getSettings.mockRestore();
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [fresh], [decline]]);
         } finally {
           withdraw();
         }
@@ -1854,6 +2009,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -2604,6 +2760,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -4579,6 +4736,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -4625,6 +4783,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

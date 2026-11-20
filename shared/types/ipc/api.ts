@@ -1104,7 +1104,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
-    set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    /**
+     * `lockContinueAtLimitReset` keeps each preset's stored
+     * `continueAtLimitReset`, for a writer that may not arm panes (#17912).
+     */
+    set(
+      agentId: AgentId,
+      settings: Partial<AgentSettingsEntry>,
+      options?: { lockContinueAtLimitReset?: boolean }
+    ): Promise<AgentSettings>;
     /**
      * Set the global skip-permissions override (#10432). Persisted as a
      * dot-path leaf so per-agent records aren't rewritten with defaults.
@@ -1243,6 +1251,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (query: import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery) => void
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
+  };
+  // set / list come from GeneratedElectronAPI (#17909).
+  codexLimitContinue: GeneratedElectronAPI["codexLimitContinue"] & {
+    onChanged(
+      callback: (change: import("../codexLimitContinuation.js").CodexLimitContinueChange) => void
+    ): () => void;
   };
   // hold / withdraw / sendNow / list come from GeneratedElectronAPI (#16379).
   composerHold: GeneratedElectronAPI["composerHold"] & {

@@ -114,6 +114,11 @@ const PRESET_FIELDS: readonly PresetField[] = [
     unset: "Off",
   },
   {
+    label: "Continue when usage limit resets",
+    read: (p) => (p.continueAtLimitReset === true ? "On" : undefined),
+    unset: "Off",
+  },
+  {
     // By name and id, never its folder: the id is what the preset stores.
     label: "Account",
     read: (p, names) => {

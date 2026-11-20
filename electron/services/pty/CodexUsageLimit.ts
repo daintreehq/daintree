@@ -170,6 +170,10 @@ function joinings(rows: readonly string[], cols: number | undefined): string[] {
   return [spaced, collapse(tight)];
 }
 
+function unreadableAt(start: number, end: number): LocatedCodexLimitBanner {
+  return { banner: { kind: "unreadable" }, start, end };
+}
+
 /**
  * The lowest Codex stop banner in a viewport, or null. A banner opens at the
  * left edge, behind Codex's error marker, and reads only as a whole sentence
@@ -182,6 +186,23 @@ export function scanCodexLimitBanner(
   lines: readonly string[],
   cols?: number
 ): CodexLimitBanner | null {
+  return locateCodexLimitBanner(lines, cols)?.banner ?? null;
+}
+
+/** A stop banner {@link scanCodexLimitBanner} reads, and the rows of `lines` it spans. */
+export interface LocatedCodexLimitBanner {
+  banner: CodexLimitBanner;
+  /** Its first row, the marker's. */
+  start: number;
+  /** Its last row: anything printed after the banner is below this one. */
+  end: number;
+}
+
+/** {@link scanCodexLimitBanner}, with where the banner it reads sits (#17909). */
+export function locateCodexLimitBanner(
+  lines: readonly string[],
+  cols?: number
+): LocatedCodexLimitBanner | null {
   const rows = lines.map((line) => stripAnsi(line).trimEnd());
   const tailStart = Math.max(0, rows.length - SCAN_LINES);
   const firstStart = Math.max(0, tailStart - MAX_BANNER_ROWS + 1);
@@ -201,7 +222,8 @@ export function scanCodexLimitBanner(
       const drawing = [...texts, collapse(message(rows[i]!))].some((text) =>
         OPENER_TEXTS.some((opener) => opener.startsWith(text))
       );
-      if (drawing) return i + parts.length - 1 >= tailStart ? { kind: "unreadable" } : null;
+      const last = i + parts.length - 1;
+      if (drawing) return last >= tailStart ? unreadableAt(i, last) : null;
       // Another error behind the marker.
       continue;
     }
@@ -212,13 +234,15 @@ export function scanCodexLimitBanner(
         if (banner !== undefined) read.set(JSON.stringify(banner), banner);
       }
       if (read.size === 0) continue;
-      const ends = i + end - 1 >= tailStart;
+      const last = i + end - 1;
+      const ends = last >= tailStart;
       // Two ways of joining the wrap that say different things (a model name
       // split at the edge) can't be told apart.
-      if (read.size > 1) return ends ? { kind: "unreadable" } : null;
-      return ends ? [...read.values()][0]! : null;
+      if (read.size > 1) return ends ? unreadableAt(i, last) : null;
+      return ends ? { banner: [...read.values()][0]!, start: i, end: last } : null;
     }
-    return i + parts.length - 1 >= tailStart ? { kind: "unreadable" } : null;
+    const last = i + parts.length - 1;
+    return last >= tailStart ? unreadableAt(i, last) : null;
   }
   return null;
 }

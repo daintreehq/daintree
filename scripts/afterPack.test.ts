@@ -10,6 +10,7 @@ import {
   AVR_VAD_V5_MODEL,
   MAX_APP_ASAR_BYTES,
   ONNX_RUNTIME_LIBRARY,
+  WINDOWS_CLI_CLIENT,
   WINDOWS_CLI_SHIM,
   WINDOWS_CLI_TEMPLATE,
   applyPlatformFuses,
@@ -371,6 +372,16 @@ describe("afterPack", () => {
       expect(text).toContain("\r\necho daintree 1.2.3-beta.4\r\n");
       // The executable comes from the package's product filename.
       expect(text).toContain('..\\Daintree Dev.exe"');
+    });
+
+    it("refuses a package without the client the command hands daintree call to (#17932)", async () => {
+      const clientPath = path.join("/build/win", ...WINDOWS_CLI_CLIENT.split("/"));
+      mockExistsSync.mockImplementation((p: string) => String(p) !== clientPath);
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /daintree call client is missing/
+      );
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
   });
 
@@ -1614,10 +1625,66 @@ describe("renderWindowsCliShim (#17931)", () => {
     // parsed as batch syntax.
     for (const line of statements(render())) {
       // The bracketed second-operand test is the one bare positional: it only
-      // runs once the quoted test has found that operand empty.
+      // runs once the quoted test has found that operand empty. The arguments
+      // handed to the call client go over exactly as the caller quoted them:
+      // wrapped in quotes of its own, their quoted parts would come out bare.
+      if (line === "set DAINTREE_CLI_ARGS=%*") continue;
       const unquoted = line.replace(/"[^"]*"/g, "").replace("[%2]", "");
-      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%%?~|%[0-9*]/i);
+      expect(unquoted, line).not.toMatch(/%(target|app|client|powershell)[%:]|%%?~|%[0-9*]/i);
     }
+  });
+
+  it("hands call and session to Windows PowerShell by its full path, the arguments only in its environment (#17932)", () => {
+    const lines = statements(render());
+    const clientLabel = lines.indexOf(":client");
+    expect(clientLabel).toBeGreaterThan(-1);
+    for (const word of ["call", "session"]) {
+      expect(lines).toContain(`if "%~1"=="${word}" goto client`);
+    }
+    // Reached only by goto, so %* is still the command's own arguments, and
+    // emptied first so a value the caller exported never stands in for them.
+    expect(lines[clientLabel - 1]).toMatch(/^(exit \/b|goto)\b/i);
+    expect(lines[clientLabel + 1]).toBe('set "DAINTREE_CLI_ARGS="');
+    expect(lines[clientLabel + 2]).toBe("set DAINTREE_CLI_ARGS=%*");
+    expect(lines.filter((line) => line.includes("%*"))).toHaveLength(1);
+
+    const launches = lines.filter((line) => line.startsWith('"%powershell%"'));
+    expect(launches).toEqual([
+      '"%powershell%" -NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "%client%"',
+    ]);
+    expect(lines).toContain(
+      'set "powershell=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"'
+    );
+    const client = lines.find((line) => line.startsWith('set "client='));
+    expect(client).toBe(`set "client=%~dp0..\\${WINDOWS_CLI_CLIENT.replace("/", "\\")}"`);
+  });
+
+  it("reads only the client's own exits as its statuses, and anything else as no answer (#17932)", () => {
+    const lines = statements(render());
+    const launch = lines.findIndex((line) => line.startsWith('"%powershell%"'));
+    // Read at once, before any other command can replace it.
+    expect(lines[launch + 1]).toBe('set "status=%errorlevel%"');
+    expect(lines.slice(0, launch)).toContain('set "ERRORLEVEL="');
+    const mapped = new Map<string, number>();
+    let at = launch + 2;
+    for (; at < lines.length; at++) {
+      const match = lines[at].match(/^if "%status%"=="(\d+)" exit \/b (\d+)$/);
+      if (!match) break;
+      expect(mapped.has(match[1]), lines[at]).toBe(false);
+      mapped.set(match[1], Number(match[2]));
+    }
+    // The client exits 40 plus its status, and 170 for an interrupt.
+    expect(Object.fromEntries(mapped)).toEqual({
+      "40": 0,
+      "41": 1,
+      "42": 2,
+      "43": 3,
+      "44": 4,
+      "45": 5,
+      "170": 130,
+    });
+    expect(lines[at]).toMatch(/^>&2 echo daintree: Windows PowerShell couldn't run "%client%"/);
+    expect(lines[at + 1]).toBe("exit /b 3");
   });
 
   it("keeps cmd syntax out of its comments", () => {

@@ -7,9 +7,11 @@ rem caret or parenthesis in a folder name is never parsed as syntax, and
 rem delayed expansion stays off so an exclamation mark is just a character.
 rem Comments here avoid percent signs: cmd expands them even on rem lines.
 setlocal EnableExtensions DisableDelayedExpansion
+rem A variable named ERRORLEVEL would shadow the exit status read below.
+set "ERRORLEVEL="
 
-if "%~1"=="call" goto noClient
-if "%~1"=="session" goto noClient
+if "%~1"=="call" goto client
+if "%~1"=="session" goto client
 rem One directory at most. The bracketed test catches an explicitly empty
 rem second operand, which the quoted one reads as absent.
 if not "%~2"=="" goto tooMany
@@ -44,6 +46,35 @@ start "" "%app%" --cli-path="%target%\."
 if errorlevel 1 exit /b 1
 exit /b 0
 
+:client
+rem daintree call and daintree session (#17932) run in Windows PowerShell,
+rem which every supported Windows ships, named by its full path so that no
+rem powershell.exe in the current directory or on PATH is handed the bearer.
+rem The arguments travel in DAINTREE_CLI_ARGS rather than on its command line,
+rem where -File would bind any word starting with a dash as a parameter, and
+rem the script splits that raw text the way any Windows program splits its own.
+rem cmd still reads a word outside double quotes first, as for every batch
+rem file, so JSON holding shell characters belongs on stdin.
+set "DAINTREE_CLI_ARGS="
+set DAINTREE_CLI_ARGS=%*
+call :findClient
+if not exist "%client%" goto noClient
+if not exist "%powershell%" goto noPowerShell
+"%powershell%" -NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "%client%"
+set "status=%errorlevel%"
+rem The client exits 40 to 45 for its own 0 to 5, and 170 for an interrupt.
+rem Anything else is PowerShell failing to run it to one of its own exits,
+rem such as a policy that refuses the script.
+if "%status%"=="40" exit /b 0
+if "%status%"=="41" exit /b 1
+if "%status%"=="42" exit /b 2
+if "%status%"=="43" exit /b 3
+if "%status%"=="44" exit /b 4
+if "%status%"=="45" exit /b 5
+if "%status%"=="170" exit /b 130
+>&2 echo daintree: Windows PowerShell couldn't run "%client%" (exit status %status%)
+exit /b 3
+
 :findApp
 rem Inside a CALLed label the dp0 modifier names this file even when it was
 rem run as a quoted bare name found on PATH, where at the top level it can
@@ -51,15 +82,28 @@ rem name the caller's directory instead.
 set "app=%~dp0..\@EXE@"
 exit /b 0
 
+:findClient
+rem The client ships in the install's resources folder, beside bin.
+set "client=%~dp0..\resources\daintree-call.ps1"
+set "powershell=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+exit /b 0
+
 :help
 echo Usage: daintree [directory]
+echo        daintree call ^<tool^> [options]
+echo        daintree session start^|end
 echo.
-echo Open a directory as a project in Daintree.
+echo Open a directory as a project in Daintree, or call one of its tools from a
+echo script.
 echo.
 echo Arguments:
 echo   directory    Path to open (defaults to the current directory). To open a
 echo                folder named "call" or "session", write it as .\call or
 echo                .\session
+echo.
+echo Commands:
+echo   call ^<tool^>        Call a Daintree MCP tool (see daintree call --help)
+echo   session start^|end  Hold one session across calls (see daintree session --help)
 echo.
 echo Options:
 echo   -h, --help       Show this help message
@@ -68,6 +112,7 @@ echo.
 echo Examples:
 echo   daintree                     Open the current directory
 echo   daintree "C:\src\my app"     Open a specific project
+echo   daintree call terminal.list  List terminals, from an agent pane
 exit /b 0
 
 :version
@@ -75,8 +120,12 @@ echo daintree @VERSION@
 exit /b 0
 
 :noClient
->&2 echo daintree: "daintree %~1" isn't available on Windows yet. To open a folder named "%~1", write it as ".\%~1"
-exit /b 2
+>&2 echo daintree: the client for "daintree %~1" isn't where this command expects it: "%client%"
+exit /b 3
+
+:noPowerShell
+>&2 echo daintree: "daintree %~1" needs Windows PowerShell, which isn't at "%powershell%"
+exit /b 3
 
 :tooMany
 >&2 echo daintree: expected one directory (quote a path that contains spaces)

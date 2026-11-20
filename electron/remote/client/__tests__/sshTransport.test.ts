@@ -40,6 +40,7 @@ import {
   buildSignInArgs,
   buildStreamLocalCheckArgs,
   defaultSshSpawner,
+  discoveryReadFrom,
   hiddenHopRefusal,
   controlPathFor,
   controlPathOption,
@@ -227,6 +228,27 @@ describe("ssh argument construction", () => {
     expect(read.at(-1)).toMatch(
       /^sh -c '[^']*' sh '\/Users\/g\/Library\/Application Support\/Daintree\/host\.json'$/
     );
+    expect(
+      buildCatArgs("greg@studio", "/cp/cm-%C", [
+        "/run/user/1000/daintree/host.json",
+        "/home/g/.cache/daintree/run/host.json",
+      ]).at(-1)
+    ).toMatch(
+      /^sh -c '[^']*' sh '\/run\/user\/1000\/daintree\/host\.json' '\/home\/g\/\.cache\/daintree\/run\/host\.json'$/
+    );
+    expect(discoveryReadFrom(`banner\n@@dt:discovery-from 2\n@@dt:discovery\n{}`)).toBe(1);
+    expect(discoveryReadFrom(`\n@@dt:discovery-from 1\r\n@@dt:discovery\n`)).toBe(0);
+    // An older reply, or a shell's noise that only looks like it, reads as the first.
+    expect(discoveryReadFrom(`\n@@dt:discovery\n{}`)).toBe(0);
+    expect(discoveryReadFrom(`x@@dt:discovery-from 2\n`)).toBe(0);
+    // Only the marker right before the file counts.
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 1\nbanner\n@@dt:discovery-from 2\n@@dt:discovery\n{}`)
+    ).toBe(1);
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery-from 1\n@@dt:discovery\n{}`)
+    ).toBe(0);
+    expect(discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery\n{}`)).toBe(0);
     expect(
       buildMuxForwardArgs("studio", "/cp/cm-%C", "/l/l.sock", "/run/user/1/daintree/host.sock")
     ).toEqual([
@@ -651,7 +673,12 @@ describe("SshTransport with an injected ssh", () => {
       if (command === PROBE_COMMAND) {
         child.finish(0, "Linux\n4242\n/home/greg\n");
       } else if (isDiscoveryRead(command)) {
-        expect(command.endsWith(" sh '/run/user/4242/daintree/host.json'")).toBe(true);
+        // Both places a Linux host may listen: the read picks by PID 1, as the host does.
+        expect(
+          command.endsWith(
+            " sh '/run/user/4242/daintree/host.json' '/home/greg/.cache/daintree/run/host.json'"
+          )
+        ).toBe(true);
         child.finish(
           0,
           discoveryReply({
@@ -850,6 +877,67 @@ describe("SshTransport with an injected ssh", () => {
     });
     await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
       detail: "Error: remote port forwarding failed for listen path",
+    });
+  });
+
+  it("holds a Linux host's socket to the place its discovery file was read from", async () => {
+    const runtime = remoteHostSocketLocation({ platform: "linux", uid: 4242, home: "/home/greg" });
+    const cache = remoteHostSocketLocation({
+      platform: "linux",
+      uid: 4242,
+      home: "/home/greg",
+      startsOnConnect: true,
+    });
+    const open = (from: 1 | 2, socketPath: string) => {
+      const after: string[][] = [];
+      const spawner: SshSpawner = (args) => {
+        const child = new FakeChild();
+        const command = args.at(-1)!;
+        if (command === PROBE_COMMAND) child.finish(0, "Linux\n4242\n/home/greg\n");
+        else if (isDiscoveryRead(command)) {
+          child.finish(
+            0,
+            `\n@@dt:discovery-from ${from}${discoveryReply({
+              version: 1,
+              socketPath,
+              token: "a".repeat(64),
+              pid: 1,
+            })}`
+          );
+        } else {
+          after.push(args);
+          child.finish(1);
+        }
+        return child;
+      };
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: spawner,
+        spawnStream: () => bridgeChild("/nonexistent/host.json"),
+      });
+      return {
+        opened: transport.open(new AbortController().signal).catch((e: unknown) => e),
+        after,
+      };
+    };
+
+    // Read from the home's cache (PID 1 isn't systemd there): its socket is the one beside it.
+    const fromCache = open(2, cache.socketPath);
+    const cacheError = await fromCache.opened;
+    expect(cacheError).not.toMatchObject({ message: "Host discovery file is not valid" });
+    expect(fromCache.after.flat().some((arg) => arg.includes(cache.socketPath))).toBe(true);
+
+    // A socket beside the other place is still a path the host chose, and refused.
+    const crossed = open(2, runtime.socketPath);
+    await expect(crossed.opened).resolves.toMatchObject({
+      message: "Host discovery file is not valid",
+      detail: expect.stringContaining("not beside it"),
+    });
+    expect(crossed.after).toEqual([]);
+    const crossedBack = open(1, cache.socketPath);
+    await expect(crossedBack.opened).resolves.toMatchObject({
+      message: "Host discovery file is not valid",
     });
   });
 

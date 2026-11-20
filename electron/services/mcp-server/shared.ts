@@ -1321,6 +1321,13 @@ export interface McpRelayCaller {
   helpSessionId: string;
   shellName: string;
   /**
+   * The conversation the calling assistant's lane runs (#17919), as its own
+   * machine's main minted it, never the model: what that conversation made
+   * here is held under it with the sender, so a resumed one keeps it. Absent
+   * from an older Shell, whose creations stay its help session's.
+   */
+  conversationId?: string;
+  /**
    * One of this machine's own assistants reaching another of its projects
    * (#14024), set only by the in-process relay, never from anything a link
    * carries: its standing to change a project is this machine's own views'.
@@ -1347,6 +1354,8 @@ export interface McpRelayCaller {
       callId: string;
       /** When the call stops waiting on the answer, on this machine's clock (#15699). */
       holdUntil?: number;
+      /** The global Assistant's close of a finished agent it didn't launch (#16750). */
+      closeClass?: import("../../../shared/types/assistantControl.js").GlobalCloseClass;
     }
   ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
   /**

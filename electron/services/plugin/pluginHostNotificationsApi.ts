@@ -28,6 +28,7 @@ import {
   type HostApprovedPluginPresetLaunch,
 } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { supersedeByPluginLaunch } from "../mcp-server/assistantPaneCreations.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   isBuiltInActionId,
@@ -477,6 +478,7 @@ export function buildNotificationsHostApi(
       ? dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId)
       : dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId, approval));
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
+    supersedeByPluginLaunch(actionId, result, projectId);
     return result;
   };
   /**

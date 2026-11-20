@@ -1035,6 +1035,38 @@ describe("GceProvider", () => {
     expect(google.requests.find((request) => request.path.endsWith("/stop"))!.sentBody).toBe(false);
   });
 
+  it("sends an idle stop once, where a person's stop resends a throttled one (#17924)", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const stops = () => google.requests.filter((request) => request.path.endsWith("/stop"));
+    google.state.script.push({ path: /\/stop$/, status: 429, reason: "rateLimitExceeded" });
+    await expect(
+      google.provider.stop(google.credentials(), created.resourceId, { once: true })
+    ).rejects.toMatchObject({ kind: "rate-limited" });
+    expect(stops()).toHaveLength(1);
+
+    google.state.script.push({ path: /\/stop$/, status: 429, reason: "rateLimitExceeded" });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopped");
+    expect(stops()).toHaveLength(3);
+  });
+
+  it("sends an idle stop refused for its token no second time, where a person's stop gets a fresh token (#17924)", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const stops = () => google.requests.filter((request) => request.path.endsWith("/stop"));
+    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
+    await expect(
+      google.provider.stop(google.credentials(), created.resourceId, { once: true })
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(stops()).toHaveLength(1);
+
+    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopped");
+    expect(stops()).toHaveLength(3);
+  });
+
   it("leaves a stop's progress to the VM when its operation can't be read", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);

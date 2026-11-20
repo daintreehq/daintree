@@ -23,6 +23,7 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
+import { forgetContinuationProject } from "../../../services/codexLimitContinuation/forgetPane.js";
 import { logError } from "../../../utils/logger.js";
 import { captureProjectLayoutSeed } from "../../../services/plugin/projectLayoutSeeds.js";
 
@@ -206,6 +207,8 @@ async function removeProjectRow(
   // project to reconcile it away.
   notifyProjectPluginsClosed(projectId);
   notifyProjectPluginsRemoved(projectId);
+  // Its panes are gone for good, and so is what was chosen for them (#17912).
+  forgetContinuationProject(projectId);
 
   await projectStore.removeProject(projectId);
 }

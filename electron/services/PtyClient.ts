@@ -150,6 +150,10 @@ import type {
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitStopRef,
+} from "../../shared/types/codexLimitContinuation.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
 import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
@@ -229,6 +233,7 @@ interface TerminalInfoResponse {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalAgentPresetId?: string;
+  fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
   /**
@@ -367,6 +372,8 @@ const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
 const END_TRASH_GRACE_TIMEOUT_MS = 5000;
 /** One run of Main's tree-kill helper for roots a disposing host handed over. */
 const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
+/** The host's own lane wait (30 s) plus the screen read, before main stops listening (#17909). */
+const CONTINUE_CODEX_LIMIT_TIMEOUT_MS = 45_000;
 /**
  * How long quit waits, once the hosts have exited, for those kills: Main's
  * helper is usually cold, and it dies with Main. Only a host that could not
@@ -3166,6 +3173,25 @@ export class PtyClient extends EventEmitter {
       requestId,
     }));
     return promise.catch(() => false);
+  }
+
+  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
+  setCodexLimitContinue(id: string, armed: boolean): void {
+    this.shardForTerminal(id).send({ type: "set-codex-limit-continue", id, armed });
+  }
+
+  /**
+   * Have the terminal's host check the pane is still at `stop` and type the
+   * line that continues it (#17909). Rejects when the host didn't answer.
+   */
+  continueCodexLimitAsync(id: string, stop: CodexLimitStopRef): Promise<CodexLimitContinueResult> {
+    const shard = this.shardForTerminal(id);
+    return sendPtyHostRpc<CodexLimitContinueResult>(
+      shard,
+      `continue-codex-limit-${id}`,
+      (requestId) => ({ type: "continue-codex-limit", id, requestId, stop }),
+      { method: "continue-codex-limit", timeoutMs: CONTINUE_CODEX_LIMIT_TIMEOUT_MS }
+    );
   }
 
   /** Replay terminal history */

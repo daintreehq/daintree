@@ -452,6 +452,7 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  fallbackChainIndex: z.number().int().nonnegative().optional(),
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),

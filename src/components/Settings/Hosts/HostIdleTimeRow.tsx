@@ -13,6 +13,11 @@ import {
   HOST_IDLE_MINUTE_CHOICES,
   type HostIdleObservation,
 } from "@shared/types/hostIdle";
+import type {
+  CloudKeepAwake,
+  CloudLifetimeModel,
+  CloudLinkedIdleStop,
+} from "@shared/types/cloudHosts";
 import type { HostSettingsSnapshot, HostSettingsUpdateResult } from "@shared/types/hostSettings";
 import type { HostId } from "@shared/types/remoteHosts";
 import { SettingsRow } from "../SettingsGroup";
@@ -66,8 +71,16 @@ interface HostIdleTimeRowProps {
   sampledAt: number | null;
   /** Why the machine can't stop itself once idle, as this device found; null when nothing stands in the way. */
   selfStopProblem?: string | null;
+  /** What this device does once the idle time ends while it's linked, for a plugin provider's machine (#17923). */
+  linkedIdleStop?: CloudLinkedIdleStop | null;
   /** The machine's provider; null while it isn't registered, which leaves what the idle time does unknown. */
   provider?: CloudProviderTerms | null;
+  /** The machine's own idle sleep, as its provider last reported it, for a provider that has one. */
+  lifetime?: CloudLifetimeModel | null;
+  /** The machine's own idle timeout follows the host's idle time (#17916). */
+  idleTimeFollowsHost?: boolean;
+  /** What the host holds the machine awake with while it sees work, with no device connected (#17918). */
+  keepAwake?: CloudKeepAwake | null;
 }
 
 /**
@@ -82,7 +95,11 @@ export function HostIdleTimeRow({
   idle,
   sampledAt,
   selfStopProblem = null,
+  linkedIdleStop = null,
   provider = null,
+  lifetime = null,
+  idleTimeFollowsHost = false,
+  keepAwake = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -136,7 +153,12 @@ export function HostIdleTimeRow({
   };
 
   // What its idle time ending does to the machine; the host's word that it stops it settles it.
-  const consequence = idleEndSentence(idle, provider, selfStopProblem);
+  const consequence = idleEndSentence(idle, provider, selfStopProblem, linkedIdleStop, {
+    connected,
+    lifetime,
+    followsHost: idleTimeFollowsHost,
+    keepAwake,
+  });
   const withConsequence = (text: string) =>
     consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;
 

@@ -25,6 +25,8 @@ export interface AddHostPayload {
   ownerWorktreeId?: string;
   /** A worktree waiting on the new host, written with the host so no restart can split them. */
   pendingPlacement?: PendingHostPlacement;
+  /** Setup's check saw a machine where Daintree starts on connect (see {@link HostProbeResult.startsOnConnect}). */
+  startsOnConnect?: boolean;
 }
 
 export interface UpdateHostPayload {
@@ -259,6 +261,13 @@ export interface HostProbeResult {
   advice: HostAdvice;
   /** What Daintree on the host last wrote about its Host mode setting; null when it wrote nothing. */
   hostModeState: HostModeObservation | null;
+  /**
+   * Linux over SSH or a cloud route, where PID 1 was seen not to be systemd:
+   * no user service can keep Host mode running, so Daintree there runs in the
+   * background once started and a connection from here starts it again.
+   * Absent or false everywhere else, including a WSL distro.
+   */
+  startsOnConnect?: boolean;
 }
 
 /** Where a host's build stands against this machine's, by release order. */
@@ -307,6 +316,13 @@ export interface HostModeObservation {
   /** What the process's updater has downloaded; absent with nothing staged, or in older files. */
   stagedUpdate?: StagedHostUpdate;
   enabled: boolean;
+  /**
+   * How the host is kept running when nothing starts it at login: "on-connect"
+   * where its machine has no init system to run a service under, so it runs
+   * until stopped and a Shell connecting starts it again. Absent where start
+   * at login applies, and in files written before it existed.
+   */
+  startMethod?: "on-connect";
   startAtLogin: boolean;
   /** The Daintree-owned login item or unit was on disk when the host last looked; null when unread. */
   startAtLoginInstalled: boolean | null;

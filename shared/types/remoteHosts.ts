@@ -433,6 +433,13 @@ export interface HostDescriptor {
    * observations when the host is pointed at another target.
    */
   wake?: HostWakeSetup;
+  /**
+   * The last check of the host saw a Linux machine with no init system, where
+   * Daintree runs in the background once started and connecting starts it
+   * again; absent when it was seen otherwise or not yet. Dropped when the
+   * host is pointed at another target.
+   */
+  startsOnConnect?: true;
 }
 
 /**

@@ -39,11 +39,21 @@ import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import { readWorktreeGitObservation } from "./mcp-server/worktreeRetirementGit.js";
 import {
+  helpConversationKey,
   helpOwnershipPrincipal,
   principalOwnerKey,
+  relayConversationKey,
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
 import { readRunAssistantWork, type RunAssistantWork } from "./mcp-server/workerCreationHistory.js";
+import {
+  assistantPaneCreationLedgerFor,
+  assistantPaneCreationObserver,
+  attachAssistantPaneCreationLedger,
+  forgetTrashedAssistantPane,
+  isKeptAssistantPane,
+} from "./mcp-server/assistantPaneCreations.js";
+import { attachAssistantPaneCreationStore } from "./mcp-server/assistantPaneCreationStore.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
@@ -291,6 +301,8 @@ export class McpServerService {
         cleanupResourceSubscriptions(sessionId, this.sessionStore);
       },
       {
+        // What an Assistant's conversation launched outlives the app (#16845).
+        ownershipObserver: assistantPaneCreationObserver,
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
         launchGenerationOf: (terminalId) => getPtyClient()?.getLaunchGeneration(terminalId) ?? null,
         dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
@@ -330,6 +342,19 @@ export class McpServerService {
       }
     );
 
+    attachAssistantPaneCreationLedger(
+      assistantPaneCreationLedgerFor(
+        this.sessionStore.resourceOwnership,
+        this.sessionStore.terminalAdoption,
+        (terminalId) => {
+          const pty = getPtyClient();
+          return pty?.hasTerminal(terminalId) === true
+            ? pty.getTerminalProjectId(terminalId)
+            : null;
+        }
+      )
+    );
+
     this.turnOutcomeService = new TurnOutcomeService({
       saveConfig: (patch) => this.persistConfig(patch),
       readConfig: () => this.getConfig(),
@@ -361,8 +386,21 @@ export class McpServerService {
       // Trashing is the user putting the terminal away; restoring it later
       // does not restore a hand-over they never repeated (#12490).
       this.sessionStore.terminalAdoption.release(payload.id);
+      // Nor does a restart give it back to the conversation that launched it (#16845).
+      forgetTrashedAssistantPane(payload.id);
     });
     this.persistentListeners.push(offTrashed);
+
+    // A terminal starting under an id in another project ends what an earlier
+    // run kept for that id's pane elsewhere (#16845).
+    const offLifecycle = events.on("terminal:lifecycle", (observation) => {
+      if (observation.type !== "spawned" || observation.projectId === undefined) return;
+      this.sessionStore.resourceOwnership.supersedeRestoredOutside(
+        observation.terminalId,
+        observation.projectId
+      );
+    });
+    this.persistentListeners.push(offLifecycle);
 
     const offExited = events.on("terminal:exited", (payload) => {
       this.turnOutcomeService.dropTerminal(payload.terminalId);
@@ -549,8 +587,11 @@ export class McpServerService {
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
-      // collision check needs: a panel store only knows its own (#12407).
-      isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
+      // collision check needs: a panel store only knows its own (#12407). A
+      // pane a restart kept for an Assistant is in use too, though its project
+      // hasn't opened yet, or its conversation could get another pane back (#16845).
+      isTerminalIdInUse: (terminalId) =>
+        (getPtyClient()?.hasTerminal(terminalId) ?? false) || isKeptAssistantPane(terminalId),
       // `getTerminalAsync` answers null for a failed read as well as an unknown
       // id, so the id is checked first: null for a tracked terminal is a read
       // that failed, and the assistant's close must ask rather than assume idle.
@@ -816,6 +857,41 @@ export class McpServerService {
   }
 
   /**
+   * Hold what a help session launches under its lane's conversation (#17919),
+   * as `HelpSessionService` decided at its spawn: kept from the conversation's
+   * last bearer when it resumed, or a new one when it started fresh. Its local
+   * `host.call` principal binds the same conversation when its relay session
+   * opens; neither binds once its bearer is revoked.
+   */
+  bindHelpConversation(helpSessionId: string, conversationId: string): void {
+    this.sessionStore.resourceOwnership.attachConversation(
+      helpOwnershipPrincipal(helpSessionId),
+      helpConversationKey(conversationId)
+    );
+  }
+
+  /**
+   * A lane's conversation can no longer resume (#17919): the lane started
+   * another or was cleared. What it launched, directly or through this
+   * machine's own `host.call`, is no one's to clean up any more.
+   */
+  forgetAssistantConversation(conversationId: string): void {
+    const ownership = this.sessionStore.resourceOwnership;
+    ownership.forgetConversation(helpConversationKey(conversationId));
+    ownership.forgetConversation(relayConversationKey(LOCAL_HOST_ID, conversationId));
+  }
+
+  /**
+   * Remote Hosts (#17919): what another machine's assistant's conversation
+   * made here outlived the relay's hold on it, so it is no one's any more.
+   */
+  forgetRelayConversation(senderId: string, conversationId: string): void {
+    this.sessionStore.resourceOwnership.forgetConversation(
+      relayConversationKey(senderId, conversationId)
+    );
+  }
+
+  /**
    * A pane's bearer is gone (its terminal exited or relaunched): revoke what
    * it owns and close the sessions it holds. Pane sessions never idle out
    * (#13635), so this is what ends them.
@@ -872,10 +948,10 @@ export class McpServerService {
     );
     if (new Set(workspaces).size > 1) return refuse("other-project");
     // One driver per terminal: whoever launched it can already type into it.
-    const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
-    if (creator !== undefined) {
+    const ownership = this.sessionStore.resourceOwnership;
+    if (ownership.creatorOf("terminal", terminalId) !== undefined) {
       return refuse(
-        creator === principalOwnerKey(orchestrator.principalId)
+        ownership.owns(principalOwnerKey(orchestrator.principalId), "terminal", terminalId)
           ? "launched-by-orchestrator"
           : "launched-by-another"
       );
@@ -951,10 +1027,11 @@ export class McpServerService {
     // sender (`LOCAL_RELAY_SENDER_ID`), named here without loading the gated
     // remote module into core.
     const principalId = relayOwnershipPrincipal(LOCAL_HOST_ID, global.sessionId);
-    const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
-    if (creator !== undefined) {
+    const ownership = this.sessionStore.resourceOwnership;
+    if (ownership.creatorOf("terminal", terminalId) !== undefined) {
+      // Through its conversation too (#17919): what it launched before a resume is its own.
       return refuse(
-        creator === principalOwnerKey(principalId)
+        ownership.owns(principalOwnerKey(principalId), "terminal", terminalId)
           ? "launched-by-orchestrator"
           : "launched-by-another"
       );
@@ -1216,6 +1293,8 @@ export class McpServerService {
       return;
     }
     this._registry = resolved;
+    // Before any session can create: a short id main mints must miss every pane kept on disk.
+    attachAssistantPaneCreationStore();
     await this.httpLifecycle.start(resolved);
   }
 
@@ -1709,10 +1788,17 @@ export class McpServerService {
   /**
    * Remote Hosts (#13493): another machine's assistant no longer holds what it
    * made here. Its terminals and worktrees stay; only the authority goes.
+   *
+   * What its conversation launched (#17919) stays for that conversation's
+   * other principals here, and with none left, only with `keepConversation`:
+   * it ended rather than aged out, and the relay holds the conversation in its
+   * own retention until it resumes or `forgetRelayConversation` drops it.
    */
-  retireRelayPrincipal(senderId: string, helpSessionId: string): void {
+  retireRelayPrincipal(senderId: string, helpSessionId: string, keepConversation = false): void {
     const principal = relayOwnershipPrincipal(senderId, helpSessionId);
-    this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    this.sessionStore.resourceOwnership.revokePrincipal(principal, {
+      dropUnboundConversation: !keepConversation,
+    });
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
     // Held for a worker by the session that ended, never typed for its successor

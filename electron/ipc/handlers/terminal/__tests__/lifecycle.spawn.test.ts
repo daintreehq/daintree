@@ -11,6 +11,7 @@ vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
   resolveWindowsCliTarget: resolveWindowsCliTargetMock,
 }));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { setContinuationForgetter } from "../../../../services/codexLimitContinuation/forgetPane.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -268,7 +269,22 @@ const mockGetAssistantScratchEnv = vi.hoisted(() =>
 const mockIsHelpTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => boolean>(() => false));
 
 const mockRecordLaneLaunchForToken = vi.hoisted(() =>
-  vi.fn<(token: string, agentSessionId?: string) => Promise<void>>(() => Promise.resolve())
+  vi.fn<
+    (
+      token: string,
+      agentSessionId?: string,
+      options?: { freshConversation?: true; forkedConversation?: true }
+    ) => Promise<void>
+  >(() => Promise.resolve())
+);
+
+const mockSnapshotLaneTerminals = vi.hoisted(() =>
+  vi.fn<() => Map<string, { slotKey: string; agentSessionId: string; revision: number }>>(
+    () => new Map()
+  )
+);
+const mockNoteQuitCapture = vi.hoisted(() =>
+  vi.fn<(lane: unknown, agentSessionId: string) => Promise<void>>(() => Promise.resolve())
 );
 
 vi.mock("../../../../services/HelpSessionService.js", () => ({
@@ -286,8 +302,11 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
-    recordLaneLaunchForToken: (token: string, agentSessionId?: string) =>
-      mockRecordLaneLaunchForToken(token, agentSessionId),
+    recordLaneLaunchForToken: (...args: Parameters<typeof mockRecordLaneLaunchForToken>) =>
+      mockRecordLaneLaunchForToken(...args),
+    snapshotLaneTerminals: () => mockSnapshotLaneTerminals(),
+    noteQuitCapture: (lane: unknown, agentSessionId: string) =>
+      mockNoteQuitCapture(lane, agentSessionId),
   },
 }));
 
@@ -338,6 +357,12 @@ const { mockResolveSettingTemplate } = vi.hoisted(() => ({
 }));
 const { mockArmWhenDoneLaunch } = vi.hoisted(() => ({
   mockArmWhenDoneLaunch: vi.fn(() => true),
+}));
+const { mockNoteContinuationLaunch } = vi.hoisted(() => ({
+  mockNoteContinuationLaunch: vi.fn(),
+}));
+vi.mock("../../../../services/codexLimitContinuation/codexLimitContinuationLive.js", () => ({
+  noteContinuationLaunch: mockNoteContinuationLaunch,
 }));
 vi.mock("../../../../services/terminalWhenDone/terminalWhenDoneLive.js", () => ({
   armWhenDoneLaunch: mockArmWhenDoneLaunch,
@@ -3154,6 +3179,73 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
   });
 
+  it("records a resume main turned into a fresh start as a fresh conversation (#17919)", async () => {
+    const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --resume ${SESSION}`,
+        launchAgentId: "claude",
+        agentSessionId: SESSION,
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
+      freshConversation: true,
+    });
+  });
+
+  it.each([
+    ["forks it", ["--fork-session"], { forkedConversation: true }],
+    ["forks it with a value", ["--fork-session=true"], { forkedConversation: true }],
+    ["only mentions the flag", ["--append-system-prompt", "See the --fork-session flag"], null],
+  ])(
+    "records a launch whose flags %s as the conversation it is (#17919)",
+    async (_case, flags, expected) => {
+      const SESSION = "11111111-2222-3333-4444-555555555555";
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: `claude --resume ${SESSION}`,
+          launchAgentId: "claude",
+          agentLaunchFlags: flags,
+          agentSessionId: SESSION,
+          env: { DAINTREE_MCP_TOKEN: "help-token" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      if (expected === null) {
+        expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION);
+      } else {
+        expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith(
+          "help-token",
+          SESSION,
+          expected
+        );
+      }
+    }
+  );
+
   it("does not record a lane pointer for a non-help launch (#13205)", async () => {
     mockValidateToken.mockReturnValue(false);
 
@@ -3720,7 +3812,7 @@ describe("terminal close handlers - resume journaling", () => {
     return call?.[1] as (
       event: unknown,
       id: string,
-      options?: { forRestart?: boolean }
+      options?: { forRestart?: boolean; closesPane?: boolean }
     ) => Promise<void>;
   }
 
@@ -3731,7 +3823,7 @@ describe("terminal close handlers - resume journaling", () => {
     return call?.[1] as (
       event: unknown,
       id: string,
-      options?: { forRestart?: boolean }
+      options?: { forRestart?: boolean; closesPane?: boolean }
     ) => Promise<string | null>;
   }
 
@@ -3785,6 +3877,29 @@ describe("terminal close handlers - resume journaling", () => {
       expect(ptyClient.suppressExitForRestart.mock.invocationCallOrder[0]).toBeLessThan(
         ptyClient.getTerminalAsync.mock.invocationCallOrder[0]!
       );
+    }
+  );
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "forgets the pane's continuation choice only when %s closes the pane for good (#17912)",
+    async (operation) => {
+      register();
+      ptyClient.getTerminalAsync.mockResolvedValue(null);
+      ptyClient.gracefulKill.mockResolvedValue(null);
+      const forgetPane = vi.fn();
+      setContinuationForgetter({ forgetPane, forgetProject: vi.fn(), noteSpawn: vi.fn() });
+      try {
+        const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+        await handler({}, "term-1", { forRestart: true });
+        // A process ended from the Processes dialog leaves its pane behind.
+        await handler({}, "term-1");
+        expect(forgetPane).not.toHaveBeenCalled();
+
+        await handler({}, "term-1", { closesPane: true });
+        expect(forgetPane).toHaveBeenCalledExactlyOnceWith("term-1");
+      } finally {
+        setContinuationForgetter(null);
+      }
     }
   );
 
@@ -4344,6 +4459,124 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
   });
 });
 
+describe("terminal spawn handler - a preset arming the pane to continue (#17912)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disposeLifecycleLedger();
+    // Records the launch as PtyClient.spawn does, minting the generation.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: Parameters<typeof ledgerFactsFromSpawnOptions>[0]) => {
+        getLifecycleLedger().recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      }),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockIsHelpTerminal.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+  });
+
+  const codexSpawn = async (overrides: Record<string, unknown> = {}) => {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    return handler({} as Electron.IpcMainInvokeEvent, {
+      id: "terminal-codex",
+      projectId: "project-1",
+      cwd: os.homedir(),
+      cols: 80,
+      rows: 24,
+      launchAgentId: "codex",
+      command: "codex",
+      agentPresetId: "spare",
+      originalAgentPresetId: "work",
+      ...overrides,
+    });
+  };
+
+  it("tells the continuation about the launch after its spawn, with the spawn's generation", async () => {
+    await codexSpawn();
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockNoteContinuationLaunch).toHaveBeenCalledWith({
+      terminalId: "terminal-codex",
+      projectId: "project-1",
+      launchGeneration: getLifecycleLedger().currentGeneration("terminal-codex"),
+      agentId: "codex",
+      presetId: "spare",
+      originalPresetId: "work",
+    });
+  });
+
+  it("names the launch's own preset as the original when the launch names none", async () => {
+    await codexSpawn({ originalAgentPresetId: undefined });
+
+    expect(mockNoteContinuationLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ presetId: "spare", originalPresetId: "spare" })
+    );
+  });
+
+  it("names each launch's own generation, a restart's included", async () => {
+    await codexSpawn();
+    await codexSpawn();
+
+    const generations = mockNoteContinuationLaunch.mock.calls.map(
+      (call) => (call as [{ launchGeneration: number }])[0].launchGeneration
+    );
+    expect(generations).toHaveLength(2);
+    expect(generations[1]).toBeGreaterThan(generations[0]!);
+    expect(generations[1]).toBe(getLifecycleLedger().currentGeneration("terminal-codex"));
+  });
+
+  it("says nothing when PtyClient refuses the spawn before sending it", async () => {
+    await codexSpawn();
+    mockNoteContinuationLaunch.mockClear();
+    // Refused without minting: the generation still current is the first launch's.
+    ptyClient.spawn.mockImplementation(() => {});
+
+    await codexSpawn();
+
+    expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
+  });
+
+  it("only names any other spawn, for an agent that waits for its own reset, a shell, or the Assistant", async () => {
+    const noteSpawn = vi.fn();
+    setContinuationForgetter({ forgetPane: vi.fn(), forgetProject: vi.fn(), noteSpawn });
+    try {
+      await codexSpawn({ id: "claude-pane", launchAgentId: "claude", command: "claude" });
+      await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });
+      mockIsHelpTerminal.mockReturnValue(true);
+      await codexSpawn({ id: "assistant-pane" });
+    } finally {
+      setContinuationForgetter(null);
+    }
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(3);
+    expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
+    expect(noteSpawn.mock.calls.map((call) => call[0])).toEqual([
+      "claude-pane",
+      "shell-pane",
+      "assistant-pane",
+    ]);
+    expect(noteSpawn).toHaveBeenCalledWith(
+      "shell-pane",
+      "project-1",
+      getLifecycleLedger().currentGeneration("shell-pane")
+    );
+  });
+});
+
 describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;
@@ -4737,5 +4970,56 @@ describe("terminal spawn handler - forwarded ssh-agent (#17432)", () => {
       KEEP: "1",
     });
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("graceful kill of an Assistant's PTY (#17919)", () => {
+  function gracefulKillHandler(ptyClient: unknown) {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    // The registration just made, not one an earlier test left behind.
+    return [...calls].reverse().find((c) => c[0] === CHANNELS.TERMINAL_GRACEFUL_KILL)?.[1] as (
+      event: unknown,
+      id: string
+    ) => Promise<string | null>;
+  }
+
+  beforeEach(() => {
+    mockSnapshotLaneTerminals.mockReset();
+    mockSnapshotLaneTerminals.mockReturnValue(new Map());
+    mockNoteQuitCapture.mockClear();
+  });
+
+  it("hands the id it captured to the lane it snapshotted before the kill", async () => {
+    const lane = { slotKey: "proj-1:0", agentSessionId: "", revision: 3 };
+    mockSnapshotLaneTerminals.mockReturnValue(new Map([["term-help", lane]]));
+    const ptyClient = {
+      getTerminalAsync: vi.fn().mockResolvedValue(null),
+      gracefulKill: vi.fn(async () => {
+        // The lane can move on during the kill; the snapshot is what routes it.
+        mockSnapshotLaneTerminals.mockReturnValue(new Map());
+        return "codex-thread-1";
+      }),
+    };
+
+    await expect(gracefulKillHandler(ptyClient)({}, "term-help")).resolves.toBe("codex-thread-1");
+
+    expect(mockNoteQuitCapture).toHaveBeenCalledExactlyOnceWith(lane, "codex-thread-1");
+  });
+
+  it("records nothing for a terminal that serves no lane, or a kill that captured nothing", async () => {
+    const lane = { slotKey: "proj-1:0", agentSessionId: "", revision: 3 };
+    mockSnapshotLaneTerminals.mockReturnValue(new Map([["term-help", lane]]));
+    const ptyClient = {
+      getTerminalAsync: vi.fn().mockResolvedValue(null),
+      gracefulKill: vi.fn().mockResolvedValueOnce("other-id").mockResolvedValueOnce(null),
+    };
+    const kill = gracefulKillHandler(ptyClient);
+
+    await kill({}, "term-plain");
+    await kill({}, "term-help");
+
+    expect(mockNoteQuitCapture).not.toHaveBeenCalled();
   });
 });

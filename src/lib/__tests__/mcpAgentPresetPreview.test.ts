@@ -57,6 +57,7 @@ describe("formatAgentPresetPreviewLines", () => {
           fallbacks: ["user-fast"],
           fallbackOnRateLimit: true,
           keepConversationOnRateLimit: true,
+          continueAtLimitReset: true,
         },
         { "user-fast": "Fast" }
       )
@@ -75,6 +76,7 @@ describe("formatAgentPresetPreviewLines", () => {
       'Fallback presets: "Fast" (user-fast)',
       "Fall back on usage limits: On",
       "Keep the conversation on usage limits: On",
+      "Continue when usage limit resets: On",
       "Codex's default preset stays as it is.",
     ]);
   });
@@ -160,6 +162,16 @@ describe("formatAgentPresetPreviewLines", () => {
     ).join("\n");
     expect(text).toContain("Keep the conversation on usage limits: Off → On");
     expect(text).not.toContain("Fall back on usage limits");
+  });
+
+  it("shows continuing at the limit's reset turned off (#17912)", () => {
+    const text = formatAgentPresetPreviewLines(
+      update(
+        { id: "user-work", name: "Work", continueAtLimitReset: true },
+        { id: "user-work", name: "Work" }
+      )
+    ).join("\n");
+    expect(text).toContain("Continue when usage limit resets: On → Off");
   });
 
   it("shows a fallback swap between two presets sharing a name", () => {

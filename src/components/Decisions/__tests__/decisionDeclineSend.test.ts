@@ -9,7 +9,7 @@ import type {
 } from "@shared/types/decisionsQuestion";
 import { answerKey, readAnswerRecord, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { QUEUED_DECLINE_READ_MS, dismissQuestion, followDecline } from "../decisionDeclineSend";
-import { paneQuestion } from "../decisionQuestionTarget";
+import { paneQuestion, referencedQuestion } from "../decisionQuestionTarget";
 
 const getQuestionContent =
   vi.fn<
@@ -267,5 +267,137 @@ describe("dismissing a question from this computer (#17239)", () => {
     await vi.advanceTimersByTimeAsync(QUEUED_DECLINE_READ_MS * 3);
     expect(getDeclineResult).toHaveBeenCalledTimes(1);
     expect(readAnswerRecord(KEY).decline).toBeNull();
+  });
+});
+
+describe("dismissing a Remote Host's question while its Host is away (#17946)", () => {
+  const ON_HOST = { hostId: "qhost_studio", projectId: "p1", terminalId: "t1", questionId: "q42" };
+  const AWAY = referencedQuestion(ON_HOST);
+  const AWAY_KEY = answerKey(ON_HOST);
+  const getQuestionContentByReference =
+    vi.fn<(payload: { reference: typeof ON_HOST }) => Promise<DecisionQuestionContentResult>>();
+
+  beforeEach(() => {
+    getQuestionContentByReference.mockReset().mockResolvedValue({
+      result: "host-not-connected",
+      lastRead: { result: "read", revision: 3, alias: 42, readAt: 1_000 },
+    });
+    Reflect.set(window, "electron", {
+      decisions: {
+        getQuestionContent,
+        getQuestionContentByReference,
+        declineQuestion,
+        getDeclineResult,
+      },
+    });
+  });
+
+  it("signs at the revision this computer last read it open at, by the reference it was read by", async () => {
+    declineQuestion.mockImplementation(submitted({ status: "queued" }));
+    await expect(dismissQuestion(AWAY, 3)).resolves.toEqual({
+      kind: "submitted",
+      key: AWAY_KEY,
+      phase: { kind: "settled", outcome: { status: "queued" } },
+      lastReadAt: 1_000,
+    });
+    expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
+      reference: ON_HOST,
+      declineId: expect.any(String),
+      expectedRevision: 3,
+    });
+  });
+
+  it("signs a row's dismissal, which names no revision, at the one last read", async () => {
+    getQuestionContentByReference.mockResolvedValue({
+      result: "host-not-connected",
+      lastRead: { result: "read", revision: 5, alias: 42, readAt: 1_000 },
+    });
+    await dismissQuestion(AWAY, null);
+    expect(declineQuestion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reference: ON_HOST, expectedRevision: 5 })
+    );
+  });
+
+  it("signs nothing again at a revision the relay already turned away, and says so again", async () => {
+    declineQuestion.mockImplementation(submitted({ status: "changed" }));
+    const first = await dismissQuestion(AWAY, 3);
+    expect(first).toMatchObject({ phase: { kind: "settled", outcome: { status: "changed" } } });
+    await expect(dismissQuestion(AWAY, 3)).resolves.toEqual(first);
+    expect(declineQuestion).toHaveBeenCalledOnce();
+
+    // A newer revision last read is a new round, which may be dismissed.
+    getQuestionContentByReference.mockResolvedValue({
+      result: "host-not-connected",
+      lastRead: { result: "read", revision: 4, alias: 42, readAt: 2_000 },
+    });
+    await expect(dismissQuestion(AWAY, null)).resolves.toMatchObject({ lastReadAt: 2_000 });
+    expect(declineQuestion).toHaveBeenCalledTimes(2);
+    expect(declineQuestion.mock.calls[1]![0]).toMatchObject({ expectedRevision: 4 });
+
+    // So is one read once the Host is back.
+    getQuestionContentByReference.mockResolvedValue({
+      result: "read",
+      question: question({ reference: ON_HOST, revision: 5 }),
+    });
+    declineQuestion.mockImplementation(submitted({ status: "declined" }));
+    const live = await dismissQuestion(AWAY, 5);
+    expect(live).toMatchObject({ phase: { kind: "settled", outcome: { status: "declined" } } });
+    expect(live).not.toHaveProperty("lastReadAt");
+    expect(declineQuestion).toHaveBeenCalledTimes(3);
+  });
+
+  it("signs again at the same revision once a relay or computer too old to take it may have been updated", async () => {
+    declineQuestion.mockImplementation(submitted({ status: "unsupported", by: "relay" }));
+    await dismissQuestion(AWAY, 3);
+    declineQuestion.mockImplementation(submitted({ status: "declined" }));
+    await expect(dismissQuestion(AWAY, 3)).resolves.toMatchObject({
+      phase: { kind: "settled", outcome: { status: "declined" } },
+    });
+    expect(declineQuestion).toHaveBeenCalledTimes(2);
+  });
+
+  it("still says a dismissal was signed from the last read when Retry reads back one whose reply was lost", async () => {
+    declineQuestion.mockRejectedValue(new Error("main didn't answer"));
+    await expect(dismissQuestion(AWAY, 3)).resolves.toMatchObject({
+      phase: { kind: "lost" },
+      lastReadAt: 1_000,
+    });
+    declineQuestion.mockImplementation(submitted({ status: "unsupported", by: "relay" }));
+    await expect(dismissQuestion(AWAY, 3, AWAY_KEY)).resolves.toMatchObject({
+      phase: { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+      lastReadAt: 1_000,
+    });
+  });
+
+  it("never takes a last read for a question opened from its pane", async () => {
+    getQuestionContent.mockResolvedValue({
+      result: "host-not-connected",
+      lastRead: { result: "read", revision: 3, alias: 42, readAt: 1_000 },
+    });
+    await expect(dismissQuestion(TARGET, 3)).resolves.toEqual({
+      kind: "failed",
+      reason: "host-not-connected",
+    });
+    expect(declineQuestion).not.toHaveBeenCalled();
+  });
+
+  it("signs nothing when the last read isn't the revision the person saw", async () => {
+    await expect(dismissQuestion(AWAY, 2)).resolves.toEqual({ kind: "changed" });
+    expect(declineQuestion).not.toHaveBeenCalled();
+  });
+
+  it("signs nothing when nothing read here says which revision it waits at, or the relay can't hold it yet", async () => {
+    for (const lastRead of [undefined, { result: "not-read" }, { result: "not-sent" }] as const) {
+      getQuestionContentByReference.mockResolvedValue(
+        lastRead === undefined
+          ? { result: "host-not-connected" }
+          : { result: "host-not-connected", lastRead }
+      );
+      await expect(dismissQuestion(AWAY, null)).resolves.toEqual({
+        kind: "failed",
+        reason: "host-not-connected",
+      });
+    }
+    expect(declineQuestion).not.toHaveBeenCalled();
   });
 });

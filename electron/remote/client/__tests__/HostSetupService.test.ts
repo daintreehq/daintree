@@ -408,6 +408,221 @@ describe("HostSetupService", () => {
       expect(started(noUnit.scripts)).toBe(false);
     });
 
+    describe("on a Linux machine with no init system", () => {
+      const onConnectState = (overrides: Record<string, unknown> = {}) =>
+        JSON.stringify({
+          ...JSON.parse(hostState(true)),
+          startMethod: "on-connect",
+          startAtLogin: false,
+          startAtLoginInstalled: null,
+          ...overrides,
+        });
+      const box = (opts: { listening?: boolean; state?: string | null; image?: boolean } = {}) =>
+        [
+          "@@dt:uname Linux x86_64",
+          ...(opts.image
+            ? [
+                "@@dt:appimage /home/node/Applications/Daintree.AppImage",
+                '@@dt:appimageinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}',
+              ]
+            : ["@@dt:install deb /opt/Daintree", "@@dt:version 1.4.0"]),
+          "@@dt:unit no",
+          "@@dt:fuse no",
+          "@@dt:init docker-init",
+          ...(opts.listening
+            ? ["@@dt:running yes", "@@dt:listening yes", "@@dt:hostpid 4242", "@@dt:hoststart 987"]
+            : []),
+          ...(opts.state === null ? [] : [`@@dt:hostmodestate ${opts.state ?? onConnectState()}`]),
+          "@@dt:end",
+        ].join("\n");
+      const launches = (scripts: string[]) => scripts.filter((c) => c.includes("nohup"));
+
+      it("starts Daintree again in a session of its own when its record says it's on", async () => {
+        const { run, scripts } = recording([
+          box({ image: true }),
+          box({ image: true }),
+          box({ image: true, listening: true }),
+        ]);
+        await expect(service("", { run }).setup.ensureHostRunning(studio)).resolves.toBe("started");
+        expect(launches(scripts)).toHaveLength(1);
+        const [launch] = launches(scripts);
+        // Quoted again for the login shell, so only its words are checked here.
+        expect(launch).toContain("/home/node/Applications/Daintree.AppImage");
+        expect(launch).toContain("--ozone-platform=headless");
+        expect(launch).toContain("APPIMAGE_EXTRACT_AND_RUN=1");
+        // Started as it was set up: nothing is switched on, and no service is asked for.
+        expect(launch).not.toContain("--enable-host-mode");
+        expect(
+          scripts.filter((c) => !c.includes("@@dt:uname")).some((c) => c.includes("systemctl"))
+        ).toBe(false);
+      });
+
+      it("starts nothing where Daintree there never recorded starting on connect", async () => {
+        for (const state of [null, hostState(true), onConnectState({ enabled: false })]) {
+          const { run, scripts } = recording([box({ state })]);
+          await expect(
+            service("", { run }).setup.ensureHostRunning(studio),
+            String(state)
+          ).resolves.toBe("not-startable");
+          expect(launches(scripts)).toEqual([]);
+        }
+      });
+
+      it("leaves one quit on purpose until someone asks for it back", async () => {
+        const quit = onConnectState({ pid: 0, stopped: true });
+        const left = recording([box({ state: quit })]);
+        await expect(service("", { run: left.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+          "not-startable"
+        );
+        expect(launches(left.scripts)).toEqual([]);
+        const asked = recording([
+          box({ state: quit }),
+          box({ state: quit }),
+          box({ listening: true }),
+        ]);
+        await expect(
+          service("", { run: asked.run }).setup.ensureHostRunning(studio, undefined, undefined, {
+            explicit: true,
+          })
+        ).resolves.toBe("started");
+        expect(launches(asked.scripts)).toHaveLength(1);
+      });
+
+      it("stops it on removal, by its own record, and leaves any other host alone", async () => {
+        const running = recording([box({ listening: true })]);
+        const stopping = service("", {
+          run: async (command, args) => {
+            const script = args.at(-1) ?? "";
+            if (script.includes("@@dt:stopped")) {
+              running.scripts.push(script);
+              return ok("@@dt:stopped yes\n");
+            }
+            return running.run(command, args);
+          },
+        });
+        await expect(stopping.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
+        const stop = running.scripts.find((c) => c.includes("@@dt:stopped"))!;
+        expect(stop).toContain("hp=4242");
+        // An AppImage still unpacking is waited for too, never killed outright.
+        expect(stop).toContain("host-launch.pid");
+        expect(stop).not.toContain("systemctl");
+
+        const others = [
+          // A service keeps it: removing the host leaves it running, as before.
+          box({ listening: true, state: hostState(true) }).replace(
+            "@@dt:init docker-init",
+            "@@dt:init systemd"
+          ),
+          // Running for this run only: not a start Daintree made.
+          box({ listening: true, state: onConnectState({ enabled: false }) }),
+          // Running, but not by its own account started on connect.
+          box({ listening: true, state: hostState(true) }),
+        ];
+        for (const output of others) {
+          const left = recording([output]);
+          await expect(
+            service("", { run: left.run }).setup.stopStartedOnConnect(studio)
+          ).resolves.toBe(false);
+          expect(left.scripts.filter((c) => !c.includes("@@dt:uname"))).toEqual([]);
+        }
+        const wsl = recording([box({ listening: true })]);
+        await expect(
+          service("", { run: wsl.run }).setup.stopStartedOnConnect({
+            kind: "wsl",
+            distro: "Ubuntu",
+          })
+        ).resolves.toBe(false);
+        expect(wsl.scripts).toEqual([]);
+      });
+
+      it("ends a start still unpacking when it's removed before listening", async () => {
+        const left = recording([box({})]);
+        const stopping = service("", {
+          run: async (command, args) => {
+            const script = args.at(-1) ?? "";
+            if (script.includes("@@dt:stopped")) {
+              left.scripts.push(script);
+              return ok("@@dt:stopped yes\n");
+            }
+            return left.run(command, args);
+          },
+        });
+        await expect(stopping.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
+        const stop = left.scripts.find((c) => c.includes("@@dt:stopped"))!;
+        // Only the last start, as its receipt names it, is asked to quit.
+        expect(stop).toContain("host-launch.pid");
+        expect(stop).toContain("/proc/$lp/comm");
+        // Nothing else on the account: no Daintree found by name.
+        expect(stop).not.toContain("pkill");
+        expect(stop).not.toContain("pgrep");
+
+        // Brought back after a quit: its old record still says stopped, and the start is still ended.
+        const quit = recording([box({ state: onConnectState({ pid: 0, stopped: true }) })]);
+        const afterQuit = service("", {
+          run: async (command, args) => {
+            const script = args.at(-1) ?? "";
+            if (script.includes("@@dt:stopped")) {
+              quit.scripts.push(script);
+              return ok("@@dt:stopped yes\n");
+            }
+            return quit.run(command, args);
+          },
+        });
+        await expect(afterQuit.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
+        expect(quit.scripts.some((c) => c.includes("host-launch.pid"))).toBe(true);
+      });
+
+      it("says at once when the start it made exits, in the log's words", async () => {
+        const scripts: string[] = [];
+        let probed = 0;
+        const run: CommandRunner = async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) {
+            probed++;
+            return ok(box({ image: true }));
+          }
+          if (script.includes("nohup")) return ok("@@dt:launched 777 123456 new\n");
+          if (script.includes("alive yes")) return ok("");
+          if (script.includes("host.log")) {
+            return ok(
+              "Started Daintree host\n[1:1:FATAL:zygote_host_impl_linux.cc(1)] No usable sandbox!\n"
+            );
+          }
+          return ok();
+        };
+        await expect(service("", { run }).setup.ensureHostRunning(studio)).rejects.toMatchObject({
+          userMessage:
+            "Daintree exited on studio as it started: No usable sandbox! (more in ~/.cache/daintree/host.log there)",
+        });
+        // One check before the start and one after it: not a minute, or five, of waiting.
+        expect(probed).toBe(2);
+      });
+
+      it("tells its record what every check that reached the host saw", async () => {
+        const seen: Array<boolean | undefined> = [];
+        const { run } = recording([box({ listening: true })]);
+        const { setup } = service("", {
+          run,
+          onProbed: (_connection, result) => seen.push(result.startsOnConnect),
+        });
+        await setup.probe({ connection: studio });
+        expect(seen).toEqual([true]);
+        const unreached = service("", {
+          run: async () => ({
+            code: 255,
+            stdout: "",
+            stderr: "no route",
+            spawnError: null,
+            timedOut: false,
+          }),
+          onProbed: () => seen.push(undefined),
+        });
+        await unreached.setup.probe({ connection: studio });
+        expect(seen).toEqual([true]);
+      });
+    });
+
     it("starts nothing for a connection already cancelled", async () => {
       const { run, scripts } = recording([MAC_STOPPED(true)]);
       const abort = new AbortController();

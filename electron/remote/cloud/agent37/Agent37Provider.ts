@@ -16,6 +16,7 @@ import type {
 import { AppError } from "../../../utils/errorTypes.js";
 import { raceAbort } from "../../../utils/raceAbort.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../../../../shared/types/hostIdle.js";
 import {
   Agent37ApiError,
   Agent37Client,
@@ -23,10 +24,17 @@ import {
   type Agent37RequestContext,
 } from "./Agent37Client.js";
 import type { Agent37Instance } from "./agent37Schemas.js";
+import { keepAwakeUrlProblem } from "./agent37KeepAwake.js";
 import { agent37MachineState } from "./agent37State.js";
 
-/** How long an instance Daintree creates may idle before Agent 37 sleeps it. */
-export const AGENT37_IDLE_SECONDS = 900;
+/**
+ * How long an instance Daintree creates may idle before Agent 37 sleeps it:
+ * the host's own idle time until the person picks another (#17916).
+ */
+export const AGENT37_IDLE_SECONDS = DEFAULT_HOST_IDLE_MINUTES * 60;
+
+/** The idle timeouts Agent 37 takes, in seconds. */
+export const AGENT37_IDLE_SECONDS_RANGE = { min: 300, max: 86_400 } as const;
 
 /**
  * The login whose home is the instance's mounted disk on every system
@@ -34,6 +42,13 @@ export const AGENT37_IDLE_SECONDS = 900;
  * installed in it survives stops, starts and updates alike.
  */
 export const AGENT37_SSH_USER = "node";
+
+/**
+ * How long a signed URL a host keeps its instance awake with lasts: the most
+ * Agent 37 allows, since one can't be revoked, and Daintree mints a new one
+ * every time it connects (#17918).
+ */
+export const AGENT37_KEEP_AWAKE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** How long Agent 37 says a newly registered key takes to reach instances already running. */
 export const AGENT37_KEY_DELIVERY_MS = 2 * 60_000;
@@ -193,6 +208,14 @@ class Agent37CreateRefused extends Error {
 }
 
 const CANCELLED = Symbol("cancelled");
+
+/** Agent 37 was mid-operation on the instance (`try_again`) when asked to sleep it, and the one request went unheeded. */
+class Agent37SleepBusy extends Error {
+  constructor() {
+    super("Agent 37 was busy with the instance");
+    this.name = "Agent37SleepBusy";
+  }
+}
 
 /** A machine that was running before Daintree's key was registered, which it may not have yet. */
 class Agent37KeyInDelivery extends Error {
@@ -418,6 +441,75 @@ export class Agent37Provider implements CloudProvider {
     return null;
   }
 
+  async sleepIdle(credentials: ProviderCredentials, resourceId: string): Promise<void> {
+    let answer;
+    try {
+      answer = await this.clientFor(credentials.apiUrl).sleepInstance(ctx(credentials), resourceId);
+    } catch (error) {
+      // Its own checkpoint already under way reads the same: the caller looks at the instance.
+      if (error instanceof Agent37ApiError && error.busy) throw new Agent37SleepBusy();
+      throw error;
+    }
+    if (answer.id !== resourceId) {
+      throw new Agent37ApiError(
+        "bad-response",
+        "Agent 37 answered for another instance than the one asked to sleep",
+        null,
+        null
+      );
+    }
+  }
+
+  async setIdleSleep(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    idleSeconds: number,
+    enable: boolean
+  ): Promise<ProviderResource> {
+    if (
+      !Number.isInteger(idleSeconds) ||
+      idleSeconds < AGENT37_IDLE_SECONDS_RANGE.min ||
+      idleSeconds > AGENT37_IDLE_SECONDS_RANGE.max
+    ) {
+      throw new Agent37ApiError(
+        "invalid-request",
+        "Agent 37 takes an idle time from 5 minutes to a day",
+        null,
+        null
+      );
+    }
+    return agent37Resource(
+      await this.clientFor(credentials.apiUrl).updateInstance(ctx(credentials), resourceId, {
+        idle_timeout_seconds: idleSeconds,
+        ...(enable ? { auto_sleep: true } : {}),
+      })
+    );
+  }
+
+  async keepAwakeUrl(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }> {
+    const signed = await this.clientFor(credentials.apiUrl).signedUrl(
+      ctx(credentials),
+      resourceId,
+      {
+        port,
+        ttlSeconds: AGENT37_KEEP_AWAKE_TTL_SECONDS,
+      }
+    );
+    if (signed.port !== port || keepAwakeUrlProblem(signed.url, resourceId, port) !== null) {
+      throw new Agent37ApiError(
+        "bad-response",
+        "Agent 37 answered with a link to another machine or port than the one asked for",
+        null,
+        null
+      );
+    }
+    return { url: signed.url, expiresAt: signed.expires_at * 1000 };
+  }
+
   async rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void> {
     await this.clientFor(credentials.apiUrl).updateInstance(ctx(credentials), resourceId, {
       name: name.slice(0, MAX_NAME_LENGTH),
@@ -569,6 +661,13 @@ export class Agent37Provider implements CloudProvider {
             message: `Agent 37 says the machine is ${error.status} now. Start it to connect.`,
             at,
           };
+    }
+    if (error instanceof Agent37SleepBusy) {
+      return {
+        code: "failed",
+        message: "Agent 37 was busy with another change to the machine.",
+        at,
+      };
     }
     if (error instanceof Agent37KeyInDelivery) {
       const seconds = Math.max(1, Math.ceil(error.waitMs / 1000));

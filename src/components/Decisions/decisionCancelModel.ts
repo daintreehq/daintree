@@ -1,6 +1,8 @@
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type { DeclinePhase } from "@/store/decisionsAnswerStore";
 import type {
   DecisionQuestionCancelResult,
+  DecisionQuestionLastRead,
   DecisionQuestionStatus,
 } from "@shared/types/decisionsQuestion";
 import type { DismissAttempt } from "./decisionDeclineSend";
@@ -20,6 +22,17 @@ export interface DecisionCancelTarget {
    * question only by alias, which dismisses it as it is open now.
    */
   revision: number | null;
+  /**
+   * When this computer last read it (epoch ms), for a Remote Host's question
+   * dismissed while its Host is away (#17946): `revision` is the one read
+   * then. Absent or null for a question read just now.
+   */
+  lastReadAt?: number | null;
+}
+
+/** A Remote Host's question dismissed from what was last read of it: there's no withdrawing it. */
+function isAway(target: DecisionCancelTarget): boolean {
+  return target.lastReadAt !== undefined && target.lastReadAt !== null;
 }
 
 /**
@@ -41,11 +54,35 @@ export interface DecisionCancelProblem {
   retry: boolean;
 }
 
+/**
+ * Whether a Remote Host's question can still be dismissed while its Host is
+ * away (#17946), and why not when it can't: said beside the Host being away.
+ * Null where the Host's last report doesn't have it waiting for the person.
+ */
+export function hostAwayNote(
+  lastRead: DecisionQuestionLastRead | undefined,
+  now: number = Date.now()
+): string | null {
+  switch (lastRead?.result) {
+    case undefined:
+      return null;
+    case "read":
+      return `This computer last read it ${formatRelativeTime(lastRead.readAt, now)}, so you can still dismiss it as it was then.`;
+    case "not-sent":
+      return "It hadn't reached the relay when this computer last read it, so it can't be dismissed until the Host is back.";
+    case "not-read":
+      return "This computer has no recent read of it to dismiss it by, so it can't be dismissed until the Host is back.";
+  }
+}
+
 export function dismissTitle(target: DecisionCancelTarget): string {
   return `Dismiss question ${target.label}?`;
 }
 
-export function dismissBody(): string {
+export function dismissBody(target?: DecisionCancelTarget | null): string {
+  if (target != null && isAway(target)) {
+    return "The Remote Host that asked it isn't connected, so it's dismissed as this computer last read it. If it hasn't changed since, it's declined for you, as Dismiss on your phone does: your phones show it declined on this computer, and once the Host is back, an agent still listening is told you chose not to answer. Nothing is decided or approved.";
+  }
   return "It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer, and it leaves Needs you.";
 }
 
@@ -74,19 +111,30 @@ export function noLongerWaiting(
   };
 }
 
+function unsupportedText(label: string, by: "relay" | "asking-desktop"): string {
+  return by === "relay"
+    ? `Your relay needs an update before it takes a dismissal from this computer, so ${label} wasn't dismissed.`
+    : `Daintree on the computer that asked ${label} needs an update before it takes a dismissal from this computer, so it wasn't dismissed.`;
+}
+
 /**
  * Why a dismissal from this computer can't be taken where withdrawing still
  * can: the relay or the computer that asked doesn't take one yet, this
  * computer doesn't sign for the person, or the relay doesn't hold the
- * question yet (a Remote Host hasn't sent it). Null for any other phase.
- * Given the question's `status` as read now, a relay that didn't hold it
- * stops being a reason once it reads as sent: it can be dismissed again.
+ * question yet (a Remote Host hasn't sent it). Null for any other phase,
+ * and always null where it can't be withdrawn either (`withdrawable` false:
+ * a Remote Host's question while its Host is away, #17946), so a dismissal
+ * that wasn't taken never turns into a withdrawal there. Given the
+ * question's `status` as read now, a relay that didn't hold it stops being
+ * a reason once it reads as sent: it can be dismissed again.
  */
 export function dismissFallback(
   label: string,
   phase: DeclinePhase,
-  status?: DecisionQuestionStatus
+  status?: DecisionQuestionStatus,
+  withdrawable = true
 ): string | null {
+  if (!withdrawable) return null;
   const instead = "You can withdraw it instead.";
   if (phase.kind === "refused" && phase.reason === "not-owner") {
     return `This computer doesn't sign for you, so ${label} can't be dismissed here. Dismiss it on your phone, or withdraw it instead.`;
@@ -94,9 +142,7 @@ export function dismissFallback(
   if (phase.kind !== "settled") return null;
   const outcome = phase.outcome;
   if (outcome.status === "unsupported") {
-    return outcome.by === "relay"
-      ? `Your relay needs an update before it takes a dismissal from this computer, so ${label} wasn't dismissed. ${instead}`
-      : `Daintree on the computer that asked ${label} needs an update before it takes a dismissal from this computer, so it wasn't dismissed. ${instead}`;
+    return `${unsupportedText(label, outcome.by)} ${instead}`;
   }
   if (
     outcome.status === "closed" &&
@@ -111,8 +157,10 @@ export function dismissFallback(
 /**
  * How far a dismissal from here has got, while it's under way or once the
  * relay took it and the question hasn't closed here yet; null otherwise.
+ * `away`: a Remote Host's question while its Host is away (#17946), which
+ * closes here only once the Host is back.
  */
-export function dismissProgressText(phase: DeclinePhase): string | null {
+export function dismissProgressText(phase: DeclinePhase, away = false): string | null {
   switch (phase.kind) {
     case "sending":
       return "Dismissing…";
@@ -126,9 +174,10 @@ export function dismissProgressText(phase: DeclinePhase): string | null {
       if (phase.outcome.status === "queued") {
         return "Dismissal queued. It's sent once the relay can be reached.";
       }
-      return phase.outcome.status === "declined"
-        ? "Dismissed. Waiting for it to close here…"
-        : null;
+      if (phase.outcome.status !== "declined") return null;
+      return away
+        ? "Dismissed. It closes here once its Remote Host is back."
+        : "Dismissed. Waiting for it to close here…";
   }
 }
 
@@ -186,14 +235,22 @@ export function dismissVerdict(
   attempt: DismissAttempt
 ): DismissVerdict {
   const { label } = target;
+  const away = isAway(target);
   // A view that read a revision shows the update itself; a row's Dismiss reads it again.
-  const changed = problem(
-    "info",
-    target.revision === null
-      ? `${label} changed before it was dismissed. Try again to dismiss it as it is now.`
-      : `${label} changed since you opened it, so it wasn't dismissed. Review it, then dismiss it again.`,
-    target.revision === null
-  );
+  // One last read while its Host was away can be read again only once the Host is back.
+  const changed = away
+    ? problem(
+        "info",
+        `${label} changed after this computer last read it, so it wasn't dismissed. Review it once its Remote Host is back.`,
+        false
+      )
+    : problem(
+        "info",
+        target.revision === null
+          ? `${label} changed before it was dismissed. Try again to dismiss it as it is now.`
+          : `${label} changed since you opened it, so it wasn't dismissed. Review it, then dismiss it again.`,
+        target.revision === null
+      );
   switch (attempt.kind) {
     case "failed":
       return failedVerdict(label, attempt.reason);
@@ -211,7 +268,7 @@ export function dismissVerdict(
       break;
   }
   const { phase } = attempt;
-  const fallback = dismissFallback(label, phase);
+  const fallback = dismissFallback(label, phase, undefined, !away);
   if (fallback !== null) return { kind: "withdraw", message: fallback };
   switch (phase.kind) {
     case "sending":
@@ -229,6 +286,12 @@ export function dismissVerdict(
           return problem("info", `Decisions is off, so ${label} wasn't dismissed.`, false);
         case "invalid":
           return problem("error", `This computer couldn't sign a dismissal of ${label}.`, true);
+        case "not-owner":
+          return problem(
+            "info",
+            `This computer doesn't sign for you, so ${label} can't be dismissed here. Dismiss it on your phone.`,
+            false
+          );
         default:
           return problem("info", `${label} is no longer one of this terminal's questions.`, false);
       }
@@ -249,12 +312,14 @@ export function dismissVerdict(
         "info",
         outcome.reason === "expired"
           ? `${label} expired first, so it wasn't dismissed.`
-          : `${label} was withdrawn or dismissed first.`,
+          : outcome.reason === "not-found"
+            ? `The relay doesn't hold ${label}, so it wasn't dismissed.`
+            : `${label} was withdrawn or dismissed first.`,
         false
       );
     case "unsupported":
-      // Answered by `dismissFallback` above.
-      return problem("info", `${label} wasn't dismissed.`, false);
+      // Where it can be withdrawn instead, `dismissFallback` above answered.
+      return problem("info", unsupportedText(label, outcome.by), false);
     case "rejected":
       return problem(
         "error",

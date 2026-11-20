@@ -151,6 +151,7 @@ describe("CloudHostStore worktree marks", () => {
           dataExpired: false,
           asleep: false,
           idleSleep: null,
+          snapshotsDisabled: false,
           observedAt: 5,
         },
       })
@@ -175,6 +176,7 @@ describe("CloudHostStore worktree marks", () => {
       dataExpired: false,
       asleep: true,
       idleSleep: { enabled: true, idleSeconds: 600 },
+      snapshotsDisabled: false,
       observedAt: 5,
     };
     new CloudHostStore(backend).putBinding(binding({ observation }));
@@ -207,6 +209,43 @@ describe("CloudHostStore worktree marks", () => {
       enabled: false,
       idleSeconds: null,
     });
+  });
+
+  it("keeps whether snapshots are off on the machine, and reads a record from before it as unknown (#17923)", () => {
+    const backend = disk();
+    const observation = {
+      machine: "running",
+      name: "build",
+      rawState: "running",
+      machineType: "2x4",
+      vcpu: 2,
+      memoryGB: 4,
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      asleep: false,
+      idleSleep: null,
+      snapshotsDisabled: true,
+      observedAt: 5,
+    };
+    new CloudHostStore(backend).putBinding(binding({ observation }));
+    expect(new CloudHostStore(backend).bindings()[0]?.observation?.snapshotsDisabled).toBe(true);
+    const { snapshotsDisabled: _snapshots, ...older } = observation;
+    for (const [stored, read] of [
+      [older, null],
+      [{ ...older, snapshotsDisabled: "yes" }, null],
+      [{ ...older, snapshotsDisabled: false }, false],
+    ] as const) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [binding({ observation: stored as never })],
+      });
+      expect(new CloudHostStore(backend).bindings()[0]?.observation?.snapshotsDisabled).toBe(read);
+    }
   });
 });
 
@@ -566,6 +605,49 @@ describe("CloudHostStore host keys", () => {
     expect(read.id).toBe("cb_abcdefgh12");
     expect(read.trustedHostKey).toBeNull();
     expect(read.offeredHostKey).toBeNull();
+  });
+});
+
+describe("CloudHostStore keep-awake (#17918)", () => {
+  const RESOURCE = "ab12cd34ef";
+
+  it("keeps what the host said it holds across a restart, for the machine it was said of", () => {
+    const backend = disk();
+    const held = {
+      resourceId: RESOURCE,
+      expiresAt: 1_800_604_800_000,
+      confirmedAt: 1_800_000_000_000,
+      reached: true as const,
+    };
+    new CloudHostStore(backend).putBinding(binding({ resourceId: RESOURCE, keepAwake: held }));
+    expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(held);
+    // Not yet reached reads back as such, and anything but true is not reached.
+    const { reached: _reached, ...untried } = held;
+    for (const reached of [undefined, "yes", "true", 1]) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId: RESOURCE }), keepAwake: { ...untried, reached } }],
+      });
+      expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(untried);
+    }
+
+    // Said of another machine, or unreadable: as if nothing were held.
+    for (const keepAwake of [
+      { ...held, resourceId: "zz12cd34ef" },
+      { ...held, expiresAt: "soon" },
+      { ...held, confirmedAt: "then" },
+      "held",
+    ]) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId: RESOURCE }), keepAwake }],
+      });
+      const read = new CloudHostStore(backend).bindings()[0]!;
+      expect(read.keepAwake).toBeUndefined();
+      expect(read.resourceId).toBe(RESOURCE);
+    }
   });
 });
 
