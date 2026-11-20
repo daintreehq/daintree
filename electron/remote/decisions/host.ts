@@ -1,3 +1,7 @@
+import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionCancelResult,
@@ -15,6 +19,7 @@ import type {
   OwnerStateAnnouncement,
 } from "../../types/decisionsHosts.js";
 import type { LinkSession } from "../link/session.js";
+import { HostAttentionRequestSchema, MAX_HOST_ATTENTION_BYTES } from "./attentionSchemas.js";
 import {
   DecisionsLinkMethod,
   EnrollHostPayloadSchema,
@@ -202,6 +207,11 @@ export interface DecisionsHostLifetime {
   >;
   /** The person withdrawing one of this Host's own questions by reference. */
   cancelQuestion(reference: DecisionQuestionReference): Promise<DecisionQuestionCancelResult>;
+  /**
+   * One of this Host's own stopped deliveries read or acted on by reference
+   * (#18031), through the delivery this Host's own windows act through.
+   */
+  attention(request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionAnswer>;
 }
 
 /** How the link reaches this Host's own Decisions, loading nothing until it must. */
@@ -577,6 +587,29 @@ export function installDecisionsHostWith(
     return made.cancelQuestion(reference);
   };
 
+  /**
+   * One of the Host's stopped deliveries read or acted on (#18031), for the
+   * owner that enrolled it only. What was read goes only to a session still
+   * served, and only whole: one that doesn't fit a reply says so instead.
+   */
+  const attention = async (
+    session: LinkSession,
+    request: DecisionsHostAttentionRequest
+  ): Promise<DecisionsHostAttentionAnswer> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const answer = await made.attention(request);
+    // A resume or Mark handled that ran is answered whatever the owner said meanwhile: it happened.
+    const reads = request.action === "read" || request.action === "copy";
+    if (reads && !servesQuestions(session)) return OFF;
+    return Buffer.byteLength(JSON.stringify(answer)) > MAX_HOST_ATTENTION_BYTES
+      ? { result: "too-large" }
+      : answer;
+  };
+
   const wire = ({ session }: DecisionsSessionContext): void => {
     if (disposed || wired.has(session)) return;
     wired.add(session);
@@ -649,6 +682,13 @@ export function installDecisionsHostWith(
           ({ reference }) => cancelQuestion(session, reference)
         )
       : () => {};
+    const offAttention = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.ATTENTION,
+          HostAttentionRequestSchema,
+          (request) => attention(session, request)
+        )
+      : () => {};
     let offClose: () => void = () => {};
     const unregister = () => {
       offCall();
@@ -661,6 +701,7 @@ export function installDecisionsHostWith(
       offQuestionContentV2();
       offQuestionContentV3();
       offCancelQuestion();
+      offAttention();
       offClose();
       unregisters.delete(unregister);
       owners.delete(session);

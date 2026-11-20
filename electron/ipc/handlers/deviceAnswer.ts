@@ -73,6 +73,8 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
@@ -369,6 +371,26 @@ const questionReferenceSchema = z
   .strict();
 
 const questionByReferenceSchema = z.object({ reference: questionReferenceSchema }).strict();
+
+// One of a Remote Host's stopped deliveries (#18031): a resume or Mark handled names the item it confirmed.
+const hostAttentionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("read"), reference: questionReferenceSchema }).strict(),
+  z.object({ action: z.literal("copy"), reference: questionReferenceSchema }).strict(),
+  z
+    .object({
+      action: z.literal("resume"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("handled"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+]);
 
 const getQuestionImageByReferenceSchema = z
   .object({
@@ -1281,6 +1303,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.markDecisionsAnswerHandled(payload);
+      }
+    ),
+    // A Remote Host's stopped delivery (#18031), read and acted on on that
+    // Host alone; one no Host lists never reaches this computer's delivery.
+    hostAttention: opValidated(
+      CHANNELS.DECISIONS_HOST_ATTENTION,
+      hostAttentionSchema,
+      async (request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> => {
+        refuseWhileOff("resolve a Remote Host's delivery");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.actOnHostAttention(request);
       }
     ),
     // The decision model (#16027): its preferences, evaluation and history.

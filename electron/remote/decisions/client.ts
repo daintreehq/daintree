@@ -1,5 +1,9 @@
 import type { z } from "zod";
 import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../shared/types/decisionsAttention.js";
+import type {
   DecisionsHostRuntime,
   DecisionsHostRuntimeObservation,
 } from "../../../shared/types/decisionsHosts.js";
@@ -25,6 +29,7 @@ import {
   type HostRequestResult,
   type OwnerStateAnnouncement,
 } from "../../types/decisionsHosts.js";
+import { hostAttentionResultSchema } from "./attentionSchemas.js";
 import {
   DecisionsLinkMethod,
   EnrollHostPayloadSchema,
@@ -66,6 +71,12 @@ export const HOST_ACCEPT_TIMEOUT_MS = 75_000;
 export const OWNER_STATE_TIMEOUT_MS = 75_000;
 /** A Host's list, or one of its questions opened there: an image is fetched and checked first. */
 export const HOST_QUESTION_TIMEOUT_MS = 75_000;
+/**
+ * How long a resume of a Host's stopped delivery is waited on (#18031): the
+ * Host reopens the session and waits up to a minute and a half for its
+ * prompt before delivery has its go. Past this its outcome is unknown.
+ */
+export const HOST_ATTENTION_RESUME_TIMEOUT_MS = 180_000;
 
 export interface DecisionsHostSession {
   readonly isOpen: boolean;
@@ -375,6 +386,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeContentRounds = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered content with its preparation UNSUPPORTED: from before #18042. */
   private readonly beforePreparation = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered its stopped deliveries UNSUPPORTED: from before #18031. */
+  private readonly beforeAttention = new WeakSet<DecisionsHostSession>();
   /**
    * Reads of the list with its asks out, per session. A Host answers one with
    * its list as it stands then, after any v1 push it sent before the read
@@ -683,6 +696,56 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     );
   }
 
+  hostAttention(
+    request: DecisionsHostAttentionRequest
+  ): Promise<HostCallOutcome<DecisionsHostAttentionAnswer>> | null {
+    const { reference } = request;
+    const host = this.hostQuestions().find((heard) => heard.questionHostId === reference.hostId);
+    // Only a question the Host lists: one it never listed has nothing to act on here.
+    if (!host?.questions.some((question) => sameReference(question.reference, reference))) {
+      return null;
+    }
+    // Only over the link its list came on: a newer one hasn't listed the question yet.
+    if (!host.connected) return Promise.resolve({ ok: false, failure: "disconnected" });
+    const session = this.deps.sessionFor(host.hostId);
+    // A Host that answered this link UNSUPPORTED is never asked again on it: it's from before.
+    if (session?.isOpen && this.beforeAttention.has(session)) {
+      return Promise.resolve({ ok: false, failure: "needs-update" });
+    }
+    return this.callHost(
+      host.hostId,
+      DecisionsLinkMethod.ATTENTION,
+      request,
+      hostAttentionResultSchema(request.action),
+      (unsupported) => this.beforeAttention.add(unsupported),
+      request.action === "resume" ? HOST_ATTENTION_RESUME_TIMEOUT_MS : HOST_QUESTION_TIMEOUT_MS
+    ).then((answered): HostCallOutcome<DecisionsHostAttentionAnswer> => {
+      if (!answered.ok || answered.value.result !== "read" || answered.value.item === null) {
+        return answered;
+      }
+      const { item } = answered.value;
+      if (
+        item.questionId !== reference.questionId ||
+        item.origin.projectId !== reference.projectId ||
+        item.origin.paneId !== reference.terminalId
+      ) {
+        return { ok: false, failure: "unexpected-answer" };
+      }
+      // `canReassign` stays as the Host said: choosing another of its panes is offered only there,
+      // but handling it here still takes that away, so it still asks first.
+      return {
+        ok: true,
+        value: {
+          result: "read",
+          item: {
+            ...item,
+            origin: { ...item.origin, otherHost: { hostId: reference.hostId, name: host.name } },
+          },
+        },
+      };
+    });
+  }
+
   /** The Host whose questions name `questionHostId`, by its host list id; null when none's do. */
   private hostAsking(questionHostId: string): string | null {
     return (
@@ -696,16 +759,17 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     method: string,
     payload: unknown,
     schema: S,
-    onUnsupported?: () => void
+    onUnsupported?: (session: DecisionsHostSession) => void,
+    timeoutMs = HOST_QUESTION_TIMEOUT_MS
   ): Promise<HostCallOutcome<z.infer<S>>> {
     const session = this.deps.sessionFor(hostId);
     if (!session?.isOpen) return { ok: false, failure: "disconnected" };
     const release = this.deps.hold(hostId);
     let raw: unknown;
     try {
-      raw = await session.call(method, payload, { timeoutMs: HOST_QUESTION_TIMEOUT_MS });
+      raw = await session.call(method, payload, { timeoutMs });
     } catch (error) {
-      if (codeOf(error) === "UNSUPPORTED") onUnsupported?.();
+      if (codeOf(error) === "UNSUPPORTED") onUnsupported?.(session);
       return failureOf(error);
     } finally {
       release();

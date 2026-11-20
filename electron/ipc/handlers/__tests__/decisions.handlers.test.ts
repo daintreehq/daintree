@@ -30,6 +30,10 @@ import type {
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
 import type {
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
+} from "../../../../shared/types/decisionsAttention.js";
+import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   DecisionQuestionMarkResult,
@@ -125,6 +129,11 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _payload: CancelDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
+  ),
+  actOnHostAttention: vi.fn(
+    async (_request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> => ({
+      result: "no-host",
+    })
   ),
   markDecisionQuestions: vi.fn(
     async (_payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => ({
@@ -344,6 +353,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
+    actOnHostAttention: decisionsEntry.actOnHostAttention,
     markDecisionQuestions: decisionsEntry.markDecisionQuestions,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
@@ -452,6 +462,9 @@ const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReferen
   .handler as unknown as (
   payload: CancelDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionCancelResult>;
+const hostAttention = decisionsNamespace.ops.hostAttention.handler as unknown as (
+  request: DecisionsHostAttentionRequest
+) => Promise<DecisionsHostAttentionResult>;
 const markQuestions = decisionsNamespace.ops.markQuestions.handler as unknown as (
   payload: MarkDecisionQuestionsPayload
 ) => Promise<DecisionQuestionMarkResult>;
@@ -638,6 +651,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+  CHANNELS.DECISIONS_HOST_ATTENTION,
   CHANNELS.DECISIONS_MARK_QUESTIONS,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
@@ -692,6 +706,7 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
+    decisionsEntry.actOnHostAttention.mockClear();
     decisionsEntry.markDecisionQuestions.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
@@ -1645,6 +1660,42 @@ describe("decisions IPC", () => {
       expect(decisionsEntry.cancelDecisionQuestionByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,
       });
+    });
+
+    it("acts on a Remote Host's stopped delivery only once on, a resume or Mark handled only with its token (#18031)", async () => {
+      const schema = decisionsNamespace.ops.hostAttention.schema as SafeParse;
+      const expected = "d".repeat(64);
+      expect(schema.safeParse({ action: "read", reference: REFERENCE }).success).toBe(true);
+      expect(schema.safeParse({ action: "copy", reference: REFERENCE }).success).toBe(true);
+      for (const action of ["resume", "handled"]) {
+        expect(schema.safeParse({ action, reference: REFERENCE, expected }).success).toBe(true);
+        expect(schema.safeParse({ action, reference: REFERENCE }).success).toBe(false);
+        expect(
+          schema.safeParse({ action, reference: REFERENCE, expected: "not-a-token" }).success
+        ).toBe(false);
+      }
+      expect(schema.safeParse({ action: "reassign", reference: REFERENCE }).success).toBe(false);
+      expect(
+        schema.safeParse({ action: "read", reference: REFERENCE, terminalId: "pane-1" }).success
+      ).toBe(false);
+
+      const request: DecisionsHostAttentionRequest = {
+        action: "handled",
+        reference: REFERENCE,
+        expected,
+      };
+      saved.value = { enabled: false };
+      await expect(hostAttention(request)).rejects.toMatchObject({ code: "PERMISSION" });
+      expect(decisionsEntry.actOnHostAttention).not.toHaveBeenCalled();
+
+      saved.value = { enabled: true };
+      const acted: DecisionsHostAttentionResult = {
+        result: "acted",
+        outcome: { result: "handled" },
+      };
+      decisionsEntry.actOnHostAttention.mockResolvedValueOnce(acted);
+      await expect(hostAttention(request)).resolves.toBe(acted);
+      expect(decisionsEntry.actOnHostAttention).toHaveBeenCalledExactlyOnceWith(request);
     });
 
     it("hands the person's marks to Decisions once on, as they were sent (#17895)", async () => {

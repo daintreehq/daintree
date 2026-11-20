@@ -6,6 +6,10 @@
  * nothing.
  */
 
+import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntimeObservation } from "../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionCancelResult,
@@ -179,6 +183,14 @@ export interface DecisionsHostsPort {
   cancelHostQuestion(
     reference: DecisionQuestionReference
   ): Promise<HostCallOutcome<DecisionQuestionCancelResult>> | null;
+  /**
+   * Reads or acts on one of a Host's stopped deliveries on that Host
+   * (#18031); null when no Host's questions list the reference. A Host from
+   * before it answers `needs-update`, and isn't asked again on that link.
+   */
+  hostAttention(
+    request: DecisionsHostAttentionRequest
+  ): Promise<HostCallOutcome<DecisionsHostAttentionAnswer>> | null;
   /**
    * What this computer last read of one of a Host's questions over its link
    * (#17946), for the owner to dismiss it by while the Host is away: only

@@ -10,8 +10,8 @@ function decisionsModule() {
 
 /**
  * Lets the Decisions owner among this host's Shells enroll it as a device
- * (#16021), turn its own Decisions off and on (#16022), and read its own
- * questions (#17230). Decisions' own
+ * (#16021), turn its own Decisions off and on (#16022), read its own
+ * questions (#17230), and resolve their stopped deliveries (#18031). Decisions' own
  * modules load on the first CALL that needs them, never before: an owner
  * that never enrolled this Host loads nothing.
  */
@@ -42,6 +42,7 @@ export function installDecisionsHost(server: DecisionsSessionSource): () => Prom
           onQuestionsChanged: (listener) => decisions.onDecisionsHostQuestionsChanged(listener),
           readQuestion: (read) => decisions.readHostServedQuestion(read),
           cancelQuestion: (reference) => decisions.cancelHostServedQuestion(reference),
+          attention: (request) => decisions.hostServedAttention(request),
         };
       },
     }

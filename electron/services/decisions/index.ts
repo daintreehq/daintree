@@ -116,6 +116,9 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
@@ -1360,6 +1363,70 @@ export function markDecisionsAnswerHandled(
 }
 
 const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-running" };
+
+/**
+ * One of a Remote Host's stopped deliveries read or acted on from this
+ * owner computer (#18031): only ever on the Host whose questions name the
+ * reference, never on this computer's own delivery, whatever it holds under
+ * the same id. Never makes or starts the service.
+ */
+export async function actOnHostAttention(
+  request: DecisionsHostAttentionRequest
+): Promise<DecisionsHostAttentionResult> {
+  const onHost = hostRouteFor(request.reference)?.hostAttention(request) ?? null;
+  if (onHost === null) return { result: "no-host" };
+  const answered = await onHost;
+  return answered.ok ? answered.value : { result: "unreachable", failure: answered.failure };
+}
+
+/**
+ * One of this Remote Host's own stopped deliveries read or acted on by
+ * reference for the owner's Shell that enrolled it (#18031): only while this
+ * machine runs as a Host, and through the delivery its own windows act
+ * through, so resolving it from either is done once. A resume or Mark handled
+ * is taken only while the question still asks what the owner read it asking.
+ */
+export function hostServedAttention(
+  request: DecisionsHostAttentionRequest
+): Promise<DecisionsHostAttentionAnswer> {
+  if (!servingAsHost()) return Promise.resolve({ result: "off" });
+  const { reference } = request;
+  const notRunning: DecisionsHostAttentionAnswer = { result: "not-running" };
+  switch (request.action) {
+    case "read":
+      return whileReading<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({ result: "read", item: await delivery.attentionItem(reference) }),
+        notRunning
+      );
+    case "copy":
+      return whileReading<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "copied",
+          text: await delivery.copiedAnswer(reference.questionId, reference),
+        }),
+        notRunning
+      );
+    case "resume":
+      return whileDelivering<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "acted",
+          outcome: await delivery.resumeAnswer(reference.questionId, {
+            reference,
+            expected: request.expected,
+          }),
+        }),
+        notRunning
+      );
+    case "handled":
+      return whileDelivering<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "acted",
+          outcome: await delivery.markHandled(reference.questionId, request.expected, reference),
+        }),
+        notRunning
+      );
+  }
+}
 
 /** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
 export function getDecisionsPaneState(terminalId: string): PaneDecisionState | null {

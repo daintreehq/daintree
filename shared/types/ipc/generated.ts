@@ -1028,6 +1028,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:host-attention": {
+    args: [request: import("../decisionsAttention.js").DecisionsHostAttentionRequest];
+    result: import("../decisionsAttention.js").DecisionsHostAttentionResult;
+  };
   "decisions:list-answer-destinations": {
     args: [questionId: string];
     result: import("../decisionsAttention.js").DecisionsAnswerDestinations;

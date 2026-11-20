@@ -279,3 +279,52 @@ export type DecisionsAnswerOutcome =
         /** It asks something else than when it was read (#17944): nothing was done. */
         | "changed";
     };
+
+/**
+ * One of a Remote Host's stopped deliveries, read or acted on from the owner
+ * computer (#18031), on the Host that asked it and by its reference, so
+ * nothing about it is ever taken on this computer instead. A resume or Mark
+ * handled carries the `token` of the item the person saw, which the Host
+ * checks before it acts.
+ */
+export type DecisionsHostAttentionRequest =
+  | { action: "read"; reference: DecisionQuestionReference }
+  | { action: "copy"; reference: DecisionQuestionReference }
+  | { action: "resume"; reference: DecisionQuestionReference; expected: string }
+  | { action: "handled"; reference: DecisionQuestionReference; expected: string };
+
+/**
+ * What the Host answered:
+ *
+ * - `read`: the item as the Host would list it, with what it would offer;
+ *   null once nothing of the question needs a person.
+ * - `copied`: what Copy copies; null when there is nothing to copy.
+ * - `acted`: what became of it after a resume or Mark handled.
+ * - `off`: the Host doesn't serve this computer's owner its questions now.
+ * - `not-running`: the Host's Decisions isn't delivering answers.
+ * - `too-large`: the answer doesn't fit one reply.
+ */
+export type DecisionsHostAttentionAnswer =
+  | { result: "read"; item: DecisionsAttentionItem | null }
+  | { result: "copied"; text: string | null }
+  | { result: "acted"; outcome: DecisionsAnswerOutcome }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "too-large" };
+
+/**
+ * What this computer heard back: the Host's answer, or why there is none.
+ *
+ * - `no-host`: no Host this computer knows lists the question now.
+ * - `unreachable`: the Host couldn't be asked (`needs-update`: a build from
+ *   before #18031; `disconnected`), or what it answered was lost
+ *   (`outcome-unknown`: a resume or Mark handled may have been taken),
+ *   unreadable, or a failure.
+ */
+export type DecisionsHostAttentionResult =
+  | DecisionsHostAttentionAnswer
+  | { result: "no-host" }
+  | {
+      result: "unreachable";
+      failure: "needs-update" | "disconnected" | "outcome-unknown" | "unexpected-answer" | "failed";
+    };

@@ -322,6 +322,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:list-devices": "shell",
   "decisions:list-hosts": "shell",
   "decisions:mark-answer-handled": "shell",
+  "decisions:host-attention": "shell",
   "decisions:prepare-relay-deploy": "shell",
   "decisions:reassign-answer": "shell",
   "decisions:restore-identity": "shell",

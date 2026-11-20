@@ -1713,6 +1713,7 @@ export const CHANNELS = {
   DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
   DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
   DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
+  DECISIONS_HOST_ATTENTION: "decisions:host-attention",
   // The decision model's settings, evaluation and history (#16027).
   DECISIONS_GET_MODEL: "decisions:get-model",
   DECISIONS_SET_MODEL: "decisions:set-model",
