@@ -8,6 +8,16 @@ import {
 const ORIGIN = "https://decisions.example.workers.dev";
 
 describe("revoke and rotate copy (#16010)", () => {
+  it("says encrypted, as the rest of the page does, never sealed (#18066)", () => {
+    const messages = [
+      describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel").message,
+      describeRotateResult({ result: "rotated", keyEpoch: 2 }).message,
+      describeRotateResult({ result: "unverified" }).message,
+    ];
+    for (const message of messages) expect(message).not.toMatch(/seal/i);
+    expect(messages[0]).toContain("encrypted for each device that remains");
+  });
+
   it("finishes a revocation the relay took, or one for a device it no longer lists", () => {
     expect(describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel").finished).toBe(true);
     expect(describeRevokeResult({ result: "not-found" }, "Pixel")).toEqual({

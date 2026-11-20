@@ -18,6 +18,12 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { DecisionsSettingsTab } from "../DecisionsSettingsTab";
 
+const remote = vi.hoisted(() => ({ hostName: null as string | null }));
+vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
+  useRemoteHostName: () => remote.hostName,
+}));
+
 const ORIGIN = "https://decisions.example.workers.dev";
 const SECRET = "claim-secret-0123456789abcdef";
 
@@ -53,6 +59,7 @@ async function renderTab(onClose?: SettingsTabClose) {
 
 describe("DecisionsSettingsTab", () => {
   beforeEach(() => {
+    remote.hostName = null;
     getStatus.mockReset();
     setEnabled.mockReset();
     checkRelay.mockReset();
@@ -623,6 +630,43 @@ describe("DecisionsSettingsTab", () => {
       })
     );
     expect(holdSwitch().disabled).toBe(false);
+  });
+
+  it("says once, in a remote window, that these settings are this computer's and what the Host runs under (#18066)", async () => {
+    remote.hostName = "build-box";
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    await renderTab();
+
+    const notes = screen.getAllByTestId("decisions-remote-window-note");
+    expect(notes).toHaveLength(1);
+    const note = notes[0]!.textContent ?? "";
+    expect(note).toMatch(/^These settings are saved on this (Mac|PC|machine)\./);
+    expect(note).toContain("On build-box, once it's enrolled, every agent that supports ask_human");
+    expect(note).toContain("a question waits 7 days unless its agent sets a time");
+    expect(note).toContain("from a local window");
+    // The note is why Agents is missing here, and Questions' default stays this computer's.
+    expect(document.getElementById("decisions-agents")).toBeNull();
+    expect(document.getElementById("decisions-questions-expiry")?.textContent).toContain(
+      "on this computer"
+    );
+    expect(document.getElementById("decisions-questions")?.textContent).not.toContain(
+      "Remote Host"
+    );
+  });
+
+  it("says nothing of a Host in a local window, or while Decisions is off (#18066)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    await renderTab();
+    expect(screen.queryByTestId("decisions-remote-window-note")).toBeNull();
+    expect(document.getElementById("decisions-agents")).not.toBeNull();
+    cleanup();
+
+    remote.hostName = "build-box";
+    getStatus.mockResolvedValue({ state: "off" });
+    await renderTab();
+    expect(screen.queryByTestId("decisions-remote-window-note")).toBeNull();
   });
 
   it("closes Settings before it opens the inbox (#17231)", async () => {
