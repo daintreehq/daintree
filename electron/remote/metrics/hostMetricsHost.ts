@@ -18,6 +18,7 @@ import type { FleetCaller } from "./hostOps.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import { boundProcessInventory } from "./processInventoryWire.js";
 import {
+  MAX_METRICS_ID_CHARS,
   MAX_RESTART_SHELLS,
   AgentUsageDemandSchema,
   MetricsLinkMethod,
@@ -414,11 +415,14 @@ export function installHostMetricsHostWith(
   });
 
   // Only to a Shell that said it reads them, and once: a Shell whose link is
-  // down when an agent stops never hears of it, rather than hearing late.
+  // down when an agent stops never hears of it, rather than hearing late, nor
+  // on the link that comes up after: a stop seen before a link began, by this
+  // machine's own clock, was seen while there was none.
   const offStops = deps.onAgentStopChanges((change) => {
     const now = deps.now();
     for (const ctx of server.sessions) {
       if (!ctx.session.isOpen || ctx.client.agentStopChanges !== true) continue;
+      if (change.stopped && change.seenAt < ctx.session.startedAt.wall) continue;
       const payload: AgentStopChangePayload = {
         ...change,
         ageMs: Math.max(0, now - change.seenAt),
@@ -556,8 +560,18 @@ export async function installHostMetricsHost(
         },
       };
       // Put aside after its stop was sent: the stop no longer stands, and lifting it brings none back.
-      const withdraw = (terminalId: string, seenAt: number) =>
-        listener({ terminalId, projectId: projectOf(terminalId), state: null, seenAt });
+      const withdraw = (terminalId: string, seenAt: number) => {
+        if (terminalId.length > MAX_METRICS_ID_CHARS) return;
+        const projectId = projectOf(terminalId);
+        listener({
+          terminalId,
+          projectId:
+            projectId !== null && projectId.length <= MAX_METRICS_ID_CHARS ? projectId : null,
+          stopped: false,
+          state: null,
+          seenAt,
+        });
+      };
       const offs = [
         events.on("agent:state-changed", (payload) => {
           const change = agentStopChangeOf(payload, facts);

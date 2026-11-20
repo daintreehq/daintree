@@ -90,7 +90,10 @@ export const MetricsLinkMethod = {
 export const AgentUsageDemandSchema = z.object({ enabled: z.boolean() }).strict();
 export type AgentUsageDemand = z.infer<typeof AgentUsageDemandSchema>;
 
-const id = z.string().min(1).max(256);
+/** The longest id a host sends on these methods; a longer one would be refused. */
+export const MAX_METRICS_ID_CHARS = 256;
+
+const id = z.string().min(1).max(MAX_METRICS_ID_CHARS);
 const name = z.string().max(1024);
 
 export const AttentionPayloadSchema = z.object({
@@ -133,13 +136,16 @@ export type AgentWaitingPayload = z.infer<typeof AgentWaitingPayloadSchema>;
 
 /**
  * What a host saw of one agent's stop: never a title, name or screen text.
- * `state` is null when a stop it was sent no longer stands, and a stopped
- * state a later host adds is read that way too, never refused.
+ * `state` is null when a stop it was sent no longer stands; a stopped state a
+ * later host adds reads as null too, never refused, and `stopped` still says
+ * it is a stop.
  */
 export const AgentStopChangePayloadSchema = z
   .object({
     terminalId: id,
     projectId: id.nullable(),
+    /** A stop, or false for one taken back: what decides, whatever `state` a later host names. */
+    stopped: z.boolean(),
     state: z.enum(["completed", "exited"]).nullable().catch(null),
     /** When the transition was seen, by the host's own clock: provenance, never compared with the Shell's. */
     seenAt: z.number().finite(),

@@ -2538,6 +2538,7 @@ describe("Decisions entry", () => {
       await vi.waitFor(() => expect(connections).toHaveLength(1));
       const stopped = connections[0]!.options.agentStopped!;
       type StopListener = Parameters<DecisionsHostsPort["onAgentStopChanges"]>[0];
+      const withdrawals: Array<() => void> = [];
       const publishStops = () => {
         const listeners = new Set<StopListener>();
         const withdraw = setDecisionsHostsPort({
@@ -2557,54 +2558,114 @@ describe("Decisions entry", () => {
             return () => listeners.delete(listener);
           },
         });
+        withdrawals.push(withdraw);
         const tell = (hostId: string, terminalId: string, isStopped = true) =>
           listeners.forEach((listener) => listener(hostId, { terminalId, stopped: isStopped }));
         return { listeners, withdraw, tell };
       };
+      const reports: Array<{ key: string; stopped: boolean }> = [];
+      let off: (() => void) | null = null;
+      try {
+        const first = publishStops();
+        off = stopped.watchReportedStops!((report) => reports.push(report));
+        expect(first.listeners.size).toBe(1);
+        first.tell("studio", "t-1");
+        first.tell("lab", "t-1");
+        first.tell("studio", "t-2");
+        first.tell("studio", "t-2", false);
+        // The same terminal id on two Hosts, and on this computer, is three agents.
+        const [studioKey, labKey, studioOther] = reports.map((report) => report.key);
+        expect(new Set([studioKey, labKey, studioOther, "t-1"]).size).toBe(4);
+        expect(reports.map((report) => report.stopped)).toEqual([true, true, true, false]);
+        expect(reports[3]!.key).toBe(studioOther);
 
-      const first = publishStops();
+        // A Host judged its own run's park and snooze: this computer's records don't speak for it.
+        setRunAttentionServiceRef({
+          getParkRecord: () => ({ parkedAt: 1 }),
+          isSnoozed: () => true,
+        } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
+        expect(stopped.putAside(studioKey!)).toBe(false);
+        expect(stopped.putAside("t-1")).toBe(true);
+
+        // Withdrawn, the port takes back the stops it passed on that still stood.
+        reports.length = 0;
+        first.withdraw();
+        expect(first.listeners.size).toBe(0);
+        expect(reports).toEqual([
+          { key: studioKey, stopped: false },
+          { key: labKey, stopped: false },
+        ]);
+
+        // A port published later is heard in its place.
+        const second = publishStops();
+        expect(second.listeners.size).toBe(1);
+        reports.length = 0;
+        second.tell("studio", "t-1");
+        expect(reports).toEqual([{ key: studioKey, stopped: true }]);
+
+        off();
+        off = null;
+        expect(second.listeners.size).toBe(0);
+        second.tell("studio", "t-3");
+        // Nor is a port published after it let go.
+        const third = publishStops();
+        expect(third.listeners.size).toBe(0);
+        third.withdraw();
+        expect(reports).toHaveLength(1);
+      } finally {
+        off?.();
+        for (const withdraw of withdrawals) withdraw();
+      }
+    });
+
+    it("takes back the oldest Host stops it holds as it lets them go (#17933)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+      const port: { tell: Parameters<DecisionsHostsPort["onAgentStopChanges"]>[0] | null } = {
+        tell: null,
+      };
+      const withdraw = setDecisionsHostsPort({
+        hosts: () => [],
+        linkFor: () => null,
+        onLinkOpened: () => () => {},
+        onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState: () => {},
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: (listener) => {
+          port.tell = listener;
+          return () => (port.tell = null);
+        },
+      });
       const reports: Array<{ key: string; stopped: boolean }> = [];
       const off = stopped.watchReportedStops!((report) => reports.push(report));
-      expect(first.listeners.size).toBe(1);
-      first.tell("studio", "t-1");
-      first.tell("lab", "t-1");
-      first.tell("studio", "t-2");
-      first.tell("studio", "t-2", false);
-      // The same terminal id on two Hosts, and on this computer, is three agents.
-      const [studioKey, labKey, studioOther] = reports.map((report) => report.key);
-      expect(new Set([studioKey, labKey, studioOther, "t-1"]).size).toBe(4);
-      expect(reports.map((report) => report.stopped)).toEqual([true, true, true, false]);
-      expect(reports[3]!.key).toBe(studioOther);
-
-      // A Host judged its own run's park and snooze: this computer's records don't speak for it.
-      setRunAttentionServiceRef({
-        getParkRecord: () => ({ parkedAt: 1 }),
-        isSnoozed: () => true,
-      } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
-      expect(stopped.putAside(studioKey!)).toBe(false);
-      expect(stopped.putAside("t-1")).toBe(true);
-
-      // Withdrawn, the port takes back the stops it passed on that still stood.
-      reports.length = 0;
-      first.withdraw();
-      expect(first.listeners.size).toBe(0);
-      expect(reports).toEqual([
-        { key: studioKey, stopped: false },
-        { key: labKey, stopped: false },
-      ]);
-
-      // A port published later is heard in its place.
-      const second = publishStops();
-      expect(second.listeners.size).toBe(1);
-      reports.length = 0;
-      second.tell("studio", "t-1");
-      expect(reports).toEqual([{ key: studioKey, stopped: true }]);
-
-      off();
-      expect(second.listeners.size).toBe(0);
-      second.tell("studio", "t-3");
-      expect(reports).toHaveLength(1);
-      second.withdraw();
+      try {
+        // Far more than any Host holds, spread over several.
+        for (let index = 0; index < 5_000; index += 1) {
+          port.tell!(`host-${index % 5}`, { terminalId: `t-${index}`, stopped: true });
+        }
+        const takenBack = reports.filter((report) => !report.stopped);
+        const sent = reports.filter((report) => report.stopped);
+        expect(sent).toHaveLength(5_000);
+        // The oldest each went as a later one came, and each was taken back as it went.
+        expect(takenBack.map((report) => report.key)).toEqual(
+          sent.slice(0, takenBack.length).map((report) => report.key)
+        );
+        expect(takenBack.length).toBeGreaterThan(0);
+        reports.length = 0;
+        withdraw();
+        expect(reports.length + takenBack.length).toBe(5_000);
+        expect(reports.every((report) => !report.stopped)).toBe(true);
+      } finally {
+        off();
+        withdraw();
+      }
     });
   });
 

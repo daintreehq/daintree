@@ -942,7 +942,7 @@ function isHostStopKey(key: string): boolean {
   return key.startsWith("\0host\0");
 }
 
-/** Host stops kept to take back if the port goes; the oldest go first, long since sent. */
+/** Host stops kept to take back if the port goes; the oldest go first, taken back as they go. */
 const MAX_HELD_HOST_STOPS = 4000;
 
 /**
@@ -967,7 +967,11 @@ function watchHostStops(listener: (report: ReportedStop) => void): () => void {
       held.delete(key);
       if (change.stopped) {
         held.add(key);
-        if (held.size > MAX_HELD_HOST_STOPS) held.delete(held.values().next().value!);
+        if (held.size > MAX_HELD_HOST_STOPS) {
+          const evicted = held.values().next().value!;
+          held.delete(evicted);
+          listener({ key: evicted, stopped: false });
+        }
       }
       listener({ key, stopped: change.stopped });
     });

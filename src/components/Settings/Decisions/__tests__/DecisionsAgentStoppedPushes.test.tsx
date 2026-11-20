@@ -100,8 +100,7 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
     // Which Hosts can report a stop: only those this computer is connected to (#17933).
     for (const scope of [
       "this computer and the Remote Hosts it's connected to",
-      "a project open here",
-      "its notifications turned on",
+      "one with a project open here, or with its notifications turned on",
     ]) {
       expect(described, scope).toContain(scope);
     }

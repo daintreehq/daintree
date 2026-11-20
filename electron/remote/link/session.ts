@@ -321,8 +321,9 @@ export class LinkSession {
   private readonly sentPings = new Map<number, ElapsedStamp>();
   private _peerPingNonce: number | null = null;
   /**
-   * When this session was made, on this machine's clocks: before its HELLO
-   * or WELCOME went out, so before the peer could post anything on it.
+   * When this session was made, on this machine's clocks. For a client that
+   * is before its HELLO went out, so before the host could post anything on
+   * it; a host's may come after the client's HELLO arrived.
    */
   readonly startedAt: ElapsedStamp;
   private _lastReceivedAt: number;

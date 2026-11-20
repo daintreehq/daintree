@@ -68,8 +68,8 @@ export const HOST_STOP_MAX_AGE_MS = 3 * DEFAULT_PING_INTERVAL_MS;
 
 /**
  * The most stops kept per host to take back. A stop is never taken back once
- * its agent stays stopped, so the oldest go first: by then any batch that
- * held one has long gone out.
+ * its agent stays stopped, so the oldest go first, taken back as they go:
+ * nothing could take them back later.
  */
 export const MAX_LIVE_STOPS_PER_HOST = 1000;
 
@@ -346,7 +346,7 @@ export class HostMetricsClient {
   ): void {
     if (this.agentStopListeners.size === 0 || !session.isOpen) return;
     const live = this.liveStops.get(hostId);
-    if (payload.state === null) {
+    if (!payload.stopped) {
       if (live?.delete(payload.terminalId) !== true) return;
       if (live.size === 0) this.liveStops.delete(hostId);
       this.tellAgentStop(hostId, payload.terminalId, false);
@@ -359,13 +359,19 @@ export class HostMetricsClient {
     if (since === null) return;
     const maxAgeMs = payload.ageMs + elapsedSince(since, (this.options.clock ?? stampNow)());
     if (maxAgeMs > HOST_STOP_MAX_AGE_MS) return;
+    let evicted: string | null = null;
     if (live) {
       live.delete(payload.terminalId);
       live.set(payload.terminalId, session);
-      if (live.size > MAX_LIVE_STOPS_PER_HOST) live.delete(live.keys().next().value!);
+      if (live.size > MAX_LIVE_STOPS_PER_HOST) {
+        evicted = live.keys().next().value!;
+        live.delete(evicted);
+      }
     } else {
       this.liveStops.set(hostId, new Map([[payload.terminalId, session]]));
     }
+    // Taken back as it's let go: nothing could take it back later.
+    if (evicted !== null) this.tellAgentStop(hostId, evicted, false);
     this.tellAgentStop(hostId, payload.terminalId, true);
   }
 

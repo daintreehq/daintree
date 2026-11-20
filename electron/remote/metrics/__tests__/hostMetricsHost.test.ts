@@ -1125,12 +1125,17 @@ describe("agent stops (#17933)", () => {
     return heard;
   }
 
+  const stopSent = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED);
+
   it("tells every Shell that reads them, summary-only too, with facts and its own ping", async () => {
     const server = new FakeServer();
-    const d = deps({ now: () => 5_000, acceptsRemoteControl: () => false });
-    const dispose = installHostMetricsHostWith(server, d);
     const a = await pair();
     const b = await pair();
+    // This host's clock, from just after both links began.
+    const t0 = Math.max(a.host.startedAt.wall, b.host.startedAt.wall);
+    const d = deps({ now: () => t0 + 1_000, acceptsRemoteControl: () => false });
+    const dispose = installHostMetricsHostWith(server, d);
     const heardA = hear(a);
     const heardB = hear(b);
     b.client.ping();
@@ -1139,29 +1144,60 @@ describe("agent stops (#17933)", () => {
     server.attach(a.host, "a", undefined, { agentStopChanges: true });
     server.attach(b.host, "b", undefined, { agentStopChanges: true });
 
-    d.fireStop({ terminalId: "t1", projectId: "p1", state: "completed", seenAt: 4_200 });
-    d.fireStop({ terminalId: "t1", projectId: "p1", state: null, seenAt: 4_900 });
-    await waitFor(() => heardA.length === 2 && heardB.length === 2);
+    d.fireStop({
+      terminalId: "t1",
+      projectId: "p1",
+      stopped: true,
+      state: "completed",
+      seenAt: t0 + 200,
+    });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: "p1",
+      stopped: false,
+      state: null,
+      seenAt: t0 + 900,
+    });
+    // Seen ahead of the moment it's sent, by a clock stepped back: no age, never a negative one.
+    d.fireStop({
+      terminalId: "t2",
+      projectId: null,
+      stopped: true,
+      state: "exited",
+      seenAt: t0 + 5_000,
+    });
+    await waitFor(() => heardA.length === 3 && heardB.length === 3);
     expect(heardA).toEqual([
       {
         terminalId: "t1",
         projectId: "p1",
+        stopped: true,
         state: "completed",
-        seenAt: 4_200,
+        seenAt: t0 + 200,
         ageMs: 800,
         afterPing: null,
       },
       {
         terminalId: "t1",
         projectId: "p1",
+        stopped: false,
         state: null,
-        seenAt: 4_900,
+        seenAt: t0 + 900,
         ageMs: 100,
+        afterPing: null,
+      },
+      {
+        terminalId: "t2",
+        projectId: null,
+        stopped: true,
+        state: "exited",
+        seenAt: t0 + 5_000,
+        ageMs: 0,
         afterPing: null,
       },
     ]);
     // Each Shell's frame names that Shell's own newest ping.
-    expect(heardB.map((body) => body.afterPing)).toEqual([1, 1]);
+    expect(heardB.map((body) => body.afterPing)).toEqual([1, 1, 1]);
     dispose();
   });
 
@@ -1178,37 +1214,96 @@ describe("agent stops (#17933)", () => {
     server.attach(declined.host, "declined", undefined, { agentStopChanges: false });
     server.attach(current.host, "current", undefined, { agentStopChanges: true });
 
-    d.fireStop({ terminalId: "t1", projectId: null, state: "exited", seenAt: 0 });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "exited",
+      seenAt: Date.now(),
+    });
     await waitFor(() => heardCurrent.length === 1);
-    for (const spy of sent) {
-      expect(
-        spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED)
-      ).toEqual([]);
-    }
+    for (const spy of sent) expect(stopSent(spy)).toEqual([]);
     dispose();
   });
 
-  it("holds nothing for a Shell whose link is down, and sends nothing after it's disposed", async () => {
+  it("never sends a link a stop seen before it began, though a stop taken back still goes", async () => {
     const server = new FakeServer();
-    const d = deps();
+    const d = deps({ now: () => Date.now() });
+    const dispose = installHostMetricsHostWith(server, d);
+    const p = await pair();
+    const heard = hear(p);
+    server.attach(p.host, "back", undefined, { agentStopChanges: true });
+    const began = p.host.startedAt.wall;
+
+    // Seen while this Shell had no link: the link that came up after never hears it.
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: began - 1,
+    });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: false,
+      state: null,
+      seenAt: began - 1,
+    });
+    d.fireStop({
+      terminalId: "t2",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: began,
+    });
+    await waitFor(() => heard.length === 2);
+    expect(heard.map((body) => [body.terminalId, body.stopped])).toEqual([
+      ["t1", false],
+      ["t2", true],
+    ]);
+    dispose();
+  });
+
+  it("holds nothing for a link that is down, retries none, and sends nothing once disposed", async () => {
+    const server = new FakeServer();
+    const d = deps({ now: () => Date.now() });
     const dispose = installHostMetricsHostWith(server, d);
     const gone = await pair();
+    const refusing = await pair();
     const live = await pair();
     const heardLive = hear(live);
     server.attach(gone.host, "gone", undefined, { agentStopChanges: true });
+    server.attach(refusing.host, "refusing", undefined, { agentStopChanges: true });
     server.attach(live.host, "live", undefined, { agentStopChanges: true });
     gone.host.close("link down");
     await waitFor(() => gone.client.isClosed);
     const sentOnGone = vi.spyOn(gone.host, "call");
+    const sentOnRefusing = vi.spyOn(refusing.host, "call").mockRejectedValue(new Error("refused"));
+    const sentOnLive = vi.spyOn(live.host, "call");
 
-    d.fireStop({ terminalId: "t1", projectId: null, state: "completed", seenAt: 0 });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: Date.now(),
+    });
     await waitFor(() => heardLive.length === 1);
     expect(sentOnGone).not.toHaveBeenCalled();
+    // A Shell that couldn't take it is never sent it again; the others still were.
+    expect(stopSent(sentOnRefusing)).toHaveLength(1);
 
     dispose();
-    d.fireStop({ terminalId: "t2", projectId: null, state: "completed", seenAt: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(heardLive.map((body) => body.terminalId)).toEqual(["t1"]);
+    d.fireStop({
+      terminalId: "t2",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: Date.now(),
+    });
+    expect(stopSent(sentOnLive)).toHaveLength(1);
+    expect(stopSent(sentOnRefusing)).toHaveLength(1);
   });
 });
 

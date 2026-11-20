@@ -551,7 +551,18 @@ describe("AgentStoppedPushes", () => {
       h.pushes.stop();
     });
 
-    it("waits for one to settle, and drops it when the Host takes it back first", () => {
+    it("keeps a Host's stop when this computer's own in the batch goes back to work", () => {
+      const h = harness();
+      h.pushes.update();
+      h.stop("a");
+      h.report("host-x");
+      h.work("a");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("waits for one to settle from when it was first reported, and drops it when taken back first", () => {
       const h = harness();
       h.pushes.update();
       h.report("host-x");
@@ -559,17 +570,17 @@ describe("AgentStoppedPushes", () => {
       h.report("host-x", false);
       vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
       expect(h.send).not.toHaveBeenCalled();
-      // A repeat while one is pending is the one stop; taking back one Host's leaves the other's.
+
+      // A repeat while one is pending is the one stop, still settling from the first.
       h.report("host-x");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS - 1);
       h.report("host-x");
-      h.report("host-y");
-      h.report("host-x", false);
-      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      vi.advanceTimersByTime(1);
       expect(h.send).toHaveBeenCalledTimes(1);
       h.pushes.stop();
     });
 
-    it("drops one taken back while it waits out the relay's minute", async () => {
+    it("drops only the one taken back while it waits out the relay's minute", async () => {
       const h = harness();
       h.pushes.update();
       h.stop("a");
@@ -577,34 +588,66 @@ describe("AgentStoppedPushes", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(h.send).toHaveBeenCalledTimes(1);
       h.report("host-x");
+      h.report("host-y");
       vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS / 2);
       h.report("host-x", false);
       await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
-      expect(h.send).toHaveBeenCalledTimes(1);
+      expect(h.send).toHaveBeenCalledTimes(2);
+
+      // Taken back, the last one leaves nothing to send.
+      await vi.advanceTimersByTimeAsync(0);
+      h.report("host-z");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      h.report("host-z", false);
+      await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+      expect(h.send).toHaveBeenCalledTimes(2);
       h.pushes.stop();
     });
 
-    it("admits one only while away, outside quiet hours and awake, as this computer's own", () => {
+    it("admits one only while away", () => {
       const h = harness("present");
       h.pushes.update();
       h.report("host-x");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
       h.setPresence("away");
-      h.setQuiet(true);
-      h.report("host-y");
-      h.setQuiet(false);
-      h.suspend();
-      h.report("host-z");
-      h.resume();
-      h.report("host-w");
-      vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS + AGENT_STOPPED_BATCH_MS);
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
       expect(h.send).not.toHaveBeenCalled();
-      h.report("host-v");
+      h.report("host-y");
       vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
       expect(h.send).toHaveBeenCalledTimes(1);
       h.pushes.stop();
     });
 
-    it("listens for them only while allowed", () => {
+    it("admits none in quiet hours", () => {
+      const h = harness();
+      h.pushes.update();
+      h.setQuiet(true);
+      h.report("host-x");
+      h.setQuiet(false);
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
+      expect(h.send).not.toHaveBeenCalled();
+      h.report("host-y");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("admits none while asleep, nor in the moments after waking", () => {
+      const h = harness();
+      h.pushes.update();
+      h.suspend();
+      h.report("host-x");
+      h.resume();
+      h.report("host-y");
+      vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS);
+      expect(h.send).not.toHaveBeenCalled();
+      h.report("host-z");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("listens for them only while allowed, again after being turned back on", () => {
       const h = harness();
       h.allow(false);
       h.pushes.update();
@@ -619,8 +662,13 @@ describe("AgentStoppedPushes", () => {
       expect(h.reportListeners()).toBe(0);
       h.allow(true);
       h.pushes.update();
+      expect(h.reportListeners()).toBe(1);
+      // The one reported before the turn off went with it.
       vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
       expect(h.send).not.toHaveBeenCalled();
+      h.report("host-y");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
       h.pushes.stop();
     });
   });
