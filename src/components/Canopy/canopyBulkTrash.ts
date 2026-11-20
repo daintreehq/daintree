@@ -3,7 +3,7 @@ import type { TerminalInputLineState } from "@shared/types/terminalStatus";
 import type { HostId } from "@shared/types/remoteHosts";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { allHostsKey } from "./canopyAllHosts";
-import type { CanopyItem } from "./canopyModel";
+import { itemAnswerAttention, itemQuestionAttention, type CanopyItem } from "./canopyModel";
 import { placeOf } from "./canopyInboxPlace";
 
 /**
@@ -11,15 +11,21 @@ import { placeOf } from "./canopyInboxPlace";
  * person may still want it, never a guess. A suggestion the agent drew in its
  * own input box is not one: nobody typed it.
  */
-export type BulkTrashHold = "working" | "typed" | "reply";
+export type BulkTrashHold = "working" | "answer" | "question" | "typed" | "reply";
 
 export const BULK_TRASH_HOLD_LABEL: Record<BulkTrashHold, string> = {
   working: "Working",
+  answer: "Answer needs attention",
+  question: "Question open in Decisions",
   typed: "Text typed in its terminal",
   reply: "Reply drafted here",
 };
 
-/** The first thing seen that holds a run back, by the order the person would weigh them. */
+/**
+ * The first thing seen that holds a run back, by the order the person would
+ * weigh them. What Decisions holds for the run counts whatever the panel did
+ * with it: an unanswered question is never a terminal to trash by default.
+ */
 export function bulkTrashHold(
   item: CanopyItem,
   inputLine: TerminalInputLineState | undefined,
@@ -27,6 +33,8 @@ export function bulkTrashHold(
 ): BulkTrashHold | null {
   const state = item.row.run.agentState;
   if (state === "working" || state === "directing") return "working";
+  if (itemAnswerAttention(item) > 0) return "answer";
+  if (itemQuestionAttention(item) > 0) return "question";
   if (inputLine === "typed") return "typed";
   if (replyDraft) return "reply";
   return null;

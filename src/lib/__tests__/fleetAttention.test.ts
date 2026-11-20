@@ -1013,3 +1013,12 @@ describe("agent-reported needs", () => {
     expect(fleetUnseenAskForRun(fleet, "agent-working")).toBeUndefined();
   });
 });
+
+describe("Decisions attention", () => {
+  const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+
+  it("puts a finished run whose Decisions answer stopped on its way in under needs-you", () => {
+    const finished = run({ agentState: "completed", handBack: seen, answerAttention: 1 });
+    expect(bandForRun(finished)).toBe("needs-you");
+  });
+});

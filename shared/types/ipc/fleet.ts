@@ -287,6 +287,14 @@ export interface FleetRunRow {
    */
   answerAttention?: number;
   /**
+   * How many Daintree Decisions questions this pane asked are open in Needs
+   * you (waiting for the person, or queued to be sent), less any the person
+   * cleared from Needs you on this computer at the ask they cleared. Present
+   * only while Decisions is on and the count is above zero. What Decisions
+   * recorded, never a reading of the agent's screen.
+   */
+  questionAttention?: number;
+  /**
    * Present iff Canopy is on with its model here, and read something this
    * turn that refines where the run lands. Whether it still applies to what
    * Daintree observes now is `canopyPlacement`'s to say, not presence alone:

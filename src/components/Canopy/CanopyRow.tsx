@@ -14,7 +14,9 @@ import {
   answerOptions,
   itemAgentNeedHolds,
   answerAttentionLabel,
+  questionAttentionLabel,
   itemAnswerAttention,
+  itemQuestionAttention,
   itemContextWarning,
   itemFacts,
   itemArchived,
@@ -495,18 +497,21 @@ export function CanopyRow({
   // One health note beside the attribution at most, the most pressing first,
   // so the trailing words can never outgrow the ask they follow; the rest are
   // in the row's description and the selected pane.
-  // Decisions saw an answer for this run stop on its way in. Daintree's own
-  // observation, and the reason the run sits with what needs the user, so it
-  // leads the tail.
+  // Decisions saw an answer for this run stop on its way in, or holds a
+  // question it asked open. Daintree's own record, and the reason the run sits
+  // with what needs the user, so it leads the tail.
   // The agent printed that it needs the user, said wherever the ask line
   // doesn't already say so: the reason the run sits with what needs the user.
   const agentWords = agentNeedWords(item);
   const agentNote = agentWords !== null && agentWords !== status ? agentWords : null;
   const answers = itemAnswerAttention(item);
   const answerNote = answers === 0 ? null : answerAttentionLabel(answers);
+  const questions = itemQuestionAttention(item);
+  const questionNote = questions === 0 ? null : questionAttentionLabel(questions);
   const statusTail = [
     agentNote,
     answerNote,
+    questionNote,
     stalled,
     row.band === "quiet" && !quietLead ? "Quiet" : null,
     item.failed && attribution === null ? "Read failed" : null,

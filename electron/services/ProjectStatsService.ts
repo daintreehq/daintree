@@ -9,6 +9,7 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
+import { decisionAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
 import { loadedHelpSessionService } from "./helpSessionRuntime.js";
 import {
   getSharedTerminalSnapshot,
@@ -93,6 +94,9 @@ export class ProjectStatsService {
     // Canopy reading an ask or a false alarm moves the same tallies, and the
     // host has nothing new to say about it.
     this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
+    // A Decisions question opening, cleared or answered moves them too, with
+    // nothing on the host to announce it. No counts arrive while Decisions is off.
+    this.eventUnsubscribes.push(onAnswerAttentionChanged(() => this.debouncedCompute()));
     // So does the user looking at a wait no reading placed: it stops being
     // unread, and nothing on the host moved.
     const offWaits = this.runHandBack?.onWaitChanged(() => this.debouncedCompute());
@@ -406,7 +410,8 @@ export class ProjectStatsService {
         runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
         this.runAttention?.getAll(),
         canopyRefinementFor,
-        runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
+        runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined,
+        decisionAttentionFor
       );
 
       const statusMap: ProjectStatusMap = {};

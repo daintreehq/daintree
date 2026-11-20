@@ -2,13 +2,14 @@ import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind } from "../../shared/types/panel.js";
 import type { HandbackReport } from "../../shared/types/handback.js";
 import type {
+  FleetRunRow,
   RunCanopyRefinement,
   RunHandBackRecord,
   RunWaitRecord,
 } from "../../shared/types/ipc/fleet.js";
 import { isHandBackStop, isObservedAskWait } from "../../shared/utils/runHandBack.js";
 import { canopyPlacement } from "../../shared/utils/canopyRefinement.js";
-import { bandForRun, isAgentReportedNeed } from "../../shared/utils/fleetBands.js";
+import { bandForRun, isAgentReportedNeed, isDecisionsNeed } from "../../shared/utils/fleetBands.js";
 import { isHostThrowawayWorkspaceId } from "../../shared/config/hostThrowaway.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
@@ -273,6 +274,14 @@ function usableTimestamp(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+/** Tally one run at work, dated from its working stint when known. */
+function noteWorking(entry: ProjectAgentCounts, since: number | undefined): void {
+  entry.active += 1;
+  if (typeof since === "number" && since > 0) {
+    entry.latestWorkingSince = Math.max(entry.latestWorkingSince ?? 0, since);
+  }
+}
+
 /** Tally one unseen hand-back, dated when known. */
 function noteUnacknowledged(entry: ProjectAgentCounts, at: number): void {
   entry.unacknowledgedCompleted += 1;
@@ -505,7 +514,17 @@ export function computeProjectAgentCounts(
    * answer the record would give before anyone looked. Omitted, every such wait
    * is unread.
    */
-  waitFor?: (terminalId: string, spawnedAt?: number) => RunWaitRecord | undefined
+  waitFor?: (terminalId: string, spawnedAt?: number) => RunWaitRecord | undefined,
+  /**
+   * What Daintree Decisions holds for a run, as the fleet row carries it:
+   * answers needing a person and open questions. `decisionAttentionFor` is the
+   * intended source. A run holding either waits on the user, as the fleet
+   * bands it, at work or stopped; one at work still counts as working.
+   * Omitted, as while Decisions is off, no run holds any.
+   */
+  decisionsFor?: (
+    terminalId: string
+  ) => Pick<FleetRunRow, "answerAttention" | "questionAttention"> | undefined
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -583,6 +602,7 @@ export function computeProjectAgentCounts(
         : undefined;
     const handbackReport =
       terminal.lastHandback?.report === "needs-you" ? ("needs-you" as const) : undefined;
+    const decisions = id !== undefined ? decisionsFor?.(id) : undefined;
     const band = bandForRun({
       agentState: state,
       waitingReason: terminal.waitingReason,
@@ -592,14 +612,26 @@ export function computeProjectAgentCounts(
       canopy: refinement,
       park: isParked ? true : undefined,
       snooze,
+      answerAttention: decisions?.answerAttention,
+      questionAttention: decisions?.questionAttention,
     });
     const agentNeed = isAgentReportedNeed({
       agentState: state,
       waitingReason: terminal.waitingReason,
       handbackReport,
     });
+    const decisionsNeed =
+      !agentNeed &&
+      isDecisionsNeed({
+        agentState: state,
+        waitingReason: terminal.waitingReason,
+        answerAttention: decisions?.answerAttention,
+        questionAttention: decisions?.questionAttention,
+      });
     const canopy = canopyPlacement(state, terminal.waitingReason, refinement);
     const unread = band === "review";
+    // A run at work dates its state from the work, which is no wait's age.
+    const atWork = state === "working" || state === "directing";
 
     if (band === "needs-you" || band === "blocked") {
       entry.waiting += 1;
@@ -612,8 +644,9 @@ export function computeProjectAgentCounts(
       // recorded one yet still count toward `waiting` but can't contribute an age.
       // An ask Canopy read on a hand-back is as old as the stop it was asked at,
       // as the fleet dates it, not the slide from `completed` into a prompt.
-      const since =
-        usableTimestamp(handBack?.stoppedAt) || usableTimestamp(terminal.lastStateChange);
+      const since = atWork
+        ? 0
+        : usableTimestamp(handBack?.stoppedAt) || usableTimestamp(terminal.lastStateChange);
       if (since > 0) {
         entry.oldestWaitingSince =
           entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);
@@ -624,6 +657,11 @@ export function computeProjectAgentCounts(
       // The agent said it needs the user, so it hasn't handed the work back,
       // whatever Canopy read or the hand-back record says. Counted above until
       // the next prompt clears it, and nowhere while the run is set aside.
+    } else if (decisionsNeed) {
+      // Decisions holds a question or an answer for it, so nothing is handed
+      // back while it does. Counted above unless set aside, and an agent still
+      // at work is still working.
+      if (state === "working") noteWorking(entry, terminal.lastStateChange);
     } else if (canopy?.kind === "not-asking") {
       // A question wait is never recorded as a hand-back, so a record the run
       // carries is from an earlier stop. The wait is the stop, unseen until
@@ -653,11 +691,7 @@ export function computeProjectAgentCounts(
       if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
       noteUnacknowledged(entry, at);
     } else if (state === "working") {
-      entry.active += 1;
-      const since = terminal.lastStateChange;
-      if (typeof since === "number" && since > 0) {
-        entry.latestWorkingSince = Math.max(entry.latestWorkingSince ?? 0, since);
-      }
+      noteWorking(entry, terminal.lastStateChange);
     } else if (state === "completed") {
       // Finished before main was watching, so nothing was handed back and the
       // fleet bands it idle: presence, never unread. The watermark is still

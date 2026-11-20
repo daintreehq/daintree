@@ -118,6 +118,30 @@ export function withInbox(
 }
 
 /**
+ * Each terminal's questions in Needs you that the person hasn't cleared at
+ * the ask they show now, read as the inbox reads them (`withInbox`): a mark
+ * made at an earlier ask clears nothing. `questions` are one machine's own,
+ * asked from `hostId`, with `asks` naming each one's current ask by question
+ * id. Seen alone still counts: it answers nothing.
+ */
+export function unclearedQuestionsByTerminal(
+  questions: readonly DecisionQuestionListItem[],
+  hostId: string,
+  asks: ReadonlyMap<string, string | null>,
+  marks: QuestionMarks
+): Map<string, number> {
+  const byKey = new Map<string, string | null>();
+  for (const [questionId, ask] of asks) byKey.set(markKey({ hostId, questionId }), ask);
+  const counts = new Map<string, number>();
+  for (const item of withInbox(questions, byKey, marks)) {
+    if (item.inbox === undefined || item.inbox.cleared) continue;
+    const { terminalId } = item.reference;
+    counts.set(terminalId, (counts.get(terminalId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
  * Whether the list leaves `mark` standing. This computer's own list is whole,
  * so one of its questions no longer listed has gone for good. A Host's can be
  * missing for a while (its link down, its list not read yet), so its mark

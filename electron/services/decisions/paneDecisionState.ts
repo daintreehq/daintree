@@ -10,11 +10,17 @@ import type {
   PaneDecisionAttention,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
+import type { RunDecisionAttention } from "../runAnswerAttentionSource.js";
 
 export type PaneDecisionStatePublisher = (projectId: string, state: PaneDecisionState) => void;
 
-/** Every pane with answers needing a person, and how many; an empty map when none has any. */
-export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, number>) => void;
+/**
+ * Every pane with answers needing a person or questions open for one, and how
+ * many of each; an empty map when none has any.
+ */
+export type AnswerAttentionPublisher = (
+  counts: ReadonlyMap<string, RunDecisionAttention>
+) => void;
 
 type PaneContent = Omit<PaneDecisionState, "revision">;
 
@@ -164,6 +170,8 @@ interface HeldPane {
  */
 export class PaneDecisionStates {
   private readonly panes = new Map<string, HeldPane>();
+  /** Open questions the person hasn't cleared, by terminal, as the last `replace` was told. */
+  private questions: ReadonlyMap<string, number> = new Map();
   private revision = 0;
 
   constructor(
@@ -179,8 +187,15 @@ export class PaneDecisionStates {
   /**
    * Replaces every pane's state with what these rows show, `handled` the
    * answers a person marked handled, pushing only the panes that changed.
+   * `questions` counts each terminal's questions open in Needs you that the
+   * person hasn't cleared, for the fleet alone: pane chrome doesn't show it.
    */
-  replace(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
+  replace(
+    rows: readonly QuestionRow[],
+    handled: HandledAnswers = new Map(),
+    questions: ReadonlyMap<string, number> = new Map()
+  ): void {
+    this.questions = questions;
     const next = projectPaneDecisionStates(rows, handled);
     for (const [terminalId, held] of [...this.panes]) {
       if (next.get(terminalId)?.projectId === held.projectId) continue;
@@ -199,17 +214,27 @@ export class PaneDecisionStates {
   clear(notify: boolean): void {
     const held = [...this.panes];
     this.panes.clear();
+    this.questions = new Map();
     // Whatever happens to the views, no run keeps a count once the panes go.
     this.sendAttention();
     if (!notify) return;
     for (const [terminalId, { projectId }] of held) this.send(projectId, emptyContent(terminalId));
   }
 
-  /** Each held pane's count of answers needing a person, for the fleet; best effort like `send`. */
+  /**
+   * Each terminal's answers needing a person and open questions, for the
+   * fleet; best effort like `send`. A question can wait on a terminal no pane
+   * is held for (a reply its agent asked for), and a clear changes no pane.
+   */
   private sendAttention(): void {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, RunDecisionAttention>();
     for (const [terminalId, { state }] of this.panes) {
-      if (state.needsAttention.length > 0) counts.set(terminalId, state.needsAttention.length);
+      const answers = state.needsAttention.length;
+      if (answers > 0) counts.set(terminalId, { answers, questions: 0 });
+    }
+    for (const [terminalId, questions] of this.questions) {
+      if (questions <= 0) continue;
+      counts.set(terminalId, { answers: counts.get(terminalId)?.answers ?? 0, questions });
     }
     try {
       this.publishAttention(counts);

@@ -67,7 +67,11 @@ import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions, questionAsks } from "./questionList.js";
 import type { AdvisoryHost } from "./questionRound.js";
 import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
-import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
+import {
+  readQuestionMarks,
+  unclearedQuestionsByTerminal,
+  type QuestionMarks,
+} from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import type { AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
@@ -829,10 +833,14 @@ export class DecisionsService {
    * pane's state becomes what they show, and the panes that changed are
    * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
    */
-  observeQuestions(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
+  observeQuestions(
+    rows: readonly QuestionRow[],
+    handled: HandledAnswers = new Map(),
+    questions: ReadonlyMap<string, number> = new Map()
+  ): void {
     if (this.disposed || this.state === "off") return;
     // The panes read every row, so a handled one still decides which project its pane is in.
-    this.panes.replace(rows, handled);
+    this.panes.replace(rows, handled, questions);
     this.connection?.observeQuestions?.(withoutHandled(rows, handled));
   }
 
@@ -846,8 +854,8 @@ export class DecisionsService {
     rows: readonly QuestionRow[],
     handled: HandledAnswers,
     marks: QuestionMarks
-  ): void {
-    if (this.disposed || this.state === "off") return;
+  ): ReadonlyMap<string, number> {
+    if (this.disposed || this.state === "off") return new Map();
     const hostId = this.settings?.hostId ?? null;
     const questions = projectDecisionQuestions(rows, handled, hostId, this.advisoryHost());
     const waiting = new Set(
@@ -858,6 +866,8 @@ export class DecisionsService {
     const asks = questionAsks(rows, waiting);
     if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
+    // What raises each run on the fleet: a Host's lifetime has no marks, so none is cleared there.
+    return hostId === null ? new Map() : unclearedQuestionsByTerminal(questions, hostId, asks, marks);
   }
 
   /**
@@ -1521,8 +1531,8 @@ export class DecisionsService {
         return store.listQuestions();
       },
       (rows) => {
-        this.listQuestions(rows, handled, marks);
-        this.observeQuestions(rows, handled);
+        const questions = this.listQuestions(rows, handled, marks);
+        this.observeQuestions(rows, handled, questions);
       }
     );
     this.feed = feed;
