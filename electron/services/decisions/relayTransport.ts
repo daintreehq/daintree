@@ -220,7 +220,11 @@ export class TrailingPump {
       done: started
         .then(() => done)
         .catch((error: unknown) => {
-          this.report(error instanceof Error ? error : new Error(String(error)));
+          try {
+            this.report(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // A listener's own failure: its callers still settle as the pass they joined.
+          }
         }),
     };
   }

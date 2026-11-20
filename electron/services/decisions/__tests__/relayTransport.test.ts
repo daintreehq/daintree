@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DecisionsBridge,
   MemoryKeyStore,
@@ -219,6 +219,11 @@ async function stateOf(promise: Promise<void>): Promise<"pending" | "resolved" |
 }
 
 describe("TrailingPump", () => {
+  let reported: Error[] = [];
+  beforeEach(() => {
+    reported = [];
+  });
+
   /**
    * The library's pump as 0.9.0 has it: a call while a pass runs joins that
    * pass. A pass lets go of its place before its callers hear, and they also
@@ -226,9 +231,11 @@ describe("TrailingPump", () => {
    * `onCleared` stands in for another caller starting a pass the moment one
    * lets go.
    */
-  function libraryPump(onCleared?: () => void) {
+  function libraryPump(
+    onCleared?: () => void,
+    report: (error: Error) => void = (error) => reported.push(error)
+  ) {
     const passes: Array<{ finish: () => void; fail: (error: Error) => void }> = [];
-    const reported: Error[] = [];
     let pumping: Promise<void> | null = null;
     let advisory: Promise<void> = Promise.resolve();
     const pass = (): Promise<void> => {
@@ -243,16 +250,11 @@ describe("TrailingPump", () => {
       }
       return Promise.all([pumping, advisory]).then(() => {});
     };
-    const pump = new TrailingPump(
-      pass,
-      () => pumping,
-      (error) => reported.push(error)
-    );
+    const pump = new TrailingPump(pass, () => pumping, report);
     return {
       pump,
       pass,
       passes,
-      reported,
       holdAdvisory: () => {
         let release!: () => void;
         advisory = new Promise<void>((resolve) => (release = resolve));
@@ -342,7 +344,7 @@ describe("TrailingPump", () => {
   });
 
   it("gives each caller the failure of the pass it joined, and still runs the pass after", async () => {
-    const { pump, passes, reported } = libraryPump();
+    const { pump, passes } = libraryPump();
     const first = pump.run();
     const joined = pump.run();
     passes[0]!.fail(new Error("relay gone"));
@@ -355,7 +357,7 @@ describe("TrailingPump", () => {
   });
 
   it("reports the pass after failing once, and settles its callers as the pass they joined did", async () => {
-    const { pump, passes, reported } = libraryPump();
+    const { pump, passes } = libraryPump();
     void pump.run();
     const second = pump.run();
     const third = pump.run();
@@ -364,6 +366,18 @@ describe("TrailingPump", () => {
     passes[1]!.fail(new Error("spool unreadable"));
     await expect(Promise.all([second, third])).resolves.toEqual([undefined, undefined]);
     expect(reported.map((error) => error.message)).toEqual(["spool unreadable"]);
+  });
+
+  it("settles the callers of a failed pass after even when reporting it throws", async () => {
+    const { pump, passes } = libraryPump(undefined, () => {
+      throw new Error("listener broke");
+    });
+    void pump.run();
+    const joined = pump.run();
+    passes[0]!.finish();
+    await vi.waitFor(() => expect(passes).toHaveLength(2));
+    passes[1]!.fail(new Error("spool unreadable"));
+    await expect(joined).resolves.toBeUndefined();
   });
 });
 
