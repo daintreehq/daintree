@@ -18,7 +18,7 @@ export interface InputRowShape {
 
 function launchLineFor(command: string | undefined): RegExp | null {
   if (command === undefined || command.trim() === "") return null;
-  const escaped = command.trim().replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+  const escaped = command.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`[$%#❯›>]\\s+(?:.*[\\s/=])?${escaped}(?:\\s|$)`);
 }
 
