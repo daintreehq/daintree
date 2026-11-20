@@ -17,18 +17,32 @@ import type {
 /** Cloud accounts and cloud hosts. Credentials go in once and never come back. */
 export const cloudHostsClient = {
   getSnapshot: (): Promise<CloudHostsSnapshot> => window.electron.cloudHosts.getSnapshot(),
+  /** `consent`: for a plugin's provider, the fingerprint of what the person agreed to. */
   checkAccountCredentials: (
     providerId: string,
-    credentials: CloudCredentialValues
+    credentials: CloudCredentialValues,
+    consent?: string
   ): Promise<CloudAccountCheckResult> =>
-    window.electron.cloudHosts.checkAccountKey({ providerId, credentials }),
+    window.electron.cloudHosts.checkAccountKey({
+      providerId,
+      credentials,
+      ...(consent !== undefined ? { consent } : {}),
+    }),
   addAccount: (request: CloudAccountAddRequest): Promise<CloudAccountSummary> =>
     window.electron.cloudHosts.addAccount(request),
   replaceAccountCredentials: (
     accountId: string,
-    credentials: CloudCredentialValues
+    credentials: CloudCredentialValues,
+    consent?: string
   ): Promise<CloudAccountSummary> =>
-    window.electron.cloudHosts.replaceAccountKey({ accountId, credentials }),
+    window.electron.cloudHosts.replaceAccountKey({
+      accountId,
+      credentials,
+      ...(consent !== undefined ? { consent } : {}),
+    }),
+  /** The person reviewed the plugin behind an account's provider and allowed it. */
+  allowAccountProvider: (accountId: string, consent: string): Promise<CloudAccountSummary> =>
+    window.electron.cloudHosts.allowAccountProvider({ accountId, consent }),
   renameAccount: (accountId: string, displayName: string): Promise<CloudAccountSummary> =>
     window.electron.cloudHosts.renameAccount({ accountId, displayName }),
   removeAccount: (accountId: string): Promise<void> =>

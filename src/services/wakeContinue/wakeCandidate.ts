@@ -1,0 +1,30 @@
+import type { TerminalAgentObservation } from "@shared/types/panel";
+
+/**
+ * One agent pane a restore started again from its snapshot (#17883), and what
+ * its launch did with the conversation it had.
+ *
+ * - `resumed`: launched with its agent's resume command.
+ * - `fresh`: launched without one, so the conversation it had is not there.
+ * - `held`: not launched; the pane waits for the user (the resume setting, a
+ *   plugin's hold, or a choice only the user can make).
+ */
+export interface WakeCandidate {
+  terminalId: string;
+  title: string;
+  agentId: string;
+  worktreeId: string | null;
+  outcome: "resumed" | "fresh" | "held";
+  /** Why a held pane is held, as restore recorded it. */
+  holdReason?: string;
+  /** The conversation a held pane was held with, when restore could name one. */
+  heldSessionId?: string;
+  /** When the restore pass that launched it began (epoch ms). */
+  restoredAt: number;
+  /**
+   * What was last observed of the agent before it was stopped (#17886): the
+   * pane's stop observation, or failing that its last host report. Absent on a
+   * snapshot from before either was kept.
+   */
+  lastSeen?: TerminalAgentObservation;
+}

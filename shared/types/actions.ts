@@ -234,6 +234,15 @@ export interface ActionContext {
    */
   hostApprovedPresetWrite?: string;
   /**
+   * Main offered this unconfirmed preset restart under the assistant's
+   * next-fallback tick (#17917). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.ownFallbackStep} for that one action alone,
+   * stamped over whatever a `contextOverride` claimed, and never on any
+   * `argsSchema`. The run hops only to the pane's next own fallback step and
+   * otherwise refuses with nothing changed; it never switches.
+   */
+  hostOwnFallbackStep?: boolean;
+  /**
    * The caller shows this dispatch's failure itself, so an action that owns its
    * failure toast stays quiet (#16667). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.callerReportsFailure}, stamped over whatever a
@@ -753,6 +762,14 @@ export interface ActionDispatchOptions {
    * bridge.
    */
   hostApprovedPresetWrite?: string;
+  /**
+   * Main's offer of the assistant's next-fallback tick for an unconfirmed
+   * `terminal.restartOnPreset` (#17917) — NOT a client-supplied value. See
+   * {@link ActionContext.hostOwnFallbackStep}. Set only by the MCP renderer
+   * bridge; it lets that action past the confirmation gate into a run that can
+   * only take the pane's next own fallback step.
+   */
+  ownFallbackStep?: boolean;
   /** See {@link ActionContext.callerReportsFailure}. */
   callerReportsFailure?: boolean;
   /**

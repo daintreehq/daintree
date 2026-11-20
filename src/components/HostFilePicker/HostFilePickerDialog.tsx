@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUp,
   Check,
@@ -9,11 +17,12 @@ import {
   Link2,
   RefreshCw,
 } from "lucide-react";
-import type {
-  HostDirectoryEntry,
-  HostDirectoryListing,
-  HostPickRequest,
-  HostPickerRoots,
+import {
+  HOST_HOME_PATH,
+  type HostDirectoryEntry,
+  type HostDirectoryListing,
+  type HostPickRequest,
+  type HostPickerRoots,
 } from "@shared/types/ipc/hostFiles";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -53,10 +62,14 @@ import {
   isSelectable,
   joinHostPath,
   resolveChoice,
+  revealScrollTop,
+  rowInView,
   splitFileName,
+  visibleRowRange,
+  type ListGeometry,
 } from "./hostFilePickerModel";
 import { usePickerHost, type PickerHost } from "./usePickerHost";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 
 /**
  * Where the picker reads folders from: the window's own host, or — when the
@@ -67,15 +80,29 @@ function pickerSource(hostId: string | undefined) {
     return {
       roots: () => window.electron.hostFiles.getPickerRoots(),
       list: (path: string, showHidden: boolean) =>
-        window.electron.hostFiles.listDirectory({ path, showHidden }),
+        window.electron.hostFiles.listDirectory({ path, showHidden, metadata: "picker" }),
     };
   }
   return {
     roots: () => window.electron.hostSwitch.pickerRoots({ toHostId: hostId }),
     list: (path: string, showHidden: boolean) =>
-      window.electron.hostSwitch.listDirectory({ toHostId: hostId, path, showHidden }),
+      window.electron.hostSwitch.listDirectory({
+        toHostId: hostId,
+        path,
+        showHidden,
+        metadata: "picker",
+      }),
   };
 }
+
+// A row is one line at this height, set on the row itself, so the list can
+// place a 2,000-entry listing by arithmetic and mount only what is in view.
+const ROW_HEIGHT = 34;
+// The list's `p-1`.
+const LIST_PADDING = 4;
+// The list's `h-72` less its border: what it shows before layout reports it.
+const LIST_VIEWPORT_SEED = 286;
+const LIST_OVERSCAN = 3;
 
 interface HostFilePickerDialogProps {
   request: HostPickRequest;
@@ -294,8 +321,11 @@ function SummaryLines({
  */
 export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialogProps) {
   const [roots, setRoots] = useState<HostPickerRoots | null>(null);
-  const [directory, setDirectory] = useState<string | null>(
-    isAbsoluteHostPath(request.defaultPath) ? request.defaultPath : null
+  // The folder asked for. Without an absolute default it starts as the home
+  // token, so the home folder lists while the places are still being found:
+  // they stat project parents, any of which can sit on a stalled mount.
+  const [directory, setDirectory] = useState<string>(
+    isAbsoluteHostPath(request.defaultPath) ? request.defaultPath : HOST_HOME_PATH
   );
   const [listing, setListing] = useState<HostDirectoryListing | null>(null);
   // The folder `listing` was fetched for: a listing only ever answers for that one.
@@ -307,9 +337,11 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const [showHidden, setShowHidden] = useState(false);
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [pathDraft, setPathDraft] = useState("");
-  // The field holds what the user typed, not a path the dialog put there.
-  const [draftEdited, setDraftEdited] = useState(false);
+  // `edited`: the field holds what the user typed, not a path the dialog put
+  // there. A listing that lands mid-edit leaves such a draft alone.
+  const [draft, setDraft] = useState({ text: "", edited: false });
+  const pathDraft = draft.text;
+  const draftEdited = draft.edited;
   // The path field opens focused, so it opens as a field; once focus leaves it
   // the path reads as segments again.
   const [editingPath, setEditingPath] = useState(true);
@@ -320,6 +352,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // keyboard's, so the active descendant holds until the pointer takes over.
   const [nameDismissed, setNameDismissed] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(LIST_VIEWPORT_SEED);
   const [pathInput, setPathInput] = useState<HTMLInputElement | null>(null);
   const pathInputRef = useRef<HTMLInputElement | null>(null);
   const focusOwedRef = useRef(true);
@@ -330,6 +364,18 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const hiddenId = useId();
   const host = usePickerHost(request.hostId);
   const showProgress = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => {
+      if (list.clientHeight > 0) setViewport(list.clientHeight);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
 
   // Each listing request gets its own five seconds.
   useEffect(() => {
@@ -380,27 +426,27 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // The typed folder the primary was pressed on: chosen once it opens, and
   // forgotten by any other navigation, an edit to the path, or a failure.
   const confirmOwedRef = useRef<string | null>(null);
+  // This host's places, settled to null when they can't be had: where a host
+  // from before the home token says its home is.
+  const rootsRef = useRef<Promise<HostPickerRoots | null> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    pickerSource(hostId)
+    const settled = pickerSource(hostId)
       .roots()
-      .then((result) => {
-        if (cancelled) return;
-        setRoots(result);
-        setDirectory((current) => current ?? result.home);
-      })
-      .catch(() => {
-        if (!cancelled) setDirectory((current) => current ?? "/");
-      });
+      .catch(() => null);
+    rootsRef.current = settled;
+    void settled.then((result) => {
+      if (!cancelled && result) setRoots(result);
+    });
     return () => {
       cancelled = true;
     };
   }, [hostId]);
 
   useEffect(() => {
-    if (directory === null) return;
     let cancelled = false;
+    let handedOff = false;
     setLoading(true);
     pickerSource(hostId)
       .list(directory, showHidden)
@@ -412,20 +458,23 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         listedPathRef.current = result.path;
         setListing(result);
         setListedDirectory(directory);
-        setPathDraft(result.path);
-        setDraftEdited(false);
-        setSelectedNames((current) =>
-          sameFolder
-            ? current.filter((name) =>
-                result.entries.some(
-                  (entry) => entry.name === name && isSelectable(entry, requestRef.current)
-                )
-              )
-            : []
-        );
+        setDraft((current) => (current.edited ? current : { text: result.path, edited: false }));
+        setSelectedNames((current) => {
+          if (!sameFolder || current.length === 0) return [];
+          const kept = new Set(
+            result.entries
+              .filter((entry) => isSelectable(entry, requestRef.current))
+              .map((entry) => entry.name)
+          );
+          return current.filter((name) => kept.has(name));
+        });
         setActiveIndex((index) =>
           sameFolder ? Math.min(index, Math.max(0, result.entries.length - 1)) : 0
         );
+        if (!sameFolder) {
+          if (listRef.current) listRef.current.scrollTop = 0;
+          setScrollTop(0);
+        }
         setLoadError(null);
         if (confirmOwedRef.current === directory) {
           confirmOwedRef.current = null;
@@ -436,13 +485,24 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        const pending = rootsRef.current;
+        if (directory === HOST_HOME_PATH && clientErrorCode(cause) === "INVALID_PATH" && pending) {
+          // A host from before the home token: its places name the home.
+          handedOff = true;
+          void pending.then((result) => {
+            if (!cancelled) {
+              setDirectory(result && result.home !== HOST_HOME_PATH ? result.home : "/");
+            }
+          });
+          return;
+        }
         if (confirmOwedRef.current === directory) confirmOwedRef.current = null;
         setLoadError(clientErrorText(cause, "Couldn't open that folder"));
-        setPathDraft(directory);
-        setDraftEdited(false);
+        const shown = directory === HOST_HOME_PATH ? (listedPathRef.current ?? "") : directory;
+        setDraft((current) => (current.edited ? current : { text: shown, edited: false }));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !handedOff) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -463,30 +523,50 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     () => (listing && loadError === null ? listing.entries : []),
     [listing, loadError]
   );
+  // Indexed once per change: rows and the choice both ask about membership.
+  const selectedSet = useMemo(() => new Set(selectedNames), [selectedNames]);
   const selectedEntries = ready
-    ? entries.filter((entry) => selectedNames.includes(entry.name) && isSelectable(entry, request))
+    ? entries.filter((entry) => selectedSet.has(entry.name) && isSelectable(entry, request))
     : [];
   const choice = ready ? resolveChoice(request, listing.path, selectedEntries) : null;
   const confirmLabel = confirmButtonLabel(request, choice?.length ?? 0);
   const optionId = (index: number) => `${listId}-option-${index}`;
   const activeEntry = ready ? entries[activeIndex] : undefined;
   const multiple = request.mode === "file" && request.multiple === true;
-  const parentTarget =
-    directory === null ? null : ready ? listing.parent : hostPathParent(directory);
-  const shownPath = directory ?? listing?.path ?? "";
+  const geometry: ListGeometry = { rowHeight: ROW_HEIGHT, padding: LIST_PADDING, viewport };
+  const { start: windowStart, end: windowEnd } = visibleRowRange(
+    entries.length,
+    scrollTop,
+    geometry,
+    LIST_OVERSCAN
+  );
+  // The active descendant only ever names an option that is in the DOM.
+  const activeMounted = activeIndex >= windowStart && activeIndex < windowEnd;
+  const activeInView = rowInView(activeIndex, entries.length, scrollTop, geometry);
+  // The home token stands for a folder only the host can name, so it reads as
+  // its last listing, through a refresh or a failed one too.
+  const homeListing =
+    directory === HOST_HOME_PATH && listedDirectory === directory ? listing : null;
+  const shownPath = directory !== HOST_HOME_PATH ? directory : (homeListing?.path ?? "");
+  const parentTarget = ready
+    ? listing.parent
+    : directory !== HOST_HOME_PATH
+      ? hostPathParent(directory)
+      : (homeListing?.parent ?? null);
   const draftTarget = pathDraft.trim();
   // A folder picker's field holds a path the user typed that the folder on
   // screen doesn't answer: the primary goes there (validating it, even when it
   // is empty) and chooses it, rather than the folder it replaces.
   const draftPending =
-    request.mode === "directory" && draftEdited && pathDraft !== (ready ? listing.path : directory);
+    request.mode === "directory" &&
+    draftEdited &&
+    (ready ? pathDraft !== listing.path : directory === HOST_HOME_PATH || pathDraft !== directory);
 
   const navigate = (target: string) => {
     confirmOwedRef.current = null;
     setLoadError(null);
     setPathError(null);
-    setPathDraft(target);
-    setDraftEdited(false);
+    setDraft({ text: target, edited: false });
     if (target === directory) {
       setReloadKey((key) => key + 1);
       return;
@@ -526,11 +606,10 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     if (choice) onResolve(choice);
   };
 
-  const editPath = (draft?: string) => {
-    if (draft !== undefined) {
+  const editPath = (text?: string) => {
+    if (text !== undefined) {
       confirmOwedRef.current = null;
-      setPathDraft(draft);
-      setDraftEdited(true);
+      setDraft({ text, edited: true });
     }
     setEditingPath(true);
   };
@@ -539,8 +618,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     confirmOwedRef.current = null;
     setEditingPath(false);
     setPathError(null);
-    setPathDraft(shownPath);
-    setDraftEdited(false);
+    setDraft({ text: shownPath, edited: false });
     listRef.current?.focus();
   };
 
@@ -556,6 +634,32 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const confirmPrimary = () => {
     if (draftPending) goToDraft(true);
     else confirm();
+  };
+
+  // Scrolls a row into view; the window follows the offset written here, so a
+  // row that isn't mounted yet still gets there.
+  const revealRow = (index: number) => {
+    const list = listRef.current;
+    if (!list) return;
+    const target = revealScrollTop(index, entries.length, list.scrollTop, geometry);
+    if (target !== null) list.scrollTop = target;
+    // Synced either way: a scroll whose event hasn't arrived yet still counts.
+    setScrollTop(target ?? list.scrollTop);
+  };
+
+  // Keyboard focus arriving, or a listing landing under it, brings the active
+  // row into view: focus can return to a list scrolled away from that row, or
+  // during a refresh that moves it. A wheel scroll alone never pulls it back.
+  const revealActive = useEffectEvent(() => revealRow(activeIndex));
+  useLayoutEffect(() => {
+    if (ready && keyboardCursor) revealActive();
+  }, [ready, keyboardCursor, entries]);
+
+  const moveTo = (index: number) => {
+    setKeyboardCursor(true);
+    setNameDismissed(false);
+    setActiveIndex(index);
+    revealRow(index);
   };
 
   const onListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -581,19 +685,16 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setKeyboardCursor(true);
-      setNameDismissed(false);
-      setActiveIndex((index) => Math.min(entries.length - 1, Math.max(0, index + step)));
+      moveTo(Math.min(entries.length - 1, Math.max(0, activeIndex + step)));
       return;
     }
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      setKeyboardCursor(true);
-      setNameDismissed(false);
-      setActiveIndex(event.key === "Home" ? 0 : entries.length - 1);
+      moveTo(event.key === "Home" ? 0 : entries.length - 1);
       return;
     }
     if (!activeEntry) return;
+    if (event.key === "Enter" || event.key === " ") revealRow(activeIndex);
     if (event.key === "Enter") {
       event.preventDefault();
       // In a multi-select, Enter on a file confirms what is selected, as the
@@ -611,17 +712,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     }
   };
 
-  useEffect(() => {
-    const row = listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`);
-    row?.scrollIntoView?.({ block: "nearest" });
-  }, [activeIndex]);
-
-  const pendingLeaf = directory ? hostPathLeaf(directory) : null;
-  const openingText = pendingLeaf
-    ? stillWorking
-      ? `Still opening ${pendingLeaf}…`
-      : `Opening ${pendingLeaf}…`
-    : "";
+  const pendingLeaf = shownPath ? hostPathLeaf(shownPath) : "home folder";
+  const openingText = stillWorking ? `Still opening ${pendingLeaf}…` : `Opening ${pendingLeaf}…`;
   const status = loading
     ? showProgress
       ? openingText
@@ -723,15 +815,13 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               className="h-8 min-w-0 flex-1"
               onChange={(event) => {
                 confirmOwedRef.current = null;
-                setPathDraft(event.target.value);
-                setDraftEdited(true);
+                setDraft({ text: event.target.value, edited: true });
                 setPathError(null);
               }}
               onBlur={() => {
                 setEditingPath(false);
                 setPathError(null);
-                setPathDraft(shownPath);
-                setDraftEdited(false);
+                setDraft({ text: shownPath, edited: false });
               }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
@@ -754,9 +844,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
           )}
         </div>
 
-        <div className="relative h-1">
-          {showProgress && <ProgressBar label={openingText || "Opening folder"} />}
-        </div>
+        <div className="relative h-1">{showProgress && <ProgressBar label={openingText} />}</div>
 
         {roots && roots.roots.length > 0 && (
           <div className="-mt-1 flex flex-wrap items-center gap-1" aria-label="Places">
@@ -779,8 +867,10 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         </div>
 
         {/* A fixed height: the dialog keeps its size from folder to folder,
-            so it never re-centres while browsing. */}
-        <div className="relative flex h-72 shrink-0 flex-col">
+            so it never re-centres while browsing. It gives way only to a
+            window too short for the whole dialog, and never below what the
+            empty and error states need. */}
+        <div className="relative flex h-72 min-h-40 flex-col">
           <div
             ref={listRef}
             id={listId}
@@ -789,10 +879,11 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
             aria-busy={loading || undefined}
             aria-multiselectable={multiple || undefined}
             aria-activedescendant={
-              activeEntry && keyboardCursor ? optionId(activeIndex) : undefined
+              activeEntry && keyboardCursor && activeMounted ? optionId(activeIndex) : undefined
             }
             tabIndex={0}
             onKeyDown={onListKeyDown}
+            onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
             onPointerDown={() => {
               listPointerRef.current = true;
               setKeyboardCursor(false);
@@ -811,12 +902,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               setKeyboardCursor(false);
             }}
             className={cn(
-              "group/list min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-1 transition-opacity duration-150 ease-out",
+              // Spacers above the window resize as it moves; anchoring would
+              // fight the offset the window is computed from.
+              "group/list min-h-0 flex-1 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-1 transition-opacity duration-150 ease-out [overflow-anchor:none]",
               // The rows still on screen belong to the folder being left.
               showProgress && "opacity-60",
-              // With rows, the active row carries the focus ring; an empty
+              // An active row in view carries the focus ring; otherwise the
               // list rings itself.
-              ready && entries.length > 0
+              ready && entries.length > 0 && activeInView
                 ? "focus-visible:outline-hidden"
                 : "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             )}
@@ -831,10 +924,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 ))}
               </Skeleton>
             )}
-            {entries.map((entry, index) => {
+            {windowStart > 0 && (
+              <div aria-hidden="true" style={{ height: windowStart * ROW_HEIGHT }} />
+            )}
+            {entries.slice(windowStart, windowEnd).map((entry, offset) => {
+              const index = windowStart + offset;
               const selectable = isSelectable(entry, request);
               const navigable = isNavigable(entry);
-              const selected = ready && selectedNames.includes(entry.name);
+              const selected = ready && selectedSet.has(entry.name);
               const inert = !ready || (!selectable && !navigable);
               return (
                 <div
@@ -843,18 +940,23 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   role="option"
                   // The name split in two flex parts would be read with a gap in it.
                   aria-label={entry.name}
-                  data-index={index}
+                  // Only a window of the listing is in the DOM.
+                  aria-posinset={index + 1}
+                  aria-setsize={entries.length}
                   aria-selected={selected}
                   aria-disabled={inert ? true : undefined}
+                  style={{ height: ROW_HEIGHT }}
                   onClick={(event) => {
                     if (!ready) return;
                     setActiveIndex(index);
+                    revealRow(index);
                     toggle(entry, event.metaKey || event.ctrlKey);
                   }}
                   onDoubleClick={() => open(entry)}
                   className={cn(
                     LIST_DETAIL_ROW_CLASS,
-                    "flex cursor-default select-none items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
+                    // Clipped: a name with line breaks in it stays in its row.
+                    "flex cursor-default select-none items-center gap-2 overflow-hidden rounded-[var(--radius-md)] px-3 py-1.5 text-sm",
                     ready &&
                       index === activeIndex &&
                       "group-focus-visible/list:outline-2 group-focus-visible/list:-outline-offset-2 group-focus-visible/list:outline-selection-outline group-focus-visible/list:outline-solid",
@@ -899,6 +1001,12 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 </div>
               );
             })}
+            {windowEnd < entries.length && (
+              <div
+                aria-hidden="true"
+                style={{ height: (entries.length - windowEnd) * ROW_HEIGHT }}
+              />
+            )}
           </div>
           {ready && entries.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">

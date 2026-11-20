@@ -26,6 +26,7 @@ import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownImageTrackingContext, TrackedMarkdownImage } from "./markdownImageRefresh";
 import { MermaidDiagram } from "./mermaid/MermaidDiagram";
+import { MarkdownBlockquote } from "./markdownAlerts";
 import { canonicalLang } from "./fenceLanguage";
 import { hastText } from "./hastText";
 import { MarkdownTable, MarkdownTableCell, MarkdownTableHeaderCell } from "./MarkdownTable";
@@ -266,6 +267,7 @@ export function useMarkdownRenderPolicy({
   const components = useMemo<Components>(
     () => ({
       img: MarkdownImage,
+      blockquote: MarkdownBlockquote,
       table: MarkdownTable,
       th: MarkdownTableHeaderCell,
       td: MarkdownTableCell,

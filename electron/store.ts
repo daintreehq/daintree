@@ -756,6 +756,24 @@ export interface StoreSchema {
   >;
 
   /**
+   * The panes each Assistant conversation launched on this machine, by
+   * terminal id (#16845): what lets that conversation close them again after
+   * an app restart. Written and read only by `assistantPaneCreations.ts`,
+   * which treats every entry as untrusted on load. Additive key with no
+   * numbered migration, like `pluginLaunchedAgents`.
+   */
+  assistantPaneCreations?: Record<
+    string,
+    {
+      scope: "help" | "localRelay";
+      conversationId: string;
+      projectId: string;
+      seenAt: number;
+      lastCallAt?: number;
+    }
+  >;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.
@@ -846,6 +864,16 @@ export interface StoreSchema {
    * never the repository. Same additive-key convention as above.
    */
   pluginNotificationSilences?: string[];
+
+  /**
+   * Plugin catalogs the person added beside Daintree's own (#17434), as
+   * normalized `https://` URLs in the order they were added. This machine's
+   * own settings, never a repository's, so a pull can't add one. Read and
+   * written only through `services/plugin/pluginCatalogSources.ts`, which
+   * checks each value again on every read. Same additive-key convention as
+   * above.
+   */
+  pluginCatalogSources?: string[];
 
   /**
    * Plugin search providers the user turned off in the quick switcher
@@ -1258,6 +1286,7 @@ const storeOptions = {
     projectPluginSetupSkips: {},
     projectPluginAccountBindings: {},
     pluginNotificationSilences: [],
+    pluginCatalogSources: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],
     pluginWorktreeDeleteNoteMutes: [],

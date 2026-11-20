@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { DecisionsIcon, TriangleAlert } from "@/components/icons";
+import {
+  AskingCircle,
+  BrandMark,
+  Clock,
+  DecisionsIcon,
+  DoneCircle,
+  ExitedCircle,
+  HollowCircle,
+} from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { CountBadge } from "@/components/ui/badge";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { FactRun } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
-import {
-  LIST_DETAIL_ROW_CLASS,
-  PALETTE_ROW_FOCUS_CLASS,
-  PALETTE_SECTION_LABEL_CLASS,
-} from "@/components/ui/paletteRowStyles";
+import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
@@ -18,33 +25,50 @@ import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useRovingRows } from "@/hooks/useRovingRows";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
+import { resolveAgentIcon } from "@/config/agentIcons";
+import { getBrandColorHex } from "@/lib/colorUtils";
+import { pluralize } from "@/lib/pluralize";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { worktreeDisplayName } from "@/utils/recipeScope";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
+  DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
+import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
+  askShownIn,
+  attentionText,
   connectionNotice,
   emptyText,
+  expiresSoon,
+  inboxGroupOf,
   inboxGroups,
+  inboxRowNote,
   isAttention,
-  originFacts,
+  isClosed,
+  markedText,
   referenceKey,
   resolveSelection,
   standingText,
+  whereFacts,
   worktreeName,
   type InboxChoice,
   type InboxGroup,
@@ -54,6 +78,7 @@ import {
   useDecisionsReaderRetention,
   useQuestionCancel,
 } from "./useDecisionQuestionReader";
+import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -258,37 +283,97 @@ function useTerminalReach(
 }
 
 function ListSkeleton() {
+  // The shape of what loads: a group's bar, then rows with their lead column and two lines.
   return (
-    <Skeleton label="Loading questions" className="flex flex-col gap-3 px-1 py-1">
-      <SkeletonBone className="h-3 w-1/3" />
-      <SkeletonBone className="h-9 w-full" />
-      <SkeletonBone className="h-9 w-full" />
-      <SkeletonBone className="h-9 w-4/5" />
+    <Skeleton label="Loading questions" className="flex flex-col">
+      <div className="flex h-9 items-center px-3">
+        <SkeletonBone className="h-2.5 w-20" />
+      </div>
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="flex gap-3 px-3 py-2.5">
+          <SkeletonBone className="h-4 w-10" />
+          <div className="flex flex-1 flex-col gap-2">
+            <SkeletonBone className="h-3.5 w-full" />
+            <SkeletonBone className="h-3 w-1/3" />
+          </div>
+        </div>
+      ))}
     </Skeleton>
   );
+}
+
+/** The agent that asked, by its own mark: which agent it is, without the word on every row. */
+function AgentMark({ agentKind, className }: { agentKind: string; className?: string }) {
+  const config = getEffectiveAgentConfig(agentKind);
+  const Icon = resolveAgentIcon(config?.iconId ?? agentKind);
+  return (
+    <BrandMark brandColor={getBrandColorHex(agentKind)}>
+      <Icon className={cn("size-3.5", className)} />
+    </BrandMark>
+  );
+}
+
+const STATE_GLYPH = "size-3.5 shrink-0";
+const WarningGlyph = SEVERITY_GLYPH.warning;
+
+/**
+ * Where the question stands, in the app's agent-state vocabulary: the waiting
+ * ring with a question mark while it asks the person, the ring alone while an
+ * answer waits to be typed in, the warning shape when delivery needs a person,
+ * and the finished or ended ring once it is over.
+ */
+function StandingGlyph({ standing }: { standing: DecisionQuestionStanding }) {
+  switch (standing.kind) {
+    case "waiting":
+    case "queued":
+      return <AskingCircle className={cn(STATE_GLYPH, "text-state-waiting")} />;
+    case "to-type":
+      return <HollowCircle className={cn(STATE_GLYPH, "text-text-secondary")} />;
+    case "needs-attention":
+      return <WarningGlyph className={cn(STATE_GLYPH, "text-status-warning")} />;
+    case "settled":
+      return standing.outcome === "answered" ? (
+        <DoneCircle className={cn(STATE_GLYPH, "text-text-secondary")} />
+      ) : (
+        <ExitedCircle className={cn(STATE_GLYPH, "text-text-secondary")} />
+      );
+    case "send-failed":
+      return <ExitedCircle className={cn(STATE_GLYPH, "text-text-secondary")} />;
+  }
 }
 
 function InboxRow({
   item,
   rowKey,
   line,
-  origin,
+  agent,
+  where,
   selected,
   tabStop,
   rowRef,
   onFocus,
   onSelect,
+  nowMs,
 }: {
   item: DecisionQuestionListItem;
   rowKey: string;
   line: string | null;
-  origin: readonly string[];
+  agent: string;
+  where: readonly string[];
   selected: boolean;
   tabStop: boolean;
   rowRef: (element: HTMLElement | null) => void;
   onFocus: (element: HTMLElement) => void;
   onSelect: () => void;
+  nowMs: number | null;
 }) {
+  const note = inboxRowNote(item);
+  const cleared = inboxGroupOf(item) === "cleared";
+  const expiry =
+    item.expiresAt !== null && nowMs !== null && expiresSoon(item, nowMs)
+      ? `Due ${formatRelativeTime(Date.parse(item.expiresAt), nowMs)}`
+      : null;
+  const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
   return (
     <li>
@@ -303,41 +388,78 @@ function InboxRow({
         data-selected={selected ? "true" : undefined}
         onFocus={(event) => onFocus(event.currentTarget)}
         onClick={onSelect}
-        className={cn(
-          LIST_DETAIL_ROW_CLASS,
-          PALETTE_ROW_FOCUS_CLASS,
-          "flex w-full flex-col gap-0.5 rounded-[var(--radius-md)] px-2.5 py-2 text-left"
-        )}
+        className="decisions-inbox-row flex w-full cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
         data-testid="decisions-inbox-row"
       >
-        <span className="flex w-full min-w-0 items-baseline gap-2">
-          <span className="shrink-0 font-mono text-xs text-text-primary tabular-nums">
-            {aliasLabel(item.alias)}
+        {/* The leading column: where it stands, and whose agent asked. */}
+        <span aria-hidden="true" className="flex h-5 w-10 shrink-0 items-center gap-2">
+          <span className="flex size-4 items-center justify-center">
+            <StandingGlyph standing={item.standing} />
           </span>
-          <span
-            className="min-w-0 flex-1 truncate text-xs font-medium text-text-primary"
-            data-testid="decisions-inbox-row-line"
-          >
-            {line ?? ""}
+          <span className="flex size-4 items-center justify-center">
+            <AgentMark agentKind={item.agentKind} />
           </span>
-          <TimeAgo
-            timestamp={item.askedAt}
-            prefix="asked "
-            className="shrink-0 text-3xs text-text-secondary"
-          />
         </span>
-        {/* The glyph marks the state's first line, however many it wraps to. */}
-        <span className="flex items-start gap-1 text-2xs text-text-secondary [text-wrap:pretty]">
-          {attention && (
-            <TriangleAlert
-              className="mt-0.5 size-3 shrink-0 text-status-warning"
-              aria-hidden="true"
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex min-w-0 items-start gap-3">
+            <span
+              className={cn(
+                "min-w-0 flex-1 text-sm leading-5 [text-wrap:pretty]",
+                // History is recognised, not triaged: one line of scent is enough.
+                closed ? "line-clamp-1 text-text-secondary" : "line-clamp-2 text-text-primary"
+              )}
+              data-testid="decisions-inbox-row-line"
+            >
+              {line ?? aliasLabel(item.alias)}
+            </span>
+            <TimeAgo
+              timestamp={item.askedAt}
+              className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums"
             />
+          </span>
+          {/* Only what sets this row apart from its group; the full sentence is for the ear.
+              A closed row's outcome leads its where-line instead, so history stays two lines. */}
+          {((note !== null && !closed) || expiry !== null) && (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "flex min-w-0 items-center gap-1.5 text-xs leading-4",
+                attention || expiry !== null ? "text-text-primary" : "text-text-secondary"
+              )}
+            >
+              {expiry !== null && (
+                // A deadline inside a day: the one chip a waiting row wears, as on the phone.
+                <span className="flex min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-overlay-soft px-1.5 py-0.5 font-medium">
+                  <Clock className="size-3 shrink-0 text-status-warning" />
+                  <span className="truncate">{expiry}</span>
+                </span>
+              )}
+              {note !== null && !closed && <span className="min-w-0 truncate">{note}</span>}
+            </span>
           )}
-          {standingText(item.standing)}
-        </span>
-        <span className="w-full truncate text-2xs text-text-secondary">
-          <FactRun facts={origin} />
+          {/* A closed row's outcome is already read out with its where-line. */}
+          {!(closed && note !== null) && (
+            <span className="sr-only">
+              {standingText(item.standing)}
+              {cleared && ", cleared on this computer"}
+              {expiry !== null && `, ${expiry.toLowerCase()}`}
+            </span>
+          )}
+          <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
+            <span className="min-w-0 flex-1 truncate">
+              <span className="sr-only">{agent}, </span>
+              <FactRun facts={closed && note !== null ? [note, ...where] : where} />
+            </span>
+            {/* Not twice: a row whose line couldn't be read is already named by it. */}
+            {line !== null && (
+              <span
+                className="shrink-0 font-mono text-2xs tabular-nums"
+                data-testid="decisions-inbox-row-alias"
+              >
+                {aliasLabel(item.alias)}
+              </span>
+            )}
+          </span>
         </span>
       </button>
     </li>
@@ -351,15 +473,17 @@ function InboxRow({
 function InboxList({
   groups,
   lines,
-  originOf,
+  partsOf,
   selectedKey,
   onSelect,
+  nowMs,
 }: {
   groups: readonly InboxGroup[];
   lines: ReadonlyMap<string, string | null>;
-  originOf: (item: DecisionQuestionListItem) => readonly string[];
+  partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
   selectedKey: string | null;
   onSelect: (key: string, index: number) => void;
+  nowMs: number | null;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
@@ -412,7 +536,7 @@ function InboxList({
       }}
       role="region"
       aria-labelledby={labelId}
-      className="flex flex-col gap-3"
+      className="flex flex-col"
       data-testid="decisions-inbox-groups"
     >
       <span id={labelId} className="sr-only">
@@ -420,30 +544,58 @@ function InboxList({
       </span>
       {groups.map((group) => {
         const headingId = `${labelId}-${group.id}`;
+        const stopped = groups.find((other) => other.id === "attention")?.items.length ?? 0;
         return (
           <section
             key={group.id}
             aria-labelledby={headingId}
-            className="flex flex-col gap-0.5"
+            className="flex flex-col"
             data-testid={`decisions-inbox-group-${group.id}`}
           >
-            <h3
-              id={headingId}
-              className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-baseline gap-1.5 px-1")}
-            >
-              {group.title}
-              <span className="tabular-nums">{group.items.length.toLocaleString()}</span>
-            </h3>
-            <ul className="flex flex-col gap-0.5">
+            {/* Canopy's section bar: the group's name and count, held at the top while its rows scroll. */}
+            <div className="decisions-inbox-heading flex h-9 w-full shrink-0 items-center justify-between gap-1.5 px-3">
+              <h3
+                id={headingId}
+                className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}
+              >
+                {group.title}
+                <CountBadge label={pluralize(group.items.length, "question")}>
+                  {group.items.length.toLocaleString()}
+                </CountBadge>
+              </h3>
+              {/* Stopped deliveries can sit below a long queue: one click takes the list to them.
+                  A pointer shortcut only; the keyboard reaches them with the list's own keys. */}
+              {group.id === "needs-you" && stopped > 0 && (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    listRef.current
+                      ?.querySelector('[data-testid="decisions-inbox-group-attention"]')
+                      ?.scrollIntoView({ block: "start" })
+                  }
+                  className="flex h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-text-secondary transition-colors duration-150 hover:bg-overlay-highlight hover:text-text-primary"
+                  data-testid="decisions-inbox-jump-attention"
+                >
+                  <WarningGlyph className="size-3 text-status-warning" />
+                  {stopped.toLocaleString()} stopped
+                </button>
+              )}
+            </div>
+            <ul className="flex flex-col">
               {group.items.map((item) => {
                 const key = referenceKey(item.reference);
+                const parts = partsOf(item);
                 return (
                   <InboxRow
                     key={key}
                     item={item}
                     rowKey={key}
                     line={lines.get(key) ?? null}
-                    origin={originOf(item)}
+                    agent={parts.agent}
+                    where={parts.where}
                     selected={key === selectedKey}
                     tabStop={key === roving.tabStopKey}
                     rowRef={roving.rowRef(key)}
@@ -452,6 +604,7 @@ function InboxList({
                       roving.onRowFocus(key);
                     }}
                     onSelect={() => onSelect(key, keys.indexOf(key))}
+                    nowMs={nowMs}
                   />
                 );
               })}
@@ -482,8 +635,10 @@ export function DecisionsInboxDialog() {
   const { read: listRead, retry, release: releaseList } = useQuestionList(active, request.seq);
   const { status, known: statusKnown } = useInboxStatus(active, request.seq);
   const notice = connectionNotice(status);
+  // Read against when this opening began: a deadline a day out doesn't need to tick while it's open.
+  const nowMs = request.openedAt ?? null;
   const questions = listRead.state === "listed" ? listRead.list.questions : null;
-  const groups = questions === null ? [] : inboxGroups(questions);
+  const groups = questions === null ? [] : inboxGroups(questions, nowMs);
   const ordered = groups.flatMap((group) => group.items);
   const { lines, release: releaseLines } = useQuestionLines(ordered, active);
 
@@ -493,7 +648,7 @@ export function DecisionsInboxDialog() {
   const viewWorkspace = getViewWorkspaceId();
   // A Remote Host window's projects are another computer's, whatever their
   // ids: a question there keeps the names it was asked under.
-  const originOf = (item: DecisionQuestionListItem): string[] => {
+  const partsOf = (item: DecisionQuestionListItem): { agent: string; where: string[] } => {
     const local = !remote && item.reference.projectId === viewWorkspace;
     const project =
       (remote
@@ -501,11 +656,10 @@ export function DecisionsInboxDialog() {
         : projects.find((candidate) => candidate.id === item.reference.projectId)?.name) ??
       item.projectLabel;
     const known = local ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null) : null;
-    return originFacts({
+    return {
       agent: agentName(item.agentKind),
-      project,
-      worktree: worktreeName(item, known),
-    });
+      where: whereFacts(project, worktreeName(item, known)),
+    };
   };
 
   // The question shown sticks to the one chosen, by reference, as the list moves around it.
@@ -543,6 +697,53 @@ export function DecisionsInboxDialog() {
           ? { text: dismissal.outcome, live: true }
           : null;
   const { reach, markGone } = useTerminalReach(selected, active);
+  const questionHeadingId = useId();
+  const pendingFocus = useRef<{ seq: number; key: string } | null>(null);
+  const detailRef = useRef<HTMLElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const detailHeadingId = useId();
+  // Where the needs-attention list hands the keyboard back once it closes over the inbox.
+  const detailDomId = useId();
+  // Once the one shown no longer needs the person, the next that does is one press away:
+  // the first they haven't seen yet, when there is one.
+  const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
+  const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
+  const nextUp =
+    selected !== null && inboxGroupOf(selected) !== "needs-you"
+      ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
+      : null;
+  const announce = useAnnouncerStore((state) => state.announce);
+  // Clearing and restoring stay on this computer: nothing is answered, declined or typed in,
+  // and each question goes with the ask it was shown with, so one asking something new stays.
+  const markShown = (action: "clear" | "restore", items: readonly DecisionQuestionListItem[]) => {
+    const questions = items.flatMap((item) =>
+      item.inbox === undefined ? [] : [{ reference: item.reference, ask: item.inbox.ask }]
+    );
+    if (questions.length === 0) return;
+    const say = (text: string | null) => {
+      if (text !== null) announce(text);
+    };
+    decisionsClient.markQuestions(action, questions).then(
+      (result) => say(markedText(action, result)),
+      () => say(markedText(action, { result: "failed" }))
+    );
+  };
+  const selectedGroup = selected === null ? null : inboxGroupOf(selected);
+  const showNext = () => {
+    if (nextUp === null) return;
+    const key = referenceKey(nextUp.reference);
+    setChoice({ seq: request.seq, key, index: ordered.indexOf(nextUp) });
+    // The button goes with the question it followed: the keyboard waits in the pane, and
+    // moves to the next question's words once they're read (the effect below), so the
+    // next Tab leads into its answer. The list shows where that question sits.
+    pendingFocus.current = { seq: request.seq, key };
+    detailRef.current?.focus({ preventScroll: true });
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-inbox-key="${encodeURIComponent(key)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  };
 
   // Each look before going elsewhere belongs to the question shown when it
   // started, in this opening: closing, reopening or choosing another drops it.
@@ -551,9 +752,33 @@ export function DecisionsInboxDialog() {
     navigation.current += 1;
   }, [isOpen, request.seq, selectedKey]);
 
-  const detailRef = useRef<HTMLElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const detailHeadingId = useId();
+  // Next question's hand-off: once the question it asked for is read, its words take the keyboard,
+  // unless the keyboard went somewhere else meanwhile or another question was chosen.
+  const shownRead = reader.current?.result === "read" ? reader.current.question : null;
+  useDecisionQuestionSeen(selected, shownRead, active, detailRef);
+  // Clearing waits while the read on screen predates what the list says it asks now; with
+  // no read on screen (one that can't be read, its Host away) it goes by the list alone.
+  const clearWaits =
+    selected !== null &&
+    selectedGroup === "needs-you" &&
+    shownRead !== null &&
+    !askShownIn(selected, shownRead);
+  useEffect(() => {
+    const pending = pendingFocus.current;
+    if (pending === null || shownRead === null) return;
+    if (pending.seq !== request.seq || pending.key !== selectedKey) {
+      pendingFocus.current = null;
+      return;
+    }
+    pendingFocus.current = null;
+    if (document.activeElement !== detailRef.current) return;
+    document.getElementById(questionHeadingId)?.focus({ preventScroll: true });
+  }, [shownRead, selectedKey, request.seq, questionHeadingId]);
+
+  // Each question is read from its top, wherever the last one was scrolled to.
+  useLayoutEffect(() => {
+    if (detailRef.current !== null) detailRef.current.scrollTop = 0;
+  }, [selectedKey]);
 
   // Where the person went from this opening: the close hands focus to the
   // terminal, and nothing of it outlives the opening it was asked in.
@@ -657,135 +882,292 @@ export function DecisionsInboxDialog() {
           <AppDialog.Title icon={<DecisionsIcon size={16} />}>Decisions inbox</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
-        {/* Two columns that scroll on their own, so a plain element rather than the dialog's body column. */}
-        <div className="flex min-h-0 flex-1 overflow-hidden border-t border-divider">
-          <div
-            className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain border-r border-divider px-2 py-3 lg:w-80"
-            data-testid="decisions-inbox-list"
-          >
-            {notice !== null && (
-              <Callout
-                severity={notice.severity}
-                size="compact"
-                data-testid="decisions-inbox-connection"
-              >
-                {notice.text}
-              </Callout>
-            )}
-            {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
-            {listRead.state === "failed" && (
-              <Callout
-                severity="warning"
-                size="compact"
-                action={
-                  <Button variant="outline" size="xs" onClick={retry}>
-                    Retry
-                  </Button>
-                }
-                data-testid="decisions-inbox-failed"
-              >
-                The questions couldn&apos;t be read.
-              </Callout>
-            )}
-            {empty !== null && (
-              <p className="px-1 text-xs text-text-secondary" data-testid="decisions-inbox-empty">
-                {empty}
-              </p>
-            )}
-            {groups.length > 0 && (
-              <InboxList
-                groups={groups}
-                lines={lines}
-                originOf={originOf}
-                selectedKey={selectedKey}
-                onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
-              />
-            )}
+        {notice !== null && (
+          // Above both columns, so what it says about sending stays in view of the composer.
+          <div className="shrink-0 px-4 pt-3">
+            <Callout
+              severity={notice.severity}
+              size="compact"
+              data-testid="decisions-inbox-connection"
+            >
+              {notice.text}
+            </Callout>
           </div>
-          <section
-            ref={detailRef}
-            // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
-            tabIndex={selected !== null ? 0 : -1}
-            aria-labelledby={selected !== null ? detailHeadingId : undefined}
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            data-testid="decisions-inbox-detail"
+        )}
+        {empty !== null ? (
+          <div
+            className="flex min-h-0 flex-1 items-center justify-center p-8"
+            data-testid="decisions-inbox-empty"
           >
-            {selected !== null && (
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <h3
-                      id={detailHeadingId}
-                      className="text-sm font-semibold text-text-primary"
-                      data-testid="decisions-inbox-detail-title"
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<DecisionsIcon />}
+              title="No questions yet"
+              description={empty}
+            />
+          </div>
+        ) : (
+          // Two columns that scroll on their own, so a plain element rather than the dialog's body column.
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="flex w-80 shrink-0 flex-col border-r border-divider lg:w-[26rem]">
+              <div
+                className="decisions-inbox-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+                data-testid="decisions-inbox-list"
+              >
+                {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
+                {listRead.state === "failed" && (
+                  <div className="p-3">
+                    <Callout
+                      severity="warning"
+                      size="compact"
+                      action={
+                        <Button variant="outline" size="xs" onClick={retry}>
+                          Retry
+                        </Button>
+                      }
+                      data-testid="decisions-inbox-failed"
                     >
-                      Question {aliasLabel(selected.alias)}
-                    </h3>
-                    <p className="truncate text-xs text-text-secondary">
-                      <FactRun facts={originOf(selected)} />
-                    </p>
+                      The questions couldn&apos;t be read.
+                    </Callout>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {reach !== null && (
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        onClick={goToTerminal}
-                        data-testid="decisions-inbox-go-to-terminal"
-                      >
-                        Go to terminal
-                      </Button>
-                    )}
-                    {reader.cancellable &&
-                      (dismissal.progress !== null ? (
-                        dismissal.phase?.kind === "lost" && (
-                          <Button
-                            ref={cancelRef}
-                            variant="outline"
-                            size="xs"
-                            onClick={dismissal.retry}
-                            data-testid="decisions-inbox-dismiss-retry"
-                          >
-                            Retry
-                          </Button>
-                        )
-                      ) : dismissal.fallback !== null ? (
-                        <Button
-                          ref={cancelRef}
-                          variant="ghost-danger"
-                          size="xs"
-                          onClick={cancel.askToWithdraw}
-                          data-testid="decisions-inbox-withdraw"
-                        >
-                          Withdraw question
-                        </Button>
-                      ) : (
-                        <Button
-                          ref={cancelRef}
-                          variant="ghost-danger"
-                          size="xs"
-                          onClick={cancel.ask}
-                          data-testid="decisions-inbox-dismiss"
-                        >
-                          Dismiss question
-                        </Button>
-                      ))}
-                  </div>
-                </div>
-                {reader.cancellable && dismissNote !== null && (
-                  <p
-                    role={dismissNote.live ? "status" : undefined}
-                    className="text-xs text-text-secondary [text-wrap:pretty]"
-                    data-testid="decisions-inbox-dismiss-status"
-                  >
-                    {dismissNote.text}
-                  </p>
                 )}
-                <DecisionQuestionReadView reader={reader} target={shownTarget} active={isOpen} />
+                {groups.length > 0 && (
+                  <InboxList
+                    groups={groups}
+                    lines={lines}
+                    partsOf={partsOf}
+                    nowMs={nowMs}
+                    selectedKey={selectedKey}
+                    onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
+                  />
+                )}
               </div>
-            )}
-          </section>
-        </div>
+              {/* Below the list rather than on its heading, so the dialog's first focus stays on the
+                question list. Kept while anything is cleared, so a press that empties Needs you
+                leaves the keyboard here rather than nowhere. */}
+              {(waiting.length > 0 || cleared.length > 0) && (
+                <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-disabled={waiting.length === 0 || undefined}
+                    onClick={() => {
+                      if (waiting.length > 0) markShown("clear", waiting);
+                    }}
+                    className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                    data-testid="decisions-inbox-clear-all"
+                  >
+                    Clear Needs you
+                  </Button>
+                </div>
+              )}
+            </div>
+            <section
+              ref={detailRef}
+              id={detailDomId}
+              // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
+              tabIndex={selected !== null ? 0 : -1}
+              aria-labelledby={selected !== null ? detailHeadingId : undefined}
+              className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              data-testid="decisions-inbox-detail"
+            >
+              {selected !== null && (
+                <>
+                  {/* The pane's bar, as Canopy's: who asked and where, and what can be done to it. */}
+                  <div className="sticky top-0 z-1 shrink-0 border-b border-divider bg-surface-dialog">
+                    {/* On the body's measure, so the bar's actions end where the question does. */}
+                    <div className="flex min-h-12 w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-2 px-8 py-2">
+                      <h3
+                        id={detailHeadingId}
+                        className="sr-only"
+                        data-testid="decisions-inbox-detail-title"
+                      >
+                        Question {aliasLabel(selected.alias)}
+                      </h3>
+                      {/* Where it was asked, as the Decisions app's bar names it; who asked heads the question. */}
+                      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
+                        <span className="min-w-0 truncate">
+                          <FactRun facts={partsOf(selected).where} />
+                        </span>
+                        <span className="shrink-0 font-mono text-2xs tabular-nums">
+                          {aliasLabel(selected.alias)}
+                        </span>
+                      </p>
+                      {/* Ghost buttons pad their ink; pulled out by that pad so the text ends where the body does. */}
+                      <div className="-mr-2 flex shrink-0 items-center gap-1">
+                        {reach !== null && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={goToTerminal}
+                            data-testid="decisions-inbox-go-to-terminal"
+                          >
+                            Go to terminal
+                          </Button>
+                        )}
+                        {/* One button that turns into its inverse, so the keyboard stays on it as the
+                            question moves between groups. Needs only the list: it works whether or
+                            not the question can be read or its terminal reached. */}
+                        {(selectedGroup === "needs-you" || selectedGroup === "cleared") && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-disabled={clearWaits || undefined}
+                            onClick={() => {
+                              if (clearWaits) return;
+                              markShown(selectedGroup === "cleared" ? "restore" : "clear", [
+                                selected,
+                              ]);
+                            }}
+                            className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                            data-testid="decisions-inbox-clear"
+                          >
+                            {selectedGroup === "cleared"
+                              ? "Restore to Needs you"
+                              : "Clear from Needs you"}
+                          </Button>
+                        )}
+                        {reader.cancellable &&
+                          (dismissal.progress !== null ? (
+                            dismissal.phase?.kind === "lost" && (
+                              <Button
+                                ref={cancelRef}
+                                variant="outline"
+                                size="xs"
+                                onClick={dismissal.retry}
+                                data-testid="decisions-inbox-dismiss-retry"
+                              >
+                                Retry
+                              </Button>
+                            )
+                          ) : dismissal.fallback !== null ? (
+                            <Button
+                              ref={cancelRef}
+                              variant="ghost"
+                              size="xs"
+                              onClick={cancel.askToWithdraw}
+                              data-testid="decisions-inbox-withdraw"
+                            >
+                              Withdraw question
+                            </Button>
+                          ) : (
+                            // Neutral here: the confirmation carries the danger, not the bar.
+                            <Button
+                              ref={cancelRef}
+                              variant="ghost"
+                              size="xs"
+                              onClick={cancel.ask}
+                              data-testid="decisions-inbox-dismiss"
+                            >
+                              Dismiss question
+                            </Button>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex w-full max-w-3xl flex-col gap-4 px-8 py-6">
+                    {reader.cancellable && dismissNote !== null && (
+                      <p
+                        role={dismissNote.live ? "status" : undefined}
+                        className="text-xs text-text-secondary [text-wrap:pretty]"
+                        data-testid="decisions-inbox-dismiss-status"
+                      >
+                        {dismissNote.text}
+                      </p>
+                    )}
+                    {selected.standing.kind === "needs-attention" && (
+                      <Callout
+                        severity="warning"
+                        size="compact"
+                        title={
+                          selected.standing.deliveryStatus === "delivery-uncertain"
+                            ? "Delivery uncertain"
+                            : "Delivery stopped"
+                        }
+                        action={
+                          // This computer's list of stopped answers; a Remote Host keeps its own.
+                          selected.remoteHost === undefined ? (
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() =>
+                                useDecisionsAttentionStore
+                                  .getState()
+                                  .open(selected.reference.terminalId, {
+                                    returnFocusTo: detailDomId,
+                                  })
+                              }
+                              data-testid="decisions-inbox-review-attention"
+                            >
+                              Resolve delivery
+                            </Button>
+                          ) : undefined
+                        }
+                        data-testid="decisions-inbox-attention"
+                      >
+                        {attentionText(selected.standing)}
+                      </Callout>
+                    )}
+                    <DecisionQuestionReadView
+                      reader={reader}
+                      target={shownTarget}
+                      active={isOpen}
+                      headingId={questionHeadingId}
+                      // As the question view does, so a reply in progress never unmounts as it moves on.
+                      followUps
+                      eyebrow={
+                        <p className="flex items-center gap-1.5 text-xs">
+                          <span
+                            className="flex size-4 items-center justify-center"
+                            aria-hidden="true"
+                          >
+                            <AgentMark agentKind={selected.agentKind} />
+                          </span>
+                          <span className="font-medium text-text-primary">
+                            {partsOf(selected).agent}
+                          </span>
+                        </p>
+                      }
+                      sendNote={
+                        // Only while a connection is being retried, never past a problem that needs the person.
+                        status !== null &&
+                        status.problem === undefined &&
+                        (status.state === "connecting" ||
+                          status.state === "reconnecting" ||
+                          status.state === "replaced")
+                          ? "Sends once reconnected"
+                          : null
+                      }
+                    />
+                    {/* Once this one is settled, the way on sits where the reading ends. */}
+                    {nextUp !== null && (
+                      <div className="-mr-2 flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={showNext}
+                          data-testid="decisions-inbox-next"
+                        >
+                          Next question
+                          <ArrowRight className="size-3.5" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        )}
+        {/* After the columns, so the dialog's first focus still lands on the question list. Each
+            opening has its own, so nothing a save in an earlier one settles reaches this one. */}
+        <DecisionsInvolvementSection
+          key={request.seq}
+          active={active}
+          opening={request.seq}
+          statusRevision={status?.revision ?? null}
+        />
       </AppDialog>
       <DecisionCancelDialog
         {...cancel.dialog}

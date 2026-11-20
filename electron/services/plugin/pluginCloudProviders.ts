@@ -22,11 +22,19 @@ import {
   cloudProviderImplArgs,
   cloudProviderMethodsNeeded,
 } from "./pluginCloudProviderCalls.js";
+import { pluginCloudConsentFingerprint } from "./pluginCloudProviderConsent.js";
 
 export interface PluginCloudProviderDeclaration {
   readonly pluginId: string;
+  /** What the person knows the plugin as (its display name, or its id when it has none), and what its accounts keep calling it once it's gone. */
+  readonly pluginName: string;
   readonly providerId: CloudProviderId;
   readonly contribution: CloudProviderContribution;
+  /**
+   * What a person agrees to before this plugin's providers get an account, the
+   * same for each of its declarations from one load (`pluginCloudConsentFingerprint`).
+   */
+  readonly consentFingerprint: string;
 }
 
 /**
@@ -66,6 +74,9 @@ const DECLARATIONS = new Map<string, readonly PluginCloudProviderDeclaration[]>(
 const BINDINGS = new Map<CloudProviderId, Bound>();
 const LISTENERS = new Set<() => void>();
 let runtime: PluginCloudProviderRuntime | null = null;
+let consentForgetter: ((pluginId: string) => void) | null = null;
+/** Uninstalled before the cloud runtime was there to hear it; forgotten once it is. */
+const PENDING_FORGETS = new Set<string>();
 
 function notify(): void {
   for (const listener of [...LISTENERS]) {
@@ -84,14 +95,20 @@ function notify(): void {
  */
 export function publishPluginCloudProviders(
   pluginId: string,
-  contributions: readonly CloudProviderContribution[]
+  contributions: readonly CloudProviderContribution[],
+  pluginName: string = pluginId
 ): void {
-  const declarations: PluginCloudProviderDeclaration[] = [];
+  const entries: Array<{ providerId: CloudProviderId; contribution: CloudProviderContribution }> =
+    [];
   for (const contribution of contributions) {
     const providerId = pluginCloudProviderId(pluginId, contribution.id);
-    if (providerId === null) continue;
-    declarations.push(Object.freeze({ pluginId, providerId, contribution }));
+    if (providerId !== null) entries.push({ providerId, contribution });
   }
+  const consentFingerprint = pluginCloudConsentFingerprint(entries);
+  const name = pluginName.trim() || pluginId;
+  const declarations = entries.map(({ providerId, contribution }) =>
+    Object.freeze({ pluginId, pluginName: name, providerId, contribution, consentFingerprint })
+  );
   if (declarations.length === 0 && !DECLARATIONS.has(pluginId)) return;
   if (declarations.length === 0) DECLARATIONS.delete(pluginId);
   else DECLARATIONS.set(pluginId, declarations);
@@ -213,6 +230,37 @@ export function pluginCloudProviderUnavailableReason(providerId: CloudProviderId
   );
 }
 
+/**
+ * The plugin was uninstalled: the person's agreement to its cloud providers
+ * goes with it, so whatever installs under the same id later asks again. Its
+ * accounts stay, unavailable, until then. An update never calls this.
+ */
+export function forgetPluginCloudProviderConsent(pluginId: string): void {
+  if (!consentForgetter) {
+    PENDING_FORGETS.add(pluginId);
+    return;
+  }
+  consentForgetter(pluginId);
+}
+
+/** Set by the cloud runtime while it runs; it hears every uninstall made before it started too. */
+export function setPluginCloudConsentForgetter(next: ((pluginId: string) => void) | null): void {
+  consentForgetter = next;
+  if (!next) return;
+  for (const pluginId of [...PENDING_FORGETS]) {
+    try {
+      next(pluginId);
+      // Dropped only once forgotten: a failed write is tried again by the next forgetter.
+      PENDING_FORGETS.delete(pluginId);
+    } catch (error) {
+      console.error(
+        `[PluginCloudProviders] forgetting the consent of "${pluginId}" failed:`,
+        error
+      );
+    }
+  }
+}
+
 /** A plugin's state changed in a way the reasons read (it failed to load, startup finished). */
 export function pluginCloudProviderStatusChanged(): void {
   notify();
@@ -229,4 +277,6 @@ export function clearPluginCloudProviders(): void {
   BINDINGS.clear();
   LISTENERS.clear();
   runtime = null;
+  consentForgetter = null;
+  PENDING_FORGETS.clear();
 }

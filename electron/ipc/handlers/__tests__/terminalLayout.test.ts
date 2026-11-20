@@ -395,6 +395,34 @@ describe("setTerminals session-id preservation (#11461)", () => {
     expect(saved()?.terminals?.find((t) => t.id === "1")).not.toHaveProperty("holdOnRestart");
   });
 
+  it("keeps the stop Main recorded through the kill's own state saves, until a restore consumes it (#17886)", async () => {
+    const stop = { agentState: "working" as const, at: 40 };
+    const saved = onDisk(
+      baseState([withSession("1", undefined, { agentState: "working", stopObservation: stop })])
+    );
+
+    // The quit keys settle the agent, and the renderer saves that after Main's write.
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1", undefined, { agentState: "waiting" })],
+      changedIds: ["1"],
+      removedIds: [],
+    });
+    const entry = saved()?.terminals?.find((t) => t.id === "1");
+    expect(entry?.agentState).toBe("waiting");
+    expect(entry?.stopObservation).toEqual(stop);
+
+    // The restore read it from disk, and its first save drops it.
+    await setTerminals({
+      projectId: "p1",
+      terminals: [withSession("1")],
+      changedIds: ["1"],
+      removedIds: [],
+      fieldEdits: [{ id: "1", fields: ["stopObservation"] }],
+    });
+    expect(saved()?.terminals?.find((t) => t.id === "1")).not.toHaveProperty("stopObservation");
+  });
+
   it("ignores field names outside the allowlist", async () => {
     const saved = onDisk(baseState([withSession("1", "captured")]));
 

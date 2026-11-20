@@ -40,6 +40,12 @@ const ALL_CATEGORY_TOKENS = [
 
 const STATUS_TOKENS = ["status-success", "status-warning", "status-danger", "status-info"] as const;
 
+/**
+ * The category hues drawn beside a status hue: the worktree palette, plus the
+ * purple a GitHub IMPORTANT alert takes among the status-toned alerts (#17333).
+ */
+const CATEGORY_TOKENS_BESIDE_STATUS = [...WORKTREE_COLOR_PALETTE, "category-purple"] as const;
+
 const DEFICIENCIES: Deficiency[] = ["protanopia", "deuteranopia", "tritanopia"];
 
 // Quarter-JND floor (~0.005 OKLab units). Catches near-identical perceived
@@ -163,7 +169,7 @@ describe("palette distinguishability", () => {
         for (const deficiency of DEFICIENCIES) {
           const filter = cvdFilter(deficiency);
 
-          for (const catKey of WORKTREE_COLOR_PALETTE) {
+          for (const catKey of CATEGORY_TOKENS_BESIDE_STATUS) {
             const catValue = scheme.tokens[catKey as AppThemeTokenKey] as string;
             const catParsed = parseColor(catValue);
             if (!catParsed) {

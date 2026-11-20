@@ -243,6 +243,11 @@ const scheduleOsJobMock = vi.hoisted(() => ({
 }));
 vi.mock("../../services/scheduledRuns/scheduleOsJobLive.js", () => scheduleOsJobMock);
 
+const claudeUsageSaveMock = vi.hoisted(() => ({
+  sealClaudeUsageObservations: vi.fn(),
+}));
+vi.mock("../../services/claude/ClaudeUsageObservations.js", () => claudeUsageSaveMock);
+
 const vadDrainMock = vi.hoisted(() => ({
   waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
 }));
@@ -254,6 +259,12 @@ const readerDrainMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../services/canopy/canopyReaderProcess.js", () => readerDrainMock);
+
+const localSpeechDrainMock = vi.hoisted(() => ({
+  shutdownLocalSpeech: vi.fn((_budgetMs: number) => Promise.resolve()),
+}));
+
+vi.mock("../../services/voice/localSpeech.js", () => localSpeechDrainMock);
 
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
@@ -287,6 +298,9 @@ const helpSessionMock = vi.hoisted(() => ({
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,
 }));
+
+const paneCreationsMock = vi.hoisted(() => ({ beginAssistantPaneCreationQuit: vi.fn() }));
+vi.mock("../../services/mcp-server/assistantPaneCreations.js", () => paneCreationsMock);
 
 const idleTerminalMock = vi.hoisted(() => ({ stop: vi.fn() }));
 vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
@@ -544,6 +558,25 @@ describe("registerShutdownHandler", () => {
     // Paired devices stop answering before any terminal is enumerated or killed.
     expect(order[1]).toBe("device-answer-stop");
     expect(order).toContain("pty-dispose");
+  });
+
+  it("keeps the Assistant's pane records before the remote hosts' teardown lets anything go (#16845)", async () => {
+    const order: string[] = [];
+    paneCreationsMock.beginAssistantPaneCreationQuit.mockImplementationOnce(() => {
+      order.push("keep-records");
+    });
+    const stopRemoteHosts = vi.fn(async () => {
+      order.push("remote-stop");
+    });
+    const { beforeQuitCb } = await setup({ stopRemoteHosts });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(order.slice(0, 2)).toEqual(["keep-records", "remote-stop"]);
   });
 
   it("imports no Decisions module at quit when nothing loaded it", async () => {
@@ -1455,6 +1488,28 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(callOrder).toEqual(["scheduler-stop", "closeSharedDb"]);
+    });
+
+    it("seals the Claude usage readings before db maintenance and closeSharedDb (#17610)", async () => {
+      const callOrder: string[] = [];
+      claudeUsageSaveMock.sealClaudeUsageObservations.mockImplementationOnce(() => {
+        callOrder.push("usage-sealed");
+      });
+      dbMaintenanceMock.dispose.mockImplementation(async () => {
+        callOrder.push("dispose");
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        callOrder.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["usage-sealed", "dispose", "closeSharedDb"]);
     });
 
     it("lets a rewrite of the schedules' OS job finish before the app exits", async () => {
@@ -2854,6 +2909,70 @@ describe("registerShutdownHandler", () => {
         "sess-1"
       );
       vi.useRealTimers();
+    });
+
+    it("records what each agent was doing before the quit's kill, captured id or not (#17886)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1" },
+        { id: "asleep" },
+      ] as never);
+      const ptyClient = makePtyClient({
+        // Read before the kill; the quit keys move the agents on afterwards.
+        getAllTerminalsAsync: vi.fn(async () => [
+          { ...agentTerminal, agentState: "working", lastStateChange: 40 },
+          { ...agentTerminal, id: "t2", agentState: "completed", lastStateChange: 30 },
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true, agentState: "working" },
+          { id: "shell", projectId: "proj-1", cwd: "/repo", agentState: "idle" },
+          // What a session-preserving Sleep left registered: no process this quit stops.
+          {
+            ...agentTerminal,
+            id: "retained",
+            projectId: "asleep",
+            isExited: true,
+            agentState: "exited",
+            lastStateChange: 50,
+          },
+        ]),
+        // t2 reported back; t1 didn't before the deadline but still goes with the
+        // app; "gone" answered the kill but missed the inventory read.
+        gracefulKillByProject: vi.fn(async (pid: string) =>
+          pid === "proj-1"
+            ? [
+                { id: "t2", agentSessionId: "sess-2" },
+                { id: "gone", agentSessionId: null },
+              ]
+            : [{ id: "retained", agentSessionId: null }]
+        ),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      const [projectId, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(projectId).toBe("proj-1");
+      const state = {
+        terminals: [
+          { id: "t1" },
+          { id: "t2" },
+          { id: "assistant" },
+          { id: "shell" },
+          { id: "gone", stopObservation: { agentState: "working", at: 5 } },
+        ],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", stopObservation: { agentState: "working", at: 40 } },
+        {
+          id: "t2",
+          agentSessionId: "sess-2",
+          stopObservation: { agentState: "completed", at: 30 },
+        },
+        { id: "assistant" },
+        { id: "shell" },
+        { id: "gone" },
+      ]);
     });
 
     it("writes nothing for a project that outran the deadline with no streamed captures", async () => {

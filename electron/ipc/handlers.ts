@@ -39,6 +39,7 @@ import { registerNotificationSoundsHandlers } from "./handlers/notificationSound
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerFileMutationHandlers } from "./handlers/fileMutation.js";
+import { registerGitHunkHandlers } from "./handlers/gitHunks.js";
 import { registerFileDocumentHandlers } from "./handlers/fileDocument.js";
 import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerFileBrowserHandlers } from "./handlers/fileBrowser.js";
@@ -136,6 +137,7 @@ import { registerPluginProjectPresenceHandlers } from "./handlers/pluginProjectP
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerAgentToolbarPinsHandlers } from "./handlers/agentToolbarPins.js";
+import { registerAgentUsageHandlers } from "./handlers/agentUsage.js";
 import { registerUserPromptTemplatesHandlers } from "./handlers/userPromptTemplates.js";
 import { registerProjectCloneHandlers } from "./handlers/projectClone.js";
 import { registerAgentAccountsHandlers } from "./handlers/agentAccounts.js";
@@ -147,6 +149,7 @@ import { registerWorktreeTitlesHandlers } from "./handlers/worktreeTitles.js";
 import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
 import { registerSchedulesHandlers } from "./handlers/schedules.js";
 import { registerTerminalWhenDoneHandlers } from "./handlers/terminalWhenDone.js";
+import { registerCodexLimitContinueHandlers } from "./handlers/codexLimitContinue.js";
 import { registerComposerHoldHandlers } from "./handlers/composerHold.js";
 import { registerBulkWorktreeRunsHandlers } from "./handlers/bulkWorktreeRuns.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
@@ -197,6 +200,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTerminalHandlers(deps));
     register(() => registerFilesHandlers());
     register(() => registerFileMutationHandlers());
+    register(() => registerGitHunkHandlers());
     register(() => registerFileDocumentHandlers());
     register(() => registerDiffMediaHandlers());
     register(() => registerFileBrowserHandlers(deps));
@@ -313,6 +317,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());
     register(() => registerAgentToolbarPinsHandlers());
+    register(() => registerAgentUsageHandlers());
     register(() => registerUserPromptTemplatesHandlers());
     register(() => registerProjectCloneHandlers());
     register(() => registerAgentAccountsHandlers());
@@ -324,6 +329,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerReviewMarksHandlers(deps));
     register(() => registerSchedulesHandlers());
     register(() => registerTerminalWhenDoneHandlers());
+    register(() => registerCodexLimitContinueHandlers());
     register(() => registerComposerHoldHandlers());
     register(() => registerBulkWorktreeRunsHandlers());
     register(() => registerDecisionsHandlers());

@@ -26,7 +26,7 @@ function makeProps(
   };
 }
 
-describe("useAgentScope — skip-permissions Default follows the global switch (#16414)", () => {
+describe("useAgentScope — permission Inherit follows the global switch (#16414)", () => {
   function setGlobalSkip(globalSkipPermissions: boolean) {
     useAgentSettingsStore.setState({
       settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions },
@@ -40,8 +40,8 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
     setGlobalSkip(true);
     for (const agentId of ["antigravity", "gemini"]) {
       const { result } = renderHook(() => useAgentScope(makeProps(agentId)));
-      expect(result.current.inheritResolvesToOn, agentId).toBe(true);
-      expect(result.current.effectiveSkipPerms, agentId).toBe(true);
+      expect(result.current.inheritLevel, agentId).toBe("skip");
+      expect(result.current.effectiveLevel, agentId).toBe("skip");
       expect(result.current.inheritHint, agentId).toBe("Inherited from global setting");
     }
   });
@@ -49,20 +49,20 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
   it("tracks the global switch turning off", () => {
     setGlobalSkip(true);
     const { result, rerender } = renderHook(() => useAgentScope(makeProps("antigravity")));
-    expect(result.current.inheritResolvesToOn).toBe(true);
+    expect(result.current.inheritLevel).toBe("skip");
 
     setGlobalSkip(false);
     rerender();
-    expect(result.current.inheritResolvesToOn).toBe(false);
-    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritLevel).toBe("cli-default");
+    expect(result.current.effectiveLevel).toBe("cli-default");
     expect(result.current.inheritHint).toBe("Inherited from global setting");
   });
 
   it("keeps Default off and says the global doesn't apply for an agent with no bypass flag", () => {
     setGlobalSkip(true);
     const { result } = renderHook(() => useAgentScope(makeProps("opencode")));
-    expect(result.current.inheritResolvesToOn).toBe(false);
-    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritLevel).toBe("cli-default");
+    expect(result.current.effectiveLevel).toBe("cli-default");
     expect(result.current.inheritHint).toBe("The global setting doesn't apply to this agent");
   });
 
@@ -71,8 +71,8 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
     const { result } = renderHook(() =>
       useAgentScope(makeProps("antigravity", { dangerousMode: "off" }))
     );
-    expect(result.current.effectiveSkipPerms).toBe(false);
-    expect(result.current.inheritResolvesToOn).toBe(true);
+    expect(result.current.effectiveLevel).toBe("cli-default");
+    expect(result.current.inheritLevel).toBe("skip");
   });
 
   it("attributes a custom preset's Default to the agent default", () => {
@@ -93,12 +93,49 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
       presetId: "user-1",
     });
     const inherit = renderHook(() => useAgentScope(makeProps("gemini", withPreset())));
-    expect(inherit.result.current.inheritResolvesToOn).toBe(true);
-    expect(inherit.result.current.effectiveSkipPerms).toBe(true);
+    expect(inherit.result.current.inheritLevel).toBe("skip");
+    expect(inherit.result.current.effectiveLevel).toBe("skip");
 
     const vetoed = renderHook(() => useAgentScope(makeProps("gemini", withPreset("off"))));
     expect(vetoed.result.current.dangerousMode).toBe("off");
-    expect(vetoed.result.current.effectiveSkipPerms).toBe(false);
+    expect(vetoed.result.current.effectiveLevel).toBe("cli-default");
+  });
+
+  it("resolves an agent's own Auto over the global switch, naming the flags it adds (#17435)", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() =>
+      useAgentScope(makeProps("codex", { dangerousMode: "auto" }))
+    );
+    expect(result.current.autoSupported).toBe(true);
+    expect(result.current.effectiveLevel).toBe("auto");
+    expect(result.current.effectivePermissionArgs).toBe("--approve-for-me");
+    expect(result.current.inheritLevel).toBe("skip");
+  });
+
+  it("carries the agent's Auto down to a preset that inherits it, and lets the preset's Skip all win", () => {
+    const withPreset = (dangerousMode?: "on"): AgentSettingsEntry => ({
+      dangerousMode: "auto",
+      customPresets: [{ id: "user-1", name: "My preset", ...(dangerousMode && { dangerousMode }) }],
+      presetId: "user-1",
+    });
+    const inherit = renderHook(() => useAgentScope(makeProps("claude", withPreset())));
+    expect(inherit.result.current.inheritLevel).toBe("auto");
+    expect(inherit.result.current.effectivePermissionArgs).toBe("--permission-mode auto");
+
+    const skip = renderHook(() => useAgentScope(makeProps("claude", withPreset("on"))));
+    expect(skip.result.current.effectiveLevel).toBe("skip");
+    expect(skip.result.current.effectivePermissionArgs).toBe("--dangerously-skip-permissions");
+  });
+
+  it("launches a saved Auto on the CLI default, never Skip all, for an agent with no Auto mode", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() =>
+      useAgentScope(makeProps("gemini", { dangerousMode: "auto" }))
+    );
+    expect(result.current.autoSupported).toBe(false);
+    expect(result.current.dangerousMode).toBe("auto");
+    expect(result.current.effectiveLevel).toBe("cli-default");
+    expect(result.current.effectivePermissionArgs).toBe("");
   });
 });
 
@@ -146,4 +183,40 @@ describe("useAgentScope — rename follows the preset sanitizer's rules", () => 
       expect(error).toBeTruthy();
     }
   );
+});
+
+describe("useAgentScope — duplicating a preset's continuation switch (#17912)", () => {
+  async function duplicate(entry: AgentSettingsEntry, preset: { id: string; name: string }) {
+    const writes: Array<Partial<AgentSettingsEntry>> = [];
+    const props = {
+      ...makeProps("codex", entry),
+      updateAgent: async (_agentId: string, updates: Partial<AgentSettingsEntry>) => {
+        writes.push(updates);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    await act(async () => {
+      result.current.handleDuplicatePreset({ ...preset, continueAtLimitReset: true });
+    });
+    return writes[0]?.customPresets?.at(-1);
+  }
+
+  it("keeps it on a copy of the user's own preset", async () => {
+    const own = { id: "user-1", name: "Mine", continueAtLimitReset: true };
+    const copy = await duplicate({ customPresets: [own] }, own);
+    expect(copy?.name).toBe("Mine (copy)");
+    expect(copy?.continueAtLimitReset).toBe(true);
+  });
+
+  it("drops it when the user's own entry under that id is one the sanitiser discards", async () => {
+    const discarded = { id: "team", name: "<bad>" };
+    const copy = await duplicate({ customPresets: [discarded] }, { id: "team", name: "Team" });
+    expect(copy?.continueAtLimitReset).toBeUndefined();
+  });
+
+  it("drops it from a copy of a repository's preset, whose switch the user never saw", async () => {
+    const copy = await duplicate({ customPresets: [] }, { id: "team", name: "Team" });
+    expect(copy?.name).toBe("Team (copy)");
+    expect(copy?.continueAtLimitReset).toBeUndefined();
+  });
 });

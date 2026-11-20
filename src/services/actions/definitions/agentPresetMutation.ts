@@ -6,7 +6,13 @@ import {
   isEffectivelyRegisteredAgent,
   type AgentPreset,
 } from "@shared/config/agentRegistry";
-import type { AgentAccount, AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
+import {
+  getPermissionAutoArgs,
+  type AgentAccount,
+  type AgentSettings,
+  type AgentSettingsEntry,
+} from "@shared/types/agentSettings";
+import type { DangerousMode } from "@shared/types/dangerousMode";
 import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import {
   getMergedPresetIdentities,
@@ -76,15 +82,13 @@ export type AgentPresetMutation =
 export type AgentPresetMutationPlan =
   { ok: true; mutation: AgentPresetMutation } | { ok: false; message: string };
 
-type PresetMode = "inherit" | "on" | "off";
-
 interface PresetPatch {
   name?: string;
   envSet?: Record<string, string>;
   envUnset?: string[];
   args?: string[];
   customFlags?: string | null;
-  dangerousMode?: PresetMode;
+  dangerousMode?: DangerousMode;
   color?: string;
   displayTitle?: string;
   fallbacks?: string[];
@@ -186,6 +190,13 @@ export function planAgentPresetMutation(
     return refuse("Agent settings haven't loaded yet, so the preset can't be checked. Try again.");
   }
   const agentName = getEffectiveAgentConfig(agentId)?.name ?? agentId;
+  if (
+    "dangerousMode" in parsed.data &&
+    parsed.data.dangerousMode === "auto" &&
+    getPermissionAutoArgs(agentId).length === 0
+  ) {
+    return refuse(`${agentName} has no Auto permission mode; use "on", "off" or "inherit".`);
+  }
   // Absent keeps the built-in registry presets and an own array replaces them,
   // as the launcher reads these layers.
   const layers: AgentPresetLayers = {

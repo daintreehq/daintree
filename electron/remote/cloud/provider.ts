@@ -12,6 +12,7 @@ import type {
   CloudProviderResource,
   CloudProviderSshAccess,
 } from "../../../shared/types/pluginCloudProvider.js";
+import type { GuestPowerOffTarget } from "./machineKeeperLink.js";
 
 /** Why a cloud host can't run here: the Shell reaches hosts on Windows through WSL only. */
 export const CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS =
@@ -73,6 +74,21 @@ export interface MachineKeyIssuer {
 }
 
 /**
+ * Whether the machine powering its own OS off would be a normal stop that
+ * keeps its disk, as the provider reports the machine now, and how its host
+ * names itself (its cloud metadata server's identity for it).
+ */
+export type GuestPowerOffCheck =
+  | { eligible: true; target: GuestPowerOffTarget }
+  | {
+      eligible: false;
+      /** Null when the machine can't be named at all. */
+      target: GuestPowerOffTarget | null;
+      /** Why not, in a sentence for the host's details. */
+      problem: string;
+    };
+
+/**
  * One cloud provider: authentication, catalog, machine lifecycle and SSH
  * access, translated into Daintree's types. It holds no state and decides
  * nothing about whether a host is idle; the coordinator does.
@@ -115,6 +131,17 @@ export interface CloudProvider {
     request: ProviderCreateRequest
   ): Promise<ProviderResource>;
   /**
+   * For a provider with work to do before it asks for the machine (Agent 37
+   * registers the key): does that work, asking for nothing, and answers with
+   * the send that does ask. The create is marked sent between the two, so one
+   * interrupted while it is readied is known never to have reached the
+   * provider. Without it, `create` is the send and is marked before it starts.
+   */
+  prepareCreate?(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<() => Promise<ProviderResource>>;
+  /**
    * Starts a stopped machine; resolves with what the provider said, which may
    * still be starting. `lifetimeSeconds` is the runtime limit to start it with,
    * absent when it keeps whatever it has (and null for none).
@@ -124,8 +151,16 @@ export interface CloudProvider {
     resourceId: string,
     options: { lifetimeSeconds?: number | null }
   ): Promise<ProviderResource | null>;
-  /** A normal, saving stop. Never forced. */
-  stop(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource | null>;
+  /**
+   * A normal, saving stop. Never forced. `once` sends it a single time, for a
+   * stop whose reason has to be checked again before any second try: an idle
+   * stop, whose idle time new work may have ended by the time a resend went.
+   */
+  stop(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    options?: { once?: boolean }
+  ): Promise<ProviderResource | null>;
   /**
    * Moves the machine's automatic stop to `lifetimeSeconds` from now. Only a
    * provider whose lifetime is `renewable` has it, and that one must.
@@ -141,8 +176,9 @@ export interface CloudProvider {
   /**
    * Puts `publicKey` on the machine and says how to reach its sshd. Required
    * when `provisioning.sshKey` is "after-create". A provider that takes the
-   * key at create may have it too, for a machine it didn't create with the
-   * key (an imported one); it is then called for those alone.
+   * key at create may have it too, for a machine that may not hold the
+   * account's key: an imported one, or a created one whose key was made again
+   * since (#17929). It is then called for those alone.
    */
   authorizeSsh?(
     credentials: ProviderCredentials,
@@ -152,13 +188,65 @@ export interface CloudProvider {
   /**
    * Says how to reach the sshd of a machine that took the key with its create,
    * changing nothing on it. Required when `provisioning.sshKey` is "at-create",
-   * and only called then.
+   * and only called then. Without `authorizeSsh`, a created machine whose key
+   * is missing from this device is refused instead.
    */
   sshAccess?(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
   describeError(error: unknown): CloudHostError;
   /** Present only for a provider whose machines can renew and stop themselves (#17361). */
   readonly machineKeys?: MachineKeyIssuer;
+  /**
+   * Present only for a provider where a machine powering its own OS off is a
+   * normal stop that keeps its disk, so its host can stop it once idle with
+   * no credential on the machine (#17362). Throws when the provider couldn't
+   * be asked; answers why not when it was, and the machine isn't one.
+   */
+  checkGuestPowerOff?(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<GuestPowerOffCheck>;
+  /**
+   * Present only for a provider whose `idle-sleep` lifetime this device can
+   * drive (#17916): puts a running machine to sleep now, keeping its memory.
+   * Sends one request and never repeats it, since whoever calls it acts on its
+   * host's idleness once; a machine already asleep is the same outcome.
+   */
+  sleepIdle?(credentials: ProviderCredentials, resourceId: string): Promise<void>;
+  /**
+   * Present with {@link sleepIdle}: sets how long the machine may go without
+   * activity before its provider sleeps it, and turns that sleep on when
+   * `enable`. Applies at once, whatever the machine is doing.
+   */
+  setIdleSleep?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    idleSeconds: number,
+    enable: boolean
+  ): Promise<ProviderResource>;
+  /**
+   * Present only for a provider whose idle timer counts traffic on the
+   * machine's own URLs, Agent 37's (#17918): a URL reaching `port` of the
+   * machine alone, with no account key, that its host sends requests to
+   * itself through while it sees work. `expiresAt` is epoch milliseconds.
+   */
+  keepAwakeUrl?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }>;
+}
+
+/** A provider that can put its idle machines to sleep for this device, and set when they would by themselves. */
+export type IdleSleepingCloudProvider = CloudProvider &
+  Required<Pick<CloudProvider, "sleepIdle" | "setIdleSleep">>;
+
+export function canSleepIdle(provider: CloudProvider): provider is IdleSleepingCloudProvider {
+  return (
+    provider.info(process.platform).capabilities.lifetime.kind === "idle-sleep" &&
+    typeof provider.sleepIdle === "function" &&
+    typeof provider.setIdleSleep === "function"
+  );
 }
 
 /** A provider that can move a running machine's automatic stop. */

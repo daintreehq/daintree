@@ -1,4 +1,7 @@
-import type { CloudProviderId } from "../../../shared/types/cloudHosts.js";
+import type {
+  CloudPluginProviderLabel,
+  CloudProviderId,
+} from "../../../shared/types/cloudHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginCloudProviderRuntime,
@@ -8,12 +11,18 @@ import {
   pluginCloudProviderUnavailableReason,
   type PluginCloudProviderDeclaration,
 } from "../../services/plugin/pluginCloudProviders.js";
+import { canonicalCloudOrigin } from "../../services/plugin/pluginCloudProviderConsent.js";
+import type { PluginConsentSubject } from "./CloudAccountService.js";
 import type { CloudProviderRegistry } from "./CloudProviderRegistry.js";
 import { PluginCloudProvider, type PluginCloudProviderHost } from "./PluginCloudProvider.js";
 
 export interface PluginCloudProviderRegistrations {
   /** Why a plugin's provider isn't registered, or null for an id that isn't a plugin's. */
   unavailableReason(providerId: CloudProviderId): string | null;
+  /** What the person agrees to before a registered plugin provider gets credentials; null when it isn't registered. */
+  consentSubject(providerId: CloudProviderId): PluginConsentSubject | null;
+  /** What a registered plugin provider is called and where its console is; null when it isn't registered. */
+  label(providerId: CloudProviderId): CloudPluginProviderLabel | null;
   dispose(): void;
 }
 
@@ -21,15 +30,6 @@ const LIVE_HOST: PluginCloudProviderHost = {
   runtime: getPluginCloudProviderRuntime,
   binding: pluginCloudProviderBinding,
 };
-
-/** The origin an account is tied to: a manifest that adds or drops a trailing slash names the same one. */
-function canonicalOrigin(apiUrl: string): string {
-  try {
-    return new URL(apiUrl).origin;
-  } catch {
-    return apiUrl;
-  }
-}
 
 /**
  * Keeps `providers` holding one provider per cloud provider a loaded plugin
@@ -88,14 +88,17 @@ export function watchPluginCloudProviders(params: {
       const { providerId } = declaration;
       if (registered.has(providerId) || refused.has(providerId) || failing.has(providerId))
         continue;
+      // Recorded first: the registry tells its listeners from inside register(), and they ask for the label.
+      const entry = { declaration, dispose: () => {} };
+      registered.set(providerId, entry);
       try {
-        const dispose = params.providers.register(new PluginCloudProvider(declaration, host), {
+        entry.dispose = params.providers.register(new PluginCloudProvider(declaration, host), {
           owner: { kind: "plugin", pluginId: declaration.pluginId },
-          apiUrl: canonicalOrigin(declaration.contribution.apiUrl),
+          apiUrl: canonicalCloudOrigin(declaration.contribution.apiUrl),
         });
-        registered.set(providerId, { declaration, dispose });
         changed = true;
       } catch (error) {
+        registered.delete(providerId);
         const why = formatErrorMessage(error, "it was refused");
         console.warn(`[CloudHosts] Cloud provider ${providerId} wasn't registered: ${why}`);
         refused.set(providerId, {
@@ -114,6 +117,37 @@ export function watchPluginCloudProviders(params: {
       refused.get(providerId)?.reason ??
       failing.get(providerId) ??
       pluginCloudProviderUnavailableReason(providerId),
+    // From the published declarations, never `registered`: registering wakes the lifecycle
+    // before `registered` holds the entry, and that wake must already see the consent.
+    consentSubject: (providerId) => {
+      const declaration = listPluginCloudProviders().find(
+        (entry) => entry.providerId === providerId
+      );
+      if (!declaration) return null;
+      return {
+        pluginId: declaration.pluginId,
+        pluginName: declaration.pluginName,
+        fingerprint: declaration.consentFingerprint,
+        // Every provider the agreement covers, registered or not: the fingerprint hashes them all.
+        providerNames: listPluginCloudProviders()
+          .filter(
+            (entry) =>
+              entry.pluginId === declaration.pluginId &&
+              entry.consentFingerprint === declaration.consentFingerprint
+          )
+          .map((entry) => entry.contribution.name),
+      };
+    },
+    label(providerId) {
+      const entry = registered.get(providerId);
+      if (!entry) return null;
+      const { pluginName, contribution } = entry.declaration;
+      return {
+        pluginName,
+        providerName: contribution.name,
+        dashboardUrl: contribution.dashboardUrl,
+      };
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

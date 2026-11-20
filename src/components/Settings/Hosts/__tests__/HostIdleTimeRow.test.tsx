@@ -8,7 +8,9 @@ import type {
   HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
 import type { HostIdleObservation } from "@shared/types/hostIdle";
-import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
+import type { CloudLinkedIdleStop, CloudProviderInfo } from "@shared/types/cloudHosts";
+import { clockTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
+import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { SettingsGroup } from "../../SettingsGroup";
 import { HostIdleTimeRow } from "../HostIdleTimeRow";
 
@@ -46,36 +48,44 @@ function result(
   };
 }
 
-async function renderRow(
-  props: {
-    connected?: boolean;
-    idle?: HostIdleObservation;
-    sampledAt?: number | null;
-    selfStopProblem?: string | null;
-  } = {}
-) {
-  const tree = (connected: boolean) => (
+interface RowProps {
+  connected?: boolean;
+  idle?: HostIdleObservation;
+  sampledAt?: number | null;
+  selfStopProblem?: string | null;
+  linkedIdleStop?: CloudLinkedIdleStop | null;
+  provider?: CloudProviderInfo | null;
+}
+
+async function renderRow(props: RowProps = {}) {
+  const tree = (current: RowProps) => (
     <SettingsGroup>
       <HostIdleTimeRow
         hostId="boat-1"
         hostName="Boat"
-        connected={connected}
-        idle={props.idle}
-        sampledAt={props.sampledAt ?? null}
-        selfStopProblem={props.selfStopProblem}
+        connected={current.connected ?? true}
+        idle={current.idle}
+        sampledAt={current.sampledAt ?? null}
+        selfStopProblem={current.selfStopProblem}
+        linkedIdleStop={current.linkedIdleStop}
+        provider={current.provider}
       />
     </SettingsGroup>
   );
   let rendered: ReturnType<typeof render> | undefined;
+  let current = props;
   await act(async () => {
-    rendered = render(tree(props.connected ?? true));
+    rendered = render(tree(current));
   });
+  const rerender = async (next: RowProps) => {
+    current = { ...current, ...next };
+    await act(async () => {
+      rendered!.rerender(tree(current));
+    });
+  };
   return {
-    setConnected: async (connected: boolean) => {
-      await act(async () => {
-        rendered!.rerender(tree(connected));
-      });
-    },
+    setConnected: (connected: boolean) => rerender({ connected }),
+    rerender,
   };
 }
 
@@ -350,5 +360,120 @@ describe("HostIdleTimeRow (#17357)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
     expect(select().textContent).toBe("30 minutes");
+  });
+});
+
+describe("HostIdleTimeRow says what its idle time ending does (#17921)", () => {
+  const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
+  const endsAt = lastWorkAt + 30 * 60_000;
+  const ended = `Its idle time ended ${clockTime(new Date(endsAt).toISOString())}.`;
+  const idle: HostIdleObservation = {
+    idleAfterMinutes: 30,
+    lastWorkAt,
+    busy: false,
+    idleEndsAt: endsAt,
+  };
+  const digitalOcean = provider({
+    name: "DigitalOcean",
+    stoppedBilling: "DigitalOcean bills a stopped Droplet in full until it's deleted.",
+  });
+  // The row's own description, not the page's: the select names it.
+  const description = () => {
+    const ids = select().getAttribute("aria-describedby")?.split(" ") ?? [];
+    return ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+  };
+
+  it("says a DigitalOcean Droplet doesn't stop once its idle time ends, and bills stopped in full", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    await renderRow({ idle, sampledAt: endsAt + 60_000, provider: digitalOcean });
+
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. ${ended} On DigitalOcean, the machine doesn't stop when the host's idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted.`
+    );
+  });
+
+  it("says a plugin provider's machine doesn't stop, in its provider's name", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    await renderRow({
+      idle,
+      sampledAt: endsAt + 60_000,
+      provider: provider({ name: "Acme Droplets", stoppedComputeBilled: false }),
+    });
+
+    expect(description()).toContain(
+      `${ended} On Acme Droplets, the machine doesn't stop when the host's idle time ends.`
+    );
+  });
+
+  it("says this device stops a plugin provider's machine while it's linked, from its status (#17923)", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    await renderRow({
+      idle,
+      sampledAt: endsAt + 60_000,
+      provider: provider({ name: "Acme Droplets", stoppedComputeBilled: false }),
+      linkedIdleStop: { kind: "stops" },
+    });
+
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. ${ended} While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.`
+    );
+  });
+
+  it("keeps a confirmed self-stop's wording, with nothing added", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    await renderRow({
+      idle: { ...idle, stopsWhenIdle: true },
+      sampledAt: endsAt + 60_000,
+      provider: BOAT_PROVIDER,
+      selfStopProblem: "This machine can't stop itself when idle: the key isn't allowed.",
+    });
+
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. Its idle time ended ${clockTime(new Date(endsAt).toISOString())}, so it stops by itself.`
+    );
+  });
+
+  it("says a confirmed self-stop while the idle time itself can't be read", async () => {
+    api.read.mockRejectedValue(new Error("link dropped"));
+    await renderRow({
+      idle: { ...idle, stopsWhenIdle: true },
+      sampledAt: endsAt + 60_000,
+      provider: BOAT_PROVIDER,
+    });
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      `Its idle time ended ${clockTime(new Date(endsAt).toISOString())}, so it stops by itself.`
+    );
+    expect(document.body.textContent).not.toContain(IDLE_STOP_UNKNOWN);
+  });
+
+  it("says it can't tell, rather than implying a stop, without a current summary or link", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    // Connected, with no summary on this link yet: an older host, or one not heard from since it came back.
+    const row = await renderRow({ provider: BOAT_PROVIDER });
+    expect(select().textContent).toBe("30 minutes");
+    expect(description()).toContain(IDLE_STOP_UNKNOWN);
+
+    // A summary that doesn't say the host stops it: the host hasn't said, so still unknown.
+    await row.rerender({ idle, sampledAt: endsAt + 60_000 });
+    expect(description()).toContain(`${ended} ${IDLE_STOP_UNKNOWN}`);
+
+    // The link drops: the summary goes with it, and the stop it promised isn't kept.
+    await row.rerender({ idle: { ...idle, stopsWhenIdle: true } });
+    expect(description()).toContain("so it stops by itself.");
+    await row.rerender({ connected: false, idle: undefined, sampledAt: null });
+    expect(document.body.textContent).toContain(IDLE_STOP_UNKNOWN);
+    expect(document.body.textContent).not.toContain("stops by itself");
+
+    // Back up, before a summary has come on the new link: the earlier link's is left out (#17921).
+    await row.rerender({ connected: true });
+    expect(description()).toContain(IDLE_STOP_UNKNOWN);
+    expect(description()).not.toContain("stops by itself");
+
+    // A provider that isn't registered says no more.
+    cleanup();
+    await renderRow({ idle, sampledAt: endsAt + 60_000, provider: null });
+    expect(description()).toContain(IDLE_STOP_UNKNOWN);
   });
 });

@@ -416,7 +416,7 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
     const { onCommitChange } = renderRow({ onCloudChange });
     expect(onCloudChange.mock.lastCall?.[0] ?? null).toBeNull();
 
-    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    await choose(screen.getByTestId("worktree-host-select"), /New machine Personal/);
     expect(screen.getByTestId("worktree-new-machine-note").textContent).toContain(
       "Boat then creates a machine for it in Personal"
     );
@@ -463,7 +463,7 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
       provisioning: { location: null, image: null, network: null },
     });
     renderRow();
-    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    await choose(screen.getByTestId("worktree-host-select"), /New machine Personal/);
     const review = await screen.findByTestId("worktree-machine-review");
     expect(review.textContent).toContain(
       "Acme keeps billing a stopped machine for compute until it's deleted."
@@ -488,7 +488,7 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
     getCatalog.mockRejectedValue(new Error("Boat is unreachable"));
     const onCloudChange = vi.fn<CloudListener>();
     renderRow({ onCloudChange });
-    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    await choose(screen.getByTestId("worktree-host-select"), /New machine Personal/);
     await screen.findByRole("button", { name: "Retry" });
     const commit = onCloudChange.mock.lastCall?.[0];
     expect(commit?.blocked).toContain("Boat is unreachable");

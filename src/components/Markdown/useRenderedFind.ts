@@ -1,7 +1,8 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import {
   FORCED_COLORS_QUERY,
   createFindPainter,
+  createRenderedTextIndex,
   findInRenderedText,
   firstVisibleMatch,
   matchAfter,
@@ -9,6 +10,7 @@ import {
   selectionSeed,
   type FindPainter,
   type FindResult,
+  type RenderedTextIndex,
 } from "./renderedFind";
 
 const NO_MATCHES: FindResult = { ranges: [], capped: false };
@@ -60,6 +62,9 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
   const painterRef = useRef<FindPainter | null>(null);
+  // The open bar's index of `root`; it goes with the bar or the document.
+  const textIndexRef = useRef<RenderedTextIndex | null>(null);
+  const refreshFrameRef = useRef(0);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   // Bumped by every Cmd+F; the effect below focuses the field once the bar
   // that holds it has committed.
@@ -72,12 +77,19 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
    * otherwise on the first match in view.
    */
   const search = (nextQuery: string, nextMatchCase: boolean, refresh: boolean) => {
+    // This search reads the document as it is now. A refresh still queued
+    // would only repeat it, with whatever query was last committed.
+    cancelAnimationFrame(refreshFrameRef.current);
     if (!root || nextQuery.length === 0) {
       setResult(NO_MATCHES);
       setActiveIndex(-1);
       return;
     }
-    const next = findInRenderedText(root, nextQuery, nextMatchCase);
+    const textIndex = textIndexRef.current;
+    const next =
+      textIndex?.root === root
+        ? textIndex.find(nextQuery, nextMatchCase)
+        : findInRenderedText(root, nextQuery, nextMatchCase);
     let index = refresh ? matchAfter(result.ranges[activeIndex], next.ranges) : -1;
     if (index === -1) {
       index = firstVisibleMatch(next.ranges, root, FIND_BAR_CLEARANCE);
@@ -108,6 +120,9 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
   const close = () => {
     const current = result.ranges[activeIndex];
     painterOf(painterRef).clear();
+    cancelAnimationFrame(refreshFrameRef.current);
+    textIndexRef.current?.dispose();
+    textIndexRef.current = null;
     setIsOpen(false);
     setResult(NO_MATCHES);
     setActiveIndex(-1);
@@ -158,27 +173,34 @@ export function useRenderedFind(root: HTMLElement | null): RenderedFindState {
     inputRef.current?.select();
   }, [focusRequest]);
 
-  // The document can arrive after the bar opened (its chunk is lazy), and a
-  // reopened bar searches again for the query it kept.
-  const searchOnArrival = useEffectEvent(() => search(query, matchCase, false));
-  useEffect(() => {
-    if (isOpen && root) searchOnArrival();
+  // The document can change under the open bar, and the matches follow it
+  // without moving the reader; a composition in progress waits for its commit
+  // to search. The index lives from commit to commit, so no search or queued
+  // refresh reads a document the bar has already left.
+  const refresh = useEffectEvent(() => {
+    if (query.length > 0 && !isComposingRef.current) search(query, matchCase, true);
+  });
+  useLayoutEffect(() => {
+    if (!isOpen || !root) return;
+    const index = createRenderedTextIndex(root, () => {
+      cancelAnimationFrame(refreshFrameRef.current);
+      refreshFrameRef.current = requestAnimationFrame(() => refresh());
+    });
+    textIndexRef.current = index;
+    return () => {
+      cancelAnimationFrame(refreshFrameRef.current);
+      index.dispose();
+      if (textIndexRef.current === index) textIndexRef.current = null;
+    };
   }, [isOpen, root]);
 
-  const refresh = useEffectEvent(() => search(query, matchCase, true));
+  // The document can arrive after the bar opened (its chunk is lazy), and a
+  // reopened bar searches again for the query it kept. When Source mode takes
+  // the document away, this drops the matches into it.
+  const searchOnArrival = useEffectEvent(() => search(query, matchCase, false));
   useEffect(() => {
-    if (!isOpen || !root || query.length === 0) return;
-    let frame = 0;
-    const observer = new MutationObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => refresh());
-    });
-    observer.observe(root, { childList: true, subtree: true, characterData: true });
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(frame);
-    };
-  }, [isOpen, root, query]);
+    if (isOpen) searchOnArrival();
+  }, [isOpen, root]);
 
   // `close()` clears at once, but a refresh committed just before it can still
   // flush its paint afterwards; the closed render clears that too.

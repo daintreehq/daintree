@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "fs/promises";
 import path from "path";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 
@@ -27,32 +27,67 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";
 }
 
+/** Nothing at all at `target`, as opposed to a symlink whose target is missing. */
+async function isAbsent(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return false;
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
+  }
+}
+
 /**
- * A checkout's own git directory, read without spawning git. A main checkout
- * has a `.git` directory; a linked worktree has a `.git` *file* naming its
- * directory under the main repo's `.git/worktrees/<name>`, which is where that
- * worktree's MERGE_HEAD, rebase state and index lock live.
+ * A path a git pointer file names, resolved as git resolves it: from `base`,
+ * following each symlink before any `..` after it rather than collapsing `..`
+ * lexically first. Windows collapses `..` lexically whatever it is handed, and
+ * there `path.resolve` gives a drive-less target its checkout's drive.
  */
-async function resolveGitDir(checkoutPath: string): Promise<string> {
+function resolvePointer(base: string, target: string): Promise<string> {
+  if (process.platform === "win32") return realpath(path.resolve(base, target));
+  return realpath(path.isAbsolute(target) ? target : `${base}/${target}`);
+}
+
+/**
+ * A checkout's own git directory, read without spawning git, or undefined when
+ * the checkout has no `.git` and the caller knows it isn't a repository. A main
+ * checkout has a `.git` directory; a linked worktree has a `.git` *file* naming
+ * its directory under the main repo's `.git/worktrees/<name>`, which is where
+ * that worktree's MERGE_HEAD, rebase state and index lock live. Paths are
+ * canonical, so checkouts reached through different symlinks agree on their
+ * repository, and a relative `gitdir:` resolves from the checkout's physical
+ * location, as git resolves it.
+ */
+async function resolveGitDir(
+  checkoutPath: string,
+  missingRepoIsClear: boolean
+): Promise<string | undefined> {
   const dotGit = path.join(checkoutPath, ".git");
-  const info = await stat(dotGit);
-  if (info.isDirectory()) return dotGit;
+  const info = await stat(dotGit).catch(async (error: unknown) => {
+    if (missingRepoIsClear && isMissing(error) && (await isAbsent(dotGit))) return undefined;
+    throw error;
+  });
+  if (!info) return undefined;
+  if (info.isDirectory()) return realpath(dotGit);
   if (!info.isFile()) throw new Error(".git is neither a directory nor a file");
   const content = await readFile(dotGit, "utf8");
   const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
   if (!match) throw new Error("malformed .git file");
-  return path.resolve(checkoutPath, match[1]);
+  return resolvePointer(await realpath(checkoutPath), match[1]);
 }
 
 /** The repository's shared directory: a linked worktree's `commondir`, else the git dir itself. */
 async function resolveCommonDir(gitDir: string): Promise<string> {
+  const pointer = path.join(gitDir, "commondir");
+  let content: string;
   try {
-    const content = await readFile(path.join(gitDir, "commondir"), "utf8");
-    return path.resolve(gitDir, content.trim());
+    content = await readFile(pointer, "utf8");
   } catch (error) {
-    if (isMissing(error)) return gitDir;
+    if (isMissing(error) && (await isAbsent(pointer))) return gitDir;
     throw error;
   }
+  return resolvePointer(gitDir, content.trim());
 }
 
 async function subdirectories(dir: string): Promise<string[]> {
@@ -67,56 +102,58 @@ async function subdirectories(dir: string): Promise<string[]> {
   }
 }
 
+interface Walk {
+  /** Submodule directories this probe may still visit. */
+  left: number;
+  /** Common directories already walked, so a repository is walked and charged once per probe. */
+  walked: Set<string>;
+}
+
 /**
  * A repository's own git directory plus every git directory nested under it:
  * one per linked worktree (`worktrees/<name>`) and one per absorbed submodule
  * (`modules/<path>`, whose name can itself span directories, and which can
- * have worktrees and submodules of its own).
+ * have worktrees and submodules of its own). A submodule initialized from a
+ * linked worktree lives under that worktree's own `modules/`. Empty when this
+ * probe already walked the repository from another of its checkouts.
  */
-async function nestedGitDirs(commonDir: string, budget: { left: number }): Promise<string[]> {
+async function nestedGitDirs(commonDir: string, walk: Walk): Promise<string[]> {
+  if (walk.walked.has(commonDir)) return [];
+  walk.walked.add(commonDir);
   const dirs = [commonDir, ...(await subdirectories(path.join(commonDir, "worktrees")))];
-  const pending = await subdirectories(path.join(commonDir, "modules"));
+  const pending: string[] = [];
+  for (const dir of dirs) pending.push(...(await subdirectories(path.join(dir, "modules"))));
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    if (--budget.left < 0) throw new Error("too many submodule directories");
+    if (--walk.left < 0) throw new Error("too many submodule directories");
     let isGitDir = false;
     try {
       isGitDir = (await stat(path.join(dir, "HEAD"))).isFile();
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
-    if (isGitDir) dirs.push(...(await nestedGitDirs(dir, budget)));
+    if (isGitDir) dirs.push(...(await nestedGitDirs(dir, walk)));
     else pending.push(...(await subdirectories(dir)));
   }
   return dirs;
 }
 
 /**
- * Every git directory of the repository a checkout belongs to, read from disk
- * rather than from any cached worktree list, so a worktree created outside
- * Daintree, or a submodule paused mid-rebase, is covered too.
+ * Every git directory of the repositories these checkouts belong to, read from
+ * disk rather than from any cached worktree list, so a worktree created outside
+ * Daintree, or a submodule paused mid-rebase, is covered too. Each checkout's
+ * own git directory is kept even when its repository was already walked.
  */
-async function repositoryGitDirs(
-  checkoutPath: string,
-  budget: { left: number }
-): Promise<string[]> {
-  const gitDir = await resolveGitDir(checkoutPath);
-  const commonDir = await resolveCommonDir(gitDir);
-  return [gitDir, ...(await nestedGitDirs(commonDir, budget))];
-}
-
 async function probe(
   checkoutPaths: readonly string[],
   missingRepoIsClear: boolean
 ): Promise<GitSleepSafety> {
   const gitDirs = new Set<string>();
-  const budget = { left: MAX_MODULE_DIRS };
+  const walk: Walk = { left: MAX_MODULE_DIRS, walked: new Set() };
   for (const checkoutPath of checkoutPaths) {
-    try {
-      for (const dir of await repositoryGitDirs(checkoutPath, budget)) gitDirs.add(dir);
-    } catch (error) {
-      if (missingRepoIsClear && isMissing(error)) continue;
-      throw error;
-    }
+    const gitDir = await resolveGitDir(checkoutPath, missingRepoIsClear);
+    if (gitDir === undefined) continue;
+    gitDirs.add(gitDir);
+    for (const dir of await nestedGitDirs(await resolveCommonDir(gitDir), walk)) gitDirs.add(dir);
   }
   for (const gitDir of gitDirs) {
     const entries = new Set(await readdir(gitDir));

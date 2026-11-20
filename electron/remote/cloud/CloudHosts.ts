@@ -1,26 +1,34 @@
-import type {
-  CloudHostCreatedFor,
-  CloudHostCreateRequest,
-  CloudHostImportRequest,
-  CloudAccountAddRequest,
-  CloudAccountCheckResult,
-  CloudAccountSummary,
-  CloudCatalog,
-  CloudHostStatus,
-  CloudHostsSnapshot,
-  CloudResourceSummary,
-  CloudWorktreeCleanupOutcome,
+import {
+  cloudProviderNamespace,
+  type CloudHostCreatedFor,
+  type CloudHostCreateRequest,
+  type CloudHostImportRequest,
+  type CloudAccountAddRequest,
+  type CloudAccountCheckResult,
+  type CloudAccountSummary,
+  type CloudCatalog,
+  type CloudHostStatus,
+  type CloudHostsSnapshot,
+  type CloudResourceSummary,
+  type CloudWorktreeCleanupOutcome,
+  type PluginCloudAccountInfo,
 } from "../../../shared/types/cloudHosts.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
-import type { CloudHostStore } from "./CloudHostStore.js";
+import type { CloudHostStore, StoredCloudAccount } from "./CloudHostStore.js";
 import type { CloudHostLifecycle } from "./CloudHostLifecycle.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
-import { AppError } from "../../utils/errorTypes.js";
+import { AppError, isAppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     cloudHosts: CloudHosts;
   }
+}
+
+function ownedBy(account: StoredCloudAccount, pluginId: string): boolean {
+  const namespace = cloudProviderNamespace(account.providerId);
+  return namespace?.kind === "plugin" && namespace.pluginId === pluginId;
 }
 
 export interface CloudHostsDeps {
@@ -187,16 +195,28 @@ export class CloudHosts {
     this.changed();
   }
 
-  checkAccountCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
-    return this.deps.accounts.checkCredentials(providerId, values);
+  checkAccountCredentials(
+    providerId: unknown,
+    values: unknown,
+    consent?: unknown
+  ): Promise<CloudAccountCheckResult> {
+    return this.deps.accounts.checkCredentials(providerId, values, consent);
   }
 
   addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     return this.deps.accounts.addAccount(request);
   }
 
-  replaceAccountCredentials(accountId: unknown, values: unknown): Promise<CloudAccountSummary> {
-    return this.deps.accounts.replaceCredentials(accountId, values);
+  replaceAccountCredentials(
+    accountId: unknown,
+    values: unknown,
+    consent?: unknown
+  ): Promise<CloudAccountSummary> {
+    return this.deps.accounts.replaceCredentials(accountId, values, consent);
+  }
+
+  allowAccountProvider(accountId: unknown, consent: unknown): CloudAccountSummary {
+    return this.deps.accounts.allowAccountProvider(accountId, consent);
   }
 
   renameAccount(accountId: unknown, displayName: unknown): CloudAccountSummary {
@@ -217,6 +237,94 @@ export class CloudHosts {
 
   listResources(accountId: unknown): Promise<CloudResourceSummary[]> {
     return this.deps.accounts.listResources(accountId);
+  }
+
+  /**
+   * The cloud accounts here whose provider comes from a plugin, by plugin id,
+   * each with the hosts bound to it (#17353): what the plugin's uninstall asks
+   * to keep or remove. Read from what is stored, so a plugin that no longer
+   * declares the provider still owns its accounts. Empty when there are none.
+   */
+  pluginCloudAccounts(): Map<string, PluginCloudAccountInfo[]> {
+    const byPlugin = new Map<string, PluginCloudAccountInfo[]>();
+    const owned = this.deps.store.accounts().flatMap((account) => {
+      const namespace = cloudProviderNamespace(account.providerId);
+      return namespace?.kind === "plugin" ? [{ account, pluginId: namespace.pluginId }] : [];
+    });
+    if (owned.length === 0) return byPlugin;
+    const bindings = this.deps.store.bindings();
+    for (const { account, pluginId } of owned) {
+      const hosts = bindings.flatMap((binding) =>
+        binding.accountId === account.id && binding.hostId !== null
+          ? [
+              {
+                hostId: binding.hostId,
+                name:
+                  this.lifecycleRef?.hostName(binding.hostId) ??
+                  binding.observation?.name ??
+                  binding.creation?.name ??
+                  binding.hostId,
+              },
+            ]
+          : []
+      );
+      const list = byPlugin.get(pluginId) ?? [];
+      list.push({
+        id: account.id,
+        name: account.displayName,
+        providerName: account.pluginProvider?.providerName ?? account.providerId,
+        hosts,
+      });
+      byPlugin.set(pluginId, list);
+    }
+    return byPlugin;
+  }
+
+  /**
+   * Refused unless every listed account that is still here belongs to a
+   * provider in `pluginId`'s namespace: checked before the plugin goes, so a
+   * removal its uninstall asked for never stops halfway on a stray id.
+   */
+  requirePluginAccounts(pluginId: string, accountIds: readonly string[]): void {
+    for (const accountId of accountIds) {
+      const account = this.deps.store.account(accountId);
+      if (account && !ownedBy(account, pluginId)) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: `Cloud account ${accountId} isn't one of ${pluginId}'s`,
+          userMessage: `${account.displayName} doesn't belong to that plugin's cloud provider.`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Removes the listed accounts of `pluginId`'s providers from this device
+   * after the plugin was uninstalled (#17353): each account's hosts leave the
+   * list as Settings → Remove host takes them, then the account goes with its
+   * sealed credentials. Nothing is asked of the provider, so every machine
+   * keeps running in its account. One account that can't be removed doesn't
+   * stop the rest; the error names each one left, to remove in Settings → Hosts.
+   */
+  async removePluginAccounts(pluginId: string, accountIds: readonly string[]): Promise<void> {
+    const left: string[] = [];
+    for (const accountId of accountIds) {
+      const account = this.deps.store.account(accountId);
+      if (!account || !ownedBy(account, pluginId)) continue;
+      try {
+        await this.lifecycleRef?.forgetAccountHosts(account.id);
+        await this.deps.accounts.removeAccount(account.id);
+      } catch (error) {
+        const why =
+          isAppError(error) && error.userMessage
+            ? error.userMessage
+            : formatErrorMessage(error, "it couldn't be removed");
+        left.push(`${account.displayName} (${why})`);
+      }
+    }
+    if (left.length === 0) return;
+    const message = `The plugin was uninstalled, but ${left.length === 1 ? "this cloud account is" : "these cloud accounts are"} still on this device: ${left.join("; ")}. Remove ${left.length === 1 ? "it" : "them"} in Settings → Hosts.`;
+    throw new AppError({ code: "PERSIST_FAILED", message, userMessage: message });
   }
 
   dispose(): void {

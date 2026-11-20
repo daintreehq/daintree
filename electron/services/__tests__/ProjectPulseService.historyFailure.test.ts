@@ -35,6 +35,11 @@ function isHeatmapLog(args: string[]): boolean {
   return args[0] === "log" && args.some((a) => a.startsWith("--since="));
 }
 
+// The cache probe reads HEAD and the branch in one rev-parse.
+function isHeadProbe(args: string[]): boolean {
+  return args[0] === "rev-parse" && args[1] === "HEAD" && args[2] === "--abbrev-ref";
+}
+
 function isStreakLog(args: string[]): boolean {
   return args[0] === "log" && args.some((a) => a.startsWith("--max-count=")) && !isHeatmapLog(args);
 }
@@ -90,6 +95,7 @@ describe("ProjectPulseService history read failures", () => {
     let head = "sha-aaa\n";
     const raw = vi.fn(async (args: string[]) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return head;
+      if (isHeadProbe(args)) return `${head}main\n`;
       if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (isHeatmapLog(args)) {
         if (heatmapFails) throw new Error("fatal: bad object");
@@ -240,16 +246,17 @@ describe("ProjectPulseService history read failures", () => {
     expect(shared).not.toContain(subject);
   });
 
-  it("recomputes when the branch probe fails at the cached SHA instead of reading it as detached", async () => {
-    let branchFails = false;
+  it("recomputes when the HEAD probe fails at the cached SHA instead of reading it as detached", async () => {
+    let probeFails = false;
     const raw = vi.fn(async (args: string[]) => {
+      if (isHeadProbe(args)) {
+        if (probeFails) throw new Error("git exited with null and no error output");
+        return "deadbeef\nHEAD\n";
+      }
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
         return "deadbeef\n";
       }
-      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) {
-        if (branchFails) throw new Error("git exited with null and no error output");
-        return "HEAD\n";
-      }
+      if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "HEAD\n";
       if (args[0] === "log") return HISTORY;
       return "";
     });
@@ -263,7 +270,7 @@ describe("ProjectPulseService history read failures", () => {
     expect(await svc.getPulse(OPTS)).toBe(detached);
     expect(raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length).toBe(heatmapReads);
 
-    branchFails = true;
+    probeFails = true;
     await svc.getPulse(OPTS);
     expect(raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length).toBe(heatmapReads + 1);
   });
@@ -298,6 +305,7 @@ describe("ProjectPulseService history read failures", () => {
 
   it("caches a shallow clone's missing first-commit date like any complete pulse", async () => {
     const raw = vi.fn(async (args: string[]) => {
+      if (isHeadProbe(args)) return "deadbeef\nmain\n";
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
         return "deadbeef\n";
       }

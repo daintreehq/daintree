@@ -148,6 +148,7 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
       name: freeHostName(box.sshTarget, hosts),
       connection,
       ownerWorktreeId: box.worktreeId,
+      ...(probe.startsOnConnect === true ? { startsOnConnect: true } : {}),
     }));
   // Removed while the list was read or the host was added: main's cleanup has
   // already run for it, so a host added here would have nothing to remove it.

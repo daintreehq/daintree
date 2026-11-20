@@ -1,6 +1,23 @@
+/**
+ * Lists the host's home folder without first asking where it is: the
+ * listing's `path` is the absolute home. A host from before it refuses the
+ * token as a relative path (`INVALID_PATH`).
+ */
+export const HOST_HOME_PATH = "~";
+
+/**
+ * Which entry metadata a listing reads. `"full"` (the default) reads a size for
+ * files and a modification time for every entry; `"picker"` reads only what the
+ * picker shows, a size for files, and leaves `mtimeMs` null. A host from before
+ * it ignores the field and answers in full.
+ */
+export type HostDirectoryMetadata = "full" | "picker";
+
 export interface ListHostDirectoryPayload {
+  /** An absolute path on the host, or `HOST_HOME_PATH`. */
   path: string;
   showHidden?: boolean;
+  metadata?: HostDirectoryMetadata;
 }
 
 export interface HostDirectoryEntry {

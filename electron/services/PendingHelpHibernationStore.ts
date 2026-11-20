@@ -30,6 +30,13 @@ export interface PendingHelpHibernation {
   agentSessionId: string;
   cwd: string;
   capturedAt: number;
+  /**
+   * The ownership id main gave this lane's conversation (#17919): what it
+   * launched is held under it, so resuming the same conversation keeps it and
+   * a fresh one gets another. Main's own, never handed to a view. Absent from
+   * an entry written before it, whose next launch mints one.
+   */
+  conversationOwnershipId?: string;
   // In-memory only — whether the assistant panel was open when this token was
   // captured this session. Drives auto-reopen + auto-resume on cold
   // switch-back. Deliberately stripped before persisting (see `persist()`):
@@ -78,6 +85,9 @@ export class PendingHelpHibernationStore {
   private resumeAtLaunch: LaunchResume | null = null;
   // What this launch read back, handed out once by `takeResumeAtLaunch`.
   private loadedResumeAtLaunch: LaunchResume | null = null;
+  // The conversations the entries read back could resume (#16845), as read: a
+  // lane that moves on later in this run doesn't take one out.
+  private readonly loadedConversationIds = new Set<string>();
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
@@ -112,8 +122,26 @@ export class PendingHelpHibernationStore {
         // corruption, or a regression in `persist()`): the field is in-memory
         // only and a disk-loaded `true` would auto-resume a prior-session token
         // on app restart — the exact invariant this feature must never break.
-        const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
-        this.entries.set(key, safeEntry);
+        const {
+          panelWasOpen: _panelWasOpen,
+          conversationOwnershipId,
+          ...safeEntry
+        } = entry as PendingHelpHibernation;
+        // A malformed ownership id costs only the ownership, never the conversation.
+        const ownershipId =
+          typeof conversationOwnershipId === "string" && conversationOwnershipId !== ""
+            ? conversationOwnershipId
+            : undefined;
+        this.entries.set(
+          key,
+          ownershipId !== undefined
+            ? { ...safeEntry, conversationOwnershipId: ownershipId }
+            : safeEntry
+        );
+        // Only a lane that names its conversation can reopen it by that id.
+        if (ownershipId !== undefined && safeEntry.agentSessionId !== "") {
+          this.loadedConversationIds.add(ownershipId);
+        }
       }
       if (parsed.resumeAtLaunch !== undefined) {
         // Off disk before anything can resume from it: a crash during this
@@ -126,6 +154,15 @@ export class PendingHelpHibernationStore {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
       console.warn("[PendingHelpHibernationStore] Failed to load:", err);
     }
+  }
+
+  /**
+   * The conversation ownership ids the entries this launch loaded could resume
+   * (#16845): what an earlier run's kept creations may be given back under.
+   * Read once `load()` settles; later lane changes leave it as loaded.
+   */
+  loadedConversationOwnershipIds(): ReadonlySet<string> {
+    return this.loadedConversationIds;
   }
 
   /** `slotKey` is `assistantSlotKey(projectId, slot)` — see #12108. */

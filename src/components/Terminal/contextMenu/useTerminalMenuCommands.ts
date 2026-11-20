@@ -9,6 +9,9 @@ import {
 } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { codexLimitContinueClient } from "@/clients/codexLimitContinueClient";
+import { isArmedToContinue } from "@/store/codexLimitContinueStore";
+import { logWarn } from "@/utils/logger";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import {
   consultPanelCloseGuards,
@@ -306,6 +309,17 @@ export function useTerminalMenuCommands({
             { terminalId },
             { source: sourceRef.current }
           );
+          break;
+        // Straight to main, never an action: nothing here reaches MCP (#17909).
+        case "toggle-continue-at-limit-reset":
+          void codexLimitContinueClient
+            .set(terminalId, !isArmedToContinue(terminalId))
+            .catch((error: unknown) => {
+              logWarn("[TerminalMenu] Continue when usage limit resets wasn't changed", {
+                terminalId,
+                error,
+              });
+            });
           break;
         case "duplicate":
           void actionService.dispatch(

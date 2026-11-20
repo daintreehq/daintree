@@ -19,10 +19,18 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
   DecisionQuestionList,
+  DecisionQuestionMarkResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  MarkDecisionQuestionsPayload,
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
+import { DECISION_QUESTION_MARKS_PER_CALL } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "@shared/types/decisionsInvolvement";
 
 /** The protocol's largest image: a part claiming more is refused before anything is allocated. */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -213,6 +221,27 @@ export const decisionsClient = {
    */
   listQuestions: (): Promise<DecisionQuestionList> => window.electron.decisions.listQuestions(),
 
+  /**
+   * The person seeing, clearing or restoring questions on this computer
+   * (#17895), each named with the ask it was shown with: recorded here only,
+   * and the list changes once it is. Nothing is answered, declined or typed
+   * in. More than one call takes are marked a page at a time, stopping at
+   * the first page that isn't, whose result is the one returned.
+   */
+  markQuestions: async (
+    action: MarkDecisionQuestionsPayload["action"],
+    questions: MarkDecisionQuestionsPayload["questions"]
+  ): Promise<DecisionQuestionMarkResult> => {
+    let marked = 0;
+    for (let start = 0; start < questions.length; start += DECISION_QUESTION_MARKS_PER_CALL) {
+      const page = questions.slice(start, start + DECISION_QUESTION_MARKS_PER_CALL);
+      const result = await window.electron.decisions.markQuestions({ action, questions: page });
+      if (result.result !== "marked") return result;
+      marked += result.marked;
+    }
+    return { result: "marked", marked };
+  },
+
   /** Every change to that list, with the new list. */
   onQuestionsChanged: (callback: (list: DecisionQuestionList) => void): (() => void) =>
     window.electron.events.on("decisions:questions-changed", callback),
@@ -334,6 +363,22 @@ export const decisionsClient = {
   /** Where a follow-up stands, by the id it was submitted with: a queued one settles later. */
   getFollowUpResult: (messageId: string): Promise<DecisionFollowUpResultRead> =>
     window.electron.decisions.getFollowUpResult({ messageId }),
+
+  /**
+   * The person's involvement preference (#17237), from the copy agents'
+   * `get_involvement` reads on this computer. Touches no network.
+   */
+  getInvolvement: (): Promise<DecisionsInvolvementRead> =>
+    window.electron.decisions.getInvolvement(),
+
+  /**
+   * The person's change to it, signed by this computer, replacing the
+   * revision they reviewed: a newer change from a phone comes back as a
+   * conflict, never overwritten.
+   */
+  setInvolvement: (
+    payload: SetDecisionsInvolvementPayload
+  ): Promise<DecisionsInvolvementSaveResult> => window.electron.decisions.setInvolvement(payload),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

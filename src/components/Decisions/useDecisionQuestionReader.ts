@@ -4,6 +4,7 @@ import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import {
   answerKey,
+  isInFlight,
   useAnswerRecord,
   useDecisionsAnswerStore,
   type DeclinePhase,
@@ -13,12 +14,9 @@ import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore"
 import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
+  DecisionQuestionReference,
 } from "@shared/types/decisionsQuestion";
-import {
-  useAnswerComposerMode,
-  useAnswerInFlight,
-  type AnswerComposerMode,
-} from "./DecisionAnswerComposer";
+import { useAnswerComposerMode, type AnswerComposerMode } from "./DecisionAnswerComposer";
 import {
   dismissFallback,
   dismissOutcomeText,
@@ -69,7 +67,8 @@ function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () 
     const item = list.questions.find(
       (question) => targetKey({ scope: "reference", reference: question.reference }) === key
     );
-    const now = JSON.stringify(item ?? null);
+    // The person's marks (#17895) move nothing that is read; a new ask does.
+    const now = JSON.stringify(item === undefined ? null : { ...item, inbox: item.inbox?.ask });
     if (now === last) return;
     last = now;
     moved();
@@ -112,6 +111,20 @@ export function useDecisionsReaderRetention(isOpen: boolean, close: () => void):
   }, [decisionsSwitch, clearAnswers, clearFollowUps]);
 }
 
+/**
+ * The question a dismissal from here names, and the revision it is signed
+ * against: as read now, or, for a Remote Host's question while its Host is
+ * away, as this computer last read it open (#17946), with when.
+ */
+export interface DismissalSubject {
+  reference: DecisionQuestionReference;
+  revision: number;
+  alias: number;
+  status: DecisionQuestionContent["status"];
+  /** When it was last read (epoch ms) while its Host is away; null when read just now. */
+  lastReadAt: number | null;
+}
+
 export interface DecisionQuestionReader {
   /** The read for the target shown now; null until one lands. */
   current: QuestionRead | null;
@@ -119,7 +132,9 @@ export interface DecisionQuestionReader {
   shownRead: TaggedRead | null;
   /** `current`'s question, once it was read. */
   question: DecisionQuestionContent | null;
-  /** `q-42`, once the question was read. */
+  /** What a dismissal from here would name: `question`, or what was last read of it. */
+  subject: DismissalSubject | null;
+  /** `q-42`, once the question was read, or last read while its Host is away. */
   alias: string | null;
   showSkeleton: boolean;
   answerMode: AnswerComposerMode;
@@ -239,8 +254,37 @@ export function useDecisionQuestionReader(
   }, []);
   const showSkeleton = useSkeletonGate(open && current === null);
   const question = current?.result === "read" ? current.question : null;
+  // A Host away: what was last read of its question open, kept by the reference that read it.
+  const lastRead =
+    current?.result === "host-not-connected" && current.lastRead?.result === "read"
+      ? current.lastRead
+      : null;
+  const subject: DismissalSubject | null =
+    question !== null
+      ? {
+          reference: question.reference,
+          revision: question.revision,
+          alias: question.alias,
+          status: question.status,
+          lastReadAt: null,
+        }
+      : lastRead !== null && target?.scope === "reference"
+        ? {
+            reference: target.reference,
+            revision: lastRead.revision,
+            alias: lastRead.alias,
+            status: "open",
+            lastReadAt: lastRead.readAt,
+          }
+        : null;
   const answerMode = useAnswerComposerMode(question);
-  const answering = useAnswerInFlight(question) || answerMode === "progress";
+  const subjectRecord = useAnswerRecord(subject !== null ? answerKey(subject.reference) : "");
+  const answer = subjectRecord.submission?.phase;
+  // An answer from here under way, or taken: with no composer showing it while its Host is away.
+  const answering =
+    isInFlight(subjectRecord) ||
+    answerMode === "progress" ||
+    (answer?.kind === "settled" && answer.outcome.status === "sent");
   // Bound to the question the composer was shown for, and stable: its effects call it.
   const reread = useCallback(() => readAgain(target), [readAgain, target]);
   const release = useCallback(() => setTagged(null), []);
@@ -249,11 +293,12 @@ export function useDecisionQuestionReader(
     current,
     shownRead,
     question,
-    alias: question !== null ? aliasLabel(question.alias) : null,
+    subject,
+    alias: subject !== null ? aliasLabel(subject.alias) : null,
     showSkeleton,
     answerMode,
     // Not while an answer from here is on its way: one or the other would be turned away.
-    cancellable: question !== null && target !== null && isWaiting(question.status) && !answering,
+    cancellable: subject !== null && target !== null && isWaiting(subject.status) && !answering,
     reread,
     readAgain,
     release,
@@ -314,23 +359,34 @@ export function useQuestionCancel(
     /** The dismissal that couldn't be taken, when it asks to withdraw instead. */
     fallback: DeclinePhase | null;
   } | null>(null);
-  const { question, alias, cancellable, reread, readAgain } = reader;
+  const { subject, alias, cancellable, reread, readAgain } = reader;
   const key = target !== null ? targetKey(target) : null;
+  // A Remote Host's question while its Host is away (#17946): dismissed from its last read, never withdrawn.
+  const away = subject !== null && subject.lastReadAt !== null;
 
-  const declineKey = question !== null ? answerKey(question.reference) : "";
-  const declinePhase = useAnswerRecord(declineKey).decline?.phase ?? null;
+  const declineKey = subject !== null ? answerKey(subject.reference) : "";
+  const decline = useAnswerRecord(declineKey).decline;
+  const declinePhase = decline?.phase ?? null;
+  // Signed from a last read: never withdrawn in its place, even once its Host is back.
+  const signedAway = decline?.lastReadAt;
   const shownDecline = cancellable ? declinePhase : null;
-  const progress = shownDecline !== null ? dismissProgressText(shownDecline) : null;
+  const progress = shownDecline !== null ? dismissProgressText(shownDecline, away) : null;
   // A relay that didn't hold the question yet is no reason once it reads as sent.
   const fallback =
-    shownDecline !== null && alias !== null && question !== null
-      ? dismissFallback(alias, shownDecline, question.status)
+    shownDecline !== null && alias !== null && subject !== null
+      ? dismissFallback(alias, shownDecline, subject.status, !away && signedAway === undefined)
       : null;
   // One that settled without being taken, once out of the confirmation (read again on its own, or Retry).
   const outcome =
-    shownDecline !== null && alias !== null && question !== null && target !== null
+    shownDecline !== null && alias !== null && subject !== null && target !== null
       ? dismissOutcomeText(
-          { question: target, label: alias, line: null, revision: question.revision },
+          {
+            question: target,
+            label: alias,
+            line: null,
+            revision: subject.revision,
+            lastReadAt: subject.lastReadAt ?? signedAway ?? null,
+          },
           shownDecline
         )
       : null;
@@ -347,13 +403,14 @@ export function useQuestionCancel(
   }, [declineSettled, reread]);
 
   const askFor = (mode: DecisionCancelMode, because: DeclinePhase | null) => {
-    if (question === null || target === null) return;
+    if (subject === null || target === null) return;
     setCancel({
       target: {
         question: target,
-        label: aliasLabel(question.alias),
+        label: aliasLabel(subject.alias),
         line: null,
-        revision: question.revision,
+        revision: subject.revision,
+        lastReadAt: subject.lastReadAt,
       },
       open: true,
       mode,
@@ -363,7 +420,7 @@ export function useQuestionCancel(
 
   // The dismissal or withdrawal asked about, while this surface still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
-  const status = cancelShown && question !== null ? question.status : null;
+  const status = cancelShown && subject !== null ? subject.status : null;
   // A read that couldn't be made says nothing of whether it still waits: only one that found
   // it gone or settled does, so a dismissal whose standing is unknown can still be tried again.
   const waiting = status !== null ? isWaiting(status) : reader.current?.result !== "not-found";

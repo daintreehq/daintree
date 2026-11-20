@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
-import { FactSeparator } from "@/components/ui/FactSeparator";
+import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -16,6 +16,7 @@ import {
   clockTime,
   cloudCostFacts,
   cloudProviderFor,
+  cloudProviderName,
   cloudStateWord,
   diskSentence,
   durationLabel,
@@ -89,11 +90,22 @@ export function CloudMachineSection({
   const now = useNow(status !== null);
   if (!status) return null;
   // An old reading is the last one, not the machine now: its facts say so.
-  const stale = status.machine !== "unknown" && isObservationStale(status, now);
+  // Without its provider nothing is current, however recent the last answer was (#17353).
+  const stale =
+    status.machine !== "unknown" &&
+    (isObservationStale(status, now) ||
+      (status.providerUnavailable !== null &&
+        status.resourceId !== null &&
+        status.operation === null));
+  // A zero time is a reading whose time a Retry cleared: known state, unknown when.
   const checkedAt =
-    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
+    status.observedAt !== null && status.observedAt > 0
+      ? clockTime(new Date(status.observedAt).toISOString())
+      : null;
   const provider = cloudProviderFor(snapshot.providers, status);
-  const providerName = provider?.name ?? status.providerId;
+  const providerName = cloudProviderName(provider, status);
+  // A plugin's provider that's gone still names where its machines can be seen.
+  const consoleUrl = provider?.dashboardUrl ?? status.pluginProvider?.dashboardUrl ?? null;
   // Beside Stop, and beside a stopped machine: a provider that bills it stopped says so.
   const stoppedBilling =
     status.machine === "stopped" || canStopMachine(status)
@@ -310,12 +322,8 @@ export function CloudMachineSection({
       Keep machine
     </Button>
   );
-  const consoleButton = provider && (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => void systemClient.openExternal(provider.dashboardUrl)}
-    >
+  const consoleButton = consoleUrl && (
+    <Button variant="outline" size="sm" onClick={() => void systemClient.openExternal(consoleUrl)}>
       <ExternalLink aria-hidden="true" />
       Open {providerName} console
     </Button>
@@ -428,7 +436,7 @@ export function CloudMachineSection({
                     />
                   </>
                 )}
-                {status.observedAt !== null && (
+                {status.observedAt !== null && status.observedAt > 0 && (
                   <>
                     {" "}
                     <FactSeparator />{" "}
@@ -462,6 +470,10 @@ export function CloudMachineSection({
           }
           control={
             <div className="flex items-center gap-1.5">
+              {status.providerUnavailable !== null &&
+                cleanup?.phase !== "failed" &&
+                cleanup?.phase !== "unconfirmed" &&
+                consoleButton}
               {status.resourceId === null &&
                 status.operation === null &&
                 status.lastError &&
@@ -542,7 +554,7 @@ export function CloudMachineSection({
         )}
         <SettingsRow
           label="Account"
-          description={`${providerName} · ${status.accountName}${status.ownership === "imported" ? " · Added from the account" : ""}`}
+          description={`${status.pluginProvider ? `${providerName} from the ${status.pluginProvider.pluginName} plugin` : providerName} · ${status.accountName}${status.ownership === "imported" ? " · Added from the account" : ""}`}
         />
         {provider?.capabilities.sshTrust === "provider-tunnel" && (
           <SettingsRow
@@ -578,9 +590,11 @@ export function CloudMachineSection({
               label={pick.label}
               description={
                 <span data-testid={`cloud-machine-${dimension}`}>
-                  {pick.id !== null && pick.id !== pick.value
-                    ? `${pick.value} · ${pick.id}`
-                    : pick.value}
+                  {pick.id !== null && pick.id !== pick.value ? (
+                    <FactRun facts={[pick.value, pick.id]} />
+                  ) : (
+                    pick.value
+                  )}
                 </span>
               }
             />
@@ -595,6 +609,11 @@ export function CloudMachineSection({
           idle={liveSummary?.idle}
           sampledAt={liveSummary?.sampledAt ?? null}
           selfStopProblem={status.selfStopProblem ?? null}
+          linkedIdleStop={status.linkedIdleStop ?? null}
+          provider={provider}
+          lifetime={status.lifetime}
+          idleTimeFollowsHost={status.idleTimeFollowsHost ?? false}
+          keepAwake={status.keepAwake ?? null}
         />
         <SettingsRow
           label="Disk"

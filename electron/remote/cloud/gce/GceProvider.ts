@@ -8,6 +8,7 @@ import type {
 } from "../../../../shared/types/cloudHosts.js";
 import type {
   CloudProvider,
+  GuestPowerOffCheck,
   ProviderCatalog,
   ProviderCreateRequest,
   ProviderCredentials,
@@ -285,6 +286,9 @@ export class GceProvider implements CloudProvider {
       apiKeyUrl: "https://console.cloud.google.com/iam-admin/serviceaccounts",
       dashboardUrl: "https://console.cloud.google.com/compute/instances",
       docsUrl: "https://cloud.google.com/compute/docs",
+      // Its machines power themselves off once idle (#17362): a limit by default would only cut
+      // off agents still working.
+      defaultLifetimeHours: null,
       credentialFields: [
         {
           id: "serviceAccountKey",
@@ -518,6 +522,41 @@ export class GceProvider implements CloudProvider {
     );
   }
 
+  /**
+   * A VM whose disks are all persistent (#17362): its own OS powering off
+   * stops it, and a stopped VM keeps those disks. A local SSD's data isn't
+   * kept, so a VM with one doesn't stop itself.
+   */
+  async checkGuestPowerOff(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<GuestPowerOffCheck> {
+    const project = projectOf(credentials);
+    const { zone, instance } = parseResourceId(resourceId, project);
+    const target = { provider: "gce" as const, project, zone, instanceId: instance };
+    const found = await this.client(credentials).getInstance(this.ctx(credentials), zone, instance);
+    if (idString(found.id) !== instance) {
+      return { eligible: false, target, problem: "Compute Engine described another VM." };
+    }
+    if (found.metadata?.items?.some((item) => item.key === "created-by")) {
+      return {
+        eligible: false,
+        target,
+        problem: "It belongs to a managed instance group, which may replace it once it stops.",
+      };
+    }
+    const disks = found.disks ?? [];
+    if (disks.length === 0 || disks.some((disk) => disk.type !== "PERSISTENT")) {
+      return {
+        eligible: false,
+        target,
+        problem:
+          "It has a disk that isn't persistent (a local SSD), whose data a stop doesn't keep.",
+      };
+    }
+    return { eligible: true, target };
+  }
+
   async create(
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
@@ -688,13 +727,14 @@ export class GceProvider implements CloudProvider {
 
   async stop(
     credentials: ProviderCredentials,
-    resourceId: string
+    resourceId: string,
+    options: { once?: boolean } = {}
   ): Promise<ProviderResource | null> {
     const project = projectOf(credentials);
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
-    const operation = await client.stopInstance(ctx, zone, instance);
+    const operation = await client.stopInstance(ctx, zone, instance, options);
     // Followed to its end, so a stop Google gives up on is said, not read as one still under way.
     let done = operation;
     try {

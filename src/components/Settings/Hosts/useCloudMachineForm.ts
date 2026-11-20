@@ -25,6 +25,15 @@ export const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
   hours === null ? "never" : String(hours)
 );
 
+/** Where a new machine's lifetime selector starts for this provider. */
+function defaultLifetime(provider: CloudProviderInfo | null): string {
+  const hours =
+    provider?.defaultLifetimeHours !== undefined
+      ? provider.defaultLifetimeHours
+      : DEFAULT_CLOUD_LIFETIME_HOURS;
+  return hours === null ? "never" : String(hours);
+}
+
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
     ? err.userMessage
@@ -69,7 +78,11 @@ export function useCloudMachineForm(
   enabled = true
 ): CloudMachineForm {
   const [machineType, setMachineType] = useState<string | null>(null);
-  const [lifetime, setLifetime] = useState(String(DEFAULT_CLOUD_LIFETIME_HOURS));
+  /** What the person picked, for the provider they picked it for: another provider starts at its own default. */
+  const [pickedLifetime, setPickedLifetime] = useState<{
+    providerId: string;
+    value: string;
+  } | null>(null);
   /** What the person picked here, for the account they picked it for. */
   const [picked, setPicked] = useState<{
     accountId: string;
@@ -124,6 +137,13 @@ export function useCloudMachineForm(
     currentCatalog && provider ? selectionProblem(provider, currentCatalog, provisioning) : null;
   // Only a provider that holds a machine to a deadline takes one; the rest are sent none,
   // whatever the selector held for the last account.
+  const lifetime =
+    pickedLifetime && provider && pickedLifetime.providerId === provider.id
+      ? pickedLifetime.value
+      : defaultLifetime(provider);
+  const setLifetime = (value: string) => {
+    if (provider) setPickedLifetime({ providerId: provider.id, value });
+  };
   const lifetimeChosen = provider !== null && cloudLifetimeIsChosen(provider.capabilities.lifetime);
   const lifetimeHours = lifetimeChosen && lifetime !== "never" ? Number(lifetime) : null;
 

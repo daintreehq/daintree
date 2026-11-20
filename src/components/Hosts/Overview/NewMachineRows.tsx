@@ -1,3 +1,4 @@
+import { FactRun } from "@/components/ui/FactSeparator";
 import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -212,7 +213,7 @@ export function NewMachineRows({
                       : sentenceCase(type.reason ?? "Not available on this account")
                   }
                 >
-                  {`${type.label} · ${machineSpecLabel(type.vcpu, type.memoryGB)}`}
+                  <FactRun facts={[type.label, machineSpecLabel(type.vcpu, type.memoryGB)]} />
                 </SelectItem>
               ))}
             </SelectContent>

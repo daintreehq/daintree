@@ -5763,3 +5763,78 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     expect(t.stopSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("VoiceRecordingService — on-device configuration (#17338)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function stubLocalModel(electron: ReturnType<typeof buildElectronStub>) {
+    let answer!: (state: { state: string; totalBytes: number; receivedBytes: number }) => void;
+    const voiceInput = electron.voiceInput as unknown as Record<string, unknown>;
+    voiceInput.getLocalModel = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    voiceInput.onLocalModelStatus = vi.fn(() => () => {});
+    return { answer: (state: string) => answer({ state, totalBytes: 10, receivedBytes: 10 }) };
+  }
+
+  it("waits for the launch's model check before deciding it isn't configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      transcriptionProvider: "local",
+      correctionEnabled: false,
+    });
+    const model = stubLocalModel(electron);
+    setupGlobals(electron);
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    // Initialized, so the model turning ready starts a refresh of its own
+    // while the start's read is still waiting on the check.
+    voiceRecordingService.initialize();
+    const configured = voiceRecordingService.refreshConfiguration();
+    await vi.waitFor(() => expect(electron.voiceInput.getSettings).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    model.answer("ready");
+    expect(await configured).toBe(true);
+  });
+
+  it("answers an overtaken read with the newer one's verdict", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings
+      .mockResolvedValueOnce({
+        enabled: true,
+        openaiApiKey: "",
+        transcriptionProvider: "local",
+        correctionEnabled: false,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        openaiApiKey: "sk-key",
+        transcriptionProvider: "openai",
+        correctionEnabled: false,
+      });
+    const model = stubLocalModel(electron);
+    setupGlobals(electron);
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const older = voiceRecordingService.refreshConfiguration();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Another view chose OpenAI with a key while the model check was running.
+    const newer = voiceRecordingService.refreshConfiguration();
+    expect(await newer).toBe(true);
+    model.answer("failed");
+    expect(await older).toBe(true);
+  });
+});

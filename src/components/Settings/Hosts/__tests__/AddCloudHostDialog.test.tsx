@@ -333,21 +333,47 @@ describe("AddCloudHostDialog provisioning", () => {
 });
 
 describe("AddCloudHostDialog connecting an account", () => {
-  it("offers Connect for Daintree's own providers only, until a plugin's can ask consent", () => {
+  const allowed = (info: CloudProviderInfo, granted: boolean): CloudProviderInfo => ({
+    ...info,
+    plugin: {
+      pluginId: "acme.clouds",
+      pluginName: "Acme Clouds",
+      fingerprint: "fp-1",
+      granted,
+      providerNames: ["Acme"],
+    },
+  });
+
+  it("offers Connect for every provider this machine can use, a plugin's included", () => {
     cloud.snapshot = {
-      providers: [provider("boat", "Boat", NONE), ACME()],
+      providers: [provider("boat", "Boat", NONE), allowed(ACME(), false)],
       accounts: [],
       hosts: [],
     };
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
     expect(screen.getByRole("button", { name: "Connect Boat account" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Connect Acme account" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Connect Acme account" }));
+    // A plugin's provider asks its consent before any credentials are entered.
+    expect(screen.getByTestId("cloud-provider-consent-dialog").textContent).toContain(
+      "Acme Clouds"
+    );
   });
 
-  it("offers no Connect when only a plugin's provider is there", () => {
-    cloud.snapshot = { providers: [ACME()], accounts: [], hosts: [] };
+  it("makes no machine from an account whose plugin isn't allowed now", () => {
+    cloud.snapshot = {
+      providers: [allowed(ACME(), false)],
+      accounts: [
+        {
+          ...account("acme.clouds.ec2"),
+          providerUnavailable:
+            "Its cloud provider comes from the Acme Clouds plugin, which changed what it asks for or does since you allowed it.",
+        },
+      ],
+      hosts: [],
+    };
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
-    expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
-    expect(screen.getByText("No cloud provider is available on this machine.")).toBeTruthy();
+    expect(screen.queryByTestId("add-cloud-host-name")).toBeNull();
+    expect(screen.getByRole("button", { name: "Connect Acme account" })).toBeTruthy();
+    expect(client.getCatalog).not.toHaveBeenCalled();
   });
 });

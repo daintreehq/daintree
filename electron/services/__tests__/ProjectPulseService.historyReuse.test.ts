@@ -45,8 +45,13 @@ function isShallowCheck(args: string[]): boolean {
   return args[0] === "rev-parse" && args.includes("--is-shallow-repository");
 }
 
+// The compute's own branch read, not the cache probe that reads HEAD and the branch together.
 function isBranchLookup(args: string[]): boolean {
-  return args[0] === "rev-parse" && args.includes("--abbrev-ref");
+  return args[0] === "rev-parse" && args[1] === "--abbrev-ref";
+}
+
+function isHeadProbe(args: string[]): boolean {
+  return args[0] === "rev-parse" && args[1] === "HEAD" && args[2] === "--abbrev-ref";
 }
 
 function createRepo(state: RepoState) {
@@ -55,6 +60,7 @@ function createRepo(state: RepoState) {
       return `${state.headSha}\n`;
     }
     if (isBranchLookup(args)) return `${state.branch}\n`;
+    if (isHeadProbe(args)) return `${state.headSha}\n${state.branch}\n`;
     if (args[0] === "rev-parse" && args.includes("--quiet")) return "basesha\n";
     if (isShallowCheck(args)) return state.shallow ? "true\n" : "false\n";
     if (isRootWalk(args)) {

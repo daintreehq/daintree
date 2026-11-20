@@ -820,10 +820,14 @@ describe("startRemoteHosts", () => {
     m.hostEntries.push({
       descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
       connection: { status: "disconnected" },
-      summary,
+      summary: null,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf, cameOn: () => null } as never);
+    registerRemoteService("hostMetrics", {
+      receiptOf,
+      cameOn: () => null,
+      latest: (hostId: string) => (hostId === "control-on" ? summary : null),
+    } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
@@ -837,17 +841,22 @@ describe("startRemoteHosts", () => {
     const cameOn = vi.fn((held: object, session: unknown) =>
       held === summary ? session === current : null
     );
+    // The host list leaves out an earlier link's summary (#17921); host control reads it from metrics.
     m.hostEntries.push({
       descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
       connection: { status: "connected", rttMs: null },
-      summary,
+      summary: null,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf: () => null, cameOn } as never);
+    registerRemoteService("hostMetrics", {
+      receiptOf: () => null,
+      cameOn,
+      latest: (hostId: string) => (hostId === "control-on" ? summary : null),
+    } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
-    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: false });
+    expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryFromCurrentLink: false });
     expect(cameOn).toHaveBeenLastCalledWith(summary, null);
 
     m.client.sessionFor.mockReturnValueOnce(current);

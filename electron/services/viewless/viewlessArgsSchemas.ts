@@ -185,6 +185,12 @@ export const AgentListPresetsArgsSchema = z.object({
   projectId: z.string().min(1).optional(),
 });
 
+/** `agent.listAccounts`'s arguments, as the renderer's: any non-empty agent id. */
+export const AgentListAccountsArgsSchema = z.object({
+  agentId: z.string().min(1),
+  worktreeId: z.string().min(1).optional(),
+});
+
 /** `agent.listModels`'s arguments. */
 export const AgentListModelsArgsSchema = z
   .object({ agentId: z.string().min(1).optional() })

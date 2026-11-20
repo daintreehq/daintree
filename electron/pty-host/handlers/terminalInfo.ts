@@ -1,7 +1,9 @@
 import type { AgentId } from "../../../shared/types/agent.js";
+import type { PtyHostTerminalStatusFields } from "../../../shared/types/pty-host.js";
 import { isDetectableAgentId } from "../../services/ProcessDetector/registries.js";
 import { readPtyDimension } from "../../services/pty/TerminalProcess.js";
 import type { HostContext } from "./types.js";
+import type { CodexLimitQuery } from "../../../shared/types/codexLimitReset.js";
 
 type TerminalInfoLike = ReturnType<HostContext["ptyManager"]["getTerminal"]>;
 
@@ -46,15 +48,21 @@ export function narrowDetectedAgentId(value: unknown): AgentId | undefined {
 export function mapTerminalInfo(
   t: NonNullable<TerminalInfoLike>,
   ctx: HostContext,
-  submissionToken?: string
+  submissionToken?: string,
+  codexLimit?: CodexLimitQuery
 ) {
   const hasPty = !t.wasKilled && !t.isExited;
+  // Nothing reads a PTY whose reads are paused, so the span ends there too.
+  const outputObservedSince = ctx.getPauseCoordinator(t.id)?.isReadPaused
+    ? undefined
+    : (ctx.ptyManager.analysisObservedSince(t.id) ?? undefined);
   const isTrashed = ctx.ptyManager.isInTrash(t.id);
   const ptyCols = hasPty ? readPtyDimension(() => t.ptyProcess.cols, null) : null;
   const ptyRows = hasPty ? readPtyDimension(() => t.ptyProcess.rows, null) : null;
   return {
     id: t.id,
     projectId: t.projectId,
+    unplaced: t.unplaced,
     kind: t.kind,
     // Null (unknown) is normalised to absent so the field means "the host did
     // not report a grid" on both the old-host and dead-handle paths.
@@ -81,10 +89,7 @@ export function mapTerminalInfo(
     lastForeignPromptInputAt: t.lastForeignPromptInputAt,
     lastOutputTime: t.lastOutputTime,
     hasPendingSubmission: ctx.ptyManager.hasPendingSubmission(t.id),
-    // Nothing reads a PTY whose reads are paused, so the span ends there too.
-    outputObservedSince: ctx.getPauseCoordinator(t.id)?.isReadPaused
-      ? undefined
-      : (ctx.ptyManager.analysisObservedSince(t.id) ?? undefined),
+    outputObservedSince,
     spawnedAt: t.spawnedAt,
     isTrashed,
     trashExpiresAt:
@@ -99,6 +104,7 @@ export function mapTerminalInfo(
     isExited: t.isExited === true,
     agentSessionId: t.agentSessionId,
     claudeConfigDir: t.claudeConfigDir,
+    codexHome: t.codexHome,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,
     scheduledRun: t.scheduledRun,
@@ -106,8 +112,10 @@ export function mapTerminalInfo(
     agentPresetId: t.agentPresetId,
     agentPresetColor: t.agentPresetColor,
     originalAgentPresetId: t.originalAgentPresetId,
+    fallbackChainIndex: t.fallbackChainIndex,
     everDetectedAgent: t.everDetectedAgent,
     agentIncarnation: t.agentIncarnation,
+    updateInstalled: t.updateInstalled,
     launchGeneration: t.launchGeneration,
     detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
     detectedProcessId: t.detectedProcessIconId,
@@ -121,5 +129,33 @@ export function mapTerminalInfo(
       submissionToken === undefined
         ? undefined
         : ctx.ptyManager.getSubmission(t.id, submissionToken),
+    // Likewise only when asked (#17906): the banner itself never leaves here.
+    codexLimit:
+      codexLimit === undefined
+        ? undefined
+        : ctx.ptyManager.answerCodexLimit(t.id, codexLimit, outputObservedSince ?? null),
   };
+}
+
+/**
+ * The projection a `get-terminal-status-fields` query answers with (#17809):
+ * plain fields off the record and nothing else. Unlike {@link mapTerminalInfo}
+ * it never touches the pty handle, so a status read of many live terminals
+ * costs no native grid reads.
+ */
+export function mapTerminalStatusFields(
+  t: NonNullable<TerminalInfoLike>,
+  ctx: HostContext,
+  submissionToken?: string
+): PtyHostTerminalStatusFields {
+  const fields: PtyHostTerminalStatusFields = {
+    id: t.id,
+    projectId: t.projectId,
+    lastOutputChangeAt: t.lastOutputChangeAt,
+    lastTypedInputAt: t.lastTypedInputAt,
+  };
+  if (submissionToken !== undefined) {
+    fields.submission = ctx.ptyManager.getSubmission(t.id, submissionToken);
+  }
+  return fields;
 }

@@ -458,6 +458,32 @@ describe("MoveTerminalsToAccountDialog (#17089)", () => {
     expect(screen.queryByText(/will be interrupted/)).toBeNull();
   });
 
+  it("follows a rename made while it's open, keeping the account and the boxes as they were (#17080)", () => {
+    renderMove(COMPANY);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Release" }));
+    expect(screen.getByText("Restart 1 terminal on 'Company'?")).toBeTruthy();
+
+    // Company becomes Acme, and Personal takes the old name.
+    act(() => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: {
+              accounts: [
+                { id: "company", name: "Acme", configDir: "/Users/me/.claude-company" },
+                { id: "personal", name: "Company", configDir: "/Users/me/.claude-personal" },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("Restart 1 terminal on 'Acme'?")).toBeTruthy();
+    expect(checked("Release")).toBe("false");
+    expect(checked("Parser")).toBe("true");
+  });
+
   it("restarts exactly the checked terminals, without asking the host about limits", async () => {
     const onClose = renderMove(COMPANY);
 

@@ -229,10 +229,13 @@ async function handleThumbnailFromPath(
   // rather than the path-taking nativeImage.createFromPath — that API follows
   // symlinks in C++, leaving a TOCTOU window an fs.realpath check alone can't
   // close. Mirrors the safe read pattern in electron/ipc/handlers/files.ts.
+  // Roots come from the identity projection: getAllProjects() would repair
+  // statuses (demoting a project another host just activated) and rank every
+  // row only for the paths to be kept.
   const roots = [
     getClipboardDir(),
     ...(hostInboxRoot ? [hostInboxRoot] : []),
-    ...projectStore.getAllProjects().map((p) => p.path),
+    ...projectStore.getAllProjectIdentities().map((p) => p.path),
   ];
   await resolveContainedPath(filePath, roots);
 

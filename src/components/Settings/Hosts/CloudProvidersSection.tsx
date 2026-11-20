@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ExternalLink, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,17 +13,24 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { InlineError } from "@/components/ui/field";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
-import { credentialsNoun, sentenceCase } from "@/components/Hosts/cloud/cloudHostLabels";
+import { systemClient } from "@/clients/systemClient";
+import {
+  cloudProviderName,
+  cloudStateWord,
+  credentialsNoun,
+  sentenceCase,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { pluralize } from "@/lib/pluralize";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import {
-  canConnectCloudAccount,
-  type CloudAccountSummary,
-  type CloudProviderInfo,
+import type {
+  CloudAccountSummary,
+  CloudHostStatus,
+  CloudProviderInfo,
 } from "@shared/types/cloudHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 
 function errorText(err: unknown, fallback: string): string {
@@ -45,6 +52,31 @@ function scopeLabel(account: CloudAccountSummary): string {
 }
 
 /**
+ * The machines an account's hosts are, as last seen, while its provider can't
+ * be asked (#17353): they may well still be running, and billing, there.
+ */
+function LastKnownMachines({ hosts, label }: { hosts: CloudHostStatus[]; label: string }) {
+  return (
+    <ul className="mt-1.5 space-y-0.5" aria-label={label}>
+      {hosts.map((host) => (
+        <li key={host.hostId}>
+          <span className="text-text-primary">{host.machineName ?? "Unnamed machine"}</span>{" "}
+          {/* What the provider last said, never what this device was in the middle of asking. */}
+          <FactSeparator /> {cloudStateWord({ ...host, operation: null })} <FactSeparator />{" "}
+          {host.observedAt === null ? (
+            "Never checked"
+          ) : host.observedAt > 0 ? (
+            <TimeAgo prefix="Last checked " timestamp={host.observedAt} />
+          ) : (
+            "Check time unknown"
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * Settings → Hosts → Cloud providers: the provider accounts that let Daintree
  * create, start and stop machines as hosts. Removing one here only forgets
  * its credentials on this device; nothing changes at the provider.
@@ -60,14 +92,46 @@ export function CloudProvidersSection() {
   const [removeTarget, setRemoveTarget] = useState<CloudAccountSummary | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<CloudAccountSummary | null>(null);
+  /** The account an Allow is out for, and what the last one said, so a late answer never reaches another review. */
+  const [allowing, setAllowing] = useState<string | null>(null);
+  const [allowErrors, setAllowErrors] = useState<Record<string, string>>({});
+  const setAllowError = (accountId: string, message: string | null) =>
+    setAllowErrors((current) => {
+      const next = { ...current };
+      if (message) next[accountId] = message;
+      else delete next[accountId];
+      return next;
+    });
 
   const providers = snapshot.providers;
-  // A plugin's provider isn't offered for a new account until it can ask consent (#17352).
-  const connectable = providers.filter((provider) => canConnectCloudAccount(provider.id));
-  const usable = connectable.filter((provider) => provider.unsupportedReason === null);
+  const usable = providers.filter((provider) => provider.unsupportedReason === null);
   const accounts = snapshot.accounts;
   const providerFor = (account: CloudAccountSummary) =>
     providers.find((provider) => provider.id === account.providerId) ?? null;
+  // As it is now: a plugin update while the dialog is open asks its consent again, and a
+  // provider that's gone (its plugin turned off or uninstalled) takes its dialog with it.
+  const connectingProvider = connecting
+    ? (providers.find((provider) => provider.id === connecting.provider.id) ?? null)
+    : null;
+  const connectingGone = connecting !== null && connectingProvider === null;
+  // The account and its plugin as they are now: a review ends once there's nothing left to allow.
+  const reviewingAccount = reviewing
+    ? (accounts.find((entry) => entry.id === reviewing.id) ?? null)
+    : null;
+  const reviewingProvider = reviewingAccount ? providerFor(reviewingAccount) : null;
+  const reviewingPlugin =
+    reviewingProvider?.plugin && !reviewingProvider.plugin.granted
+      ? reviewingProvider.plugin
+      : null;
+  const reviewOver = reviewing !== null && reviewingPlugin === null && allowing !== reviewing.id;
+
+  useEffect(() => {
+    if (connectingGone) setConnecting(null);
+  }, [connectingGone]);
+  useEffect(() => {
+    if (reviewOver) setReviewing(null);
+  }, [reviewOver]);
 
   const clearRowError = (accountId: string) =>
     setRowErrors((errors) => {
@@ -94,6 +158,24 @@ export function CloudProvidersSection() {
           ...errors,
           [account.id]: errorText(err, "Couldn't check the account"),
         }));
+      }
+    );
+  };
+
+  const allowReviewed = () => {
+    if (!reviewingAccount || !reviewingPlugin) return;
+    const accountId = reviewingAccount.id;
+    setAllowing(accountId);
+    setAllowError(accountId, null);
+    cloudHostsClient.allowAccountProvider(accountId, reviewingPlugin.fingerprint).then(
+      (account) => {
+        setAllowing((current) => (current === accountId ? null : current));
+        setReviewing((current) => (current?.id === accountId ? null : current));
+        clearRowError(account.id);
+      },
+      (err: unknown) => {
+        setAllowing((current) => (current === accountId ? null : current));
+        setAllowError(accountId, errorText(err, "Couldn't allow the plugin"));
       }
     );
   };
@@ -147,7 +229,7 @@ export function CloudProvidersSection() {
       </DropdownMenu>
     );
 
-  const unsupported = connectable.length > 0 && usable.length === 0;
+  const unsupported = providers.length > 0 && usable.length === 0;
 
   return (
     <SettingsSection
@@ -172,12 +254,21 @@ export function CloudProvidersSection() {
             {!loaded
               ? "Loading cloud accounts"
               : unsupported
-                ? connectable[0]!.unsupportedReason
+                ? providers[0]!.unsupportedReason
                 : "Connect a cloud provider account to create machines that run projects and agents, then stop or delete them when you're done"}
           </SettingsEmptyRow>
         ) : (
           accounts.map((account) => {
             const provider = providerFor(account);
+            const providerName = cloudProviderName(provider, account);
+            // Paused until the person allows the plugin behind it as it is declared now.
+            const needsReview = provider?.plugin !== undefined && !provider.plugin.granted;
+            // A paused account's provider is still here to ask; only a gone one leaves the last known state.
+            const unavailable = account.providerUnavailable !== null && !needsReview;
+            const lastKnown = unavailable
+              ? snapshot.hosts.filter((host) => host.accountId === account.id)
+              : [];
+            const consoleUrl = unavailable ? (account.pluginProvider?.dashboardUrl ?? null) : null;
             const noun = credentialsNoun(provider);
             const Noun = sentenceCase(noun);
             const validation = account.validation;
@@ -191,7 +282,10 @@ export function CloudProvidersSection() {
                 label={account.displayName}
                 description={
                   <>
-                    {provider?.name ?? account.providerId} <FactSeparator /> {scopeLabel(account)}
+                    {account.pluginProvider
+                      ? `${providerName} from the ${account.pluginProvider.pluginName} plugin`
+                      : providerName}{" "}
+                    <FactSeparator /> {scopeLabel(account)}
                     {/* The sign-in, unless the row is already named after it. */}
                     {account.identity && account.identity !== account.displayName && (
                       <>
@@ -223,20 +317,53 @@ export function CloudProvidersSection() {
                     ) : (
                       "Not checked yet"
                     )}
+                    {lastKnown.length > 0 && (
+                      <LastKnownMachines
+                        hosts={lastKnown}
+                        label={`Machines on ${account.displayName}`}
+                      />
+                    )}
                   </>
                 }
                 error={rowError ? <span role="alert">{rowError}</span> : undefined}
                 control={
                   <div className="flex items-center gap-1.5" data-cloud-account={account.id}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      loading={checking.has(account.id)}
-                      aria-label={`Check ${account.displayName}`}
-                      onClick={() => check(account)}
-                    >
-                      Check
-                    </Button>
+                    {needsReview && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Review access for ${account.displayName}`}
+                        onClick={() => {
+                          setAllowError(account.id, null);
+                          setReviewing(account);
+                        }}
+                      >
+                        Review access
+                      </Button>
+                    )}
+                    {/* Nothing can check the credentials without the provider; its console still lists the machines. */}
+                    {consoleUrl ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void systemClient.openExternal(consoleUrl)}
+                      >
+                        <ExternalLink aria-hidden="true" />
+                        Open {providerName} console
+                      </Button>
+                    ) : (
+                      !unavailable && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          loading={checking.has(account.id)}
+                          aria-label={`Check ${account.displayName}`}
+                          onClick={() => check(account)}
+                        >
+                          Check
+                        </Button>
+                      )
+                    )}
                     {provider && (
                       <Button
                         variant="outline"
@@ -270,13 +397,25 @@ export function CloudProvidersSection() {
           })
         )}
       </SettingsGroup>
-      {connecting && (
+      {connecting && connectingProvider && (
         <ConnectCloudAccountDialog
           isOpen
           onClose={() => setConnecting(null)}
-          provider={connecting.provider}
+          provider={connectingProvider}
           replacing={connecting.replacing}
           onConnected={(account) => clearRowError(account.id)}
+        />
+      )}
+      {reviewingAccount && reviewingProvider && reviewingPlugin && (
+        <CloudProviderConsentDialog
+          isOpen
+          onClose={() => setReviewing(null)}
+          provider={reviewingProvider}
+          plugin={reviewingPlugin}
+          purpose="review"
+          onAllow={allowReviewed}
+          busy={allowing === reviewingAccount.id}
+          error={allowErrors[reviewingAccount.id] ?? null}
         />
       )}
       <ConfirmDialog

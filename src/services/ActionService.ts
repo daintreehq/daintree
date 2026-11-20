@@ -37,16 +37,18 @@ import {
   resolveEffectiveActionDanger,
 } from "./actions/effectiveDanger";
 import { hostApprovalCoversPresetLaunch } from "@shared/utils/agentPresetLaunchConsent";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "@shared/config/assistantConfirmationDelegation";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
  * Substring match (no word boundaries) so `apiKey`, `authHeader`, `refreshToken`
  * are caught at any depth. Prompts are the user's own words to an agent and are
- * never logged, so `prompt`, `systemPrompt` and `initialPrompt` go too.
+ * never logged, so `prompt`, `systemPrompt` and `initialPrompt` go too, and
+ * `hunks` are lines of the user's files.
  * Module-level so we don't allocate a fresh matcher per recursive frame in
  * `redactSensitiveArgs`.
  */
-const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|prompt/i;
+const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|prompt|hunk/i;
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
@@ -714,10 +716,17 @@ export class ActionService {
         actionId,
         validatedArgs
       );
+    // The assistant's next-fallback tick (#17917): main offers it, and only
+    // this action's own run decides whether the move qualifies. That run hops
+    // or refuses; it never switches, so it needs no approval to enter.
+    const ownFallbackStep =
+      source === "agent" &&
+      options?.ownFallbackStep === true &&
+      actionId === ASSISTANT_PRESET_MOVE_DELEGATE;
     if (
       effectiveDanger === "confirm" &&
       !pluginPresetApproved &&
-      (source === "plugin" || (source === "agent" && !options?.confirmed))
+      (source === "plugin" || (source === "agent" && !options?.confirmed && !ownFallbackStep))
     ) {
       // A plugin has no confirmation to give, so the configured-launch refusal
       // names what to drop rather than pointing at a dialog it can't reach.
@@ -786,6 +795,9 @@ export class ActionService {
         // And the preset half (#16047): the change a human was shown, so an
         // injected `contextOverride` cannot claim an approval for another.
         hostApprovedPresetWrite: options?.hostApprovedPresetWrite,
+        // Same unconditional stamp, so a `contextOverride` can't turn a
+        // confirmed restart into a hop or claim the offer main never made.
+        hostOwnFallbackStep: ownFallbackStep ? true : undefined,
         // Same unconditional stamp (#16667): it silences an action's own
         // failure toast, so only the caller that will show the failure itself
         // may set it, never a `contextOverride`.

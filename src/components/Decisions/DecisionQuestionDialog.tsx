@@ -18,6 +18,7 @@ import {
   useQuestionCancel,
   type TaggedRead,
 } from "./useDecisionQuestionReader";
+import { useDecisionQuestionSeen, useListedQuestion } from "./useDecisionQuestionSeen";
 
 /** A pane's Decisions chip, where the close returns while it still shows. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -99,6 +100,10 @@ export function DecisionQuestionDialog() {
     done: boolean;
   } | null>(null);
   const { shownRead } = reader;
+  // Read here counts as seen on this computer (#17895), as in the inbox.
+  const shownQuestion = reader.current?.result === "read" ? reader.current.question : null;
+  const listed = useListedQuestion(shownQuestion, isOpen);
+  useDecisionQuestionSeen(listed, shownQuestion, isOpen, bodyRef);
   useEffect(() => {
     // Content is never kept past the close, nor once it has been scrolled to.
     if (!isOpen || request?.threadMessageId === undefined) {
@@ -255,7 +260,6 @@ export function DecisionQuestionDialog() {
                 <Button
                   ref={cancelRef}
                   variant="outline"
-                  size="sm"
                   onClick={dismissal.retry}
                   data-testid="decision-question-dismiss-retry"
                 >

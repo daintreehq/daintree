@@ -1,0 +1,307 @@
+import type { HostDescriptor, HostId } from "../../../shared/types/remoteHosts.js";
+import { AppError } from "../../utils/errorTypes.js";
+import type { LinkSession } from "../link/session.js";
+import type { CloudAccountService } from "./CloudAccountService.js";
+import type { CloudHostStore } from "./CloudHostStore.js";
+import {
+  GUEST_POWER_OFF_METHOD,
+  GuestPowerOffStatusSchema,
+  type GuestPowerOffRequest,
+  type GuestPowerOffStatus,
+  type GuestPowerOffTarget,
+} from "./machineKeeperLink.js";
+import type { GuestPowerOffCheck, ProviderCredentials } from "./provider.js";
+
+/** How often a linked machine is checked again at the provider and its host asked to hold the permission. */
+const CHECK_EVERY_MS = 30 * 60_000;
+/** A check or a call that failed in a way that may pass is tried again after this long. */
+const RETRY_MS = 5 * 60_000;
+const CALL_TIMEOUT_MS = 30_000;
+const CANT = "This machine can't stop itself when idle:";
+
+export interface CloudGuestPowerOffDeps {
+  store: Pick<CloudHostStore, "bindings" | "binding" | "bindingForHost" | "account">;
+  accounts: Pick<CloudAccountService, "provider" | "providerUnavailable" | "credentials">;
+  hosts: { get(hostId: HostId): HostDescriptor | null };
+  /** The host's open session, or null while it has none. */
+  sessionFor(hostId: HostId): LinkSession | null;
+  /** What the person sees changed: a reason to show, or one gone. */
+  changed(): void;
+  now?: () => number;
+}
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
+/**
+ * Lets the host of each EC2 or Compute Engine machine power it off once idle,
+ * with no Shell attached (#17362). A guest power-off is a normal stop that
+ * keeps the disk there, so the machine needs no credential: this device checks
+ * at the provider, on every link and every half hour, that a power-off would
+ * stop the machine and keep its disk, and tells its host which machine it is.
+ * A machine found no longer safe to power off has the permission taken back.
+ */
+export class CloudGuestPowerOff {
+  /** The attempt under way for each binding, with the link it runs on. */
+  private readonly arming = new Map<string, { session: LinkSession; promise: Promise<void> }>();
+  /** A link that came up while another's attempt ran: tried once that one settles. */
+  private readonly queued = new Map<string, { hostId: HostId; session: LinkSession }>();
+  /** Why a machine can't stop itself, by binding. */
+  private readonly problems = new Map<string, string>();
+  private readonly checkedAt = new Map<string, number>();
+  private readonly retryAt = new Map<string, number>();
+  /** A host's word that a take-back didn't last yet, kept until a reply on the current link says it did. */
+  private readonly unconfirmed = new Map<string, string>();
+  /**
+   * The link on which a machine the provider found fit was confirmed by its
+   * host, which refused only the power-off itself (#17924): a stop through
+   * the provider's API still fits it, for as long as that link lasts.
+   */
+  private readonly standIns = new Map<string, LinkSession>();
+  private disposed = false;
+
+  constructor(private readonly deps: CloudGuestPowerOffDeps) {}
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  /** Why this machine can't stop itself when idle, as last found here; null when nothing stands in the way. */
+  problemFor(bindingId: string): string | null {
+    return this.problems.get(bindingId) ?? null;
+  }
+
+  /**
+   * Whether the machine can't stop itself only because its OS won't let its
+   * host power it off, as its host said on its current link: a stop through
+   * the provider's API still keeps its disk, so a linked Shell may make it on
+   * an idle time it claims (#17924).
+   */
+  standsInFor(bindingId: string): boolean {
+    const session = this.standIns.get(bindingId);
+    const hostId = this.deps.store.binding(bindingId)?.hostId;
+    return Boolean(session?.isOpen && hostId && this.deps.sessionFor(hostId) === session);
+  }
+
+  /** A link to a host came up: make sure its machine may stop itself. */
+  sessionOpened(hostId: HostId, session: LinkSession): void {
+    void this.arm(hostId, session);
+  }
+
+  /** Background pass: checks each linked machine again now and then, and retries what may pass. */
+  async tick(): Promise<void> {
+    if (this.disposed) return;
+    const bindings = this.deps.store.bindings();
+    this.forgetRemoved(bindings);
+    const now = this.now();
+    for (const binding of bindings) {
+      if (this.disposed) return;
+      if (!binding.hostId) continue;
+      const session = this.deps.sessionFor(binding.hostId);
+      if (!session?.isOpen) continue;
+      const retryAt = this.retryAt.get(binding.id);
+      const checked = this.checkedAt.get(binding.id);
+      // A pause after a failure holds however long ago the last check was.
+      const due =
+        retryAt !== undefined
+          ? retryAt <= now
+          : checked === undefined || now - checked >= CHECK_EVERY_MS;
+      if (due) await this.arm(binding.hostId, session);
+    }
+  }
+
+  /** Forgets what was found for bindings no longer stored; the keeper may not pass again to do it. */
+  forgetRemoved(bindings = this.deps.store.bindings()): void {
+    const live = new Set(bindings.map((binding) => binding.id));
+    for (const map of [
+      this.problems,
+      this.checkedAt,
+      this.retryAt,
+      this.unconfirmed,
+      this.standIns,
+    ]) {
+      for (const id of map.keys()) if (!live.has(id)) map.delete(id);
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.queued.clear();
+    this.standIns.clear();
+  }
+
+  /**
+   * Checks the machine and gives or takes back its permission over `session`.
+   * `again` asks for a fresh look even behind one under way on the same link,
+   * whose provider answer may predate what the caller just found.
+   */
+  arm(hostId: HostId, session: LinkSession, options: { again?: boolean } = {}): Promise<void> {
+    const binding = this.deps.store.bindingForHost(hostId);
+    if (this.disposed || !binding?.resourceId) return Promise.resolve();
+    const bindingId = binding.id;
+    const running = this.arming.get(bindingId);
+    if (running) {
+      // A link since replaced never takes the place of the current link's queued look.
+      const current = session.isOpen && this.deps.sessionFor(hostId) === session;
+      if (current && (running.session !== session || options.again)) {
+        this.queued.set(bindingId, { hostId, session });
+      }
+      return running.promise;
+    }
+    const promise = this.armOnce(bindingId, hostId, session)
+      .catch(() => {
+        // A failure that may pass is retried by tick().
+        this.retryAt.set(bindingId, this.now() + RETRY_MS);
+      })
+      .finally(() => {
+        if (this.arming.get(bindingId)?.promise === promise) this.arming.delete(bindingId);
+        // Its host was removed meanwhile: what it just wrote is about a binding that is gone.
+        if (!this.deps.store.binding(bindingId)) this.forgetRemoved();
+        const next = this.queued.get(bindingId);
+        this.queued.delete(bindingId);
+        if (next && next.session.isOpen && this.deps.sessionFor(next.hostId) === next.session) {
+          void this.arm(next.hostId, next.session);
+        }
+      });
+    this.arming.set(bindingId, { session, promise });
+    return promise;
+  }
+
+  /** The session still reaches this binding's machine: the one the host is bound to, and open. */
+  private reaches(
+    hostId: HostId,
+    bindingId: string,
+    resourceId: string,
+    session: LinkSession
+  ): boolean {
+    if (this.disposed || !session.isOpen || this.deps.sessionFor(hostId) !== session) return false;
+    const connection = this.deps.hosts.get(hostId)?.connection;
+    if (connection?.kind !== "cloud" || connection.bindingId !== bindingId) return false;
+    const binding = this.deps.store.binding(bindingId);
+    return binding?.hostId === hostId && binding.resourceId === resourceId;
+  }
+
+  private setProblem(bindingId: string, message: string): void {
+    const before = this.problems.get(bindingId);
+    // A take-back the host hasn't confirmed lasting stays said, whatever else is.
+    const warning = this.unconfirmed.get(bindingId);
+    const shown = warning ? `${message} ${warning}` : message;
+    this.problems.set(bindingId, shown);
+    if (before !== shown) this.deps.changed();
+  }
+
+  private clearProblem(bindingId: string): void {
+    const standIn = this.standIns.delete(bindingId);
+    if (this.problems.delete(bindingId) || standIn) this.deps.changed();
+  }
+
+  /** Records the link a stand-in stop fits on, or that none does. */
+  private setStandIn(bindingId: string, session: LinkSession | null): void {
+    if (this.standIns.get(bindingId) === (session ?? undefined)) return;
+    if (session) this.standIns.set(bindingId, session);
+    else this.standIns.delete(bindingId);
+    this.deps.changed();
+  }
+
+  private async armOnce(bindingId: string, hostId: HostId, session: LinkSession): Promise<void> {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding?.resourceId || this.deps.accounts.providerUnavailable(binding.providerId)) return;
+    const resourceId = binding.resourceId;
+    const provider = this.deps.accounts.provider(binding.providerId);
+    const account = this.deps.store.account(binding.accountId);
+    if (typeof provider.checkGuestPowerOff !== "function" || !account) return;
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    this.retryAt.delete(bindingId);
+
+    let credentials: ProviderCredentials;
+    try {
+      credentials = await this.deps.accounts.credentials(account);
+    } catch (error) {
+      if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+      const said =
+        error instanceof AppError && error.userMessage ? error.userMessage : String(error);
+      this.checkedAt.set(bindingId, this.now());
+      this.setStandIn(bindingId, null);
+      this.setProblem(bindingId, `${CANT} ${said}`);
+      this.retryAt.set(bindingId, this.now() + RETRY_MS);
+      return;
+    }
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    // Throws when the provider couldn't be asked: nothing is changed, and it's asked again later.
+    const check: GuestPowerOffCheck = await provider.checkGuestPowerOff(credentials, resourceId);
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    this.checkedAt.set(bindingId, this.now());
+    if (!check.eligible) {
+      const said = () => `${CANT} ${check.problem}`;
+      // Unsuitable to the provider: never stopped from here either.
+      this.setStandIn(bindingId, null);
+      this.setProblem(bindingId, said());
+      // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
+      // may not have arrived, or that the host couldn't make last, is sent again soon, and the
+      // host's warning stays until a reply on the current link says it's gone.
+      if (check.target) {
+        try {
+          const reply = await this.send(session, check.target, false);
+          if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+          if (reply.problem !== null) {
+            this.unconfirmed.set(bindingId, reply.problem);
+            this.retryAt.set(bindingId, this.now() + RETRY_MS);
+          } else {
+            this.unconfirmed.delete(bindingId);
+          }
+          this.setProblem(bindingId, said());
+        } catch (error) {
+          if (errorCode(error) !== "UNSUPPORTED") {
+            this.retryAt.set(bindingId, this.now() + RETRY_MS);
+          }
+        }
+      }
+      return;
+    }
+    let status: GuestPowerOffStatus;
+    try {
+      status = await this.send(session, check.target, true);
+    } catch (error) {
+      if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+      if (errorCode(error) === "UNSUPPORTED") {
+        this.setStandIn(bindingId, null);
+        this.setProblem(
+          bindingId,
+          "The Daintree on this machine is too old to stop it by itself. Update it to let it."
+        );
+        return;
+      }
+      throw error;
+    }
+    if (!this.reaches(hostId, bindingId, resourceId, session)) return;
+    if (status.armed) this.unconfirmed.delete(bindingId);
+    if (status.armed && status.problem === null) {
+      this.clearProblem(bindingId);
+      return;
+    }
+    // Only the host's word that it is this machine and that only its OS refused: never a mismatch,
+    // a metadata server it couldn't read, another OS, or a host from before it said so.
+    const standIn =
+      !status.armed && status.problem !== null && status.powerOffProbeRefused === true;
+    this.setStandIn(bindingId, standIn ? session : null);
+    this.setProblem(
+      bindingId,
+      status.problem ?? `${CANT} its host didn't take the permission to power it off.`
+    );
+    // The host may not have been able to read its identity yet.
+    if (!status.armed) this.retryAt.set(bindingId, this.now() + RETRY_MS);
+  }
+
+  private async send(
+    session: LinkSession,
+    target: GuestPowerOffTarget,
+    enabled: boolean
+  ): Promise<GuestPowerOffStatus> {
+    const request: GuestPowerOffRequest = { target, enabled };
+    return GuestPowerOffStatusSchema.parse(
+      await session.call(GUEST_POWER_OFF_METHOD, request, { timeoutMs: CALL_TIMEOUT_MS })
+    );
+  }
+}

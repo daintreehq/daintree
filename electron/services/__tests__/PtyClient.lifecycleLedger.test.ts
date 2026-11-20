@@ -205,6 +205,26 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
   });
 
+  // #17926: a project activated after the spawn must not claim it on replay.
+  it("replays a terminal placed in no project still in none", () => {
+    const client = createReadyClient();
+    client.spawn("t1", { ...baseOptions, projectId: null });
+    client.setActiveProject(1, "project-later");
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.options).toMatchObject({ unplaced: true });
+    expect(replayed[0]!.options).not.toHaveProperty("projectId");
+    expect(client.isUnplacedTerminal("t1")).toBe(true);
+  });
+
   it("reports the incarnation a crashed host took with it before replaying the terminal (#15976)", () => {
     const client = createReadyClient();
     const lost = vi.fn();
@@ -221,6 +241,25 @@ describe("PtyClient lifecycle ledger", () => {
 
     expect(lost).toHaveBeenCalledExactlyOnceWith({ terminalId: "t1", launchGeneration: 1 });
     expect(spawnMessages(restartedChild)[0]?.options.launchGeneration).toBe(2);
+  });
+
+  it("clears the update footer a crashed host observed, since that host can't (#17905)", () => {
+    const client = createReadyClient();
+    const cleared: unknown[] = [];
+    const unsub = events.on("agent:update-installed-changed", (payload) => cleared.push(payload));
+    client.spawn("t1", baseOptions);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+    unsub();
+
+    expect(cleared).toEqual([
+      { terminalId: "t1", updateInstalled: null, timestamp: expect.any(Number) },
+    ]);
   });
 
   it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
@@ -588,6 +627,59 @@ describe("PtyClient lifecycle ledger", () => {
 
       refuseAsLive(2);
       expect(client.isAssistantTerminal("t1")).toBe(true);
+    });
+
+    // #17926: the lease gate lets anyone end a terminal that reads as unplaced.
+    it("doesn't read a live project terminal as unplaced while an unplaced duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      // Output, input and the lease still answer to the running terminal's project.
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+
+      refuseAsLive(2);
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("doesn't read a live terminal main never placed as unplaced while an unplaced duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions); // generation 1: no project, no active one either
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+    });
+
+    it("reads a live unplaced terminal as unplaced only while no duplicate naming a project awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
+      refuseAsLive(2);
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
+
+      client.spawn("t1", { ...baseOptions, projectId: "p-duplicate" }); // generation 3
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+      refuseAsLive(3);
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
     });
 
     it("reports the running incarnation as live while a duplicate awaits the host", () => {

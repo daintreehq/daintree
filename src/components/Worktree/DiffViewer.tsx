@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useId,
   useLayoutEffect,
   useMemo,
@@ -185,6 +186,23 @@ export interface DiffViewerProps {
   onShowWhitespaceChanges?: () => void;
   /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal, each staged batch of a large file), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
+  /**
+   * How many hunks the patch holds as git wrote them, across its files, with
+   * the patch it counted. Context expansion and the full-file view merge
+   * hunks into one drawn body, and the progressive cap and the staged mount
+   * draw only some, so a count of drawn bodies would shift under the reader;
+   * this one is the stops a host's hunk stepper walks. The first changed row
+   * of each carries `diff-hunk-anchor`, in the same order, inside a file root
+   * whose `data-hunk-offset` says where that file's hunks start.
+   */
+  onHunkCount?: (count: number, forDiff: string) => void;
+  /**
+   * Bring authored hunk `index` (counted as `onHunkCount` counts) to the top:
+   * its file opens if collapsed, the progressive cap lifts to include it, and
+   * its first changed row scrolls into view once the staged mount has drawn
+   * it. A new `seq` repeats the request for the same hunk.
+   */
+  revealHunk?: { index: number; seq: number } | null;
   /** Fired after each commit of a file's token pass (highlighting, search marks) — the signal that .diff-search-match spans are scannable. A large file's pass lands in batches; the last call has every row highlighted. */
   onTokensRendered?: () => void;
   /**
@@ -619,6 +637,8 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     onRetry,
     onShowWhitespaceChanges,
     onToggleCollapse,
+    onHunkCount,
+    revealHunk,
     onTokensRendered,
     annotations,
     language,
@@ -674,6 +694,22 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   // the query lands as a deferred value and the table catches up after paint.
   const deferredSearchQuery = useDeferredValue(searchQuery ?? "");
   const files = useMemo(() => parseDiffFiles(diff), [diff]);
+
+  // Where each file's hunks start in the patch-wide count the host steps by.
+  const hunkOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let total = 0;
+    for (const file of files) {
+      offsets.push(total);
+      total += file.hunks?.length ?? 0;
+    }
+    return { offsets, total };
+  }, [files]);
+  useEffect(() => {
+    onHunkCount?.(hunkOffsets.total, diff);
+  }, [onHunkCount, hunkOffsets, diff]);
+  const revealIndex = revealHunk?.index ?? null;
+  const revealSeq = revealHunk?.seq ?? 0;
 
   // Raw per-file slices of the diff text, used by the per-file copy buttons.
   // Falls back to null (buttons hidden) when the segment count doesn't line up
@@ -836,6 +872,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           oldSource={files.length === 1 ? oldSource : null}
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
+          hunkOffset={hunkOffsets.offsets[index] ?? 0}
+          revealHunkIndex={localRevealIndex(revealIndex, hunkOffsets.offsets[index] ?? 0, file)}
+          revealSeq={revealSeq}
           onTokensRendered={onTokensRendered}
           stageFlush={stageFlush}
           annotations={annotations}
@@ -1042,6 +1081,16 @@ interface FileDiffProps {
   fullFile: boolean;
   /** Fired whenever this file's rendered hunk rows change (collapse, expansion, reveal) */
   onToggleCollapse?: () => void;
+  /**
+   * Where this file's hunks start in the patch-wide count, drawn on its root as
+   * `data-hunk-offset`: a collapsed file before it draws no anchors, so a
+   * host reading anchors in DOM order needs it to number the ones it sees.
+   */
+  hunkOffset: number;
+  /** This file's authored hunk to bring to the top, or null when the request is another file's. */
+  revealHunkIndex: number | null;
+  /** Bumped with each reveal request, so asking for the same hunk again scrolls again. */
+  revealSeq: number;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
   /** Bumped to finish any staged mount at once (Select All needs every row in the DOM) */
@@ -1061,6 +1110,27 @@ const NOTHING_TO_COLLAPSE = { collapse: false, reason: null } as const;
 const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
 const FILE_NOTE_ANCHOR: DiffNoteAnchor = { kind: "file" };
+
+/** A patch-wide hunk index as one file's own, or null when it falls in another file. */
+function localRevealIndex(
+  index: number | null,
+  offset: number,
+  file: FileDiffProps["file"]
+): number | null {
+  if (index === null) return null;
+  const local = index - offset;
+  return local >= 0 && local < (file.hunks?.length ?? 0) ? local : null;
+}
+
+/**
+ * The row a hunk stepper lands on: the hunk's first changed line, keyed the
+ * way react-diff-view keys rows. Unlike a drawn body, which expansion merges
+ * with its neighbours, that line stays put whatever the view draws around it.
+ */
+function hunkAnchorKey(hunk: HunkData): string | null {
+  const change = hunk.changes.find((c) => c.type !== "normal") ?? hunk.changes[0];
+  return change ? getChangeKey(change) : null;
+}
 
 interface PendingHeaderFocus {
   file: FileDiffProps["file"];
@@ -1085,6 +1155,9 @@ function FileDiff({
   oldSource,
   fullFile,
   onToggleCollapse,
+  hunkOffset,
+  revealHunkIndex,
+  revealSeq,
   onTokensRendered,
   stageFlush,
   annotations,
@@ -1160,6 +1233,15 @@ function FileDiff({
   );
   const hiddenHunkCount = renderedHunks.length - visibleHunks.length;
 
+  const anchorKeys = useMemo<(string | null)[]>(
+    () => (file.hunks ?? EMPTY_HUNKS).map(hunkAnchorKey),
+    [file]
+  );
+  const anchorKeySet = useMemo(
+    () => new Set(anchorKeys.filter((key: string | null): key is string => key !== null)),
+    [anchorKeys]
+  );
+
   // Measured from what is actually being rendered, not from the parsed diff:
   // expansion merges hunks and grows them without end, so a small diff in a
   // large file would otherwise keep the cheap-to-highlight verdict it earned
@@ -1179,8 +1261,10 @@ function FileDiff({
   const generateLineClassName = useCallback(
     ({ changes, defaultGenerate }: { changes: ChangeData[]; defaultGenerate: () => string }) => {
       const base = defaultGenerate();
-      if (!movedKeys?.size) return base;
-      let extra = "";
+      let extra = changes.some((change) => change && anchorKeySet.has(getChangeKey(change)))
+        ? " diff-hunk-anchor"
+        : "";
+      if (!movedKeys?.size) return extra ? base + extra : base;
       for (const change of changes) {
         if (!change || change.type === "normal") continue;
         if (!movedKeys.has(getChangeKey(change))) continue;
@@ -1188,7 +1272,7 @@ function FileDiff({
       }
       return extra ? base + extra : base;
     },
-    [movedKeys]
+    [movedKeys, anchorKeySet]
   );
 
   const notesWorktree = annotations?.worktreePath ?? "";
@@ -1834,6 +1918,83 @@ function FileDiff({
     [file, oldSource, visibleHunks]
   );
 
+  // A host's hunk step: open the file, lift the cap past the hunk, and land on
+  // its first changed row once the staged mount has drawn it. Held by key,
+  // file and request, so a refresh, another file, or the host withdrawing the
+  // request (the reader took the scroll back) drops it rather than scrolling
+  // from under them. A request this view mounts with is one an earlier view
+  // already carried out: a refresh that returns the same bytes, or a trip
+  // through the rendered layout, remounts it, and must not jump again.
+  const pendingRevealRef = useRef<{
+    key: string;
+    file: FileDiffProps["file"];
+    seq: number;
+  } | null>(null);
+  const handledRevealSeqRef = useRef(revealSeq);
+  const [revealTick, setRevealTick] = useState(0);
+  const startReveal = useEffectEvent((index: number, seq: number) => {
+    const key = anchorKeys[index];
+    if (!key) return;
+    pendingRevealRef.current = { key, file, seq };
+    if (isCollapsed) {
+      // As a click on the header would: consumers re-scan the rows that appear.
+      onToggleCollapse?.();
+      setIsCollapsed(false);
+    }
+    setRevealTick((tick) => tick + 1);
+  });
+  useEffect(() => {
+    if (revealHunkIndex === null || revealSeq === handledRevealSeqRef.current) return;
+    handledRevealSeqRef.current = revealSeq;
+    startReveal(revealHunkIndex, revealSeq);
+  }, [revealHunkIndex, revealSeq]);
+  useLayoutEffect(() => {
+    const pending = pendingRevealRef.current;
+    if (pending === null) return;
+    if (pending.file !== file || revealHunkIndex === null || pending.seq !== revealSeq) {
+      pendingRevealRef.current = null;
+      return;
+    }
+    // Recomputed on every commit while the landing waits, so a scope change
+    // that splits the drawn bodies apart again still lifts the cap far enough.
+    const drawnIndex = renderedHunks.findIndex((hunk) =>
+      hunk.changes.some((change) => getChangeKey(change) === pending.key)
+    );
+    if (drawnIndex === -1) {
+      pendingRevealRef.current = null;
+      return;
+    }
+    if (drawnIndex >= visibleHunkCount) {
+      setVisibleHunkCount(drawnIndex + 1);
+      extendStage();
+      return;
+    }
+    const region = regionRef.current ?? nativeScrollerRef.current;
+    if (isCollapsed || !region) return;
+    const row = region.querySelector(`[data-change-key="${pending.key}"]`)?.closest("tr");
+    if (!row) {
+      // Every visible row is drawn and the line isn't among them: nothing to land on.
+      if (allRowsMounted) pendingRevealRef.current = null;
+      return;
+    }
+    // Scrolled as soon as it is drawn, and again as later batches arrive: a row
+    // near the end of a partial stage can't reach the top until the rows below
+    // it exist, so the landing settles once staging has finished.
+    row.scrollIntoView({ block: "start", behavior: "instant" });
+    if (allRowsMounted) pendingRevealRef.current = null;
+  }, [
+    file,
+    isCollapsed,
+    renderedHunks,
+    visibleHunkCount,
+    mountedHunks,
+    allRowsMounted,
+    revealHunkIndex,
+    revealSeq,
+    revealTick,
+    extendStage,
+  ]);
+
   const handleShowMoreHunks = () => {
     setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
     // Revealed hunks join the stage behind the rows already mounted.
@@ -1988,6 +2149,7 @@ function FileDiff({
       className="mb-2"
       style={fileStyle}
       data-diff-file=""
+      data-hunk-offset={hunkOffset}
       data-notes-enabled={notesEnabled || undefined}
       onKeyDown={gutterKeys.onKeyDown}
       onFocus={gutterKeys.onFocus}

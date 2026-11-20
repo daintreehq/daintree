@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Puts Canopy's reader model where the build and an unpackaged run read it
-// (electron/resources/canopy-reader), fetching only what is missing or wrong.
+// (electron/resources/canopy-reader/<revision>), fetching only what is missing
+// or wrong.
 // `--check` only verifies, and never touches the network.
 //
 //   node scripts/fetch-canopy-model.mjs

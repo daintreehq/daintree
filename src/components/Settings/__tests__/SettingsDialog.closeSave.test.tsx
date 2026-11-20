@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const projectForm = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
 vi.mock("@/hooks/useProjectSettingsForm", () => ({
@@ -24,6 +24,7 @@ vi.mock("@/clients", async (importOriginal) => ({
 
 import { SettingsDialog } from "../SettingsDialog";
 import { hostEnvDrafts, type HostEnvDraft } from "../Hosts/hostEnvDrafts";
+import { getSettingsTabEntry } from "../settingsTabRegistry";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import { useSettingsTargetStore } from "@/store/settingsTargetStore";
 
@@ -38,6 +39,12 @@ vi.stubGlobal(
     disconnect() {}
   }
 );
+
+beforeAll(async () => {
+  // Slow Windows workers can spend the field wait on the cold tab import.
+  const environmentTab = getSettingsTabEntry("environment");
+  if (environmentTab?.importKind === "lazy") await environmentTab.importer();
+});
 
 beforeEach(() => {
   projectForm.flush.mockClear();

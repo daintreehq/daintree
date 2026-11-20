@@ -51,6 +51,14 @@ function shownBranch(): string | null {
   return label?.textContent ?? null;
 }
 
+/** What the place says after the project: a branch, or the folder in its stead. */
+function shownPlace(): { kind: string; text: string } | null {
+  const place = document.querySelector<HTMLElement>("[data-canopy-place]");
+  const kind = place?.querySelector(".sr-only")?.textContent;
+  const text = place?.querySelector(".font-mono")?.textContent;
+  return kind && text ? { kind, text } : null;
+}
+
 async function settle(fn: () => void) {
   await act(async () => {
     fn();
@@ -135,6 +143,61 @@ describe("CanopyPlace branch reads", () => {
     await settle(() => reads[1]!.resolve("feature/after-checkout"));
     await settle(() => reads[0]!.resolve("feature/before-checkout"));
     expect(shownBranch()).toBe("feature/after-checkout");
+  });
+
+  it("keeps the branch through a failed read and takes the next good one", async () => {
+    const item = itemFor();
+    const { reads, runBranch } = heldReads();
+    render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={runBranch} />);
+    await settle(() => reads[0]!.resolve("feature/login"));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
+
+    act(() => {
+      vi.advanceTimersByTime(REREAD_MS);
+    });
+    await settle(() => reads[1]!.reject(new Error("Couldn't read the run's branch")));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
+
+    act(() => {
+      vi.advanceTimersByTime(REREAD_MS);
+    });
+    expect(reads).toHaveLength(3);
+    await settle(() => reads[2]!.resolve("feature/after-checkout"));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/after-checkout" });
+  });
+
+  it("keeps a remembered branch when the first read on coming back fails", async () => {
+    const item = itemFor();
+    const first = heldReads();
+    render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={first.runBranch} />);
+    await settle(() => first.reads[0]!.resolve("feature/login"));
+
+    cleanup();
+    const next = heldReads();
+    render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={next.runBranch} />);
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
+
+    await settle(() => next.reads[0]!.reject(new Error("Couldn't read the run's branch")));
+    expect(shownPlace()).toEqual({ kind: "on branch", text: "feature/login" });
+  });
+
+  it("names the folder once a read says the branch is gone", async () => {
+    const item = itemFor();
+    const { reads, runBranch } = heldReads();
+    render(<CanopyPlace item={item} id="place" hostId="remote" runBranch={runBranch} />);
+    await settle(() => reads[0]!.resolve("feature/login"));
+
+    act(() => {
+      vi.advanceTimersByTime(REREAD_MS);
+    });
+    await settle(() => reads[1]!.resolve(null));
+    expect(shownPlace()).toEqual({ kind: "in folder", text: "login-fix" });
+
+    cleanup();
+    render(
+      <CanopyPlace item={item} id="place" hostId="remote" runBranch={heldReads().runBranch} />
+    );
+    expect(shownPlace()).toEqual({ kind: "in folder", text: "login-fix" });
   });
 
   it("still takes each read in turn when they land in the order they went out", async () => {

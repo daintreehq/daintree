@@ -1,3 +1,4 @@
+import type { AgentUsageReading } from "./ipc/agentUsage.js";
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
 import type { HostWakeSetup } from "./hostWake.js";
 import type { HostIdleObservation } from "./hostIdle.js";
@@ -432,6 +433,13 @@ export interface HostDescriptor {
    * observations when the host is pointed at another target.
    */
   wake?: HostWakeSetup;
+  /**
+   * The last check of the host saw a Linux machine with no init system, where
+   * Daintree runs in the background once started and connecting starts it
+   * again; absent when it was seen otherwise or not yet. Dropped when the
+   * host is pointed at another target.
+   */
+  startsOnConnect?: true;
 }
 
 /**
@@ -686,6 +694,12 @@ export interface HostMetricsSummary {
    * listening as a host.
    */
   idle?: HostIdleObservation;
+  /**
+   * The tightest usage window of each agent's accounts with an agent running
+   * on the Host now (#17318), at most one per agent, times by its own clock.
+   * Absent from a host that doesn't report it; empty when it has none.
+   */
+  agentUsage?: AgentUsageReading[];
 }
 
 /**

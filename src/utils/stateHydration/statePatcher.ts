@@ -23,6 +23,7 @@ import type {
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
+import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import { isAccountId } from "@shared/utils/agentAccounts";
@@ -36,10 +37,11 @@ import {
   buildLaunchCommandFromFlags,
   mintAssignedSessionId,
   getPluginBypassArgHistory,
-  reconcileBypassFlags,
+  reconcilePermissionFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
+  userPermissionArgs,
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
@@ -245,6 +247,8 @@ export interface SavedTerminalData {
    */
   restoreProvenance?: unknown;
   lastAgentObservation?: unknown;
+  /** Untrusted on-disk value (#17886), sanitized in `restoreProvenance.ts`. */
+  stopObservation?: unknown;
   launchedByPluginId?: unknown;
   holdOnRestart?: unknown;
   /** Untrusted on-disk value (#15941), read through {@link sanitizeSavedExitCode}. */
@@ -326,6 +330,7 @@ interface BackendTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  updateInstalled?: UpdateInstalledObservation;
   detectedAgentId?: AgentId;
   detectedProcessId?: string;
   /** False once the host's record outlived its process. */
@@ -355,6 +360,7 @@ interface ReconnectedTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  updateInstalled?: UpdateInstalledObservation;
   detectedAgentId?: AgentId;
   detectedProcessId?: string;
 }
@@ -507,6 +513,7 @@ export function buildArgsForBackendTerminal(
     ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: backendTerminal.everDetectedAgent,
     agentIncarnation: backendTerminal.agentIncarnation,
+    updateInstalled: backendTerminal.updateInstalled,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? backendTerminal.agentPresetId,
@@ -609,6 +616,7 @@ export function buildArgsForReconnectedFallback(
     ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     agentIncarnation: reconnectedTerminal.agentIncarnation,
+    updateInstalled: reconnectedTerminal.updateInstalled,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? reconnectedTerminal.agentPresetId,
@@ -811,8 +819,11 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-    const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
-    const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
+    const permissionLevel = resolveEffectivePermissionLevel(
+      effectiveEntry,
+      agentId,
+      globalSkipPermissions
+    );
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
     // instruction (#12431), which no setting can rebuild. It is carried into
@@ -830,13 +841,12 @@ export function buildArgsForRespawn(
     const reconcileFlags = (base: string[]): string[] =>
       reconcileDecorationFlags(
         reconcileInlineModeFlag(
-          reconcileBypassFlags(
-            base,
-            agentId,
-            effectiveBypass,
-            dangerousArgs,
-            getPluginBypassArgHistory(agentSettings, agentId)
-          ),
+          reconcilePermissionFlags(base, agentId, permissionLevel, {
+            bypassArgs: effectiveEntry.dangerousArgs,
+            pluginBypassArgHistory: getPluginBypassArgHistory(agentSettings, agentId),
+            userArgs: userPermissionArgs(effectiveEntry, preset?.args),
+            carriedArgs: callerLaunchFlags,
+          }),
           agentId
         ),
         agentId,
@@ -1188,6 +1198,13 @@ export function buildArgsForRespawn(
     // Carried as the pane's own until its new process reports something, so a
     // pane held again, or resumed and closed before reporting, keeps it (#14017).
     lastAgentObservation: lastSeen,
+    // A held pane has run nothing since its stop, so the next restore still
+    // judges it by that stop (#17886). A launched one is stopped again by
+    // whatever ends it, and Main records that stop itself.
+    ...(restoreRecovery &&
+      isAgentPanel && {
+        stopObservation: sanitizeAgentObservation(saved.stopObservation),
+      }),
     ...pluginHoldArgs(saved),
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
@@ -1319,6 +1336,7 @@ export function buildArgsForOrphanedTerminal(
     agentModelId: terminal.agentModelId,
     everDetectedAgent: terminal.everDetectedAgent,
     agentIncarnation: terminal.agentIncarnation,
+    updateInstalled: terminal.updateInstalled,
     detectedAgentId: terminal.detectedAgentId,
     detectedProcessId: terminal.detectedProcessId,
     agentPresetId: terminal.agentPresetId,

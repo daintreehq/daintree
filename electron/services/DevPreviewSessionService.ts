@@ -7,7 +7,6 @@ import { processDevPreviewOutput } from "./DevPreviewOutputProcessor.js";
 import {
   CACHE_DIRS,
   clearCacheDirs,
-  computeDirSize,
   detectPackageManagerInfo,
   statDirMeta,
 } from "./DevPreviewDiskUsage.js";
@@ -75,6 +74,20 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+/** One confirmation opening's size scans: stopping `signal` stops every `measure` it started. */
+export interface DevPreviewDirSizeScan {
+  signal: AbortSignal;
+  /** Bytes the directory occupies, or null when it is missing or couldn't be measured. */
+  measure(dirPath: string): Promise<number | null>;
+}
+
+function unmeasuredSizes(): DevPreviewDestructivePreviewSizes {
+  return {
+    cacheDirSizes: Object.fromEntries(CACHE_DIRS.map((relPath) => [relPath, null])),
+    nodeModulesSizeBytes: null,
+  };
+}
 
 interface DevPreviewSession extends DevPreviewSessionState {
   cwd: string;
@@ -1711,21 +1724,37 @@ export class DevPreviewSessionService {
     };
   }
 
+  /**
+   * Every directory goes through `scan`, which owns the concurrency bound and
+   * the opening's lifetime, including a missing one: its existence check runs
+   * inside the scan's slot, so a stat hung on a dead mount still counts against
+   * the bound. Once the scan is stopped every size answers null, even those
+   * already measured, so a superseded opening never reports a partial figure.
+   */
   async getDestructivePreviewSizes(
-    request: DevPreviewDestructivePreviewSizesRequest
+    request: DevPreviewDestructivePreviewSizesRequest,
+    scan: DevPreviewDirSizeScan
   ): Promise<DevPreviewDestructivePreviewSizes> {
     validateSessionRequest(request);
+    if (scan.signal.aborted) return unmeasuredSizes();
     const cwd = this.resolveSessionCwd(request);
+    // Each tier shows one figure, so only that one is measured: a large .next
+    // would otherwise delay the reinstall preview, and node_modules/.vite would
+    // be walked once as a cache root and again inside node_modules.
     const skipNodeModules = request.skipNodeModules === true;
+    const skipCacheDirs = request.skipCacheDirs === true;
     const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
-      Promise.all(
-        CACHE_DIRS.map(async (relPath) => {
-          const size = await computeDirSize(path.join(cwd, relPath));
-          return [relPath, size] as const;
-        })
-      ),
-      skipNodeModules ? Promise.resolve(null) : computeDirSize(path.join(cwd, "node_modules")),
+      skipCacheDirs
+        ? Promise.resolve([])
+        : Promise.all(
+            CACHE_DIRS.map(async (relPath) => {
+              const size = await scan.measure(path.join(cwd, relPath));
+              return [relPath, size] as const;
+            })
+          ),
+      skipNodeModules ? Promise.resolve(null) : scan.measure(path.join(cwd, "node_modules")),
     ]);
+    if (scan.signal.aborted) return unmeasuredSizes();
     return {
       cacheDirSizes: Object.fromEntries(cacheDirEntries),
       nodeModulesSizeBytes,

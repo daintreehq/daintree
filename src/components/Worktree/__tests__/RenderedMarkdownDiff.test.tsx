@@ -190,8 +190,12 @@ describe("RenderedMarkdownDiff", () => {
     // The number the stepper shows is a count of things the reader accepts or
     // rejects. A substitution is one of those; reporting its two halves
     // separately claims twice as many changes as the document has.
-    const counts: number[] = [];
-    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onChangeCount: (n: number) => counts.push(n) });
+    const counts: (number | null)[] = [];
+    renderDiff(EDITED_DIFF, EDITED_SOURCE, {
+      onChangeCount: (n: number | null) => {
+        counts.push(n);
+      },
+    });
 
     expect(counts.at(-1)).toBe(1);
   });
@@ -891,7 +895,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
     // Its count is withdrawn, and nothing is reported for the attempt in flight.
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-1"],
-      [0, "attempt-1"],
+      [null, "attempt-1"],
     ]);
 
     await act(async () => builds[1]!.resolve(engineResult(builds[1])));
@@ -911,7 +915,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-3"],
-      [0, "attempt-3"],
+      [null, "attempt-3"],
     ]);
   });
 
@@ -1143,5 +1147,90 @@ describe("RenderedMarkdownDiff staged mounting", () => {
     expect(frames.size).toBe(1);
     view.unmount();
     expect(frames.size).toBe(0);
+  });
+});
+
+describe("RenderedMarkdownDiff GitHub alerts (#17333)", () => {
+  function alertsIn(container: HTMLElement, kind: "added" | "removed"): Element[] {
+    return [
+      ...container.querySelectorAll(`.rendered-markdown-diff__block--${kind} .markdown-alert`),
+    ];
+  }
+
+  it("draws an edited alert as an alert on both sides, keeping its word marks", () => {
+    const source = "> [!WARNING]\n> This migration drops the new table.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      " > [!WARNING]",
+      "-> This migration drops the old table.",
+      "+> This migration drops the new table.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+    const [removed] = alertsIn(container, "removed");
+    const [added] = alertsIn(container, "added");
+
+    expect(removed?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(added?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(visibleText(removed?.querySelector(".rendered-markdown-diff__inline--removed"))).toBe(
+      "old"
+    );
+    expect(visibleText(added?.querySelector(".rendered-markdown-diff__inline--added"))).toBe("new");
+    expect(container.textContent).not.toContain("[!WARNING]");
+  });
+
+  it("takes a changed marker out whole, leaving no empty mark behind", () => {
+    const source = "> [!WARNING]\n> Back up the database first.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      "-> [!NOTE]",
+      "+> [!WARNING]",
+      " > Back up the database first.",
+    ]);
+    // The engine marks inside the marker itself, so the marks reach the alert step.
+    const built = buildMarkdownDiff({ diff, newSource: source, status: "modified" });
+    const modified = built.ok
+      ? built.model.changes.find((change) => change.kind === "modified")
+      : undefined;
+    expect(modified?.kind).toBe("modified");
+    if (modified?.kind !== "modified") return;
+    expect(modified.inline.old.some((range) => range.start < "[!NOTE]".length)).toBe(true);
+    expect(modified.inline.new.some((range) => range.start < "[!WARNING]".length)).toBe(true);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "removed").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["note"]);
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["warning"]);
+    expect(container.textContent).not.toContain("[!");
+    for (const mark of container.querySelectorAll(".rendered-markdown-diff__inline")) {
+      expect(visibleText(mark)).not.toBe("");
+    }
+  });
+
+  it("reads no further through authored strikethrough than the document does", () => {
+    const source = "> ~~[!NOTE]~~\n> Body changed.\n";
+    const diff = patch(["@@ -1,2 +1,2 @@", " > ~~[!NOTE]~~", "-> Body.", "+> Body changed."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector(".markdown-alert")).toBeNull();
+    expect(visibleText(container.querySelector(".rendered-markdown-diff__block--added"))).toContain(
+      "[!NOTE]"
+    );
+  });
+
+  it("draws a whole added alert as an alert", () => {
+    const source = "# Guide\n\n> [!CAUTION]\n> Irreversible.\n";
+    const diff = patch(["@@ -1,1 +1,4 @@", " # Guide", "+", "+> [!CAUTION]", "+> Irreversible."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["caution"]);
   });
 });

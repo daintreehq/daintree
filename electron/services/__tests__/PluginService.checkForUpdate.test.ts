@@ -977,6 +977,151 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     }
   );
 
+  /** A catalog opened for one background pass, serving `document` to every fetch. */
+  function passCatalog(document: { entries: unknown[] }) {
+    const passFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify(document), {
+          headers: { "content-type": "application/json" },
+        })
+    );
+    const batch = new PluginCatalogService({ cachePath: null, fetchImpl: passFetch });
+    return { batch: batch.openUpdateBatch(), passFetch };
+  }
+
+  it("reads the catalog a background pass hands it, one fetch across several checks (#17805)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const sharedFetch = catalogServes();
+    const { batch, passFetch } = passCatalog({ entries: [entry("0.1.0", installedHash)] });
+
+    const results = await Promise.all([
+      service.checkForUpdate(ID, { catalog: batch }),
+      service.checkForUpdate(ID, { catalog: batch }),
+    ]);
+    results.push(await service.checkForUpdate(ID, { catalog: batch }));
+
+    expect(results).toEqual([
+      { status: "up-to-date" },
+      { status: "up-to-date" },
+      { status: "up-to-date" },
+    ]);
+    expect(passFetch).toHaveBeenCalledTimes(1);
+    expect(sharedFetch).not.toHaveBeenCalled();
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("answers an install from an added catalog from that catalog's batch, never Daintree's (#17434)", async () => {
+    const SOURCE = "https://plugins.example.org/catalog.json";
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service, "0.1.0", {
+      id: ID,
+      version: "0.1.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
+    const sharedFetch = catalogServes();
+    const own = passCatalog({ entries: [] });
+    const added = passCatalog({ entries: [entry("0.1.0", installedHash)] });
+    const catalogFor = vi.fn(() => added.batch);
+
+    const result = await service.checkForUpdate(ID, { catalog: own.batch, catalogFor });
+
+    // Daintree's batch lists nothing, which would read as delisted.
+    expect(result).toEqual({ status: "up-to-date" });
+    expect(catalogFor).toHaveBeenCalledWith(SOURCE);
+    expect(own.passFetch).not.toHaveBeenCalled();
+    expect(sharedFetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("refuses a record whose catalog isn't a catalog URL, rather than reading Daintree's (#17434)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installFromCatalog(service, "0.1.0", {
+      id: ID,
+      version: "0.1.0",
+      repo: REPO,
+      sourceUrl: "http://plugins.example.org/catalog.json",
+    });
+    const sharedFetch = catalogServes({ entries: [] });
+
+    expect((await service.checkForUpdate(ID)).status).toBe("fetch-failed");
+    expect(sharedFetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("offers the update a pass's catalog lists once its archive checks out", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const next = await readArchiveBytes({
+      name: ID,
+      version: "0.1.1",
+      capabilities: ["mcp:expose"],
+    });
+    const sharedFetch = catalogServes();
+    const { batch } = passCatalog({
+      entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))],
+    });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+
+    const result = await service.checkForUpdate(ID, { catalog: batch });
+
+    expect(result).toMatchObject({
+      status: "available",
+      version: "0.1.1",
+      capabilities: ["mcp:expose"],
+      archiveHash: sha(next),
+      catalog: { id: ID, version: "0.1.1", repo: REPO },
+    });
+    expect(netMock.fetch).toHaveBeenCalledTimes(1);
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1"));
+    expect(sharedFetch).not.toHaveBeenCalled();
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("still refuses an archive that isn't the one a pass's catalog reviewed", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const served = await readArchiveBytes({ name: ID, version: "0.1.1" });
+    const sharedFetch = catalogServes();
+    const { batch } = passCatalog({
+      entries: [entry("0.1.0", installedHash), entry("0.1.1", "f".repeat(64))],
+    });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(served)]));
+
+    const result = await service.checkForUpdate(ID, { catalog: batch });
+
+    expect(result).toMatchObject({ status: "fetch-failed" });
+    expect(result.status === "fetch-failed" && result.message).toContain(
+      "isn't the one the plugin catalog reviewed"
+    );
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1"));
+    expect(sharedFetch).not.toHaveBeenCalled();
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("checks a URL install against its URL even when handed a pass's catalog", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const manifest = { name: "acme.byurl", version: "1.0.0" };
+    await installUrlPlugin(service, manifest);
+    const sharedFetch = catalogServes();
+    const { batch, passFetch } = passCatalog({ entries: [] });
+    netMock.fetch.mockResolvedValueOnce(
+      fakeResponse([new Uint8Array(await readArchiveBytes(manifest))])
+    );
+
+    expect(await service.checkForUpdate("acme.byurl", { catalog: batch })).toEqual({
+      status: "up-to-date",
+    });
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe("https://example.com/plugin.dntr");
+    expect(passFetch).not.toHaveBeenCalled();
+    expect(sharedFetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it("keeps checking a URL install against its URL, never the catalog", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const manifest = { name: "acme.byurl", version: "1.0.0" };

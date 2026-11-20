@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { PortListener } from "../../remote/ports/listenerScan.js";
+import type { PortListener } from "../../utils/localPortListeners.js";
 import { isStrictlyInside } from "./containment.js";
 
 /**

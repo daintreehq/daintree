@@ -17,6 +17,7 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import type { CloudHostStatus, CloudProviderInfo } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
+import { removeHostOutcome } from "./hostLabels";
 
 interface RemoveCloudHostDialogProps {
   hostId: HostId;
@@ -26,6 +27,11 @@ interface RemoveCloudHostDialogProps {
   providerName: string;
   /** What its provider declares; null while that provider isn't registered. */
   provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl"> | null;
+  /**
+   * Daintree on the machine was last seen started on connect: removing the
+   * host stops it there, unless the machine goes with it.
+   */
+  startsOnConnect?: boolean;
   onClose: () => void;
   /** The host is gone from this device. */
   onRemoved?: () => void;
@@ -52,6 +58,7 @@ function errorText(err: unknown, fallback: string): string {
 export function RemoveCloudHostDialog({
   hostId,
   name,
+  startsOnConnect = false,
   status,
   providerName,
   provider,
@@ -154,7 +161,9 @@ export function RemoveCloudHostDialog({
                 ? `The host leaves your list, but its machine stays in your ${providerName} account.`
                 : `The host leaves your list, but removing it doesn't delete its machine from your ${providerName} account.`
               : "The host leaves your list."
-      } Windows on it return to this machine, and its plugin permissions, history and browser data on this device are cleared.`}
+      } Windows on it return to this machine, and its plugin permissions, history and browser data on this device are cleared.${
+        startsOnConnect && !deleting ? ` ${removeHostOutcome(undefined, name, true).sentence}` : ""
+      }`}
       confirmLabel={deleting ? "Delete machine" : "Remove host"}
       onConfirm={confirm}
       confirmDisabled={!ready}

@@ -13,6 +13,7 @@ import type {
   AddPanelOptions,
 } from "@/types";
 import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
+import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 export type { AddPanelOptions };
@@ -70,9 +71,24 @@ export interface PresetRespawnOptions {
   keepConversation?: boolean;
 }
 
+export interface OwnFallbackStepOptions extends PresetRespawnOptions {
+  /** When the call asking for the move gave up (#17917): nothing starts after it. */
+  deadlineAt?: number;
+}
+
 export interface PresetRespawnResult {
   success: boolean;
   error?: string;
+  /**
+   * The move wasn't the pane's next own fallback step (#17917), and nothing
+   * was changed: the caller asks the person instead.
+   */
+  needsConfirmation?: boolean;
+  /**
+   * An assistant's hop that claimed the pane and then failed (#17917): the
+   * tick authorized it, and the old process may already have been ended.
+   */
+  admitted?: boolean;
   /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
   resumedSessionId?: string;
 }
@@ -199,6 +215,11 @@ export interface PanelRegistrySlice {
    * alike, so the pane never names the wrong session beside that state.
    */
   setAgentIncarnation: (id: string, agentIncarnation: number) => void;
+  /**
+   * Copy the host's update-installed observation for a terminal (#17905);
+   * undefined clears it. Written by the live listener and by resync alike.
+   */
+  setUpdateInstalled: (id: string, updateInstalled: UpdateInstalledObservation | undefined) => void;
   updateActivity: (
     id: string,
     headline: string,
@@ -342,6 +363,17 @@ export interface PanelRegistrySlice {
     id: string,
     presetId: string,
     options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
+  /**
+   * Hop a pane to `presetId` as a usage-limit hop would, keeping its root and
+   * advancing its index, only when that is the next step of the chain on one
+   * of the person's own presets it walks (#17917). Any other move changes
+   * nothing and reports `needsConfirmation`.
+   */
+  restartTerminalOnOwnFallbackStep: (
+    id: string,
+    presetId: string,
+    options?: OwnFallbackStepOptions
   ) => Promise<PresetRespawnResult>;
   /**
    * Respawn an agent pane in place on another account (#16040), keeping its

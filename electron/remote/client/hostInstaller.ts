@@ -17,16 +17,25 @@ import type { CommandResult, CommandRunner } from "./commandRunner.js";
 import {
   APPIMAGE_BUILD_INFO_SUFFIX,
   BUILD_INFO_PATTERN,
+  DEB_EXECUTABLE,
   LINUX_UNIT_NAME,
   MAC_APP_PATH,
   formatBuildInfo,
   liveHostRecord,
+  liveProcessShell,
   processStartShell,
   runningHostBuild,
   type ParsedProbe,
   type ProbeOutcome,
 } from "./hostProbe.js";
 import { acquireInstallLock, newInstallToken, type InstallLock } from "./hostInstallLock.js";
+import {
+  DETACHED_LAUNCH_READ,
+  detachedStartScript,
+  linuxLaunchTarget,
+  linuxTargetFor,
+  stopLaunchShell,
+} from "./hostModeBootstrap.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
@@ -613,17 +622,43 @@ async function waitForIdle(
 }
 
 /**
+ * How Daintree on a Linux host is started again: its `systemd --user` unit,
+ * or, where there is no init system to run one, the same start a connection
+ * makes (see `detachedStartScript`); null when neither applies.
+ */
+export type LinuxRestart = "unit" | "on-connect" | null;
+
+export function linuxRestartFor(
+  probe: Pick<HostProbeResult, "startsOnConnect">,
+  parsed: Pick<ParsedProbe, "advice" | "hostModeState">
+): LinuxRestart {
+  if (probe.startsOnConnect) {
+    // Only where Daintree there recorded itself on and started on connect.
+    const state = parsed.hostModeState;
+    return state?.enabled === true && state.startMethod === "on-connect" ? "on-connect" : null;
+  }
+  return parsed.advice.hostModeUnit === true ? "unit" : null;
+}
+
+/**
  * Stop Daintree on the host. A pid from the discovery file is signalled only
  * while it still started when that file says (`hostStartedAt`, confirmed live by
  * the probe): a pid since reused by a stranger is left alone. With no pid, or an
  * older host that recorded no start time, the user's own process named
  * Daintree is the target.
+ *
+ * A host started on connect may still be the AppImage runtime unpacking it,
+ * which isn't named Daintree yet (see `detachedStartScript`): its last start,
+ * while still that process, is waited for too, and with `launch: "stop"` asked
+ * to quit first. A normal stop only waits: that runtime removes what it
+ * unpacked once Daintree under it quits.
  */
 export function stopScript(
   platform: "darwin" | "linux",
   hostPid: number | null,
   hasUnit: boolean,
-  hostStartedAt: string | null = null
+  hostStartedAt: string | null = null,
+  launch: "wait" | "stop" | null = null
 ): string {
   const name = platform === "darwin" ? "Daintree" : "daintree";
   const unitStop = hasUnit ? `systemctl --user stop ${LINUX_UNIT_NAME} 2>/dev/null; ` : "";
@@ -632,7 +667,20 @@ export function stopScript(
     hostPid !== null && Number.isInteger(hostPid) && hostPid > 0 && hostStartedAt
       ? `hp=${hostPid}; ${processStartShell("hp", "hn")}; if [ "$hn" = ${sq(hostStartedAt)} ]; then kill -TERM "$hp" 2>/dev/null; fi`
       : byName;
-  return `${unitStop}if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+  const running = `pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1`;
+  if (launch === null || platform !== "linux") {
+    return `${unitStop}if ${running}; then ${signalIt}; fi; i=0; while ${running} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if ${running}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+  }
+  // A zombie its PID 1 never reaps is gone, whatever pgrep and kill -0 say.
+  const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if ${liveProcessShell("q")}; then return 0; fi; done; return 1`;
+  const stopLaunch =
+    launch === "stop" ? `if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; fi; ` : "";
+  // One signal each: a second SIGTERM soon after the first makes Daintree exit at once.
+  const signalRest =
+    launch === "stop"
+      ? `if [ -z "$lp" ] && ${running}; then ${signalIt}; fi`
+      : `if ${running}; then ${signalIt}; fi`;
+  return `${unitStop}${DETACHED_LAUNCH_READ}; alive() { ${live}; }; ${stopLaunch}${signalRest}; i=0; while alive && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if alive; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
 /**
@@ -728,12 +776,13 @@ function macAppPath(probe: Pick<HostProbeResult, "install">): string {
  * plain launch with Host mode switched on listens and opens its windows; one
  * listening only for this run (Host mode off) needs the flag, which is always
  * windowless. A record without the window observation keeps the flag. A Mac
- * starts the app at `target`, where the probe found it.
+ * starts the app at `target`, where the probe found it; a Linux host started
+ * on connect starts `target` as its executable.
  */
 function startScript(
   platform: "darwin" | "linux",
   probe: ParsedProbe,
-  hasUnit: boolean,
+  restart: LinuxRestart,
   target: string
 ): string | null {
   if (platform === "darwin") {
@@ -743,8 +792,14 @@ function startScript(
       ? `open -g -a ${remotePath(target)} --args --host-mode`
       : `open -g -a ${remotePath(target)}`;
   }
-  // Never run the backend from this SSH session: only the user's own unit may start it.
-  return hasUnit ? `systemctl --user start ${LINUX_UNIT_NAME}` : null;
+  // Never run the backend as a child of this SSH session: the user's own unit
+  // starts it, or a start in a session of its own where no init system can.
+  if (restart === "on-connect") {
+    return detachedStartScript(
+      linuxTargetFor(target, target !== DEB_EXECUTABLE, probe.advice.fuse)
+    );
+  }
+  return restart === "unit" ? `systemctl --user start ${LINUX_UNIT_NAME}` : null;
 }
 
 /**
@@ -1019,7 +1074,10 @@ export async function runHostInstall(
       probe = fresh.result;
       parsed = fresh.parsed;
     }
-    const hasUnit = parsed.advice.hostModeUnit === true;
+    const restart = linuxRestartFor(probe, parsed);
+    const hasUnit = restart === "unit";
+    // Waited for or stopped with the rest: a start that is still unpacking isn't named Daintree yet.
+    const launchStop = restart === "on-connect" ? ("wait" as const) : null;
     const wasHostMode = parsed.hostModeListening;
     const wasRunning = parsed.appRunning || wasHostMode;
     // An app bundle or AppImage is replaced where it is, so a unit or login item that runs it keeps working.
@@ -1032,7 +1090,7 @@ export async function runHostInstall(
           ? probe.install.path
           : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
     }
-    const start = wasRunning ? startScript(platform, parsed, hasUnit, target) : null;
+    const start = wasRunning ? startScript(platform, parsed, restart, target) : null;
     if (wasRunning && start === null) {
       await dropStaged();
       throw new AppError({
@@ -1103,7 +1161,10 @@ export async function runHostInstall(
       let previous = true;
       if (swapped) {
         if (wasRunning) {
-          const stopped = await run(stopScript(platform, null, hasUnit), 120_000);
+          const stopped = await run(
+            stopScript(platform, null, hasUnit, null, launchStop && "stop"),
+            120_000
+          );
           // Files are never put back under a build that is still running.
           if (stopped.code !== 0 || markerValue(stopped.stdout, "stopped") !== "yes") {
             return "not-restored";
@@ -1188,7 +1249,7 @@ export async function runHostInstall(
         touched = true;
         const out = await exec(
           deps,
-          stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+          stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt, launchStop),
           settle,
           "Couldn't stop Daintree on the host"
         );
@@ -1283,6 +1344,22 @@ function stagedProblem(probe: HostProbeResult, version: string): string | null {
   return null;
 }
 
+/** How a host restarting into its staged update is started again; null when nothing here can. */
+function stagedStart(
+  platform: "darwin" | "linux",
+  seen: ProbeOutcome & { parsed: ParsedProbe }
+): string | null {
+  const restart = platform === "linux" ? linuxRestartFor(seen.result, seen.parsed) : null;
+  if (restart !== "on-connect") {
+    return startScript(platform, seen.parsed, restart, macAppPath(seen.result));
+  }
+  try {
+    return detachedStartScript(linuxLaunchTarget(seen.result));
+  } catch {
+    return null;
+  }
+}
+
 const NO_SERVICE_TO_RESTART =
   "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Restart it at the machine to install the update.";
 
@@ -1307,10 +1384,7 @@ async function applyStagedUpdate(
   const platform = before.result.platform!;
   const problem = stagedProblem(before.result, version);
   if (problem) throw refusal(problem);
-  const hasUnitBefore = before.parsed.advice.hostModeUnit === true;
-  if (startScript(platform, before.parsed, hasUnitBefore, macAppPath(before.result)) === null) {
-    throw refusal(NO_SERVICE_TO_RESTART);
-  }
+  if (stagedStart(platform, before) === null) throw refusal(NO_SERVICE_TO_RESTART);
 
   const whileWorking = payload.whileWorking ?? "refuse";
   let confirmed: HostRestartImpact | null = payload.confirmed ?? null;
@@ -1337,9 +1411,27 @@ async function applyStagedUpdate(
     const changed = stagedProblem(current.result, version);
     if (changed) throw refusal(changed);
     const parsed = current.parsed;
-    const hasUnit = parsed.advice.hostModeUnit === true;
-    const start = startScript(platform, parsed, hasUnit, macAppPath(current.result));
+    const restart = linuxRestartFor(current.result, parsed);
+    const hasUnit = restart === "unit";
+    const launchStop = restart === "on-connect" ? ("wait" as const) : null;
+    const start = stagedStart(platform, { ...current, parsed });
     if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
+    /**
+     * The start to run now. A host started on connect is started from the
+     * image there once it has quit: its updater may have given the new build
+     * a name of its own as it installed it. What it ran before stands in
+     * while the image there can't be told.
+     */
+    const currentStart = async (): Promise<string> => {
+      if (restart !== "on-connect") return start;
+      const seen = await deps.probe(settle).catch(() => null);
+      if (!seen?.parsed || seen.parsed.appImageConflict || !seen.result.install) return start;
+      try {
+        return detachedStartScript(linuxLaunchTarget(seen.result));
+      } catch {
+        return start;
+      }
+    };
 
     // From the stop on, every step runs to completion whatever the cancel does,
     // and any failure starts Daintree there again, so the host isn't left stopped.
@@ -1348,6 +1440,7 @@ async function applyStagedUpdate(
     let started = false;
 
     const runStart = async (): Promise<CommandResult> => {
+      const script = await currentStart();
       // Without the lock another device may be updating the host: it starts Daintree there itself.
       if (!lock.held()) {
         return {
@@ -1359,7 +1452,7 @@ async function applyStagedUpdate(
         };
       }
       const result = await deps.shell
-        .exec(start, { signal: settle, timeoutMs: 30_000 })
+        .exec(script, { signal: settle, timeoutMs: 30_000 })
         .catch((err: unknown): CommandResult => ({
           code: null,
           stdout: "",
@@ -1400,7 +1493,7 @@ async function applyStagedUpdate(
       report({ stage: "stopping", fraction: 0.3, message: "Stopping Daintree on the host" });
       const stopped = await exec(
         deps,
-        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt, launchStop),
         settle,
         "Couldn't stop Daintree on the host"
       );

@@ -318,8 +318,16 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.terminalIds ?? []);
       return true;
 
+    case "project-terminals":
+      broker.resolve(event.requestId, event.terminals ?? []);
+      return true;
+
     case "terminal-info":
       broker.resolve(event.requestId, event.terminal ?? null);
+      return true;
+
+    case "terminal-status-fields":
+      broker.resolve(event.requestId, event.terminals ?? []);
       return true;
 
     case "replay-history-result":
@@ -328,6 +336,18 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
 
     case "reset-terminal-modes-result":
       broker.resolve(event.requestId, event.reset === true);
+      return true;
+
+    case "continue-codex-limit-result":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
+    case "codex-limit-stopped":
+      emitter.emit("codex-limit-stopped", {
+        terminalId: event.terminalId,
+        run: event.run,
+        seq: event.seq,
+      });
       return true;
 
     case "available-terminals":

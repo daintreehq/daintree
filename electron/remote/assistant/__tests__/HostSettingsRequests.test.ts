@@ -116,9 +116,9 @@ function setup(
   let now = 1_000;
   let id = 0;
   const control = new Set(Object.keys(names));
-  const askApproval = vi.fn<NonNullable<HostSettingsRequestDeps["askApproval"]>>(
-    async () => "approved"
-  );
+  const askApproval = vi.fn<NonNullable<HostSettingsRequestDeps["askApproval"]>>(async () => ({
+    decision: "approved",
+  }));
   const requests = new HostSettingsRequests({
     client: () => fake.client,
     hostName: (hostId) => fake.hosts.get(hostId)?.name ?? null,
@@ -273,7 +273,7 @@ describe("host.settings (#14167)", () => {
       [null, "policy_rejected"],
     ] as const) {
       const t = setup();
-      t.askApproval.mockResolvedValueOnce(decision);
+      t.askApproval.mockResolvedValueOnce(decision === null ? null : { decision });
       const { ticket } = await t.run({
         operation: "preview",
         hostIds: ["a"],
@@ -290,17 +290,86 @@ describe("host.settings (#14167)", () => {
     });
     t.askApproval.mockImplementationOnce(async () => {
       t.stop();
-      return "approved";
+      return { decision: "approved" };
     });
     expect((await t.run({ operation: "apply", ticket: ticket! })).outcome).toBe("policy_rejected");
     expect(t.client.update).not.toHaveBeenCalled();
+  });
+
+  describe("the dialog's hand-over (#16752)", () => {
+    const offer = { label: "Change a host's settings", detail: "Only as it previewed them" };
+
+    function withHandOver() {
+      const commit = vi.fn(() => true);
+      const prepareDelegation = vi.fn(() => ({ offer, approved: () => {}, commit }));
+      const t = setup(undefined, { prepareDelegation });
+      return { t, commit, prepareDelegation };
+    }
+
+    async function applyOnce(t: ReturnType<typeof setup>) {
+      const { ticket } = await t.run({
+        operation: "preview",
+        hostIds: ["a"],
+        patch: { canopyMode: "on" },
+      });
+      return t.run({ operation: "apply", ticket: ticket! });
+    }
+
+    it("offers it in the dialog and writes it once the approval stands", async () => {
+      const { t, commit, prepareDelegation } = withHandOver();
+      t.askApproval.mockResolvedValueOnce({ decision: "approved", delegate: true });
+      expect((await applyOnce(t)).outcome).toBe("ok");
+      expect(prepareDelegation).toHaveBeenCalledWith("s1");
+      expect(t.askApproval.mock.calls[0]![0].delegation).toEqual(offer);
+      expect(commit).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes nothing on an approval without the tick, a decline or a missed dialog", async () => {
+      for (const answer of [
+        { decision: "approved" as const },
+        { decision: "rejected" as const, delegate: true as const },
+        { decision: "timeout" as const, delegate: true as const },
+      ]) {
+        const { t, commit } = withHandOver();
+        t.askApproval.mockResolvedValueOnce(answer);
+        await applyOnce(t);
+        expect(commit).not.toHaveBeenCalled();
+      }
+    });
+
+    it("writes nothing when the run or a host's control went while the person decided", async () => {
+      const stopped = withHandOver();
+      stopped.t.askApproval.mockImplementationOnce(async () => {
+        stopped.t.stop();
+        return { decision: "approved", delegate: true };
+      });
+      expect((await applyOnce(stopped.t)).outcome).toBe("policy_rejected");
+      expect(stopped.commit).not.toHaveBeenCalled();
+
+      const optedOut = withHandOver();
+      optedOut.t.askApproval.mockImplementationOnce(async () => {
+        optedOut.t.control.delete("a");
+        return { decision: "approved", delegate: true };
+      });
+      expect((await applyOnce(optedOut.t)).outcome).toBe("policy_rejected");
+      expect(optedOut.commit).not.toHaveBeenCalled();
+    });
+
+    it("offers nothing when the change runs handed over already", async () => {
+      const commit = vi.fn(() => true);
+      const prepareDelegation = vi.fn(() => ({ offer, approved: () => {}, commit }));
+      const t = setup(undefined, { prepareDelegation, skipsApproval: () => true });
+      expect((await applyOnce(t)).outcome).toBe("ok");
+      expect(t.askApproval).not.toHaveBeenCalled();
+      expect(prepareDelegation).not.toHaveBeenCalled();
+    });
   });
 
   // A dialog nobody saw isn't a no (#16752): the ticket is spent, so the
   // answer says to preview again rather than that the person declined.
   it("reports a missed dialog as a timeout that needs a new preview", async () => {
     const t = setup();
-    t.askApproval.mockResolvedValueOnce("timeout");
+    t.askApproval.mockResolvedValueOnce({ decision: "timeout" });
     const { ticket } = await t.run({
       operation: "preview",
       hostIds: ["a"],

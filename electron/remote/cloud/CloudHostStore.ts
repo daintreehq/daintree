@@ -1,18 +1,22 @@
 import {
   CLOUD_PROVISIONING_DIMENSIONS,
   isCloudProviderId,
+  isValidCloudAccountId,
   isValidCloudBindingId,
   type CloudAccountValidation,
   type CloudBillingScope,
   type CloudHostCreatedFor,
   type CloudHostError,
   type CloudHostProvisioning,
+  type CloudPluginProviderLabel,
   type CloudWorktreeRef,
   type CloudProviderId,
   type CloudProvisioningPick,
   type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { isPrivateOrLoopbackHostname } from "../../schemas/pluginIdentifiers.js";
 import { normalizeHostKey } from "./sshEndpoint.js";
 
 /**
@@ -45,13 +49,22 @@ export interface StoredCloudAccount {
   validation: CloudAccountValidation;
   /** What this account's last create named, offered first next time; null before its first. */
   lastProvisioning: CloudProvisioningSelection | null;
+  /**
+   * What its plugin's provider was called, and where its console was, when it
+   * was last registered (#17353); null for a built-in's account, or one whose
+   * provider hasn't been seen since this was kept.
+   */
+  pluginProvider: CloudPluginProviderLabel | null;
 }
 
 /** A create that may have reached the provider: kept until its outcome is known. */
 export interface StoredCreationIntent {
   operationId: string;
   idempotencyKey: string;
+  /** The first send; null until one went out. */
   sentAt: number | null;
+  /** The latest send, which with a same-key replay may be the one that made the machine. */
+  lastSentAt: number | null;
   name: string;
   machineType: string;
 }
@@ -114,6 +127,8 @@ export interface StoredCloudObservation {
   asleep: boolean;
   /** Whether it sleeps when idle, as the provider reported for this machine; null when it didn't say. */
   idleSleep: { enabled: boolean; idleSeconds: number | null } | null;
+  /** Snapshots were turned off at create, so a stop erases its disk; null in a record from before it was kept. */
+  snapshotsDisabled: boolean | null;
   observedAt: number;
 }
 
@@ -152,6 +167,104 @@ export interface StoredCloudBinding {
   offeredHostKey: StoredHostKey | null;
   lastError: CloudHostError | null;
   createdAt: number;
+  /**
+   * The person picked the host's idle time here for an imported machine whose
+   * provider sleeps idle machines, so its own idle timeout follows the host's
+   * from then on (#17916). A machine Daintree created always follows it.
+   */
+  idleTimeChosen?: true;
+  /**
+   * What the machine's host last told this device it holds to keep the
+   * machine awake while it sees work (#17918): when that stops working, and
+   * when the host said so. Never the URL itself. Absent while it holds none,
+   * or for a machine other than `resourceId`.
+   */
+  keepAwake?: StoredKeepAwake;
+}
+
+export interface StoredKeepAwake {
+  resourceId: string;
+  expiresAt: number;
+  confirmedAt: number;
+  /** The host said a request through it had reached it. */
+  reached?: true;
+}
+
+/** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
+export const CLOUD_BINDING_LABEL = "daintree-binding";
+
+/**
+ * Where a create's machine may have been made, by the provider's clock against
+ * this one: from shortly before its send (a clock behind), to the slowest
+ * create request (Agent 37's five minutes) plus a machine minted after it and
+ * a clock ahead.
+ */
+const CREATED_BEFORE_SEND_MS = 5 * 60_000;
+const CREATED_AFTER_SEND_MS = 15 * 60_000;
+
+/**
+ * Whether a machine was made while a send at `sentAt` could have made it;
+ * null when its create time is unknown, false when nothing was sent. A copy of
+ * a machine (a fork) carries its labels, but never its create time.
+ */
+export function madeInSendWindow(sentAt: number | null, createdAt: string | null): boolean | null {
+  if (sentAt === null) return false;
+  const at = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(at)) return null;
+  return at >= sentAt - CREATED_BEFORE_SEND_MS && at <= sentAt + CREATED_AFTER_SEND_MS;
+}
+
+/**
+ * Whether any of a create's sends could have made a machine: its create time
+ * is unknown, or falls from the first send's window to the latest's.
+ */
+export function mayHaveMade(
+  creation: Pick<StoredCreationIntent, "sentAt" | "lastSentAt">,
+  createdAt: string | null
+): boolean {
+  if (creation.sentAt === null) return false;
+  const at = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(at)) return true;
+  // Either send may read earlier: a clock set back between them.
+  const sends = [creation.sentAt, creation.lastSentAt ?? creation.sentAt];
+  return (
+    at >= Math.min(...sends) - CREATED_BEFORE_SEND_MS &&
+    at <= Math.max(...sends) + CREATED_AFTER_SEND_MS
+  );
+}
+
+/**
+ * Which binding has a claim on a machine: the one that holds it or, failing
+ * that, one whose unanswered create may have made it (it carries the create's
+ * label, and `mayHaveMade`). A pending claim is a "may", never proof.
+ * Bindings of other providers, and `except`, don't count.
+ */
+export function cloudMachineClaim(
+  bindings: readonly StoredCloudBinding[],
+  providerId: CloudProviderId,
+  machine: {
+    resourceId: string;
+    labels?: Readonly<Record<string, string>>;
+    createdAt?: string | null;
+  },
+  except?: string
+): { binding: StoredCloudBinding; pending: boolean } | null {
+  const others = bindings.filter(
+    (binding) => binding.providerId === providerId && binding.id !== except
+  );
+  const holder = others.find((binding) => binding.resourceId === machine.resourceId);
+  if (holder) return { binding: holder, pending: false };
+  const named = machine.labels?.[CLOUD_BINDING_LABEL];
+  const creating = named
+    ? others.find(
+        (binding) =>
+          binding.id === named &&
+          !binding.resourceId &&
+          binding.creation !== null &&
+          mayHaveMade(binding.creation, machine.createdAt ?? null)
+      )
+    : undefined;
+  return creating ? { binding: creating, pending: true } : null;
 }
 
 /**
@@ -179,11 +292,25 @@ export interface StoredMachineKey {
   createdAt: number;
 }
 
+/**
+ * The person agreed to hand a plugin's cloud providers credentials (#17352),
+ * for the declarations they had then. One per plugin; it outlives an update
+ * that leaves the declarations as they were, and goes when the plugin is
+ * uninstalled.
+ */
+export interface StoredProviderConsent {
+  pluginId: string;
+  /** `PluginCloudProviderDeclaration.consentFingerprint` as agreed to. */
+  fingerprint: string;
+  approvedAt: number;
+}
+
 export interface CloudHostsValue {
   version: 1;
   accounts: StoredCloudAccount[];
   bindings: StoredCloudBinding[];
   machineKeys?: StoredMachineKey[];
+  providerConsents?: StoredProviderConsent[];
 }
 
 export interface CloudHostsStoreBackend {
@@ -191,11 +318,7 @@ export interface CloudHostsStoreBackend {
   set(key: "cloudHosts", value: CloudHostsValue): void;
 }
 
-const ACCOUNT_ID = /^ca_[a-z0-9]{8,32}$/;
-
-export function isValidCloudAccountId(id: unknown): id is string {
-  return typeof id === "string" && ACCOUNT_ID.test(id);
-}
+export { isValidCloudAccountId };
 
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
@@ -230,6 +353,47 @@ function readScope(raw: unknown): CloudBillingScope | null {
   }
   if (typeof value.id !== "string" || value.id.length === 0) return null;
   return { kind: value.kind, id: value.id, name: str(value.name) ?? value.id };
+}
+
+const MAX_LABEL_LENGTH = 128;
+const MAX_URL_LENGTH = 2048;
+
+/** One plain line, cut short rather than refused: a long name still names the provider. */
+function labelText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const points = [...displaySafeText(value).trim()];
+  if (points.length === 0) return null;
+  return points.length > MAX_LABEL_LENGTH
+    ? `${points
+        .slice(0, MAX_LABEL_LENGTH - 1)
+        .join("")
+        .trimEnd()}…`
+    : points.join("");
+}
+
+/** A link this device opens in the browser: public https with no sign-in in it, as the manifest rules require. */
+export function readConsoleUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_URL_LENGTH || value.includes("*")) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (!url.hostname.includes(".") || isPrivateOrLoopbackHostname(url.hostname)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/** Kept text from a manifest no one may be able to read again: shown as one plain line, and never a bad link. */
+export function readPluginProviderLabel(raw: unknown): CloudPluginProviderLabel | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const pluginName = labelText(value.pluginName);
+  const providerName = labelText(value.providerName);
+  if (!pluginName || !providerName) return null;
+  return { pluginName, providerName, dashboardUrl: readConsoleUrl(value.dashboardUrl) };
 }
 
 function optionalId(value: unknown): string | null | undefined {
@@ -298,6 +462,7 @@ function readAccount(raw: unknown): StoredCloudAccount | null {
     addedAt: num(value.addedAt) ?? 0,
     validation: readValidation(value.validation),
     lastProvisioning: readProvisioningSelection(value.lastProvisioning),
+    pluginProvider: readPluginProviderLabel(value.pluginProvider),
   };
 }
 
@@ -342,6 +507,8 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
     dataExpired: value.dataExpired === true,
     asleep: value.asleep === true,
     idleSleep: readIdleSleep(value.idleSleep),
+    snapshotsDisabled:
+      typeof value.snapshotsDisabled === "boolean" ? value.snapshotsDisabled : null,
     observedAt: num(value.observedAt) ?? 0,
   };
 }
@@ -363,6 +530,8 @@ function readCreation(raw: unknown): StoredCreationIntent | null {
     operationId,
     idempotencyKey,
     sentAt: num(value.sentAt),
+    // Written before it existed: the first send is the only one known.
+    lastSentAt: num(value.lastSentAt) ?? num(value.sentAt),
     name: str(value.name) ?? "",
     machineType: str(value.machineType) ?? "default",
   };
@@ -484,6 +653,27 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     offeredHostKey: readHostKey(value.offeredHostKey),
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
+    ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
+    ...readKeepAwake(value.keepAwake, resourceId),
+  };
+}
+
+function readKeepAwake(
+  raw: unknown,
+  resourceId: string | null
+): { keepAwake: StoredKeepAwake } | Record<string, never> {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || resourceId === null) return {};
+  const expiresAt = num(value.expiresAt);
+  const confirmedAt = num(value.confirmedAt);
+  if (value.resourceId !== resourceId || expiresAt === null || confirmedAt === null) return {};
+  return {
+    keepAwake: {
+      resourceId,
+      expiresAt,
+      confirmedAt,
+      ...(value.reached === true ? { reached: true as const } : {}),
+    },
   };
 }
 
@@ -514,6 +704,16 @@ function readMachineKey(raw: unknown): StoredMachineKey | null {
   };
 }
 
+function readProviderConsent(raw: unknown): StoredProviderConsent | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const pluginId = nonEmpty(value.pluginId);
+  const fingerprint = nonEmpty(value.fingerprint);
+  // Consent that doesn't read is no consent: the plugin asks again.
+  if (!pluginId || !fingerprint) return null;
+  return { pluginId, fingerprint, approvedAt: num(value.approvedAt) ?? 0 };
+}
+
 /**
  * Reads tolerate anything a hand edit or another build left; a record that
  * doesn't read is skipped here but kept on disk, through every write, so a
@@ -524,6 +724,7 @@ interface RawCloudHosts {
   accounts: unknown[];
   bindings: unknown[];
   machineKeys: unknown[];
+  providerConsents: unknown[];
 }
 
 export class CloudHostStore {
@@ -533,11 +734,18 @@ export class CloudHostStore {
 
   private raw(): RawCloudHosts {
     const value = this.backend.get("cloudHosts") as
-      { accounts?: unknown; bindings?: unknown; machineKeys?: unknown } | undefined;
+      | {
+          accounts?: unknown;
+          bindings?: unknown;
+          machineKeys?: unknown;
+          providerConsents?: unknown;
+        }
+      | undefined;
     return {
       accounts: Array.isArray(value?.accounts) ? value.accounts : [],
       bindings: Array.isArray(value?.bindings) ? value.bindings : [],
       machineKeys: Array.isArray(value?.machineKeys) ? value.machineKeys : [],
+      providerConsents: Array.isArray(value?.providerConsents) ? value.providerConsents : [],
     };
   }
 
@@ -565,13 +773,42 @@ export class CloudHostStore {
     return this.bindings().find((binding) => binding.hostId === hostId) ?? null;
   }
 
-  putAccount(account: StoredCloudAccount): void {
+  /** Writes the account and, in the same write, the consent it was connected under. */
+  putAccount(account: StoredCloudAccount, consent?: StoredProviderConsent): void {
     this.mutate((raw) => {
       const index = raw.accounts.findIndex(
         (entry) => (entry as { id?: unknown })?.id === account.id
       );
       if (index >= 0) raw.accounts[index] = account;
       else raw.accounts.push(account);
+      if (consent) putConsent(raw, consent);
+    });
+  }
+
+  /** The consent kept for a plugin's cloud providers, or null when there is none that reads. */
+  providerConsent(pluginId: string): StoredProviderConsent | null {
+    for (const entry of this.raw().providerConsents) {
+      const consent = readProviderConsent(entry);
+      if (consent?.pluginId === pluginId) return consent;
+    }
+    return null;
+  }
+
+  putProviderConsent(consent: StoredProviderConsent): void {
+    this.mutate((raw) => putConsent(raw, consent));
+  }
+
+  /** Forgets a plugin's consent; writes nothing when there was none. */
+  removeProviderConsent(pluginId: string): void {
+    const raw = this.raw();
+    const kept = raw.providerConsents.filter(
+      (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== pluginId
+    );
+    if (kept.length === raw.providerConsents.length) return;
+    this.mutate((next) => {
+      next.providerConsents = next.providerConsents.filter(
+        (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== pluginId
+      );
     });
   }
 
@@ -657,6 +894,11 @@ export class CloudHostStore {
     return () => this.listeners.delete(listener);
   }
 
+  /** Settings were read from disk again: what a listener keeps from them may have changed outside the app. */
+  reloaded(): void {
+    this.notify();
+  }
+
   private mutate(change: (raw: RawCloudHosts) => void): void {
     const raw = this.raw();
     change(raw);
@@ -665,7 +907,15 @@ export class CloudHostStore {
       accounts: raw.accounts as StoredCloudAccount[],
       bindings: raw.bindings as StoredCloudBinding[],
       machineKeys: raw.machineKeys as StoredMachineKey[],
+      // Left out until there is one, so a store with none reads as it did before.
+      ...(raw.providerConsents.length > 0
+        ? { providerConsents: raw.providerConsents as StoredProviderConsent[] }
+        : {}),
     });
+    this.notify();
+  }
+
+  private notify(): void {
     for (const listener of [...this.listeners]) {
       try {
         listener();
@@ -674,4 +924,14 @@ export class CloudHostStore {
       }
     }
   }
+}
+
+/** One consent per plugin: a newer one takes the place of whatever was kept for it. */
+function putConsent(raw: RawCloudHosts, consent: StoredProviderConsent): void {
+  raw.providerConsents = [
+    ...raw.providerConsents.filter(
+      (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== consent.pluginId
+    ),
+    consent,
+  ];
 }

@@ -842,6 +842,7 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.injectOwned",
   "terminal.sendKeysOwned",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "worktree.retireOwned",

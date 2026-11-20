@@ -7,8 +7,9 @@ import {
 import {
   combineDangerousModes,
   resolveDangerousMode,
-  resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
   type AgentSettingsEntry,
+  type PermissionLevel,
 } from "@shared/types";
 
 export type ScopeKind = "default" | "custom" | "project" | "ccr";
@@ -89,21 +90,31 @@ export function resolveScopeKind(
 }
 
 /**
- * Whether a launch skips permission prompts, resolved the way launching resolves it:
+ * What a launch does about permission prompts, resolved the way launching resolves it:
  * the preset's own mode wins unless it defers, then the agent's, and an agent left on
  * Default follows the global switch when it has a terminal bypass flag.
  */
+export function resolvePermissionLevel(
+  agentId: string,
+  entry: AgentSettingsEntry,
+  preset: AgentPreset | undefined,
+  globalSkipPermissions: boolean
+): PermissionLevel {
+  const mode = combineDangerousModes(
+    resolveDangerousMode(entry),
+    preset ? resolveDangerousMode(preset) : undefined
+  );
+  return resolveEffectivePermissionLevel({ dangerousMode: mode }, agentId, globalSkipPermissions);
+}
+
+/** Whether a launch skips every permission prompt; see {@link resolvePermissionLevel}. */
 export function resolveSkipPermissions(
   agentId: string,
   entry: AgentSettingsEntry,
   preset: AgentPreset | undefined,
   globalSkipPermissions: boolean
 ): boolean {
-  const mode = combineDangerousModes(
-    resolveDangerousMode(entry),
-    preset ? resolveDangerousMode(preset) : undefined
-  );
-  return resolveEffectiveBypass({ dangerousMode: mode }, agentId, globalSkipPermissions);
+  return resolvePermissionLevel(agentId, entry, preset, globalSkipPermissions) === "skip";
 }
 
 /**

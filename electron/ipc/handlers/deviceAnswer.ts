@@ -96,6 +96,7 @@ import type {
   DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
+  DecisionQuestionMarkResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
   GetDecisionQuestionImageByReferencePayload,
@@ -107,7 +108,13 @@ import type {
   GetDecisionDeclineResultPayload,
   GetDecisionFollowUpResultPayload,
   SendDecisionFollowUpPayload,
+  MarkDecisionQuestionsPayload,
 } from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -348,6 +355,28 @@ const getQuestionImageByReferenceSchema = z
   })
   .strict();
 
+// The client's page, `DECISION_QUESTION_MARKS_PER_CALL`, as a literal: this module loads at
+// startup, and importing a value from the Decisions types would add that module to it.
+const MARKS_PER_CALL = 500;
+
+// What the person did with questions' current asks on this computer (#17895), a page at a time.
+const markQuestionsSchema = z
+  .object({
+    action: z.enum(["seen", "clear", "restore"]),
+    questions: z
+      .array(
+        z
+          .object({
+            reference: questionReferenceSchema,
+            ask: z.string().min(1).max(256).nullable(),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(MARKS_PER_CALL),
+  })
+  .strict();
+
 const getQuestionSummariesByReferenceSchema = z
   .object({ references: z.array(questionReferenceSchema).max(64) })
   .strict();
@@ -401,6 +430,25 @@ const sendFollowUpSchema = z
   .strict();
 
 const getFollowUpResultSchema = z.object({ messageId: answerIdSchema }).strict();
+
+const involvementModeSchema = z.enum(["involve-early", "recommend"]);
+
+// The library's own input bounds (`SetInvolvementInput`), which it checks again before signing.
+const setInvolvementSchema = z
+  .object({
+    expectedRevision: z
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER - 1),
+    normalMode: involvementModeSchema,
+    consultCount: z.number().int().min(1).max(8),
+    override: z
+      .object({ mode: involvementModeSchema, until: z.iso.datetime({ precision: 3 }) })
+      .strict()
+      .nullable(),
+  })
+  .strict();
 
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
@@ -604,6 +652,20 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.cancelDecisionQuestionByReference(payload);
       }
     ),
+    // The person seeing, clearing or restoring questions (#17895): `shell`,
+    // kept on this computer whichever machine asked, and never sent to the
+    // relay, a Host or a terminal. No action, MCP tool or plugin surface
+    // reaches it. Never starts Decisions.
+    markQuestions: opValidated(
+      CHANNELS.DECISIONS_MARK_QUESTIONS,
+      markQuestionsSchema,
+      async (payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.markDecisionQuestions(payload);
+      }
+    ),
     // The person's answer to a question (#17101), from Daintree's own view:
     // `shell`, so this computer signs it with its owner key whichever machine
     // asked, and a Remote Host window's answer never reaches the Host, whose
@@ -682,6 +744,38 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionFollowUpResult(payload);
+      }
+    ),
+
+    // The person's involvement preference (#17237), from Daintree's own view:
+    // `shell`, so this computer reads its own copy and signs a change with its
+    // owner key whichever machine a window is attached to. There is no
+    // action, MCP tool or plugin surface for it: agents read the preference
+    // in force through `get_involvement` and never change it. Never starts
+    // Decisions.
+    getInvolvement: op(
+      CHANNELS.DECISIONS_GET_INVOLVEMENT,
+      async (): Promise<DecisionsInvolvementRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionsInvolvement();
+      }
+    ),
+    setInvolvement: opValidated(
+      CHANNELS.DECISIONS_SET_INVOLVEMENT,
+      setInvolvementSchema,
+      async (payload: SetDecisionsInvolvementPayload): Promise<DecisionsInvolvementSaveResult> => {
+        // An enrolled Remote Host serves its panes with the owner's switch off
+        // here, and its key never signs the person's preference.
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.setDecisionsInvolvement(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an

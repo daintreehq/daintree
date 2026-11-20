@@ -79,7 +79,7 @@ export interface AgentSettingsEntryLike {
   customFlags?: string;
   dangerousArgs?: string;
   dangerousEnabled?: boolean;
-  dangerousMode?: "on" | "off" | "inherit";
+  dangerousMode?: "on" | "off" | "inherit" | "auto";
   /** A retired alt-screen choice an older Daintree stored; launches ignore it (#16356). */
   inlineMode?: boolean | "on" | "off" | "inherit";
   shareClipboardDirectory?: boolean;

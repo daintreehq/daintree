@@ -4510,6 +4510,43 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     });
   });
 
+  it("keeps what was seen at the stop only while the pane stays held", () => {
+    const stopped = {
+      ...claudePane,
+      agentSessionId: "sess-c",
+      lastAgentObservation: { agentState: "waiting", at: 4_500 },
+      stopObservation: { agentState: "working", at: 4_000 },
+    };
+    // A launched pane will be stopped again by whatever ends it.
+    expect(respawn(stopped).stopObservation).toBeUndefined();
+
+    const held = respawn(stopped, { resumeOnRestart: "never" });
+    expect(held.stopObservation).toEqual({ agentState: "working", at: 4_000 });
+    const saved = serializePtyPanel({
+      ...claudePane,
+      ...held,
+      cols: 80,
+      rows: 24,
+    } as PtyPanelData);
+    expect(saved.stopObservation).toEqual({ agentState: "working", at: 4_000 });
+    // Once it runs, the next stop is Main's to record.
+    const started = serializePtyPanel({
+      ...claudePane,
+      ...held,
+      restoreRecovery: undefined,
+      cols: 80,
+      rows: 24,
+    } as PtyPanelData);
+    expect(started).not.toHaveProperty("stopObservation");
+
+    expect(
+      respawn(
+        { ...stopped, stopObservation: { agentState: "directing", at: 4_000 } },
+        { resumeOnRestart: "never" }
+      ).stopObservation
+    ).toBeUndefined();
+  });
+
   it("takes the newer observation once a resumed pane has run again", () => {
     const result = respawn(
       {
@@ -4781,5 +4818,56 @@ describe("first prompt restore (#14592)", () => {
       expect(restored?.text.length).toBe(8_000);
       expect(restored?.truncated).toBe(true);
     });
+  });
+});
+
+describe("update-installed observation on restore (#17905)", () => {
+  const observed = { observedAt: 1_700_000_000_000, namesRestart: true };
+
+  // A view attached after the footer appeared learns of it from the host's
+  // record alone: nothing replays the event it missed.
+  it("carries the host's observation through every restore path", () => {
+    const record = { id: "t1", cwd: "/p", kind: "terminal" as const, title: "Claude" };
+    expect(
+      buildArgsForBackendTerminal(
+        { ...record, updateInstalled: observed },
+        { id: "t1", location: "grid" },
+        "/p"
+      ).updateInstalled
+    ).toEqual(observed);
+    expect(
+      buildArgsForReconnectedFallback(
+        { ...record, updateInstalled: observed },
+        { id: "t1", location: "grid" },
+        "/p"
+      ).updateInstalled
+    ).toEqual(observed);
+    expect(
+      buildArgsForOrphanedTerminal({ ...record, updateInstalled: observed }, "/p").updateInstalled
+    ).toEqual(observed);
+  });
+
+  it("restores none where the host has none", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.updateInstalled).toBeUndefined();
+  });
+
+  it("is never persisted with the pane", () => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      kind: "terminal",
+      title: "Claude",
+      cwd: "/p",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "claude",
+      updateInstalled: observed,
+    } as PtyPanelData);
+    expect(JSON.stringify(snapshot)).not.toContain("updateInstalled");
   });
 });

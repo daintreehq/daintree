@@ -59,6 +59,21 @@ describe("useRestartAccountChoices (#16040)", () => {
     ]);
   });
 
+  it("offers the default login by the name the user gave it, and follows a rename (#17080)", () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { accounts: ACCOUNTS, defaultLoginName: "Work" } } },
+    });
+    const { result } = renderHook(() => useRestartAccountChoices("codex", "company"));
+    expect(result.current[0]).toEqual({ id: null, name: "Work · default login" });
+
+    act(() => {
+      useAgentSettingsStore.setState({
+        settings: { agents: { codex: { accounts: ACCOUNTS, defaultLoginName: "Home" } } },
+      });
+    });
+    expect(result.current[0]).toEqual({ id: null, name: "Home · default login" });
+  });
+
   it("leaves the default login out for a pane already on it", () => {
     withAccounts("codex", ACCOUNTS);
     const { result } = renderHook(() => useRestartAccountChoices("codex", undefined));

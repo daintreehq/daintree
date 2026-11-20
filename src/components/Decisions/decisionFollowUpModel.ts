@@ -4,7 +4,7 @@ import type {
   DecisionQuestionContent,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
-import { formatBytes, isAnswerable, textBytes } from "./decisionComposeModel";
+import { formatTextExcess, isAnswerable, textBytes } from "./decisionComposeModel";
 
 /**
  * The person's follow-up on a question, written here (#17238): when it can
@@ -66,7 +66,11 @@ export function followUpVerdict(draft: string): FollowUpVerdict {
   const textOver = Math.max(0, textBytes(draft) - FOLLOW_UP_TEXT_BYTES);
   if (draft.trim().length === 0) return { canSend: false, hint: null, textOver };
   if (textOver > 0) {
-    return { canSend: false, hint: `Shorten your follow-up by ${formatBytes(textOver)}`, textOver };
+    return {
+      canSend: false,
+      hint: `Shorten your follow-up by ${formatTextExcess(textOver)}`,
+      textOver,
+    };
   }
   return { canSend: true, hint: null, textOver };
 }

@@ -2,7 +2,9 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import concurrently from "concurrently";
+import { BUILD_READY_FILE, removeBuildReadyMarker } from "./lib/build-ready-gate.mjs";
 
 const DEFAULT_PORT = 5173;
 const DEFAULT_HOST = "127.0.0.1";
@@ -46,7 +48,11 @@ async function findAvailablePort(host, startPort) {
   );
 }
 
-async function main() {
+export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) {
+  // A marker left by the last session would let wait-on start Electron on old
+  // output before the watcher's own startup gets to remove it.
+  removeBuildReadyMarker(readyFile);
+
   const host = process.env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
   const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);
@@ -91,7 +97,7 @@ async function main() {
         name: "vite",
       },
       {
-        command: `wait-on dist-electron/.build-ready.js tcp:${host}:${port} && npm run dev:electron`,
+        command: `wait-on ${BUILD_READY_FILE} tcp:${host}:${port} && npm run dev:electron`,
         env: sharedEnv,
         name: "electron",
       },
@@ -114,22 +120,29 @@ async function main() {
   }
 }
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    interrupted = true;
-  });
-}
+// `import.meta.main` is undefined on Node 24.0 and 24.1, which the engines range admits.
+const isEntry =
+  import.meta.main ??
+  (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href);
 
-main().catch((error) => {
-  if (
-    interrupted ||
-    (Array.isArray(error) &&
-      error.length > 0 &&
-      error.every((entry) => entry?.killed || entry?.exitCode === "SIGTERM"))
-  ) {
-    process.exit(0);
+if (isEntry) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      interrupted = true;
+    });
   }
 
-  console.error("[dev] Failed to start development environment:", error);
-  process.exit(1);
-});
+  main().catch((error) => {
+    if (
+      interrupted ||
+      (Array.isArray(error) &&
+        error.length > 0 &&
+        error.every((entry) => entry?.killed || entry?.exitCode === "SIGTERM"))
+    ) {
+      process.exit(0);
+    }
+
+    console.error("[dev] Failed to start development environment:", error);
+    process.exit(1);
+  });
+}

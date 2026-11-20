@@ -412,7 +412,7 @@ describe("ProjectPulseCard background refresh", () => {
     expect(visible).toContain("Couldn't refresh");
     const name = footer.getAttribute("aria-label") ?? "";
     expect(name).toMatch(/^Retry/);
-    expect(name.toLowerCase()).toContain(visible.toLowerCase());
+    expect(name.toLowerCase()).toContain(visible.replace(" · ", ", ").toLowerCase());
     // A retry is still scheduled, so the region stays quiet for now.
     expect(usePulseStore.getState().getRetryCount("wt1")).toBe(1);
     expect(liveRegionText()).toBe("");

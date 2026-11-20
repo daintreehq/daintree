@@ -28,6 +28,12 @@ const loads = vi.hoisted(() => ({
   opening: null as Promise<void> | null,
   // Why the stores stopped writing; null while they write.
   faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
+  // While set, every store opened holds these rows and meta, and a meta write commits (#17895).
+  persisted: null as null | {
+    rows: unknown[];
+    meta: Map<string, string>;
+    commits: Set<() => void>;
+  },
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => vi.fn());
@@ -438,23 +444,35 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
+          const persisted = loads.persisted;
           return {
             close: () => loads.closing ?? Promise.resolve(),
-            onCommit: () => () => {},
+            onCommit: (listener: () => void) => {
+              persisted?.commits.add(listener);
+              return () => persisted?.commits.delete(listener);
+            },
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
-            listQuestions: async () => [],
-            ...(notificationRecord.readable
+            listQuestions: async () => persisted?.rows ?? [],
+            ...(persisted
               ? {
-                  getMeta: async (key: string) => {
-                    if (key !== "daintree:notified-questions") return null;
-                    await notificationRecord.read;
-                    return "[]";
+                  getMeta: async (key: string) => persisted.meta.get(key) ?? null,
+                  setMeta: async (key: string, value: string) => {
+                    persisted.meta.set(key, value);
+                    for (const listener of [...persisted.commits]) listener();
                   },
-                  setMeta: async () => {},
                 }
-              : {}),
+              : notificationRecord.readable
+                ? {
+                    getMeta: async (key: string) => {
+                      if (key !== "daintree:notified-questions") return null;
+                      await notificationRecord.read;
+                      return "[]";
+                    },
+                    setMeta: async () => {},
+                  }
+                : {}),
           } as never;
         },
       });
@@ -526,10 +544,12 @@ import {
   cancelSetupCheck,
   cancelDecisionsModelEvaluation,
   clearDecisionsModelHistory,
+  declineDecisionQuestion,
   getDecisionsModel,
   getDecisionsService,
   getDecisionsStatus,
   listHosts,
+  markDecisionQuestions,
   getSetupCheck,
   noteHostIdentity,
   onDecisionsHostRuntimeChanged,
@@ -558,6 +578,7 @@ import type { AnswerDelivery } from "../answerDelivery.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionLastRead,
   DecisionQuestionReference,
   DecisionQuestionList,
   DecisionQuestionListItem,
@@ -568,6 +589,10 @@ import {
   setDecisionQuestions,
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
+import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
+
+/** A question in Needs you as the owner lists it before the person has marked it (#17895). */
+const UNMARKED = { ask: null, seen: false, cleared: false };
 
 const RELAY = {
   relayOrigin: "https://relay.example.com",
@@ -608,6 +633,7 @@ describe("Decisions entry", () => {
     notificationRecord.read = Promise.resolve();
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
+    loads.persisted = null;
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
@@ -720,7 +746,9 @@ describe("Decisions entry", () => {
     try {
       statusView.send.mockClear();
       publish([item("q_quit_000001")]);
-      expect(getDecisionQuestionList().questions).toEqual([item("q_quit_000001")]);
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...item("q_quit_000001"), inbox: UNMARKED },
+      ]);
       expect(listPushes()).toHaveLength(1);
 
       await stopDecisions();
@@ -799,6 +827,7 @@ describe("Decisions entry", () => {
       },
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
+      lastHostRead: () => null,
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(
@@ -809,10 +838,10 @@ describe("Decisions entry", () => {
       publish([own]);
       // Oldest first across every machine, each Host's named.
       expect(getDecisionQuestionList().questions).toEqual([
-        { ...theirs, remoteHost: studio },
-        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true } },
-        own,
-        { ...theirsLater, remoteHost: studio },
+        { ...theirs, remoteHost: studio, inbox: UNMARKED },
+        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true }, inbox: UNMARKED },
+        { ...own, inbox: UNMARKED },
+        { ...theirsLater, remoteHost: studio, inbox: UNMARKED },
       ]);
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
@@ -850,6 +879,162 @@ describe("Decisions entry", () => {
       expect(getDecisionQuestionList().questions).toEqual([]);
     } finally {
       withdraw();
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists a mark once it commits, and with the first list after Decisions starts again (#17895)", async () => {
+    loads.persisted = {
+      rows: [row(1, { origin: { host_id: RELAY.hostId } })],
+      meta: new Map(),
+      commits: new Set(),
+    };
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    try {
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual(UNMARKED)
+      );
+      const reference = getDecisionQuestionList().questions[0]!.reference;
+
+      expect(
+        await markDecisionQuestions({ action: "clear", questions: [{ reference, ask: null }] })
+      ).toEqual({ result: "marked", marked: 1 });
+      // The write's commit reads the list again: nothing else republishes it.
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+          ask: null,
+          seen: false,
+          cleared: true,
+        })
+      );
+
+      await setDecisionsEnabled(false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      const heard: DecisionQuestionList[] = [];
+      const off = onDecisionQuestionsChanged((list) => heard.push(list));
+      try {
+        await setDecisionsEnabled(true);
+        await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+        // Never listed unmarked on the way back: the marks come with the first read of the store.
+        expect(heard.map((list) => list.questions[0]?.inbox?.cleared)).toEqual(
+          heard.map(() => true)
+        );
+      } finally {
+        off();
+      }
+    } finally {
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("records the person's marks on this computer only, each at the ask it was shown with (#17895)", async () => {
+    expect(
+      await markDecisionQuestions({
+        action: "seen",
+        questions: [
+          {
+            reference: { hostId: RELAY.hostId, projectId: "p", terminalId: "t", questionId: "q" },
+            ask: null,
+          },
+        ],
+      })
+    ).toEqual({ result: "not-running" });
+
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const meta = new Map<string, string>();
+    Object.assign(service.getStore()!, {
+      getMeta: async (key: string) => meta.get(key) ?? null,
+      setMeta: async (key: string, value: string) => void meta.set(key, value),
+    });
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean,
+      inbox?: { asks: ReadonlyMap<string, string | null>; marks: ReadonlyMap<string, unknown> }
+    ) => void;
+    const own: DecisionQuestionListItem = {
+      reference: {
+        hostId: RELAY.hostId,
+        projectId: "project-1",
+        terminalId: "pane-a",
+        questionId: "q_own_000001",
+      },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    };
+    const asks = new Map([[own.reference.questionId, "note-1"]]);
+    try {
+      publish([own], true, { asks, marks: new Map() });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-1",
+        seen: false,
+        cleared: false,
+      });
+
+      // Shown before the agent's follow-up: what it asks now wasn't seen, so nothing is kept.
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: null }],
+        })
+      ).toEqual({ result: "marked", marked: 0 });
+      expect(meta.has(QUESTION_MARKS_META_KEY)).toBe(false);
+
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: "note-1" }],
+        })
+      ).toEqual({ result: "marked", marked: 1 });
+      const record = await readQuestionMarks(service.getStore()!);
+      expect([...record.values()]).toEqual([
+        {
+          hostId: RELAY.hostId,
+          questionId: "q_own_000001",
+          ask: "note-1",
+          seen: false,
+          cleared: true,
+        },
+      ]);
+
+      // Listed with what the store now reads, it is cleared until it asks something new.
+      publish([own], true, { asks, marks: record });
+      expect(getDecisionQuestionList().questions[0]?.inbox?.cleared).toBe(true);
+      publish([own], true, {
+        asks: new Map([[own.reference.questionId, "note-2"]]),
+        marks: record,
+      });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-2",
+        seen: false,
+        cleared: false,
+      });
+
+      // A store that can't save it changes nothing, and says so.
+      Object.assign(service.getStore()!, {
+        setMeta: async () => {
+          throw new Error("disk full");
+        },
+      });
+      expect(
+        await markDecisionQuestions({
+          action: "seen",
+          questions: [{ reference: own.reference, ask: "note-2" }],
+        })
+      ).toEqual({ result: "failed" });
+    } finally {
       setDecisionQuestions([]);
     }
   });
@@ -1445,6 +1630,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          lastHostRead: () => null,
           ...over,
         });
       }
@@ -1541,6 +1727,157 @@ describe("Decisions entry", () => {
             result: "cancelling",
           });
           expect(cancelHostQuestion.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("answers a read while the Host's link is down with what this computer last read of it (#17946)", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const read: DecisionQuestionLastRead = {
+          result: "read",
+          revision: 3,
+          alias: 7,
+          readAt: 1_000,
+        };
+        let last: DecisionQuestionLastRead | null = read;
+        const lastHostRead = vi.fn((_reference: DecisionQuestionReference) => last);
+        const withdraw = publishHostPort({
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          lastHostRead,
+        });
+        try {
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected", lastRead: read });
+          // Why it can't be dismissed travels with it too.
+          for (const why of [{ result: "not-read" }, { result: "not-sent" }] as const) {
+            last = why;
+            await expect(
+              getDecisionQuestionContentByReference({ reference: ON_HOST })
+            ).resolves.toEqual({ result: "host-not-connected", lastRead: why });
+          }
+          last = null;
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected" });
+          // A read that went out and got no answer says nothing of the Host being away.
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
+          outcome = { ok: true, value: { result: "unreadable" } };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "unreadable" });
+          expect(lastHostRead.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("signs an owner's decline of a Host's question only while a Host reported to this owner names it (#17946)", async () => {
+        await running(null);
+        const declineQuestion = vi
+          .spyOn(peekDecisionsService()!, "declineQuestion")
+          .mockResolvedValue({
+            result: "submitted",
+            declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+            outcome: { status: "queued" },
+          });
+        let hosts: DecisionsHostQuestions[] = [];
+        const withdraw = publishHostPort({ hostQuestions: () => hosts });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+          expectedRevision: 3,
+        };
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        try {
+          // A Host removed, or reported to another owner identity than this one: nothing is signed.
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // Another Host reported here names other questions.
+          hosts = [{ ...studio, hostId: "lab-01", questionHostId: "qhost_lab_0001" }];
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          expect(declineQuestion).not.toHaveBeenCalled();
+
+          // Reported to this owner, connected or not: the relay holds it to its own record.
+          hosts = [studio];
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // This computer's own question is its store's to check, whatever its Hosts report.
+          hosts = [];
+          const own = { ...decline, reference: OWN };
+          await expect(declineDecisionQuestion(own)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [own]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never sends a Host question's decline again under another owner identity than it was first sent under (#17946)", async () => {
+        await running(null);
+        const current = peekDecisionsService()!;
+        const declineQuestion = vi.spyOn(current, "declineQuestion").mockResolvedValue({
+          result: "submitted",
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          outcome: { status: "queued" },
+        });
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        // The same Host, under the same id, is reported to whichever identity this computer holds.
+        const withdraw = publishHostPort({ hostQuestions: () => [studio] });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          expectedRevision: 3,
+        };
+        try {
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Local data deleted and another installation set up, with the old dismissal still followed.
+          const settings = current.getSettings()!;
+          const getSettings = vi
+            .spyOn(current, "getSettings")
+            .mockReturnValue({ ...settings, installationId: "inst_87654321" });
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // A dismissal made under this identity goes as any other.
+          const fresh = { ...decline, declineId: "0190f0aa-1111-4222-8333-44445555aaac" };
+          await expect(declineDecisionQuestion(fresh)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Back under the first identity, its own decline may be sent again, as the same decline.
+          getSettings.mockRestore();
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [fresh], [decline]]);
         } finally {
           withdraw();
         }
@@ -1672,6 +2009,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -2422,6 +2760,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -4397,6 +4736,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -4443,6 +4783,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

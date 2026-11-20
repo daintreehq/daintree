@@ -21,7 +21,7 @@ import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfir
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
 import { restartPanesOnPreset } from "@/components/Terminal/restartPanesOnPreset";
 
@@ -108,6 +108,26 @@ export function useAccountSwitchPaneIds(notice: AccountSwitchNoticeState | null)
   );
 }
 
+/**
+ * The account's name as it is saved now (#17080): a rename made while a
+ * switch is on offer or awaiting its confirm shows there too, while the id the
+ * switch moves to stays put. A removed account keeps the name it was offered under.
+ */
+export function useCurrentAccountName(
+  agentId: string,
+  account: RestartAccountChoice | undefined
+): string | undefined {
+  return useAgentSettingsStore((state) => {
+    if (!account) return undefined;
+    const entry = state.settings?.agents?.[agentId];
+    if (account.id === null) return defaultLoginLabel(entry?.defaultLoginName);
+    return (
+      sanitizeAgentAccounts(entry?.accounts).find((saved) => saved.id === account.id)?.name ??
+      account.name
+    );
+  });
+}
+
 export function limitedPanesLabel(count: number, agentName: string): string {
   return `${pluralize(count, `${agentName} terminal`)} stopped on a usage limit`;
 }
@@ -130,6 +150,7 @@ export function AccountSwitchNoticeItems({
   onSwitch: () => void;
   onKeep: () => void;
 }) {
+  const accountName = useCurrentAccountName(notice.agentId, notice.account) ?? notice.account.name;
   if (paneIds.length === 0) return null;
   return (
     <>
@@ -138,7 +159,7 @@ export function AccountSwitchNoticeItems({
         {limitedPanesLabel(paneIds.length, agentName)}
       </div>
       <DropdownMenuItem inset onSelect={onSwitch}>
-        {switchPanesLabel(paneIds.length, notice.account.name)}
+        {switchPanesLabel(paneIds.length, accountName)}
       </DropdownMenuItem>
       <DropdownMenuItem
         inset
@@ -296,8 +317,11 @@ export function MoveTerminalsToAccountDialog({
   const savedAccounts = useAgentSettingsStore(
     (state) => state.settings?.agents?.[agentId]?.accounts
   );
+  const defaultLoginName = useAgentSettingsStore(
+    (state) => state.settings?.agents?.[agentId]?.defaultLoginName
+  );
   const choices: RestartAccountChoice[] = [
-    { id: null, name: "Default login" },
+    { id: null, name: defaultLoginLabel(defaultLoginName) },
     ...sanitizeAgentAccounts(savedAccounts).map(({ id, name }) => ({ id, name })),
   ];
   const [request, setRequest] = useState<AccountSwitchRequest | null>(() =>
@@ -360,6 +384,7 @@ function AccountSwitchConfirm({
 }) {
   const labelIdPrefix = useId();
   const keepId = useId();
+  const accountName = useCurrentAccountName(agentId, request?.account) ?? "";
   const [keepConversation, setKeepConversation] = useState(false);
   // One answer for the batch: every pane here is launched by the same agent.
   const canKeep = supportsConversationKeepingSwitch(agentId);
@@ -398,6 +423,7 @@ function AccountSwitchConfirm({
   const handleConfirm = () => {
     if (request === null || count === 0) return;
     const { account } = request;
+    const name = accountName;
     onClose();
     void (async () => {
       const chosenIds = chosen.map((pane) => pane.id);
@@ -415,7 +441,7 @@ function AccountSwitchConfirm({
       if (restarting.length === 0) return;
       await restartPanesOnPreset(
         restarting,
-        account.name,
+        name,
         (pane) =>
           actionService.dispatch(
             "terminal.restartOnAccount",
@@ -427,7 +453,7 @@ function AccountSwitchConfirm({
             },
             { source: "user" }
           ),
-        (restarted) => `Restarting ${pluralize(restarted, "terminal")} on ${account.name}`
+        (restarted) => `Restarting ${pluralize(restarted, "terminal")} on ${name}`
       );
     })();
   };
@@ -436,8 +462,8 @@ function AccountSwitchConfirm({
     request === null
       ? `Move ${agentName} terminals to which account?`
       : panes.length === 0
-        ? `Move ${agentName} terminals to '${request.account.name}'?`
-        : `Restart ${pluralize(count, "terminal")} on '${request.account.name}'?`;
+        ? `Move ${agentName} terminals to '${accountName}'?`
+        : `Restart ${pluralize(count, "terminal")} on '${accountName}'?`;
 
   return (
     <ConfirmDialog
@@ -467,7 +493,7 @@ function AccountSwitchConfirm({
       {accountPicker}
       {request !== null && panes.length === 0 && (
         <p role="status" className="mt-3 text-sm text-text-secondary">
-          No running {agentName} terminal to move to {request.account.name}
+          No running {agentName} terminal to move to {accountName}
         </p>
       )}
       {panes.length > 0 && (

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ProjectResourceBadge } from "@/components/Project/ProjectResourceBadge";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
+import { SidebarAgentUsage } from "./SidebarAgentUsage";
 
 /**
  * The sidebar's footer row: one ambient readout of what Daintree is doing.
@@ -19,9 +20,18 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
  * the mark would have read idle through a whole session on battery. The badge
  * reads agent activity directly instead; the hold is passed only so the popover
  * can explain itself.
+ *
+ * Agent usage sits on its own lines right above it (#17318), one per agent
+ * with a reading and none otherwise: beside the readout in a 200px row it
+ * would cut both down to a few characters.
  */
 export function SidebarStatusBar({ trailing }: { trailing?: ReactNode } = {}) {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);
 
-  return <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />;
+  return (
+    <>
+      <SidebarAgentUsage />
+      <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />
+    </>
+  );
 }

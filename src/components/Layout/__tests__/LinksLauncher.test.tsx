@@ -36,10 +36,16 @@ const h = vi.hoisted(() => ({
   getDeployments: vi.fn<
     (cwd: string, target: DeploymentTarget) => Promise<{ deployments: ForgeDeployment[] } | null>
   >(() => Promise.resolve({ deployments: [] })),
-  openUrlExternally: vi.fn<(url: string, logPrefix: string) => void>(),
+  openLinkUrlExternally: vi.fn<(url: string) => Promise<void>>(() => Promise.resolve()),
+  copyWithToast: vi.fn<(label: string, value: string) => void>(),
   listeners: new Set<() => void>(),
   restart: vi.fn((_target: unknown) => Promise.resolve()),
   stop: vi.fn((_target: unknown) => Promise.resolve()),
+  /** Whether a server's preview is a panel of this view. */
+  devServerInView: true,
+  openDevServer: vi.fn<(session: DevPreviewSessionState) => Promise<void>>(() => Promise.resolve()),
+  openDevServerExternally: vi.fn<(url: string) => Promise<void>>(() => Promise.resolve()),
+  expectHandoff: vi.fn(),
 }));
 
 function notify(): void {
@@ -103,8 +109,18 @@ vi.mock("@/hooks", () => ({
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("@/services/openLinkUrl", () => ({
   openLinkUrl: (url: string) => h.openLinkUrl(url),
-  openUrlExternally: (url: string, logPrefix: string) => h.openUrlExternally(url, logPrefix),
+  openLinkUrlExternally: (url: string) => h.openLinkUrlExternally(url),
   opensInPanel: (url: string) => url.startsWith("http://localhost"),
+}));
+vi.mock("@/lib/copyWithToast", () => ({
+  copyWithToast: (label: string, value: string) => h.copyWithToast(label, value),
+}));
+vi.mock("@/services/openDevServer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/openDevServer")>()),
+  devServerPanelInView: (session: DevPreviewSessionState) =>
+    h.devServerInView ? { id: session.panelId } : undefined,
+  openDevServer: (session: DevPreviewSessionState) => h.openDevServer(session),
+  openDevServerExternally: (url: string) => h.openDevServerExternally(url),
 }));
 vi.mock("@/components/Terminal/contentGridFocus", () => ({
   enterFocusedPanel: (id: string | null) => h.enterFocusedPanel(id),
@@ -242,6 +258,12 @@ function rows(): HTMLElement[] {
   return Array.from(launcher()?.querySelectorAll<HTMLElement>("li > button") ?? []);
 }
 
+/** The rows of the launcher's section whose heading matches `heading`. */
+function sectionRows(heading: RegExp): HTMLElement[] {
+  const section = within(launcher()!).getByRole("region", { name: heading });
+  return Array.from(section.querySelectorAll<HTMLElement>("li > button"));
+}
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -252,6 +274,9 @@ beforeEach(() => {
   h.enterFocusedPanel.mockClear();
   h.restart.mockClear();
   h.stop.mockClear();
+  h.devServerInView = true;
+  h.openDevServer.mockReset().mockResolvedValue(undefined);
+  h.openDevServerExternally.mockReset().mockResolvedValue(undefined);
   h.links = { projectLinks: [STAGING, LOCAL], declaredLinks: [], globalLinks: [DOCS] };
   h.devSessions = { sessions: [], hydrated: true, fetchError: false };
   h.pullRequest = null;
@@ -260,7 +285,8 @@ beforeEach(() => {
   h.branchTarget = null;
   h.getDeployments.mockReset();
   h.getDeployments.mockImplementation(() => Promise.resolve({ deployments: [] }));
-  h.openUrlExternally.mockClear();
+  h.openLinkUrlExternally.mockClear();
+  h.copyWithToast.mockClear();
   Reflect.set(window, "electron", { devPreview: { restart: h.restart, stop: h.stop } });
   useLinksLauncherStore.setState({
     opening: null,
@@ -641,6 +667,61 @@ describe("dev servers in the launcher", () => {
     expect(launcher()).not.toBeNull();
   });
 
+  it("opens a running server from its row, closing and leaving focus with the panel it brought forward", async () => {
+    const server = devSession({ url: "http://localhost:5824" });
+    h.devSessions.sessions = [server];
+    const panel = document.createElement("textarea");
+    document.body.append(panel);
+    let openingWhenOpened: unknown = "not opened";
+    h.openDevServer.mockImplementation(() => {
+      openingWhenOpened = useLinksLauncherStore.getState().opening;
+      panel.focus();
+      return Promise.resolve();
+    });
+    try {
+      await openLauncher();
+      const [row] = sectionRows(/^Dev servers/);
+      expect(describeRow(row!)).toEqual({
+        name: "feature-foo",
+        description: "Running localhost:5824",
+      });
+      await act(async () => {
+        fireEvent.click(row!, { detail: 1 });
+      });
+      await flush();
+
+      expect(h.openDevServer).toHaveBeenCalledTimes(1);
+      expect(h.openDevServer).toHaveBeenCalledWith(server);
+      // Closed first, so the panel's focus isn't the launcher's to take back.
+      expect(openingWhenOpened).toBeNull();
+      expect(h.openLinkUrl).not.toHaveBeenCalled();
+      expect(launcher()).toBeNull();
+      expect(document.activeElement).toBe(panel);
+    } finally {
+      panel.remove();
+    }
+  });
+
+  it("sends a running server to the system browser from its own button, and closes", async () => {
+    h.devSessions.sessions = [devSession({ url: "http://localhost:5824" })];
+    await openLauncher();
+    await act(async () => {
+      fireEvent.click(
+        within(launcher()!).getByRole("button", {
+          name: "Open dev server for feature-foo in external browser",
+        }),
+        { detail: 1 }
+      );
+    });
+    await flush();
+
+    expect(h.openDevServerExternally).toHaveBeenCalledTimes(1);
+    expect(h.openDevServerExternally).toHaveBeenCalledWith("http://localhost:5824");
+    expect(h.openDevServer).not.toHaveBeenCalled();
+    expect(h.openLinkUrlExternally).not.toHaveBeenCalled();
+    expect(launcher()).toBeNull();
+  });
+
   it("shows them alone, with no prompt to add a link, when there are no links", async () => {
     h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
     h.devSessions.sessions = [devSession({ status: "error", terminalId: null })];
@@ -785,7 +866,7 @@ describe("the active worktree's pull request in the launcher", () => {
     ]);
     expect(h.getChecks).toHaveBeenCalledTimes(1);
     expect(h.getChecks).toHaveBeenCalledWith("/repo/wt-1", 42);
-    expect(rows().slice(3).map(describeRow)).toEqual([
+    expect(sectionRows(/^Pull request/).map(describeRow)).toEqual([
       { name: "Fix login", description: "PR #42 · Open" },
       { name: "unit", description: "Failed" },
       { name: "e2e", description: "Running" },
@@ -1160,9 +1241,8 @@ describe("the active worktree's deployments in the launcher", () => {
       fireEvent.click(storybook, { detail: 1 });
     });
     await flush();
-    expect(h.openUrlExternally).toHaveBeenCalledWith(
-      "https://storybook-git-login.example.dev/?path=/docs",
-      expect.any(String)
+    expect(h.openLinkUrlExternally).toHaveBeenCalledWith(
+      "https://storybook-git-login.example.dev/?path=/docs"
     );
     expect(h.openLinkUrl).not.toHaveBeenCalled();
     expect(launcher()).toBeNull();
@@ -1341,6 +1421,8 @@ describe("the active worktree's deployments in the launcher", () => {
         devSessions={{ sessions: [], hydrated: true, fetchError: false }}
         onOpen={() => {}}
         onOpenExternal={() => {}}
+        onOpenDevServer={() => {}}
+        onOpenDevServerExternally={() => {}}
         onManage={() => {}}
       />
     );
@@ -1388,6 +1470,234 @@ describe("the active worktree's deployments in the launcher", () => {
     expect(storybook.isConnected).toBe(false);
     expect(describeRow(document.activeElement as HTMLElement).name).toBe("Staging");
     expect(launcher()).not.toBeNull();
+  });
+});
+
+describe("a row's menu in the launcher", () => {
+  async function openLauncher() {
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+  }
+
+  function rowNamed(name: string): HTMLElement {
+    const row = rows().find((button) => describeRow(button).name === name);
+    if (row === undefined) throw new Error(`No row named ${name}`);
+    return row;
+  }
+
+  function menuItems(): string[] {
+    return screen.queryAllByRole("menuitem").map((item) => item.textContent ?? "");
+  }
+
+  async function rightClick(target: HTMLElement) {
+    await act(async () => {
+      fireEvent.contextMenu(target, { clientX: 10, clientY: 10 });
+    });
+    await flush();
+  }
+
+  async function pick(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name }), { detail: 1 });
+    });
+    await flush();
+  }
+
+  it("offers both actions on every row with an address, and neither on a row without one", async () => {
+    h.links = { projectLinks: [STAGING], declaredLinks: [HOMEPAGE], globalLinks: [DOCS] };
+    h.pullRequest = PR;
+    h.getChecks.mockResolvedValue({ checks: CHECKS });
+    h.getDeployments.mockResolvedValue({ deployments: DEPLOYMENTS });
+    h.devSessions.sessions = [
+      devSession(),
+      devSession({ panelId: "panel-2", status: "starting", url: null, terminalId: "t-2" }),
+    ];
+    await openLauncher();
+
+    const named = ["Staging", "Homepage", "Team docs", "Fix login", "unit", "Storybook"];
+    for (const name of [...named, "feature-foo · panel 1"]) {
+      await rightClick(rowNamed(name));
+      expect(menuItems(), name).toEqual(["Open in external browser", "Copy URL"]);
+      await act(async () => {
+        fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      });
+      await flush();
+      expect(screen.queryByRole("menu"), name).toBeNull();
+      // Dismissing the row's menu leaves the launcher open.
+      expect(launcher(), name).not.toBeNull();
+    }
+
+    // The deployment still going out, and the server still coming up.
+    const addressless = Array.from(launcher()!.querySelectorAll("li")).filter(
+      (li) => li.querySelector(":scope > button") === null
+    );
+    expect(addressless.map((li) => li.textContent?.slice(0, 16))).toEqual([
+      expect.stringMatching(/^Preview/),
+      expect.stringMatching(/^feature-foo · pa/),
+    ]);
+    for (const li of addressless) {
+      await rightClick(li.querySelector<HTMLElement>(":scope > div")!);
+      expect(menuItems()).toEqual([]);
+    }
+  });
+
+  it("copies a link's whole address, not the host it shows, and stays open", async () => {
+    await openLauncher();
+    expect(describeRow(rowNamed("Staging")).description).toContain("staging.example.com");
+
+    await rightClick(rowNamed("Staging"));
+    await pick("Copy URL");
+
+    expect(h.copyWithToast).toHaveBeenCalledTimes(1);
+    expect(h.copyWithToast).toHaveBeenCalledWith("URL", "https://staging.example.com/app");
+    expect(h.openLinkUrl).not.toHaveBeenCalled();
+    expect(h.openLinkUrlExternally).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(launcher()).not.toBeNull();
+  });
+
+  it("opens a local link in the system browser rather than a panel, and closes", async () => {
+    await openLauncher();
+    await rightClick(rowNamed("Local app"));
+    await pick("Open in external browser");
+
+    expect(h.openLinkUrlExternally).toHaveBeenCalledTimes(1);
+    expect(h.openLinkUrlExternally).toHaveBeenCalledWith("http://localhost:3000/");
+    expect(h.openLinkUrl).not.toHaveBeenCalled();
+    expect(useLinksLauncherStore.getState().opening).toBeNull();
+    expect(launcher()).toBeNull();
+  });
+
+  it("opens the pull request, a check and a deployment through the same system-browser path", async () => {
+    h.pullRequest = PR;
+    h.getChecks.mockResolvedValue({ checks: CHECKS });
+    h.getDeployments.mockResolvedValue({ deployments: DEPLOYMENTS });
+    const expected: Array<[string, string]> = [
+      ["Fix login", "https://github.com/acme/app/pull/42"],
+      ["unit", "https://ci.example.com/unit"],
+      ["Storybook", "https://storybook-git-login.example.dev/?path=/docs"],
+    ];
+    for (const [name, url] of expected) {
+      h.openLinkUrlExternally.mockClear();
+      await openLauncher();
+      await rightClick(rowNamed(name));
+      await pick("Open in external browser");
+      expect(h.openLinkUrlExternally, name).toHaveBeenCalledTimes(1);
+      expect(h.openLinkUrlExternally, name).toHaveBeenCalledWith(url);
+      expect(launcher(), name).toBeNull();
+      cleanup();
+    }
+    expect(h.openLinkUrl).not.toHaveBeenCalled();
+  });
+
+  it("sends a running server to the system browser through its own path, and copies its whole address", async () => {
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
+    h.devSessions.sessions = [devSession({ url: "http://localhost:5824/admin" })];
+    await openLauncher();
+    const server = rowNamed("feature-foo");
+    expect(describeRow(server).description).not.toContain("/admin");
+
+    await rightClick(server);
+    await pick("Copy URL");
+    expect(h.copyWithToast).toHaveBeenCalledTimes(1);
+    expect(h.copyWithToast).toHaveBeenCalledWith("URL", "http://localhost:5824/admin");
+    expect(launcher()).not.toBeNull();
+
+    await rightClick(rowNamed("feature-foo"));
+    await pick("Open in external browser");
+    expect(h.openDevServerExternally).toHaveBeenCalledTimes(1);
+    expect(h.openDevServerExternally).toHaveBeenCalledWith("http://localhost:5824/admin");
+    expect(h.openDevServer).not.toHaveBeenCalled();
+    expect(h.openLinkUrlExternally).not.toHaveBeenCalled();
+    expect(launcher()).toBeNull();
+  });
+
+  it.each([
+    ["Shift+F10", { key: "F10", shiftKey: true }],
+    ["the Menu key", { key: "ContextMenu" }],
+  ])("opens from %s on a focused row, which keeps the global handler off it", async (_, key) => {
+    await openLauncher();
+    const row = rowNamed("Team docs");
+    // The global Shift+F10 handler stands down for these, leaving the row its own menu.
+    expect(row.hasAttribute("data-row-menu")).toBe(true);
+    act(() => row.focus());
+
+    let unhandled = true;
+    await act(async () => {
+      unhandled = fireEvent.keyDown(row, key);
+    });
+    await flush();
+    // Handled, so the browser's own contextmenu for the key can't open it a second time.
+    expect(unhandled).toBe(false);
+    expect(menuItems()).toEqual(["Open in external browser", "Copy URL"]);
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("menuitem", { name: "Copy URL" }), { key: "Enter" });
+    });
+    await flush();
+    expect(h.copyWithToast).toHaveBeenCalledWith("URL", "https://docs.example.org/handbook");
+    expect(launcher()).not.toBeNull();
+    expect(document.activeElement).toBe(rowNamed("Team docs"));
+  });
+
+  it("leaves other keys on a row alone", async () => {
+    await openLauncher();
+    const row = rowNamed("Team docs");
+    act(() => row.focus());
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "F10" });
+    });
+    await flush();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps the keyboard in the list when a server stops under its open menu", async () => {
+    h.devSessions.sessions = [devSession()];
+    await openLauncher();
+    act(() => rowNamed("feature-foo").focus());
+    await act(async () => {
+      fireEvent.keyDown(rowNamed("feature-foo"), { key: "ContextMenu" });
+    });
+    await flush();
+    act(() => screen.getByRole("menuitem", { name: "Copy URL" }).focus());
+
+    await act(async () => {
+      setDevSessions([devSession({ status: "stopping" })]);
+    });
+    await flush();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(launcher()).not.toBeNull();
+    // The list's first row, as when the row it was on goes.
+    expect(document.activeElement).toBe(rows()[0]);
+    expect(h.copyWithToast).not.toHaveBeenCalled();
+  });
+
+  it("hands focus in a row's menu to the `…` button when the launcher's button goes into overflow", async () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-toolbar-overflow-trigger", "");
+    trigger.setAttribute("data-toolbar-overflow-side", "right");
+    trigger.setAttribute("data-visible", "true");
+    document.body.appendChild(trigger);
+    try {
+      await openLauncher();
+      await rightClick(rowNamed("Staging"));
+      act(() => screen.getByRole("menuitem", { name: "Copy URL" }).focus());
+
+      await act(async () => {
+        closeLinksLauncherForHiddenButton("right");
+      });
+      await flush();
+
+      expect(launcher()).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+    }
   });
 });
 

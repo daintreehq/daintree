@@ -1,8 +1,12 @@
 import type { AgentState } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { AuditOutcome } from "./auditLog.js";
-import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpDelegationOffer,
+  McpDispatchAuthorization,
+} from "../../../shared/types/ipc/mcpServer.js";
 import type { AssistantConfirmationPolicy } from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import type { PreparedAssistantDelegation } from "./assistantConfirmationsPreference.js";
 import type { HelpAssistantTier, McpTier, DispatchEnvelope } from "./shared.js";
 import type { McpWorkspaceBinding } from "./shared.js";
 import type { OwnPane, TerminalNotifyHandlers } from "./terminalNotify.js";
@@ -95,10 +99,20 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      */
     relayCallId?: string,
     /**
-     * Passed only by main's own `actions.list` walk (#17036), so a local view
-     * answers with one large page. See `WorkspaceDispatchOptions.actionsListWalk`.
+     * `actionsListWalk` is passed only by main's own `actions.list` walk
+     * (#17036), so a local view answers with one large page. See
+     * `WorkspaceDispatchOptions.actionsListWalk`. `delegationOffer` (#16752)
+     * reaches only the help session's own pinned view; see
+     * `WorkspaceDispatchOptions.delegationOffer`. `confirmationCondition`:
+     * when an unconfirmed dispatch may run unasked, for the pane's view to
+     * settle (#17917).
      */
-    walk?: { actionsListWalk: true }
+    options?: {
+      actionsListWalk?: true;
+      delegationOffer?: McpDelegationOffer;
+      onDelegationApproved?: () => void;
+      confirmationCondition?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationCondition;
+    }
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them
@@ -344,11 +358,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * The global Assistant's steer of a worker it didn't launch (#14551), set
    * only for a session relayed for one: a prompt, keys or an interrupt, each
    * held to the run it names and the person at it, and a reveal of its panel
-   * held to the same run (#16096). Absent, nothing widens.
+   * held to the same run (#16096), and the read that tells whether a close
+   * may reach a finished agent it didn't launch (#16750). Absent, nothing widens.
    */
   globalSteer?: Pick<
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
-    "prompt" | "keys" | "interrupt" | "reveal"
+    "prompt" | "keys" | "interrupt" | "reveal" | "closeTarget"
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
@@ -372,6 +387,22 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * view drives the bound project and `projectId`, when named, is that one.
      */
     refuseWrite(projectId: string | undefined): { code: string; message: string } | null;
+    /**
+     * Puts the global Assistant's close of a finished agent it didn't launch
+     * to the requesting Shell (#16750), about the relayed call `callId` and
+     * inside its deadline: the Shell asks its person, or answers for them
+     * under their Daintree confirmations. Absent, no such close runs.
+     */
+    askClose?(
+      callId: string,
+      ask: {
+        actionId: string;
+        args: Record<string, unknown>;
+        subject: string;
+        lines: string[];
+        closeClass: import("../../../shared/types/assistantControl.js").GlobalCloseClass;
+      }
+    ): Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
   };
   /**
    * Set for this host's own assistant running with no view (#13511), and asked
@@ -426,6 +457,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     rendererOwnedOrigin?: boolean;
     /** A relayed call's callId from its Shell (#13493), so both records name one call. */
     relayCallId?: string;
+    /** What admitted the call past its ownership ledger (#16750). */
+    admission?: import("../../../shared/types/ipc/mcpServer.js").McpCallAdmission;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
@@ -498,6 +531,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * Only consulted for `help` sessions; absent reads as asking for everything.
    */
   readAssistantConfirmationPolicy?: () => AssistantConfirmationPolicy;
+  /**
+   * "Don't ask again for this kind of action" for a dialog about the
+   * assistant's call to `calledActionId` (#16752), or null when it can't be
+   * offered. Bound to this machine's preference for the agent the session
+   * runs. Only consulted for `help` sessions; absent, nothing is offered.
+   */
+  prepareAssistantDelegation?: (calledActionId: string) => PreparedAssistantDelegation | null;
   /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).

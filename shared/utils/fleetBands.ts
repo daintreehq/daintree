@@ -199,6 +199,21 @@ export function runUnseenAsk(
   return runCanopyPlacement(run) === undefined ? "observed" : undefined;
 }
 
+/**
+ * The Canopy reading that placed this run in `band`, or undefined when
+ * something else did: a park or snooze, the agent's own needs-you report, or
+ * the free rules alone. Each of those outranks a reading in
+ * {@link bandForRun}, so a refinement that would still apply to the observed
+ * state isn't the run's placement while one of them holds.
+ */
+export function canopyPlacingRun(
+  run: BandableRun,
+  band: FleetBand = bandForRun(run)
+): RunCanopyRefinement | undefined {
+  if (band === "parked" || band === "snoozed" || isAgentReportedNeed(run)) return undefined;
+  return runCanopyPlacement(run);
+}
+
 /** The Canopy refinement placing this run now, if any; see `canopyPlacement`. */
 export function runCanopyPlacement(
   run: Pick<FleetRunRow, "agentState" | "waitingReason" | "canopy" | "quietSince">

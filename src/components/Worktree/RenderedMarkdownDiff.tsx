@@ -10,7 +10,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
-import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
+import type { Element as HastElement, Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import {
   MarkdownImageCacheBust,
@@ -22,6 +22,7 @@ import {
   MARKDOWN_REMARK_PLUGINS,
 } from "@/components/Markdown/markdownRemarkPlugins";
 import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
+import { rehypeMarkdownAlerts } from "@/components/Markdown/markdownAlerts";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
@@ -88,13 +89,15 @@ export interface RenderedMarkdownDiffProps {
    * How many discrete changes the document holds, so the host can offer a
    * counter and a stepper. A modified pair is ONE change, not two. Stamped with
    * the attempt it counts and never reported while a comparison is pending, so
-   * the host can't step through the previous document's changes.
+   * the host can't step through the previous document's changes. Withdrawn
+   * with `null`, never `0`: zero is a finished comparison with no changes, a
+   * verdict a host acts on, while a withdrawn count is no verdict at all.
    *
    * Reported rather than derived by the host because the host has a patch and
    * this component has the model — and the two disagree by design: a patch hunk
    * is a run of lines, a change here is a block the reader can point at.
    */
-  onChangeCount?: (count: number, forAttempt: string) => void;
+  onChangeCount?: (count: number | null, forAttempt: string) => void;
 }
 
 /**
@@ -269,6 +272,25 @@ const RANGE_LABEL: Record<"added" | "removed", string> = {
   removed: "Deleted: ",
 };
 
+const INLINE_MARK_CLASS = "rendered-markdown-diff__inline";
+
+/** A revision mark `inlineRangePlugin` wrapped a changed range in. */
+function isRevisionMark(element: HastElement): boolean {
+  const className = element.properties.className;
+  return (
+    (element.tagName === "ins" || element.tagName === "del") &&
+    Array.isArray(className) &&
+    className.includes(INLINE_MARK_CLASS)
+  );
+}
+
+/**
+ * After the inline marks, never before: they go in only when the rendered text
+ * matches the engine's flattening, which keeps an alert's marker, so taking the
+ * marker out first would cost every edited alert its word marks.
+ */
+const ALERTS_PLUGIN: PluggableList[number] = [rehypeMarkdownAlerts, { isRevisionMark }];
+
 /**
  * Flatten a hast tree the way the engine flattens mdast, and hand back the text
  * nodes that may carry inline marks.
@@ -333,7 +355,7 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
     const { text, entries } = collectTextNodes(tree);
     if (text !== expectedText) return;
     // hast models a class attribute as a list, not the joined string.
-    const className = ["rendered-markdown-diff__inline", `rendered-markdown-diff__inline--${kind}`];
+    const className = [INLINE_MARK_CLASS, `${INLINE_MARK_CLASS}--${kind}`];
     // Native revision elements rather than styled spans: `<ins>` and `<del>`
     // are what an assistive technology reads as a revision, and a `<span>` with
     // a background is not a revision to anything but a sighted reader.
@@ -438,7 +460,10 @@ function DiffBlock({
   const body = isFrontmatterType(blockType) ? source : `\n${source}`;
   const content = definitions ? `${body}\n\n${definitions}` : body;
   const rehypePlugins = useMemo<PluggableList>(
-    () => (ranges.length ? [inlineRangePlugin(ranges, expectedText, kind)] : []),
+    () =>
+      ranges.length
+        ? [inlineRangePlugin(ranges, expectedText, kind), ALERTS_PLUGIN]
+        : [ALERTS_PLUGIN],
     [ranges, expectedText, kind]
   );
 
@@ -562,7 +587,7 @@ export function RenderedMarkdownDiff({
     // as the next comparison starts. The host keys counts by attempt, and a
     // refresh or a layout switch can remount this view on the very same attempt
     // while its build is still pending; the old count must not come back with it.
-    return () => onChangeCount?.(0, attemptKey);
+    return () => onChangeCount?.(null, attemptKey);
   }, [onChangeCount, counted, changeCount, attemptKey]);
 
   // Which folded runs the reader has opened. Keyed by run id rather than index

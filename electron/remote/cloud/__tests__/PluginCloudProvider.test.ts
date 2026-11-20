@@ -20,6 +20,9 @@ import {
   type PluginCloudProviderDeclaration,
   type PluginCloudProviderRuntime,
 } from "../../../services/plugin/pluginCloudProviders.js";
+import { CloudAccountService } from "../CloudAccountService.js";
+import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
+import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { PluginCloudProvider, type PluginCloudProviderHost } from "../PluginCloudProvider.js";
 import { watchPluginCloudProviders } from "../pluginCloudProviderRegistrations.js";
@@ -88,8 +91,10 @@ function declaration(
 ): PluginCloudProviderDeclaration {
   return {
     pluginId: "acme.clouds",
+    pluginName: "Acme Clouds",
     providerId: "acme.clouds.ec2",
     contribution: contribution(overrides),
+    consentFingerprint: "fp-1",
   };
 }
 
@@ -519,6 +524,31 @@ describe("watchPluginCloudProviders", () => {
     expect(providers.has("acme.clouds.ec2")).toBe(false);
   });
 
+  it("names a registered provider and its plugin for its accounts to keep, and nothing once it's gone", () => {
+    const providers = new CloudProviderRegistry();
+    publishPluginCloudProviders("acme.clouds", [contribution()], "Acme Clouds");
+    const watch = watchPluginCloudProviders({ providers, statusChanged: () => {} });
+    expect(watch.label("acme.clouds.ec2")).toEqual({
+      pluginName: "Acme Clouds",
+      providerName: "EC2",
+      dashboardUrl: "https://console.example.com",
+    });
+    expect(watch.label("boat")).toBeNull();
+    // The registry's listeners hear of each change from inside it, and already read the label as it now is.
+    const heard: Array<string | null> = [];
+    providers.onChange(() => heard.push(watch.label("acme.clouds.ec2")?.providerName ?? null));
+    withdrawPluginCloudProviders("acme.clouds");
+    expect(watch.label("acme.clouds.ec2")).toBeNull();
+    // A plugin published without a display name goes by its id.
+    publishPluginCloudProviders("acme.clouds", [contribution({ name: "EC2 v2" })]);
+    expect(heard).toEqual([null, "EC2 v2"]);
+    expect(watch.label("acme.clouds.ec2")).toMatchObject({
+      pluginName: "acme.clouds",
+      providerName: "EC2 v2",
+    });
+    watch.dispose();
+  });
+
   it("takes away a provider whose plugin fails to start, with why, and brings it back once it starts", () => {
     const providers = new CloudProviderRegistry();
     let failure: string | null = null;
@@ -573,5 +603,83 @@ describe("watchPluginCloudProviders", () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
     watch.dispose();
+  });
+});
+
+describe("consent to a plugin's providers as its registrations see it (#17352)", () => {
+  const GCE = () => contribution({ id: "gce", name: "GCE" });
+
+  function connected() {
+    const providers = new CloudProviderRegistry();
+    publishPluginCloudProviders("acme.clouds", [contribution(), GCE()], "Acme Clouds");
+    const watch = watchPluginCloudProviders({ providers, statusChanged: () => {} });
+    let saved: unknown;
+    const store = new CloudHostStore({
+      get: () => saved,
+      set: (_key: "cloudHosts", value: CloudHostsValue) => {
+        saved = JSON.parse(JSON.stringify(value));
+      },
+    });
+    const accounts = new CloudAccountService({
+      store,
+      vault: new MemoryCloudCredentialVault(),
+      providers,
+      apiUrlFor: (id) => providers.apiUrlFor(id),
+      platform: "darwin",
+      pluginConsent: (id) => watch.consentSubject(id),
+    });
+    const fingerprint = accounts.providerInfos()[0]!.plugin!.fingerprint;
+    store.putProviderConsent({ pluginId: "acme.clouds", fingerprint, approvedAt: 1 });
+    const granted = () => accounts.providerInfos().map((info) => info.plugin?.granted);
+    return { providers, watch, store, accounts, granted };
+  }
+
+  it("sees an allowed provider as allowed from the moment it registers again", () => {
+    const env = connected();
+    const seen: Array<string | null> = [];
+    env.providers.onChange(() => {
+      if (env.providers.get("acme.clouds.ec2")) {
+        seen.push(env.accounts.providerUnavailable("acme.clouds.ec2"));
+      }
+    });
+    // An update that only rewords registers both providers again: the lifecycle's one wake-up
+    // for each must already find it allowed.
+    publishPluginCloudProviders(
+      "acme.clouds",
+      [contribution({ description: "Other words." }), GCE()],
+      "Acme Clouds"
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).toEqual(seen.map(() => null));
+    env.watch.dispose();
+  });
+
+  it("keeps every provider of the plugin allowed through an unchanged update, and pauses them all when one changes", () => {
+    const env = connected();
+    expect(env.granted()).toEqual([true, true]);
+    publishPluginCloudProviders(
+      "acme.clouds",
+      [GCE(), contribution({ name: "Elastic Compute", docsUrl: "https://docs.example.com/v2" })],
+      "Acme Clouds"
+    );
+    expect(env.granted()).toEqual([true, true]);
+    const changed = GCE();
+    publishPluginCloudProviders(
+      "acme.clouds",
+      [
+        contribution(),
+        { ...changed, capabilities: { ...changed.capabilities, typicalStartSeconds: 300 } },
+      ],
+      "Acme Clouds"
+    );
+    expect(env.granted()).toEqual([false, false]);
+    expect(env.accounts.providerUnavailable("acme.clouds.ec2")).toContain("Acme Clouds");
+    env.watch.dispose();
+  });
+
+  it("never says a plugin's machines stop by their host once idle: the contract has no way to (#17921)", () => {
+    const env = connected();
+    expect(env.accounts.providerInfos().map((info) => info.hostIdleStop)).toEqual([false, false]);
+    env.watch.dispose();
   });
 });

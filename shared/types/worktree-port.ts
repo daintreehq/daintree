@@ -19,6 +19,7 @@ import type {
 import type { WorktreeChanges } from "./git.js";
 import type { LifecycleCommandReview, WorktreeTeardownPreview } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
+import type { IdlePausePolicy } from "./idlePause.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
@@ -154,6 +155,18 @@ export interface WorktreePortProtocol {
   // no action or MCP tool reaches this request (#12408).
   "approve-lifecycle-commands": {
     payload: { worktreeId: string; fingerprint: string };
+    result: { ok: true };
+  };
+  // Idle pause for the worktree's environment on this device (#17925): read
+  // fresh by the host, and turned on only for the commands the person was
+  // shown (`fingerprint`). Never accepted from a remote endpoint: it is this
+  // device's choice to run a pause unattended.
+  "get-idle-pause": {
+    payload: { worktreeId: string };
+    result: { policy: IdlePausePolicy };
+  };
+  "set-idle-pause": {
+    payload: { worktreeId: string; enabled: boolean; fingerprint?: string };
     result: { ok: true };
   };
   "switch-worktree-environment": {

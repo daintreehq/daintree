@@ -4,6 +4,7 @@ import {
   AGENT_SETTINGS_PORTABLE_FIELDS,
   PRESET_BYPASS_FIELDS,
 } from "../../../shared/config/portableSettings.js";
+import { isDangerousMode } from "../../../shared/types/dangerousMode.js";
 import { isRecord } from "./sectionKit.js";
 
 /**
@@ -194,12 +195,10 @@ export function projectBypass(
   return out;
 }
 
-const DANGEROUS_MODES: ReadonlySet<unknown> = new Set(["inherit", "on", "off"]);
-
 /** Why an agent's bypass payload can't be written as it is, or null when it can. */
 export function invalidBypassAgent(payload: unknown): string | null {
   if (!isRecord(payload)) return "Not a valid bypass setting";
-  if (payload.dangerousMode !== undefined && !DANGEROUS_MODES.has(payload.dangerousMode)) {
+  if (payload.dangerousMode !== undefined && !isDangerousMode(payload.dangerousMode)) {
     return "Not a valid bypass mode";
   }
   if (payload.dangerousEnabled !== undefined && typeof payload.dangerousEnabled !== "boolean") {
@@ -212,7 +211,7 @@ export function invalidBypassAgent(payload: unknown): string | null {
     if (!isRecord(payload.presets)) return "Not a valid bypass setting";
     for (const fields of Object.values(payload.presets)) {
       if (!isRecord(fields)) return "Not a valid bypass setting";
-      if (fields.dangerousMode !== undefined && !DANGEROUS_MODES.has(fields.dangerousMode)) {
+      if (fields.dangerousMode !== undefined && !isDangerousMode(fields.dangerousMode)) {
         return "Not a valid bypass mode";
       }
       if (fields.dangerousEnabled !== undefined && typeof fields.dangerousEnabled !== "boolean") {

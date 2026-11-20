@@ -30,6 +30,7 @@ const projectStoreMock = vi.hoisted(() => ({
   getProjectState: vi.fn<(id: string) => Promise<Record<string, unknown> | null>>(),
   saveProjectState: vi.fn<(id: string, state: unknown) => Promise<void>>(),
   getAllProjects: vi.fn(() => []),
+  getCompletionWatermarks: vi.fn(() => []),
   getCurrentProject: vi.fn<() => { id: string; name: string; path: string } | null>(),
   updateProjectStatus: vi.fn(),
 }));

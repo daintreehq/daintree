@@ -481,6 +481,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
   const removePanel = vi.fn();
   const restartTerminal = vi.fn();
   const restartTerminalOnPreset = vi.fn().mockResolvedValue({ success: true });
+  const restartTerminalOnOwnFallbackStep = vi.fn().mockResolvedValue({ success: true });
   const restartTerminalOnAccount = vi.fn().mockResolvedValue({ success: true });
   const bulkRestartAll = vi.fn().mockResolvedValue(undefined);
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
@@ -491,6 +492,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     removePanel,
     restartTerminal,
     restartTerminalOnPreset,
+    restartTerminalOnOwnFallbackStep,
     restartTerminalOnAccount,
     bulkRestartAll,
     bulkRestartByWorktree,
@@ -499,6 +501,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     removePanel,
     restartTerminal,
     restartTerminalOnPreset,
+    restartTerminalOnOwnFallbackStep,
     restartTerminalOnAccount,
     bulkRestartAll,
   };
@@ -1203,6 +1206,124 @@ describe("terminal.restartOnPreset (#13746)", () => {
     await expect(
       run("terminal.restartOnPresetOwned", { terminalId: "p1", presetId: "work" })
     ).rejects.toThrow(/MCP main-process path/);
+  });
+
+  describe("unconfirmed, under the assistant's next-fallback tick (#17917)", () => {
+    const panels: AgentPanel[] = [
+      { id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" },
+    ];
+
+    it("takes only the pane's next own fallback step, never a switch", async () => {
+      const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
+        focusedId: "p1",
+        panels,
+      });
+      const run = setupActions();
+
+      await run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "work", keepConversation: true },
+        { hostOwnFallbackStep: true }
+      );
+
+      expect(restartTerminalOnOwnFallbackStep).toHaveBeenCalledWith("p1", "work", {
+        keepConversation: true,
+      });
+      expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+    });
+
+    it("stages the confirmation, having changed nothing, for any other preset", async () => {
+      const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
+        focusedId: "p1",
+        panels,
+      });
+      restartTerminalOnOwnFallbackStep.mockResolvedValue({
+        success: false,
+        needsConfirmation: true,
+      });
+      const run = setupActions();
+
+      const refused = run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "other" },
+        { hostOwnFallbackStep: true }
+      );
+
+      const { ConfirmationStagedError } = await import("@/services/actions/confirmationStaged");
+      await expect(refused).rejects.toBeInstanceOf(ConfirmationStagedError);
+      await expect(refused).rejects.toThrow(/Nothing changed/);
+      expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+    });
+
+    it("takes only the step when `confirmed` rides in the args beside the offer", async () => {
+      const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
+        focusedId: "p1",
+        panels,
+      });
+      const run = setupActions();
+
+      await run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "other", confirmed: true },
+        { hostOwnFallbackStep: true, dispatchDeadlineAt: 1_234 }
+      );
+
+      expect(restartTerminalOnOwnFallbackStep).toHaveBeenCalledWith("p1", "other", {
+        keepConversation: false,
+        deadlineAt: 1_234,
+      });
+      expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+    });
+
+    it("marks a step that was admitted and then failed, and only that", async () => {
+      const { restartTerminalOnOwnFallbackStep } = setRichPanelState({ focusedId: "p1", panels });
+      const run = setupActions();
+      const { OwnFallbackStepFailedError } = await import("@/services/actions/ownFallbackStep");
+
+      restartTerminalOnOwnFallbackStep.mockResolvedValueOnce({
+        success: false,
+        error: "spawn failed",
+        admitted: true,
+      });
+      const admitted = run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "work" },
+        { hostOwnFallbackStep: true }
+      );
+      await expect(admitted).rejects.toBeInstanceOf(OwnFallbackStepFailedError);
+      await expect(admitted).rejects.toThrow(/spawn failed/);
+
+      restartTerminalOnOwnFallbackStep.mockResolvedValueOnce({
+        success: false,
+        error: "the call's deadline passed before the move started",
+      });
+      const refused = run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "work" },
+        { hostOwnFallbackStep: true }
+      );
+      await expect(refused).rejects.toThrow(/deadline/);
+      await expect(refused).rejects.not.toBeInstanceOf(OwnFallbackStepFailedError);
+    });
+
+    it("switches as before once a person confirmed, whatever the offer said", async () => {
+      const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
+        focusedId: "p1",
+        panels,
+      });
+      const run = setupActions();
+
+      await run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "other" },
+        { hostConfirmed: true, hostOwnFallbackStep: true }
+      );
+
+      expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "other", {
+        keepConversation: false,
+      });
+      expect(restartTerminalOnOwnFallbackStep).not.toHaveBeenCalled();
+    });
   });
 
   it("reports a respawn that failed instead of claiming success", async () => {

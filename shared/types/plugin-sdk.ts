@@ -345,6 +345,8 @@ export type { TerminalInputLine, TerminalInputLineState } from "./terminalStatus
 // constants and the helper are value exports.
 
 export type {
+  PluginAgentBand,
+  PluginAgentCanopyNote,
   PluginAgentInputOptions,
   PluginAgentInputResult,
   PluginAgentInterruptResult,

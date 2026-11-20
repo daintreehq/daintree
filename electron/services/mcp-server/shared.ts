@@ -10,7 +10,9 @@ import type {
   McpApprovalReason,
   McpApprovalScope,
   McpAuditResult,
+  McpConfirmationCondition,
   McpConfirmationDecision,
+  McpDelegationOffer,
   McpDispatchAuthorization,
   McpHostPreview,
   McpRequester,
@@ -173,6 +175,20 @@ export interface WorkspaceDispatchOptions {
    */
   offerSessionApproval?: boolean;
   /**
+   * Offer "Don't ask again for this kind of action" in any dialog this
+   * dispatch raises (#16752), for this machine's own assistant's call. Main
+   * keeps what an approval with the tick writes; sent to a local view only,
+   * so another machine's view never offers to change this machine's preference.
+   */
+  delegationOffer?: McpDelegationOffer;
+  /**
+   * Called once when the person approves a dispatch sent with
+   * {@link delegationOffer}: when the view claims the approval, before the
+   * action runs, or with the answer when nothing runs here (#16752). Main's
+   * own, never sent anywhere.
+   */
+  onDelegationApproved?: () => void;
+  /**
    * The pane or Assistant tab this dispatch came from, for any dialog it
    * raises to name (#14992). Set from the bearer's own surface, never from
    * the call.
@@ -198,6 +214,11 @@ export interface WorkspaceDispatchOptions {
   hostPreview?: McpHostPreview;
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
+  /**
+   * When an unconfirmed dispatch may run unasked, settled by the view that
+   * holds the pane (#17917). Main sets it, never a caller.
+   */
+  confirmationCondition?: McpConfirmationCondition;
   /**
    * Main's own walk of `actions.list` (#17036): the view answers with a page of
    * `ACTIONS_LIST_WALK_LIMIT`, so the registry comes back in one round trip.
@@ -249,6 +270,12 @@ export interface WorkspaceDispatchOptions {
     requestApproval?: (
       ask: import("../viewless/index.js").ViewlessApprovalAsk
     ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+    /**
+     * A local call's preset move, offered as one the view may run unasked
+     * once it finds it the pane's next own step (#17917): bound to this one
+     * call, so the view's project is all it is told.
+     */
+    nextFallback?: (projectId: string, actionId: string, args: unknown) => (() => void) | null;
   };
 }
 export type { HelpAssistantTier };
@@ -1178,6 +1205,15 @@ export interface PendingRequest<T> {
   destroyedCleanup?: () => void;
   /** Dispatches only: how long main still holds the call open for a person (#14989). */
   hold?: DispatchHold;
+  /**
+   * Dispatches only: the view was sent a "Don't ask again" offer (#16752), so
+   * an approval it reports may carry the `delegate` scope.
+   */
+  offeredDelegation?: true;
+  /** Dispatches only: {@link WorkspaceDispatchOptions.onDelegationApproved}, until it runs. */
+  onDelegationApproved?: () => void;
+  /** Dispatches only: sent with a `confirmationCondition`, so a reported skip is believed (#17917). */
+  offeredCondition?: true;
 }
 
 /**
@@ -1223,8 +1259,8 @@ export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
   /**
-   * How far an `approved` decision reaches (#12692). Only ever `session` when
-   * the dispatch offered it; absent otherwise.
+   * How far an `approved` decision reaches (#12692). Only ever `session` or
+   * `delegate` (#16752) when the dispatch offered it; absent otherwise.
    */
   approvalScope?: McpApprovalScope;
   /**
@@ -1285,6 +1321,13 @@ export interface McpRelayCaller {
   helpSessionId: string;
   shellName: string;
   /**
+   * The conversation the calling assistant's lane runs (#17919), as its own
+   * machine's main minted it, never the model: what that conversation made
+   * here is held under it with the sender, so a resumed one keeps it. Absent
+   * from an older Shell, whose creations stay its help session's.
+   */
+  conversationId?: string;
+  /**
    * One of this machine's own assistants reaching another of its projects
    * (#14024), set only by the in-process relay, never from anything a link
    * carries: its standing to change a project is this machine's own views'.
@@ -1311,6 +1354,8 @@ export interface McpRelayCaller {
       callId: string;
       /** When the call stops waiting on the answer, on this machine's clock (#15699). */
       holdUntil?: number;
+      /** The global Assistant's close of a finished agent it didn't launch (#16750). */
+      closeClass?: import("../../../shared/types/assistantControl.js").GlobalCloseClass;
     }
   ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
   /**
@@ -1319,7 +1364,27 @@ export interface McpRelayCaller {
    * has settled, or for a call this session isn't running.
    */
   callDeadline?: (callId: string) => number | undefined;
+  /**
+   * Whether this machine's assistant may have a call run unasked once the
+   * view holding the pane finds it the next own fallback step (#17917). Set
+   * only by the in-process relay: another machine's call is matched on its
+   * own Shell.
+   */
+  nextFallback?: RelayNextFallback;
 }
+
+/**
+ * One of this machine's own `host.call`s matched to a dispatch it runs
+ * (#17917): what to call once the view says it ran the move, or null when the
+ * move isn't offered.
+ */
+export type RelayNextFallback = (dispatch: {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
+}) => (() => void) | null;
 
 const RESOURCE_URI_PATTERN =
   /^daintree:\/\/(worktree|terminal|agent|project|workspace)\/([^/]+)\/(pulse|scrollback|state|issues|binding)$/;

@@ -54,7 +54,7 @@ vi.mock("electron", () => ({
   },
 }));
 const listening = vi.hoisted(() => ({ cwd: null as string | null, ports: [] as number[] }));
-vi.mock("../../../remote/ports/listenerScan.js", () => ({
+vi.mock("../../../utils/localPortListeners.js", () => ({
   findPortListeners: async (port: number) => {
     listening.ports.push(port);
     return listening.cwd === null ? [] : [{ pid: 4242, cwd: listening.cwd }];

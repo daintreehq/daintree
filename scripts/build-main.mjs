@@ -1,22 +1,35 @@
 import { build, context } from "esbuild";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
 import { asciiOnlyOutputPlugin } from "./lib/ascii-only-chunks.mjs";
 import { mainBundlePlugins } from "./lib/main-bundle.mjs";
+import {
+  PLUGIN_TIERS,
+  collectRelativeAssetPaths,
+  isInsideDir,
+  isReservedAssetDir,
+  syncPluginTier,
+  watchPluginAssets,
+} from "./lib/plugin-asset-sync.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 import { runProjectSync } from "./typecheck.mjs";
 import canopyReaderModel from "./lib/canopyReaderModel.cjs";
+import {
+  BUILD_READY_FILE,
+  removeBuildReadyMarker,
+  startWatchBuild,
+  writeBuildReadyMarker,
+} from "./lib/build-ready-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 
 const isWatch = process.argv.includes("--watch");
 const isProd = process.env.NODE_ENV === "production";
-const buildReadyFile = path.join(root, "dist-electron/.build-ready.js");
-let buildReadyTimer = null;
+const buildReadyFile = path.join(root, BUILD_READY_FILE);
 
 const external = MAIN_EXTERNAL;
 
@@ -108,28 +121,6 @@ function commonOptions({ production }) {
         : {}),
     },
   };
-}
-
-function removeBuildReadyMarker() {
-  if (fs.existsSync(buildReadyFile)) {
-    fs.rmSync(buildReadyFile, { force: true });
-  }
-}
-
-function writeBuildReadyMarker() {
-  fs.mkdirSync(path.dirname(buildReadyFile), { recursive: true });
-  fs.writeFileSync(buildReadyFile, `// build ready ${Date.now()}\n`, "utf8");
-}
-
-function scheduleBuildReadyMarker() {
-  if (buildReadyTimer) {
-    clearTimeout(buildReadyTimer);
-  }
-
-  buildReadyTimer = setTimeout(() => {
-    writeBuildReadyMarker();
-    buildReadyTimer = null;
-  }, 100);
 }
 
 /**
@@ -226,9 +217,14 @@ export function guestRuntimeBuildConfig(asset, options = {}) {
  * and this build script is plain ESM. Exits non-zero on the first invalid
  * manifest (the child prints the offending file + field).
  */
+const MANIFEST_VALIDATOR_ARGS = [
+  "--import",
+  "tsx/esm",
+  path.join(root, "scripts/validate-plugin-manifests.ts"),
+];
+
 function validatePluginManifests() {
-  const validator = path.join(root, "scripts/validate-plugin-manifests.ts");
-  const result = spawnSync(process.execPath, ["--import", "tsx/esm", validator], {
+  const result = spawnSync(process.execPath, MANIFEST_VALIDATOR_ARGS, {
     stdio: "inherit",
     cwd: root,
   });
@@ -238,176 +234,69 @@ function validatePluginManifests() {
   }
 }
 
-function copyBuiltInWorkflows() {
-  const workflowsSrcDir = path.join(root, "electron/workflows");
-  const workflowsDestDir = path.join(root, "dist-electron/workflows");
-  if (fs.existsSync(workflowsSrcDir)) {
-    fs.mkdirSync(workflowsDestDir, { recursive: true });
-    fs.cpSync(workflowsSrcDir, workflowsDestDir, { recursive: true });
-    console.log("[Build] Copied built-in workflows");
-  } else {
-    console.warn(`[Build] Built-in workflows directory not found: ${workflowsSrcDir}`);
-  }
+/**
+ * The watcher's recheck after a manifest changes. It only warns: the manifest
+ * is already mirrored as saved, the way an editor leaves it mid-edit, and the
+ * app rejects an invalid one when it loads. Asynchronous so esbuild's watch
+ * callbacks keep running while the validator starts up.
+ */
+function revalidatePluginManifests() {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, MANIFEST_VALIDATOR_ARGS, { stdio: "inherit", cwd: root });
+    child.once("error", (error) => {
+      console.warn("[Build] Could not run the plugin manifest validator:", error);
+      resolve();
+    });
+    child.once("exit", (code) => {
+      if (code !== 0) console.warn("[Build] Plugin manifest validation failed.");
+      resolve();
+    });
+  });
+}
+
+const PLUGIN_SRC_ROOT = path.join(root, "plugins");
+const PLUGIN_DIST_ROOT = path.join(root, "dist-electron/plugins");
+
+function logPluginAssetChanges(tier, { name, copied, removed }) {
+  const describe = (verb, paths) =>
+    paths.length === 0
+      ? []
+      : [
+          `${verb} ${paths.slice(0, 6).join(", ")}${paths.length > 6 ? ` +${paths.length - 6}` : ""}`,
+        ];
+  const detail = [...describe("copied", copied), ...describe("removed", removed)].join("; ");
+  console.log(`[Build] Synced ${tier} plugin ${name}: ${detail}`);
 }
 
 /**
- * Plugin source subdirectories the asset-copy step must NOT mirror verbatim:
- * `main/` is compiled by esbuild into the same output tree, `renderer/` is
- * consumed by the host's Vite renderer build (not loaded by the plugin at
- * runtime), `shared/` holds `import type`-only siblings esbuild erases (never
- * loaded at runtime — same compile-time category as `main`/`renderer`), and
- * `__tests__/`, `__fixtures__/` and `review/` (the
- * plugin panel preview's `panel.stories.tsx`) are dev-only. Every other subdirectory a plugin bundles (`bin/`,
- * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
- * resolve at runtime instead of ENOENT-ing (#10579).
- */
-export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
-  "main",
-  "renderer",
-  "shared",
-  "__tests__",
-  "__fixtures__",
-  "review",
-]);
-
-/**
- * True when `child` resolves to a path strictly inside `parent` — guards the
- * asset copy/validation against `./`-relative manifest paths that escape the
- * plugin directory via `..` segments. `mcpServers[].command` is not refined the
- * way agent commands are (electron/schemas/plugin.ts), so a manifest can name
- * `./../sibling` and pass schema validation.
- */
-function isInsideDir(child, parent) {
-  const rel = path.relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-/**
- * Read a plugin's `plugin.json` and return its `./`-relative `command`/`args`
- * asset paths. Tolerant of a missing/unparseable manifest (returns `[]`) — the
- * dedicated manifest validation step is what reports those loudly.
- */
-function readManifestRelativeAssetPaths(pluginDir) {
-  const manifestPath = path.join(pluginDir, "plugin.json");
-  if (!fs.existsSync(manifestPath)) return [];
-  try {
-    return collectRelativeAssetPaths(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Mirror every non-compiled plugin asset next to the compiled main entry. Before
- * #10579 only `plugin.json` (and a hardcoded `view/` for samples) was copied, so
- * a plugin's `bin/` agent scripts or `mcp/` servers were silently dropped from
- * the build and failed at spawn time. This copies all subdirectories except
- * those in `PLUGIN_EXTRA_ASSET_SKIP_DIRS` verbatim, plus any top-level file a
- * `./`-relative `command`/`args` path names directly (a script can live beside
- * `plugin.json` rather than in a bundled dir). `fs.cpSync` preserves executable
- * bits on macOS/Linux (Node 22).
- */
-export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
-  if (!fs.existsSync(srcPluginDir)) return [];
-  const copied = [];
-  fs.mkdirSync(destPluginDir, { recursive: true });
-  for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    // Lower-cased: on a case-insensitive filesystem `Main/` names `main/`.
-    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-    const src = path.join(srcPluginDir, entry.name);
-    const dest = path.join(destPluginDir, entry.name);
-    fs.cpSync(src, dest, { recursive: true });
-    copied.push(entry.name);
-  }
-  // Top-level asset files named by a `./`-relative command/arg that live beside
-  // the manifest rather than inside a bundled dir; files already shipped via
-  // their directory above are skipped (dest exists).
-  for (const relPath of readManifestRelativeAssetPaths(srcPluginDir)) {
-    const src = path.resolve(srcPluginDir, relPath);
-    if (!isInsideDir(src, srcPluginDir)) continue;
-    if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
-    const dest = path.resolve(destPluginDir, relPath);
-    if (fs.existsSync(dest)) continue;
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(src, dest);
-    copied.push(relPath);
-  }
-  return copied;
-}
-
-/**
- * Copy each built-in plugin's `plugin.json` next to its compiled main entry so
- * `PluginService.loadPlugin` can read the manifest from the same directory
- * tree it scans at runtime. The compiled JS lands via esbuild; this step
- * mirrors the static manifest and any bundled asset directories alongside it.
- */
-function copyBuiltInPluginManifests() {
-  const pluginsRoot = path.join(root, "plugins/builtin");
-  if (!fs.existsSync(pluginsRoot)) return;
-  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const srcPluginDir = path.join(pluginsRoot, entry.name);
-    const manifestSrc = path.join(srcPluginDir, "plugin.json");
-    if (!fs.existsSync(manifestSrc)) continue;
-    const destPluginDir = path.join(root, "dist-electron/plugins/builtin", entry.name);
-    const manifestDest = path.join(destPluginDir, "plugin.json");
-    fs.mkdirSync(destPluginDir, { recursive: true });
-    fs.copyFileSync(manifestSrc, manifestDest);
-    const copied = copyPluginExtraAssets(srcPluginDir, destPluginDir);
-    const extra = copied.length > 0 ? ` (+ ${copied.join(", ")})` : "";
-    console.log(`[Build] Copied built-in plugin manifest: ${entry.name}${extra}`);
-  }
-}
-
-/**
- * Mirror `plugin.json` manifests for `plugins/sample/*` alongside their
- * compiled main entries. Sample plugins are not loaded at runtime by default —
+ * Mirror each built-in and sample plugin's manifest and bundled assets next to
+ * its compiled main entry, so `PluginService.loadPlugin` reads them from the
+ * directory tree it scans at runtime. Sample plugins are not loaded by default:
  * the host-contract e2e harness (#9286) sideloads them via
  * `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` pointing at `dist-electron/plugins/sample`.
  */
-function copySamplePluginManifests() {
-  const pluginsRoot = path.join(root, "plugins/sample");
-  if (!fs.existsSync(pluginsRoot)) return;
-  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const srcPluginDir = path.join(pluginsRoot, entry.name);
-    const manifestSrc = path.join(srcPluginDir, "plugin.json");
-    if (!fs.existsSync(manifestSrc)) continue;
-    const destPluginDir = path.join(root, "dist-electron/plugins/sample", entry.name);
-    const manifestDest = path.join(destPluginDir, "plugin.json");
-    fs.mkdirSync(destPluginDir, { recursive: true });
-    fs.copyFileSync(manifestSrc, manifestDest);
-
-    // Copy every bundled asset directory verbatim — `view/` (browser-ready ESM
-    // served over `plugin://`; esbuild must NOT process it or it would bundle
-    // React in and break the single-instance contract — used by the
-    // rich-daintree panel-view E2E #10512), plus any `bin/`/`mcp/` scripts a
-    // plugin spawns via `./`-relative `command`/`args` (#10579).
-    const copied = copyPluginExtraAssets(srcPluginDir, destPluginDir);
-    const extra = copied.length > 0 ? ` (+ ${copied.join(", ")})` : "";
-    console.log(`[Build] Copied sample plugin manifest: ${entry.name}${extra}`);
+function syncAllPluginAssets() {
+  for (const tier of PLUGIN_TIERS) {
+    const changed = syncPluginTier(
+      path.join(PLUGIN_SRC_ROOT, tier),
+      path.join(PLUGIN_DIST_ROOT, tier)
+    );
+    for (const plugin of changed) logPluginAssetChanges(tier, plugin);
   }
 }
 
 /**
- * Collect the `./`-relative file paths a copied plugin manifest will spawn —
- * agent `command`/`args` and MCP server `command`/`args`. Bare PATH binaries
- * (`echo`, `node`) and absolute/`..` paths are rejected at manifest-validation
- * time, so only `./`-prefixed entries name a file the build must have shipped.
+ * Same checks as a build makes after the copy, at watch severity. Only a
+ * changed manifest pays for the schema validator's start-up; the handler check
+ * also runs for a source file deleted beside an unchanged one.
  */
-function collectRelativeAssetPaths(manifest) {
-  const paths = [];
-  const contributes = manifest?.contributes ?? {};
-  const sources = [...(contributes.agents ?? []), ...(contributes.mcpServers ?? [])];
-  for (const source of sources) {
-    for (const value of [source?.command, ...(source?.args ?? [])]) {
-      if (typeof value === "string" && value.startsWith("./")) paths.push(value);
-    }
-  }
-  return paths;
+async function recheckSyncedPluginAssets(changed) {
+  for (const { tier, ...plugin } of changed) logPluginAssetChanges(tier, plugin);
+  const touchesManifest = ({ copied, removed }) =>
+    copied.includes("plugin.json") || removed.includes("plugin.json");
+  if (changed.some(touchesManifest)) await revalidatePluginManifests();
+  validateCommandHandlerExtensions();
+  validateCopiedPluginAssets();
 }
 
 /**
@@ -442,7 +331,12 @@ export function findMissingPluginAssets(distPluginsRoot) {
           continue;
         }
         if (!fs.existsSync(resolved)) {
-          missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output`);
+          const [topDir, ...rest] = path.relative(pluginDir, resolved).split(path.sep);
+          const hint =
+            rest.length > 0 && isReservedAssetDir(topDir)
+              ? ` (the build never copies ${topDir}/: move it into a directory such as bin/, or beside plugin.json)`
+              : "";
+          missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output${hint}`);
         }
       }
     }
@@ -467,8 +361,7 @@ export function findMissingCorePickerAssets(distRoot) {
 
 /**
  * Same severity model as `validateCopiedPluginAssets`: a warning under watch,
- * where a cold build may not have emitted the bundle yet, and a hard failure
- * otherwise.
+ * where it runs once the first build is ready, and a hard failure otherwise.
  */
 function validateGuestAssets() {
   const missing = findMissingCorePickerAssets(path.join(root, "dist-electron"));
@@ -529,7 +422,9 @@ export function findTypeScriptCommandHandlers(pluginsSrcRoot) {
         // The dedicated manifest validation step reports unreadable manifests.
         continue;
       }
-      const commands = manifest?.contributes?.commands ?? [];
+      // A half-edited manifest the watcher rechecks can have any shape.
+      const commands = manifest?.contributes?.commands;
+      if (!Array.isArray(commands)) continue;
       for (const command of commands) {
         const id = command?.id;
         if (typeof id !== "string" || id.length === 0) continue;
@@ -621,7 +516,6 @@ export function mainEsmConfig({ production, watch = false }) {
       // Keeps the chunks Main, the pty host and its analysis workers load one
       // byte per character in V8, which a regex literal's glyph undoes (#17023).
       ...(production && !watch ? [asciiOnlyOutputPlugin()] : []),
-      ...(watch ? [createReadyMarkerPlugin()] : []),
     ],
     // The import is aliased because the banner is raw text esbuild never renames
     // around: a bundled ESM module that imports `createRequire` itself (fflate's
@@ -633,42 +527,44 @@ export function mainEsmConfig({ production, watch = false }) {
   };
 }
 
-function createReadyMarkerPlugin() {
-  return {
-    name: "build-ready-marker",
-    setup(buildApi) {
-      buildApi.onEnd((result) => {
-        if (result.errors.length === 0) {
-          scheduleBuildReadyMarker();
-        }
-      });
-    },
-  };
+async function prepareCanopyReaderModel() {
+  const { fetched } = await canopyReaderModel.prepareModel();
+  if (fetched.length > 0)
+    console.log(`[Build] Fetched Canopy's reader model: ${fetched.join(", ")}`);
 }
 
 /**
  * Canopy's reader model ships inside the app (#16415): fetched once per
  * checkout from its pinned revision, and verified on every build. A build that
- * can't get it fails, since a package without it can't read a screen; a dev
- * watch only warns, so working offline still starts the app.
+ * can't get it fails before building anything, since a package without it
+ * can't read a screen. A dev watch starts building at once and prepares the
+ * model beside it (#17818), so the network never holds the app's launch: the
+ * unpackaged app waits for the model and reads with it only once every file
+ * matches its pin. Resolves once the build has started; `model` settles when
+ * the watch's preparation does, and never rejects.
  */
-async function prepareCanopyReaderModel() {
-  try {
-    const { fetched } = await canopyReaderModel.prepareModel();
-    if (fetched.length > 0)
-      console.log(`[Build] Fetched Canopy's reader model: ${fetched.join(", ")}`);
-  } catch (error) {
-    if (!isWatch) throw error;
-    console.warn(
-      `[Build] Canopy's reader model isn't ready (${error instanceof Error ? error.message : error}). ` +
-        "Canopy reads nothing until `npm run fetch:canopy-model` succeeds."
-    );
+export async function runWithCanopyModel({ watch, prepare, startBuild, warn = console.warn }) {
+  if (!watch) {
+    await prepare();
+    await startBuild();
+    return { model: Promise.resolve() };
   }
+  const building = startBuild();
+  const model = Promise.resolve()
+    .then(prepare)
+    .catch((error) => {
+      warn(
+        `[Build] Canopy's reader model isn't ready (${error instanceof Error ? error.message : error}). ` +
+          "Canopy reads nothing until `npm run fetch:canopy-model` succeeds."
+      );
+    });
+  await building;
+  return { model };
 }
 
 async function run() {
   console.log(`[Build] Starting build in ${isWatch ? "watch" : "single"} mode...`);
-  removeBuildReadyMarker();
+  removeBuildReadyMarker(buildReadyFile);
 
   // Gate the build on valid plugin manifests before cleaning or emitting any
   // output, so an invalid `plugin.json` neither wipes the prior build nor ships
@@ -687,7 +583,14 @@ async function run() {
     // between production builds and ship inside `dist-electron/**/*`.
     // `dist-electron/shared` is no build output: typecheck emitted shared/
     // there until #16279, and a checkout's leftover copy would still ship.
-    for (const dir of ["dist-electron/electron", "dist-electron/plugins", "dist-electron/shared"]) {
+    // Nor is `dist-electron/workflows`, copied until the DAG workflow system
+    // and its loader were removed.
+    for (const dir of [
+      "dist-electron/electron",
+      "dist-electron/plugins",
+      "dist-electron/shared",
+      "dist-electron/workflows",
+    ]) {
       const abs = path.join(root, dir);
       if (fs.existsSync(abs)) {
         fs.rmSync(abs, { recursive: true, force: true });
@@ -704,7 +607,6 @@ async function run() {
     outdir: "dist-electron/electron",
     format: "cjs",
     outExtension: { ".js": ".cjs" },
-    plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
   const guestConfigs = CORE_PICKER_GUEST_ASSETS.map((asset) =>
@@ -713,27 +615,46 @@ async function run() {
 
   const sdkConfig = pluginSdkRuntimeBuildConfig({ minify: isProd, absWorkingDir: root });
 
-  try {
-    await prepareCanopyReaderModel();
+  const startBuild = async () => {
     if (isWatch) {
-      const ctxEsm = await context(esmConfig);
-      const ctxCjs = await context(cjsConfig);
-      const ctxSdk = await context(sdkConfig);
-      const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
-
       // Every guest bundle gets its own watch context, so editing a guest's
-      // source rebuilds its asset in place.
-      await Promise.all([
-        ctxEsm.watch(),
-        ctxCjs.watch(),
-        ctxSdk.watch(),
-        ...ctxGuests.map((c) => c.watch()),
-      ]);
-      copyBuiltInWorkflows();
-      copyBuiltInPluginManifests();
-      copySamplePluginManifests();
-      validateCopiedPluginAssets();
-      validateGuestAssets();
+      // source rebuilds its asset in place. All of them gate the ready marker
+      // `npm run dev` waits on before it starts Electron.
+      await startWatchBuild({
+        configs: {
+          main: esmConfig,
+          preload: cjsConfig,
+          sdk: sdkConfig,
+          ...Object.fromEntries(
+            CORE_PICKER_GUEST_ASSETS.map((asset, index) => [
+              `guest:${asset.id}`,
+              guestConfigs[index],
+            ])
+          ),
+        },
+        readyFile: buildReadyFile,
+        copyAssets: () => {
+          // Armed before its first sync, so an edit made while that runs is
+          // not lost, and synced before the gate can publish `.build-ready.js`.
+          // The first sync is rechecked like any later pass, which covers an
+          // edit made since the startup gates ran.
+          watchPluginAssets({
+            srcRoot: PLUGIN_SRC_ROOT,
+            destRoot: PLUGIN_DIST_ROOT,
+            initialSync: true,
+            onChange: recheckSyncedPluginAssets,
+          });
+        },
+        onFirstReady: () => {
+          validateCopiedPluginAssets();
+          validateGuestAssets();
+        },
+        onError: (error) => {
+          console.error("[Build] Failed:", error);
+          process.exit(1);
+        },
+        createContext: context,
+      });
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([
@@ -743,14 +664,16 @@ async function run() {
         ...guestConfigs.map(build),
       ]);
       writeBuildInfo();
-      copyBuiltInWorkflows();
-      copyBuiltInPluginManifests();
-      copySamplePluginManifests();
+      syncAllPluginAssets();
       validateCopiedPluginAssets();
       validateGuestAssets();
-      writeBuildReadyMarker();
+      writeBuildReadyMarker(buildReadyFile);
       console.log("[Build] Complete.");
     }
+  };
+
+  try {
+    await runWithCanopyModel({ watch: isWatch, prepare: prepareCanopyReaderModel, startBuild });
   } catch (error) {
     console.error("[Build] Failed:", error);
     process.exit(1);

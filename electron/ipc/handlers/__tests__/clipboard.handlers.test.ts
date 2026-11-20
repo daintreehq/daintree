@@ -80,6 +80,8 @@ const fsModuleMock = vi.hoisted(() => ({
 vi.mock("fs", () => ({ default: fsModuleMock, ...fsModuleMock }));
 
 const projectStoreMock = vi.hoisted(() => ({
+  getAllProjectIdentities: vi.fn<() => Array<{ path: string }>>(() => []),
+  // Only here to catch a return to the status-repairing, ranked project list.
   getAllProjects: vi.fn<() => Array<{ path: string }>>(() => []),
 }));
 
@@ -608,7 +610,7 @@ describe("clipboard:thumbnail-from-path handler", () => {
     vi.clearAllMocks();
     // Default: realpath echoes its input so containment is path-prefix based.
     fsModuleMock.promises.realpath.mockImplementation((p: string) => Promise.resolve(p));
-    projectStoreMock.getAllProjects.mockReturnValue([]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([]);
     cleanup = registerClipboardHandlers();
   });
 
@@ -638,7 +640,7 @@ describe("clipboard:thumbnail-from-path handler", () => {
 
   it("reads a drag-dropped image contained in a project root", async () => {
     const projectRoot = path.join(path.parse(process.cwd()).root, "repo");
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: projectRoot }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: projectRoot }]);
     const filePath = path.join(projectRoot, "assets", "photo.png");
     const handle = makeFileHandle(() => Promise.resolve(Buffer.from([0x89, 0x50])));
     fsPromisesMock.open.mockResolvedValue(handle);
@@ -649,6 +651,9 @@ describe("clipboard:thumbnail-from-path handler", () => {
 
     expect(fsPromisesMock.open).toHaveBeenCalledWith(filePath, 1 | 0x20000);
     expect(result.filePath).toBe(filePath);
+    // A thumbnail must not reconcile project statuses: that repair would demote
+    // a project another host just activated.
+    expect(projectStoreMock.getAllProjects).not.toHaveBeenCalled();
   });
 
   it("rejects a path outside every allowed root with OUTSIDE_ROOT", async () => {

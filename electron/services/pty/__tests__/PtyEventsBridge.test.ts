@@ -4,6 +4,11 @@ import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 import type { PtyHostEvent } from "../../../../shared/types/pty-host.js";
 import {
+  _pendingTerminalInventoryPrefetchesForTests,
+  _resetTerminalInventoryPrefetchForTests,
+  prefetchTerminalInventory,
+} from "../../terminalInventoryPrefetch.js";
+import {
   clearClaudeUsageObservations,
   readClaudeUsageRecords,
 } from "../../claude/ClaudeUsageObservations.js";
@@ -12,6 +17,7 @@ describe("bridgePtyEvent", () => {
   afterEach(() => {
     events.removeAllListeners();
     clearClaudeUsageObservations();
+    _resetTerminalInventoryPrefetchForTests();
   });
 
   it("normalizes agent-state trigger and confidence before emitting", () => {
@@ -116,6 +122,72 @@ describe("bridgePtyEvent", () => {
 
     expect(handled).toBe(true);
     expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
+  });
+
+  it("forwards an update-installed set and clear with their two fields only (#17905)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:update-installed-changed", (payload) => payloads.push(payload));
+
+    expect(
+      bridgePtyEvent({
+        type: "agent-update-installed-changed",
+        terminalId: "term-1",
+        updateInstalled: {
+          observedAt: 1_000,
+          namesRestart: true,
+          line: "✔ Update installed · /restart to apply",
+        } as never,
+        timestamp: 1_000,
+      })
+    ).toBe(true);
+    bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: null,
+      timestamp: 2_000,
+    });
+
+    expect(payloads).toEqual([
+      {
+        terminalId: "term-1",
+        updateInstalled: { observedAt: 1_000, namesRestart: true },
+        timestamp: 1_000,
+      },
+      { terminalId: "term-1", updateInstalled: null, timestamp: 2_000 },
+    ]);
+  });
+
+  it("drops an inventory read taken before an update-installed change (#17905)", () => {
+    void prefetchTerminalInventory("p1", async () => []);
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual(["p1"]);
+
+    bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: { observedAt: 1_000, namesRestart: false },
+      timestamp: 1_000,
+    });
+
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual([]);
+  });
+
+  it.each([
+    ["no observation", undefined],
+    ["a non-boolean offer", { observedAt: 1_000, namesRestart: "yes" }],
+    ["a time that isn't one", { observedAt: Number.NaN, namesRestart: true }],
+  ])("drops an update-installed event carrying %s (#17905)", (_name, updateInstalled) => {
+    const payloads: unknown[] = [];
+    events.on("agent:update-installed-changed", (payload) => payloads.push(payload));
+
+    const handled = bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: updateInstalled as never,
+      timestamp: 1_000,
+    });
+
+    expect(handled).toBe(true);
+    expect(payloads).toEqual([]);
   });
 
   it("forwards a fallback offer from the host, and drops one with an unknown reason (#14370)", () => {

@@ -182,67 +182,75 @@ export function CloudPlacementNotice({
       body = "It opens there once its machine runs and Daintree is set up.";
   }
 
+  const calloutProps = {
+    size: "compact" as const,
+    ref: focusHandoffRef,
+    "data-testid": "worktree-pending-placement",
+    "data-stage": stage.kind,
+    title,
+    // Above the sidebar's full-card select overlay, like the card's other notices (#12087).
+    className: "relative z-10 mt-2",
+  };
+  const content = (
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <span className="break-words text-text-secondary select-text">{body}</span>
+      {actionError && <span className="text-text-primary">{actionError}</span>}
+      <div className="flex flex-wrap items-center gap-2">
+        {(stage.kind === "create-failed" ||
+          stage.kind === "failed" ||
+          (stage.kind === "machine" && retryChecks)) && (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={retry}
+            className="shadow-none inset-shadow-none"
+          >
+            Retry
+          </Button>
+        )}
+        {stage.kind === "setup" && (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={setUp}
+            className="shadow-none inset-shadow-none"
+          >
+            {usable ? `Open on ${hostName}` : "Set up…"}
+          </Button>
+        )}
+        {stage.kind === "machine" && !retryChecks && (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={details}
+            className="shadow-none inset-shadow-none"
+          >
+            Details…
+          </Button>
+        )}
+        {failedKind && deletable && (
+          <Button variant="ghost-danger" size="xs" onClick={(e) => openCancel(e, "delete")}>
+            Delete machine…
+          </Button>
+        )}
+        <Button variant="ghost" size="xs" onClick={(e) => openCancel(e, "keep")}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <div data-card-control="" className={cn(inGutter && "px-3 pb-2.5")}>
-      <Callout
-        severity={failedKind ? "error" : "neutral"}
-        icon={failedKind ? undefined : Server}
-        size="compact"
-        ref={focusHandoffRef}
-        role={failedKind ? "alert" : "status"}
-        data-testid="worktree-pending-placement"
-        data-stage={stage.kind}
-        title={title}
-        // Above the sidebar's full-card select overlay, like the card's other notices (#12087).
-        className="relative z-10 mt-2"
-      >
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <span className="break-words text-text-secondary select-text">{body}</span>
-          {actionError && <span className="text-text-primary">{actionError}</span>}
-          <div className="flex flex-wrap items-center gap-2">
-            {(stage.kind === "create-failed" ||
-              stage.kind === "failed" ||
-              (stage.kind === "machine" && retryChecks)) && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={retry}
-                className="shadow-none inset-shadow-none"
-              >
-                Retry
-              </Button>
-            )}
-            {stage.kind === "setup" && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={setUp}
-                className="shadow-none inset-shadow-none"
-              >
-                {usable ? `Open on ${hostName}` : "Set up…"}
-              </Button>
-            )}
-            {stage.kind === "machine" && !retryChecks && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={details}
-                className="shadow-none inset-shadow-none"
-              >
-                Details…
-              </Button>
-            )}
-            {failedKind && deletable && (
-              <Button variant="ghost-danger" size="xs" onClick={(e) => openCancel(e, "delete")}>
-                Delete machine…
-              </Button>
-            )}
-            <Button variant="ghost" size="xs" onClick={(e) => openCancel(e, "keep")}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Callout>
+      {failedKind ? (
+        <Callout {...calloutProps} severity="error" role="alert">
+          {content}
+        </Callout>
+      ) : (
+        <Callout {...calloutProps} severity="neutral" icon={Server} role="status">
+          {content}
+        </Callout>
+      )}
       {cancelling && (
         <CancelCloudPlacementDialog
           hostId={hostId}

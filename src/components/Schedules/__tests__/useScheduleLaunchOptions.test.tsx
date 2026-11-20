@@ -178,4 +178,28 @@ describe("useScheduleLaunchOptions", () => {
     expect(result.current.presetStatus).toBe("none");
     expect(result.current.stopsAtPrompts).not.toBeNull();
   });
+
+  it("counts Skip all on an agent with no bypass flag as stopping, since it adds none", () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { opencode: { dangerousMode: "on" } } },
+    } as never);
+    expect(
+      renderHook(() => useScheduleLaunchOptions("opencode", null)).result.current.stopsAtPrompts
+    ).toBe(true);
+  });
+
+  it("counts an Auto launch as not stopping, and an Auto the agent can't honour as stopping (#17435)", () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: { codex: { dangerousMode: "auto" }, gemini: { dangerousMode: "auto" } },
+        globalSkipPermissions: true,
+      },
+    } as never);
+    expect(
+      renderHook(() => useScheduleLaunchOptions("codex", null)).result.current.stopsAtPrompts
+    ).toBe(false);
+    expect(
+      renderHook(() => useScheduleLaunchOptions("gemini", null)).result.current.stopsAtPrompts
+    ).toBe(true);
+  });
 });

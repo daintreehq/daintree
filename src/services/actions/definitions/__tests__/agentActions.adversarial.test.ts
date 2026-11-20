@@ -1155,6 +1155,32 @@ describe("agentActions adversarial", () => {
     });
   });
 
+  it("agent.getState carries a working agent's update footer, leaving its state alone (#17905)", async () => {
+    const updateInstalled = { observedAt: 1717000010000, namesRestart: true };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-runtime"],
+      panelsById: {
+        "term-runtime": {
+          id: "term-runtime",
+          detectedAgentId: "claude",
+          agentState: "working",
+          lastStateChange: 1717000009000,
+          updateInstalled,
+        },
+      },
+    });
+
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agent.getState", { agentId: "claude" });
+
+    expect(result).toMatchObject({ state: "working", waitingReason: null, updateInstalled });
+    // What a caller receives: the result as the registered schema parses it.
+    const def = actions.get("agent.getState")!() as {
+      resultSchema?: { parse: (v: unknown) => unknown };
+    };
+    expect(def.resultSchema?.parse(result)).toMatchObject({ updateInstalled });
+  });
+
   it("agent.getState returns found:false with null fields when no panel matches", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["term-a"],

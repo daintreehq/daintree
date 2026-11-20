@@ -45,3 +45,36 @@ describe("projectSleepConfirmStore", () => {
     expect(() => useProjectSleepConfirmStore.getState().resolveConfirmation(true)).not.toThrow();
   });
 });
+
+describe("projectSleepConfirmStore choices", () => {
+  it("resolves a choice request with what the user chose", async () => {
+    const store = useProjectSleepConfirmStore.getState();
+    const answer = store.requestSleepChoice({ ...request("a"), offerWhenIdle: true });
+    store.resolveChoice({ when: "idle", pauseNote: true });
+    expect(await answer).toEqual({ when: "idle", pauseNote: true });
+    expect(useProjectSleepConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("answers a choice request null when cancelled or superseded", async () => {
+    const store = useProjectSleepConfirmStore.getState();
+    const first = store.requestSleepChoice(request("a"));
+    const second = store.requestSleepChoice(request("b"));
+    expect(await first).toBeNull();
+    store.resolveConfirmation(false);
+    expect(await second).toBeNull();
+    expect(useProjectSleepConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("answers a boolean request false when cancelled", async () => {
+    const answer = useProjectSleepConfirmStore.getState().requestConfirmation(request("a"));
+    useProjectSleepConfirmStore.getState().resolveChoice(null);
+    expect(await answer).toBe(false);
+  });
+
+  it("answers a boolean request true for a sleep now", async () => {
+    const store = useProjectSleepConfirmStore.getState();
+    const answer = store.requestConfirmation(request("a"));
+    store.resolveChoice({ when: "now" });
+    expect(await answer).toBe(true);
+  });
+});

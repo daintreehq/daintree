@@ -63,6 +63,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "schedules.runNow",
   "recipe.delete",
   "recipe.run",
@@ -73,6 +74,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -153,6 +155,7 @@ const BYPASS_WIRED = new Set([
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
   "project.sleepIdle", // same store and dialog
+  "project.sleepAll", // same store and dialog
   "project.restart", // same store and dialog
   "schedules.runNow", // deferred-promise via scheduleRunConfirmStore; ScheduleRunConfirmDialog resolves it
   "worktree.resource.teardown", // deferred-promise via worktreeResourceTeardownConfirmStore (#16948); WorktreeResourceTeardownConfirmDialog resolves it
@@ -175,6 +178,7 @@ const BYPASS_WIRED = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount", // agent/MCP-only (#17079); palette-hidden, Settings adds through its own dialog and the agentAccounts IPC
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
   // gates agent dispatch — no user-side ConfirmDialog to co-locate.
   "forge.createPR",

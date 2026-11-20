@@ -247,16 +247,23 @@ export function presetSourceLabel(source: PluginPresetLaunchSummary["source"]): 
   }
 }
 
-/** Whether a launch on a preset skips permission prompts, and why. Exported for tests. */
+/** What a launch on a preset does about permission prompts, and why. Exported for tests. */
 export function presetBypassLabel(
-  preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "skipsPermissions">,
+  preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "permissionLevel">,
   agentName: string
 ): string {
+  // The CLI default is named as such, not as "asked": Daintree adds no flag
+  // then, and the CLI's own settings decide whether it asks.
   if (preset.dangerousMode === "on") return "Skipped: the preset turns bypass on";
-  if (preset.dangerousMode === "off") return "Asked: the preset turns bypass off";
-  return preset.skipsPermissions
-    ? `Skipped: from ${agentName}'s settings`
-    : `Asked: from ${agentName}'s settings`;
+  if (preset.dangerousMode === "off") return "CLI default: the preset adds no permission flag";
+  if (preset.dangerousMode === "auto") {
+    return preset.permissionLevel === "auto"
+      ? `Auto: the preset turns on ${agentName}'s Auto mode`
+      : `CLI default: ${agentName} has no Auto mode for the preset to turn on`;
+  }
+  if (preset.permissionLevel === "skip") return `Skipped: from ${agentName}'s settings`;
+  if (preset.permissionLevel === "auto") return `Auto: from ${agentName}'s settings`;
+  return `CLI default: from ${agentName}'s settings`;
 }
 
 type DetailRow = { label: string; value: string; mono?: boolean };
@@ -265,7 +272,7 @@ type DetailRow = { label: string; value: string; mono?: boolean };
 function configurationRows(
   preset: Pick<
     PluginPresetLaunchSummary,
-    "dangerousMode" | "skipsPermissions" | "args" | "customFlags" | "envNames"
+    "dangerousMode" | "permissionLevel" | "args" | "customFlags" | "envNames"
   >,
   agentName: string
 ): DetailRow[] {
@@ -324,6 +331,9 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
   ];
   if (preset.accountName !== undefined) {
     rows.push({ label: "Account it pins", value: preset.accountName });
+  }
+  if (preset.continuesAtLimitReset === true) {
+    rows.push({ label: "At a usage limit", value: "Continues by itself once the limit resets" });
   }
   return (
     <div className="space-y-3">

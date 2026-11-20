@@ -80,9 +80,26 @@ export type McpDispatchHoldResult = { held: true; remainingMs: number } | { held
  * How far an approval in the MCP confirm dialog reaches (#12692). `once`
  * covers the call on screen; `session` also mints a time-bounded per-tool grant
  * for the agent pane that asked, so its next calls to the same tool run without
- * asking. Only offered to agent panes.
+ * asking. Only offered to agent panes. `delegate` also hands the action the
+ * assistant called over to it under "Ask, except for…" (#16752), so its later
+ * calls to that action run without asking; only offered for this machine's own
+ * assistant, by main, per request.
  */
-export type McpApprovalScope = "once" | "session";
+export type McpApprovalScope = "once" | "session" | "delegate";
+
+/**
+ * "Don't ask again for this kind of action" (#16752), as the dialog shows it.
+ * Display only: main keeps the id the assistant called and whose preference
+ * it writes, so nothing the view sends back can name another action or machine.
+ */
+export interface McpDelegationOffer {
+  /** The delegable action's label, as Settings lists it. */
+  label: string;
+  /** What still holds when it runs unasked: one sentence, no period. */
+  detail: string;
+  /** Approving with the tick switches Daintree confirmations to "Ask, except for…". */
+  switchesMode?: true;
+}
 
 /**
  * Why main is asking the user about a call it has not run (#12692, #12881).
@@ -122,6 +139,13 @@ export interface McpHostPreview {
  */
 export type McpDispatchAuthorization =
   "tier" | "project-setting" | "user" | "session-grant" | "native-grant" | "skip-preference";
+
+/**
+ * A condition under which an unconfirmed dispatch may run without asking,
+ * which only the view holding the pane can settle (#17917): the assistant's
+ * preset move, when it is the pane's next own fallback step. Set only by main.
+ */
+export type McpConfirmationCondition = "next-own-fallback";
 
 /**
  * Audit-record severity tier. Derived from the dispatch result at record-write
@@ -279,7 +303,17 @@ export interface McpAuditRecord {
    * (`host.call`, #13493); absent for every call made on this machine.
    */
   relay?: McpAuditRelay;
+  /**
+   * What let the call reach a resource its ledger didn't give it, when
+   * something did: `global-close` is the global Assistant closing a finished
+   * agent it didn't launch (#16750). Whether anyone approved is
+   * `confirmationDecision` or `authorization`, as for any call.
+   */
+  admission?: McpCallAdmission;
 }
+
+/** What admitted a call past its ownership ledger (#16750). */
+export type McpCallAdmission = "global-close";
 
 /**
  * Who a relayed call came from, as this host established it (#13493). `sender`

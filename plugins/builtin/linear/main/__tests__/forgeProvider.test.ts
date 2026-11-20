@@ -514,6 +514,170 @@ describe("repoStats", () => {
     await linearForgeProvider.repoStats!.getRepoStats(REPO);
     expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
+
+  describe("concurrent counts", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * Each of the first `expected` requests waits until the test answers it, in
+     * the order they were sent; any more fail at once, so a duplicate count
+     * shows up as a failed read rather than a read that never settles.
+     */
+    function heldPages(expected: number) {
+      const pending: Array<(response: Response) => void> = [];
+      fetchMock().mockImplementation(() =>
+        pending.length < expected
+          ? new Promise<Response>((resolve) => pending.push(resolve))
+          : Promise.reject(new Error("unexpected request"))
+      );
+      return {
+        async answer(index: number, response: Response) {
+          await vi.waitFor(() => expect(pending.length).toBeGreaterThan(index));
+          pending[index](response);
+        },
+      };
+    }
+
+    it("shares one page sequence between simultaneous reads of one team", async () => {
+      const pages = heldPages(2);
+      const reads = Array.from({ length: 8 }, () =>
+        linearForgeProvider.repoStats!.getRepoStats(REPO)
+      );
+      await pages.answer(0, idPage(250, true, "c1"));
+      await pages.answer(1, idPage(4, false));
+
+      const snapshots = await Promise.all(reads);
+
+      expect(snapshots.map((s) => s.counts.issueCount)).toEqual(Array(8).fill(254));
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+      expect(body(1).variables).toMatchObject({ after: "c1" });
+    });
+
+    it("counts each team on its own", async () => {
+      fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
+        const { variables } = JSON.parse(String(init.body));
+        return idPage(variables.filter.team.key.eq === "DES" ? 8 : 3, false);
+      });
+      const [eng, des] = await Promise.all([
+        linearForgeProvider.repoStats!.getRepoStats(REPO),
+        linearForgeProvider.repoStats!.getRepoStats({ ...REPO, repo: "DES" }),
+      ]);
+      expect(eng.counts.issueCount).toBe(3);
+      expect(des.counts.issueCount).toBe(8);
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("doesn't hand a new key's read the old key's count", async () => {
+      const pages = heldPages(2);
+      const oldRead = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      // The token alone, without the cache clear `setCredentials` adds: the
+      // key version by itself keeps the counts apart.
+      setMemoryToken("lin_api_other");
+      const newRead = linearForgeProvider.repoStats!.getRepoStats(REPO);
+
+      await pages.answer(1, idPage(9, false));
+      await pages.answer(0, idPage(2, false));
+
+      expect((await newRead).counts.issueCount).toBe(9);
+      expect((await oldRead).counts.issueCount).toBe(2);
+      const headers = (i: number) =>
+        (fetchMock().mock.calls[i][1] as RequestInit).headers as Record<string, string>;
+      expect(headers(1).Authorization).toBe("lin_api_other");
+      const cached = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+      expect(cached).toMatchObject({ source: "memory-cache", counts: { issueCount: 9 } });
+    });
+
+    it("fails every read sharing a failed count, and counts afresh on the next", async () => {
+      const pages = heldPages(1);
+      const reads = [
+        linearForgeProvider.repoStats!.getRepoStats(REPO),
+        linearForgeProvider.repoStats!.getRepoStats(REPO),
+      ];
+      await pages.answer(0, gql(null, { errors: [{ message: "Linear is down" }] }));
+      for (const read of reads) await expect(read).rejects.toThrow("Linear is down");
+      expect(fetchMock()).toHaveBeenCalledTimes(1);
+
+      fetchMock().mockImplementation(async () => idPage(6, false));
+      const retried = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+      expect(retried).toMatchObject({ source: "network", counts: { issueCount: 6 } });
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts a fresh count for a bypassing read, which an older count never rolls back", async () => {
+      const pages = heldPages(2);
+      const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
+
+      await pages.answer(1, idPage(5, false));
+      const refreshedSnapshot = await refreshed;
+      expect(refreshedSnapshot.counts.issueCount).toBe(5);
+      await pages.answer(0, idPage(3, false));
+      expect((await first).counts).toEqual(refreshedSnapshot.counts);
+
+      const cached = await linearForgeProvider.repoStats!.getRepoStats(REPO);
+      expect(cached).toMatchObject({ source: "memory-cache", counts: { issueCount: 5 } });
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("joins a read to the refresh still under way once the older count has settled", async () => {
+      const pages = heldPages(2);
+      const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
+      await pages.answer(0, idPage(3, false));
+      expect((await first).counts.issueCount).toBe(3);
+
+      const joined = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await pages.answer(1, idPage(5, false));
+
+      expect((await refreshed).counts.issueCount).toBe(5);
+      expect((await joined).counts.issueCount).toBe(5);
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the refresh under way when the older count fails", async () => {
+      const pages = heldPages(2);
+      const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      const refreshed = linearForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
+      await pages.answer(0, gql(null, { errors: [{ message: "Linear is down" }] }));
+      await expect(first).rejects.toThrow("Linear is down");
+
+      const joined = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await pages.answer(1, idPage(5, false));
+
+      expect((await refreshed).counts.issueCount).toBe(5);
+      expect((await joined).counts.issueCount).toBe(5);
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one count between reads of an expired entry, stamped when it began", async () => {
+      const start = 1_000_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(start);
+      fetchMock().mockResolvedValueOnce(idPage(2, false));
+      await linearForgeProvider.repoStats!.getRepoStats(REPO);
+
+      const expiredAt = start + 5 * 60_000;
+      now.mockReturnValue(expiredAt);
+      const pages = heldPages(1);
+      const first = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      now.mockReturnValue(expiredAt + 700);
+      const second = linearForgeProvider.repoStats!.getRepoStats(REPO);
+      await pages.answer(0, idPage(7, false));
+
+      for (const snapshot of await Promise.all([first, second])) {
+        expect(snapshot).toMatchObject({
+          source: "network",
+          counts: { issueCount: 7, lastUpdated: expiredAt, issueCountRefreshedAt: expiredAt },
+        });
+      }
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe("assignment Undo", () => {

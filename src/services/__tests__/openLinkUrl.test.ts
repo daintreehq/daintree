@@ -29,6 +29,9 @@ const remote = vi.hoisted(() => ({
   resolve: vi.fn<(url: string, hostId: string | null) => Promise<string>>((url) =>
     Promise.resolve(url)
   ),
+  failure: vi.fn<(url: string, error: unknown) => string>(
+    () => "Port 8765 is in use on this machine"
+  ),
 }));
 
 vi.mock("@/clients", () => ({ systemClient: { openExternal } }));
@@ -37,10 +40,11 @@ vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => selection },
 }));
-vi.mock("@/services/terminal/remoteLoopbackLinks", () => ({
+vi.mock("@/services/terminal/remoteLoopbackLinks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/terminal/remoteLoopbackLinks")>()),
   remoteHostOfView: () => remote.hostId,
   resolveTerminalLinkForHost: (url: string, hostId: string | null) => remote.resolve(url, hostId),
-  hostForwardFailure: () => "Port 8765 is in use on this machine",
+  hostForwardFailure: (url: string, error: unknown) => remote.failure(url, error),
 }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
@@ -55,7 +59,7 @@ vi.mock("@/store/panelStore", () => ({
   },
 }));
 
-import { openLinkUrl, opensInPanel } from "../openLinkUrl";
+import { openLinkUrl, openLinkUrlExternally, opensInPanel } from "../openLinkUrl";
 
 function browser(id: string, extra: Record<string, unknown> = {}) {
   return { id, kind: "browser", location: "grid", worktreeId: "w1", ...extra };
@@ -99,6 +103,7 @@ beforeEach(() => {
   });
   remote.hostId = null;
   remote.resolve.mockReset().mockImplementation((url) => Promise.resolve(url));
+  remote.failure.mockClear();
   withPanels();
 });
 
@@ -220,6 +225,145 @@ describe("openLinkUrl for an outside address", () => {
   it("never forwards in a local view", async () => {
     await openLinkUrl("https://ci.example.com");
     expect(remote.resolve).not.toHaveBeenCalled();
+  });
+});
+
+function openedExternally(): unknown[] {
+  return dispatch.mock.calls
+    .filter(([id]) => id === "system.openExternal")
+    .map(([, args]) => Reflect.get(Object(args), "url"));
+}
+
+describe("openLinkUrlExternally", () => {
+  it.each([
+    "http://localhost:3000/admin/0.0.0.0?tab=users#top",
+    "HTTP://Localhost:3000/Admin",
+    "http:localhost:3000/admin",
+  ])(
+    "opens a local address (%s) in the system browser exactly as saved, never in a panel",
+    async (saved) => {
+      withPanels(preview("p1"), browser("b1"));
+      serving("p1", "running", "http://localhost:3000");
+      await openLinkUrlExternally(saved);
+      expect(openedExternally()).toEqual([saved]);
+      expect(devServers.getAllSessions).not.toHaveBeenCalled();
+      expect(addPanel).not.toHaveBeenCalled();
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(navigatedTo()).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["localhost:3000/admin", "http://localhost:3000/admin"],
+    ["127.0.0.1:8080/x?y=1", "http://127.0.0.1:8080/x?y=1"],
+    ["[::1]:5173", "http://[::1]:5173"],
+    [
+      "localhost:3000/login?next=http://localhost:3000/",
+      "http://localhost:3000/login?next=http://localhost:3000/",
+    ],
+    [
+      "127.0.0.1:3000/app?next=http://example.com",
+      "http://127.0.0.1:3000/app?next=http://example.com",
+    ],
+  ])("reads a bare loopback address (%s) as http, as a panel would", async (saved, opened) => {
+    await openLinkUrlExternally(saved);
+    expect(openedExternally()).toEqual([opened]);
+  });
+
+  it.each([
+    ["status.example.com/incidents", "https://status.example.com/incidents"],
+    [
+      "https://user:token@files.example.com/download/0.0.0.0?sig=AbC#part",
+      "https://user:token@files.example.com/download/0.0.0.0?sig=AbC#part",
+    ],
+  ])("opens an outside address (%s) as the row's own open does", async (saved, opened) => {
+    await openLinkUrlExternally(saved);
+    expect(openedExternally()).toEqual([opened]);
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "mailto:team@example.com",
+    "mailto:me@localhost",
+    "ftp://localhost/file",
+  ])("refuses an address that isn't http(s) (%s), with a notice", async (saved) => {
+    await openLinkUrlExternally(saved);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Couldn't open link",
+        message: "Only http and https addresses can be opened.",
+      })
+    );
+  });
+
+  it("in a view bound to a host, forwards a loopback address's port and keeps the rest of it", async () => {
+    remote.hostId = "studio-01";
+    remote.resolve.mockImplementation((url) =>
+      Promise.resolve(url === "http://localhost:3000" ? "http://localhost:49152/" : url)
+    );
+    await openLinkUrlExternally("http://localhost:3000/docs/0.0.0.0?bind=0.0.0.0#setup");
+    expect(remote.resolve).toHaveBeenCalledTimes(1);
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:3000", "studio-01");
+    expect(openedExternally()).toEqual(["http://localhost:49152/docs/0.0.0.0?bind=0.0.0.0#setup"]);
+  });
+
+  it.each([
+    ["0.0.0.0:8000/admin?q=1", "http://localhost:8000", "http://localhost:49153/admin?q=1"],
+    ["http:localhost:8000/admin", "http://localhost:8000", "http://localhost:49153/admin"],
+    ["https:@localhost/admin", "https://localhost", "https://localhost:49153/admin"],
+  ])(
+    "in a view bound to a host, forwards %s, read as the system browser reads it",
+    async (saved, origin, opened) => {
+      remote.hostId = "studio-01";
+      remote.resolve.mockImplementation((url) =>
+        Promise.resolve(`${new URL(url).protocol}//localhost:49153/`)
+      );
+      await openLinkUrlExternally(saved);
+      expect(remote.resolve).toHaveBeenCalledWith(origin, "studio-01");
+      expect(openedExternally()).toEqual([opened]);
+    }
+  );
+
+  it("in a view bound to a host, opens an outside address only once the forwarding has answered", async () => {
+    remote.hostId = "studio-01";
+    const saved = "https://auth.example.com/authorize?redirect_uri=http://localhost:8765/cb";
+    let answer!: (url: string) => void;
+    remote.resolve.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const opening = openLinkUrlExternally(saved);
+    await Promise.resolve();
+    expect(remote.resolve).toHaveBeenCalledWith(saved, "studio-01");
+    expect(openedExternally()).toEqual([]);
+    answer(saved);
+    await opening;
+    expect(openedExternally()).toEqual([saved]);
+  });
+
+  it("in a view bound to a host, says why when the forward fails and opens nothing", async () => {
+    remote.hostId = "studio-01";
+    const error = new Error("refused");
+    remote.resolve.mockRejectedValue(error);
+    await openLinkUrlExternally("http://localhost:3000/admin");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(remote.failure).toHaveBeenCalledWith("http://localhost:3000/admin", error);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't open link",
+        message: "Port 8765 is in use on this machine",
+      })
+    );
+  });
+
+  it("never forwards in a local view", async () => {
+    await openLinkUrlExternally("http://localhost:3000/admin");
+    expect(remote.resolve).not.toHaveBeenCalled();
+    expect(openedExternally()).toEqual(["http://localhost:3000/admin"]);
   });
 });
 

@@ -57,16 +57,13 @@ export function pluginCloudProviderId(
   return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;
 }
 
-/**
- * Whether a new account may be connected for this provider. Only Daintree's
- * own providers for now: a plugin's provider gets an account only once the
- * person has agreed to hand that plugin credentials (#17352).
- */
-export function canConnectCloudAccount(providerId: CloudProviderId): boolean {
-  return cloudProviderNamespace(providerId)?.kind === "built-in";
-}
-
 export { isValidCloudBindingId } from "./remoteHosts.js";
+
+const CLOUD_ACCOUNT_ID = /^ca_[a-z0-9]{8,32}$/;
+
+export function isValidCloudAccountId(id: unknown): id is string {
+  return typeof id === "string" && CLOUD_ACCOUNT_ID.test(id);
+}
 
 /**
  * What a stop keeps and loses, in the provider's own terms. The UI words every
@@ -219,6 +216,12 @@ export interface CloudProviderInfo {
   id: CloudProviderId;
   name: string;
   description: string;
+  /**
+   * The runtime limit a new machine's form starts at, in hours, for a
+   * provider whose create chooses one; null for none. Absent:
+   * {@link DEFAULT_CLOUD_LIFETIME_HOURS}.
+   */
+  defaultLifetimeHours?: number | null;
   /** Where to create an account or an API key; opened in the system browser. */
   apiKeyUrl: string;
   dashboardUrl: string;
@@ -228,6 +231,37 @@ export interface CloudProviderInfo {
   capabilities: CloudProviderCapabilities;
   /** Null when this platform's Shell can use the provider; otherwise why not. */
   unsupportedReason: string | null;
+  /** Present for a plugin's provider: the plugin behind it, and whether the person has agreed to it. */
+  plugin?: CloudProviderPluginConsent;
+  /**
+   * A machine's host can stop it once the host's idle time ends: Boat's
+   * machine keys (#17361), EC2's and Compute Engine's guest power-off
+   * (#17362). Set by this device for every registered provider, from what the
+   * provider implements, never from a declaration, so a plugin's is false.
+   */
+  hostIdleStop?: boolean;
+}
+
+/**
+ * Who stands behind a plugin's cloud provider (#17352). The plugin receives
+ * the credentials entered, chooses the machines Daintree connects to and
+ * vouches for their identity, and creates machines that bill the person's
+ * own account, so it gets an account only once the person has agreed.
+ */
+export interface CloudProviderPluginConsent {
+  pluginId: string;
+  /** The plugin's display name, or its id when it has none. */
+  pluginName: string;
+  /**
+   * What the person agrees to: every cloud provider the plugin declares now.
+   * Sent back as `consent` with a check, connect, replace or review of an
+   * account, so agreement to one version of the plugin never answers for another.
+   */
+  fingerprint: string;
+  /** The person has agreed to exactly these declarations; false asks before any credentials go to it. */
+  granted: boolean;
+  /** The names of the providers one agreement covers. */
+  providerNames: string[];
 }
 
 /**
@@ -248,12 +282,28 @@ export type CloudAccountValidation =
   | { status: "invalid"; checkedAt: number; detail: string }
   | { status: "unknown"; checkedAt: number | null; detail: string | null };
 
+/**
+ * What a plugin's cloud provider was last known as (#17353), kept with each of
+ * its accounts so they still name it, and link its console, once the plugin is
+ * turned off, blocked or uninstalled and its manifest can't be read.
+ */
+export interface CloudPluginProviderLabel {
+  /** The plugin's display name. */
+  pluginName: string;
+  /** The provider's own name, as its manifest declared it. */
+  providerName: string;
+  /** The provider's console; null when what was kept doesn't read as a public https URL. */
+  dashboardUrl: string | null;
+}
+
 /** A connected provider account, as the renderer sees it: never its key. */
 export interface CloudAccountSummary {
   id: string;
   providerId: CloudProviderId;
   /** Null while its provider is registered; otherwise why it can't be used now. The account is kept either way. */
   providerUnavailable: string | null;
+  /** What its plugin's provider was last known as; absent or null for a built-in, or before it was ever seen. */
+  pluginProvider?: CloudPluginProviderLabel | null;
   displayName: string;
   /** Who the key signs in as, as the provider reports it. */
   identity: string | null;
@@ -591,6 +641,8 @@ export interface CloudHostStatus {
   providerId: CloudProviderId;
   /** Null while its provider is registered; otherwise why the machine can't be reached now. The host is kept either way. */
   providerUnavailable: string | null;
+  /** Its account's {@link CloudAccountSummary.pluginProvider}. */
+  pluginProvider?: CloudPluginProviderLabel | null;
   accountId: string;
   accountName: string;
   /** Null before the machine exists (a saved draft or a create still under way). */
@@ -646,11 +698,56 @@ export interface CloudHostStatus {
    */
   selfStopProblem?: string | null;
   /**
+   * What this device does once the host's idle time ends, while it is linked
+   * to the host, for a plugin provider's machine that can't stop itself
+   * (#17923). Absent or null for a machine this device never stops.
+   */
+  linkedIdleStop?: CloudLinkedIdleStop | null;
+  /**
    * The provider put the stopped machine to sleep on idle rather than being
    * asked to stop it: a request to it would wake it, and it bills as stopped.
    */
   asleep: boolean;
+  /**
+   * The machine's own idle timeout follows its host's idle time: Daintree
+   * created it, or the person picked an idle time for it here (#17916). An
+   * imported machine keeps its own until then. Optional for snapshots from before it.
+   */
+  idleTimeFollowsHost?: boolean;
+  /**
+   * Whether the host holds the machine awake while it sees work with no
+   * device connected, as this device last heard from it (#17918). Absent or
+   * null for a provider with no such hold.
+   */
+  keepAwake?: CloudKeepAwake | null;
 }
+
+/**
+ * `held`: the host said it holds a link that keeps the machine awake while
+ * it sees work until `expiresAt`, when this device last asked at
+ * `confirmedAt`; `reached` once it said a request through that link reached
+ * it. `expired`: the last one it said it held has run out. `none`: it holds
+ * none, with why when the host or this device found out; a null problem is
+ * nothing handed over yet.
+ */
+export type CloudKeepAwake =
+  | { kind: "held"; expiresAt: number; confirmedAt: number; reached: boolean }
+  | { kind: "expired"; expiredAt: number }
+  | { kind: "none"; problem: string | null };
+
+/**
+ * `stops`: this device stops the machine with the provider's normal stop once
+ * the host grants it the ended idle time. `sleeps`: it puts the machine to
+ * sleep the same way, for a provider whose own idle timer a link keeps from
+ * running, which is in charge with no device linked (#17916). `unknown`: the
+ * provider hasn't said yet whether a stop would keep this machine's disk.
+ * `blocked`: why it doesn't.
+ */
+export type CloudLinkedIdleStop =
+  | { kind: "stops" }
+  | { kind: "sleeps" }
+  | { kind: "unknown" }
+  | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {
@@ -701,12 +798,26 @@ export interface CloudAccountAddRequest {
   credentials: CloudCredentialValues;
   scopeId: string;
   displayName?: string;
+  /** For a plugin's provider: `CloudProviderPluginConsent.fingerprint` as shown to the person. */
+  consent?: string;
 }
 
 export interface CloudHostsSnapshot {
   providers: CloudProviderInfo[];
   accounts: CloudAccountSummary[];
   hosts: CloudHostStatus[];
+}
+
+/**
+ * A cloud account whose provider comes from a plugin, as that plugin's
+ * uninstall asks about it (#17353): the account, and the hosts that would
+ * leave this device with it. Their machines are never touched either way.
+ */
+export interface PluginCloudAccountInfo {
+  id: string;
+  name: string;
+  providerName: string;
+  hosts: Array<{ hostId: string; name: string }>;
 }
 
 export type CloudHostsEvent = { type: "changed"; snapshot: CloudHostsSnapshot };

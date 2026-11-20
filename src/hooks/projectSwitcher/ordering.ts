@@ -1,5 +1,10 @@
 import { rankSwitcherMatches, type SearchActivityKey } from "@/lib/projectSwitcherSearch";
-import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
+import {
+  compareProjectStrict,
+  compareProjectNames,
+  compareProjectsByMode,
+  type OtherProjectsSortMode,
+} from "@/lib/projectSort";
 import {
   groupBandKey,
   groupIdOfBandKey,
@@ -300,9 +305,9 @@ export function compareWithinSection(
     // Alphabetical primary AND the only tie-breaks: falling through to
     // lastOpened would quietly reintroduce the adaptive reordering the
     // alphabetical choice exists to avoid.
-    const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    const byName = compareProjectNames(a.name, b.name);
     if (byName !== 0) return byName;
-    return a.id.localeCompare(b.id);
+    return compareProjectStrict(a.id, b.id);
   } else if (section === "running") {
     if (a.activeAgentCount !== b.activeAgentCount) {
       return b.activeAgentCount - a.activeAgentCount;
@@ -318,7 +323,7 @@ export function compareWithinSection(
     return b.frecencyScore - a.frecencyScore;
   }
   if (a.lastOpened !== b.lastOpened) return b.lastOpened - a.lastOpened;
-  return a.name.localeCompare(b.name);
+  return compareProjectStrict(a.name, b.name);
 }
 
 /**

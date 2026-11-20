@@ -14,6 +14,7 @@ import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import { useProjectLayoutSeedStore } from "@/store/projectLayoutSeedStore";
 import { useProjectStore } from "@/store/projectStore";
 import { ProjectWelcomeNotice } from "./ProjectWelcomeNotice";
+import { WakeContinueNotice } from "@/components/WakeContinue/WakeContinueNotice";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
@@ -47,6 +48,9 @@ export function ProjectLayoutSeedNotice() {
       {/* The application's welcome waits on the layout, so the two strips
           take turns in the same place rather than stacking (#14106). */}
       <ProjectWelcomeNotice />
+      {/* Every grid layout shows this strip, so the wake's continue offer
+          rides along with it (#17883). */}
+      <WakeContinueNotice />
     </ErrorBoundary>
   );
 }

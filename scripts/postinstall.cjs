@@ -6,6 +6,7 @@ const { version: electronVersion } = require("electron/package.json");
 const { patchNodePtyBindingGyp } = require("./patchNodePtyBinding.cjs");
 const { patchNodePtyConptySource } = require("./patchNodePtyConpty.cjs");
 const { patchNodePtyFork } = require("./patchNodePtyFork.cjs");
+const { patchNodePtyWindowsResize } = require("./patchNodePtyWindowsResize.cjs");
 
 const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper", "mac-phys-footprint"];
 
@@ -32,6 +33,19 @@ function patchNodePtyWindowsHelper() {
   if (patched !== source) fs.writeFileSync(agentPath, patched);
 }
 
+function patchNodePtyWindowsTerminal() {
+  const terminalPath = path.join(
+    buildPath,
+    "node_modules",
+    "node-pty",
+    "lib",
+    "windowsTerminal.js"
+  );
+  const source = fs.readFileSync(terminalPath, "utf8");
+  const patched = patchNodePtyWindowsResize(source);
+  if (patched !== source) fs.writeFileSync(terminalPath, patched);
+}
+
 async function runPostinstall() {
   const failures = [];
 
@@ -53,6 +67,11 @@ async function runPostinstall() {
     patchNodePtyWindowsHelper();
   } catch (err) {
     failures.push({ module: "node-pty Windows helper patch", error: err });
+  }
+  try {
+    patchNodePtyWindowsTerminal();
+  } catch (err) {
+    failures.push({ module: "node-pty Windows terminal patch", error: err });
   }
 
   // better-sqlite3 is intentionally NOT rebuilt: since v13 it is an N-API

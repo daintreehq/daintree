@@ -25,6 +25,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -148,6 +149,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectStats,
   ProjectStatusMap,
@@ -844,8 +846,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * host. Keeps the project in the list as `closed` with its layout intact for
      * a non-destructive reopen. Accepts the project that is on screen: that
      * window keeps its view and drops to the no-project state in the renderer.
+     * `options` carries what the user's request saw of its agents (#17886).
      */
-    sleepProject(projectId: string): Promise<ProjectSleepResult>;
+    sleepProject(projectId: string, options?: ProjectSleepOptions): Promise<ProjectSleepResult>;
     /**
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
@@ -1101,7 +1104,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
-    set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    /**
+     * `lockContinueAtLimitReset` keeps each preset's stored
+     * `continueAtLimitReset`, for a writer that may not arm panes (#17912).
+     */
+    set(
+      agentId: AgentId,
+      settings: Partial<AgentSettingsEntry>,
+      options?: { lockContinueAtLimitReset?: boolean }
+    ): Promise<AgentSettings>;
     /**
      * Set the global skip-permissions override (#10432). Persisted as a
      * dot-path leaf so per-agent records aren't rewritten with defaults.
@@ -1158,6 +1169,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentToolbarPins: GeneratedElectronAPI["agentToolbarPins"] & {
     onChanged(
       callback: (snapshot: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot) => void
+    ): () => void;
+  };
+  // setFollowing comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  agentUsage: GeneratedElectronAPI["agentUsage"] & {
+    onChanged(
+      callback: (snapshot: import("./agentUsage.js").AgentUsageSnapshot) => void
     ): () => void;
   };
   // start / getJob / stop / retry come from GeneratedElectronAPI; onJobUpdated is a renderer-only subscription.
@@ -1234,6 +1251,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (query: import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery) => void
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
+  };
+  // set / list come from GeneratedElectronAPI (#17909).
+  codexLimitContinue: GeneratedElectronAPI["codexLimitContinue"] & {
+    onChanged(
+      callback: (change: import("../codexLimitContinuation.js").CodexLimitContinueChange) => void
+    ): () => void;
   };
   // hold / withdraw / sendNow / list come from GeneratedElectronAPI (#16379).
   composerHold: GeneratedElectronAPI["composerHold"] & {
@@ -2488,6 +2511,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * owns the session: one per audio chunk main hears, never to a cached view.
      */
     onLiveLevel(callback: (payload: VoiceLiveLevel) => void): () => void;
+    /** Every change to the on-device model's status, a download's progress included. */
+    onLocalModelStatus(callback: (status: LocalSpeechModelStatus) => void): () => void;
     /** To the owner, when another view's control panel paused or resumed it. */
     onPauseRequested(callback: (payload: VoicePauseRequest) => void): () => void;
     /**
@@ -2712,6 +2737,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          */
         requester?: import("./mcpServer.js").McpRequester;
         /**
+         * "Don't ask again for this kind of action" (#16752), set only by main
+         * on a local send for its own assistant's call. Display only.
+         */
+        delegationOffer?: import("./mcpServer.js").McpDelegationOffer;
+        /**
          * Main's deadline for the call as it stood when sent, epoch ms on
          * this machine's clock (#15648), set only by main. A confirm the view
          * reports moves it; until then, nothing may start after it.
@@ -2722,6 +2752,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * send, so the view answers with one large page.
          */
         actionsListWalk?: boolean;
+        /**
+         * When this unconfirmed dispatch may run unasked (#17917), set only
+         * by main; the view settles it from the pane's own state.
+         */
+        confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2729,8 +2764,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
-      /** Present only when the approver chose to keep allowing the tool (#12692). */
+      /**
+       * Present only when the approver chose to keep allowing the tool
+       * (#12692), or to stop asking about this kind of action (#16752).
+       */
       approvalScope?: import("./mcpServer.js").McpApprovalScope;
+      /**
+       * A request's `confirmationCondition` held and it ran unasked (#17917).
+       * Main believes it only for a request it sent one with.
+       */
+      authorization?: "skip-preference";
     }): void;
   };
   pluginBridge: {
@@ -2857,6 +2900,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * callback carries no data — re-pull via {@link list}. Returns a cleanup.
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
+    /**
+     * Subscribe to "this machine's added plugin catalogs changed" (#17434), from
+     * any window. Carries no data: re-read through `getCatalogSources` or
+     * `browseCatalog`. Returns a cleanup.
+     */
+    onCatalogSourcesChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
      * Subscribe to "a plugin's stored settings changed", from the settings form
      * or the plugin's own `host.settings.set`. Carries only the plugin instance
@@ -3228,8 +3277,11 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
  *   so no client commit timer is needed.
  * - "grok": xAI's `grok-voice-transcribe-2.0` streaming. Server-side endpointing
  *   like Deepgram's, with utterance finals that restate the whole utterance.
+ * - "local": NVIDIA's Nemotron 3.5 ASR Streaming on this device, from a model
+ *   downloaded on first use. Client-side VAD like OpenAI's; nothing leaves the
+ *   machine to transcribe.
  */
-export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
+export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok" | "local";
 
 /**
  * The model cleanup and spoken rewrite run on, the user's choice in settings.

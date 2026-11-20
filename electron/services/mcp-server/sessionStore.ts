@@ -19,13 +19,19 @@ import {
 } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
-import { ResourceOwnershipLedger } from "./resourceOwnership.js";
+import { ResourceOwnershipLedger, type OwnershipRecordObserver } from "./resourceOwnership.js";
 import { TerminalAdoptionLedger } from "./terminalAdoption.js";
 import { WorkerCreationHistory } from "./workerCreationHistory.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 import { ToolListRouteWatch } from "./toolListRouteWatch.js";
 
 export interface SessionStoreOptions {
+  /**
+   * Told how creation records come and go (#16845), so what an Assistant's
+   * conversation launched can outlive the app. Optional so bare test fixtures
+   * keep the ledger in memory only.
+   */
+  ownershipObserver?: OwnershipRecordObserver;
   /**
    * The launch generation main tracks for a terminal, stamped on each creation
    * {@link SessionStore.workerCreations} notes. Optional so bare test fixtures
@@ -177,7 +183,7 @@ export class SessionStore {
    * the resources themselves. A per-pane bearer's records are held by its
    * principal and outlive the session (#12487).
    */
-  readonly resourceOwnership = new ResourceOwnershipLedger();
+  readonly resourceOwnership: ResourceOwnershipLedger;
   /**
    * Terminals the user handed to an orchestrating pane (#12490) — a second,
    * separately written source of authority the non-destructive `*Owned` tools
@@ -252,6 +258,7 @@ export class SessionStore {
     this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
     this.dropBearerStateFn = options.dropBearerState ?? (() => {});
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
+    this.resourceOwnership = new ResourceOwnershipLedger(options.ownershipObserver);
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
     this.workerCreations = new WorkerCreationHistory(options.launchGenerationOf);
   }

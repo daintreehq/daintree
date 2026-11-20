@@ -266,7 +266,14 @@ import {
 } from "../scheduledRuns/scheduledRunAdmission.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
+import { FRECENCY_HALF_LIFE_MS } from "../../../shared/utils/frecency.js";
 import { events } from "../events.js";
+import {
+  prefetchHydrateResult,
+  consumePrefetchedHydrateResult,
+  _resetPrefetchHydrateCacheForTests,
+} from "../prefetchHydrateCache.js";
+import type { HydrateResult } from "../../../shared/types/ipc/app.js";
 
 describe("ProjectStore.getAllProjects reconciliation", () => {
   let store: ProjectStore;
@@ -382,6 +389,29 @@ describe("ProjectStore.getAllProjects reconciliation", () => {
       .where(eq(schema.projects.id, invalidStatusId))
       .get();
     expect(invalidRow?.status).toBe("closed");
+  });
+
+  it("reads the host inventory as the repair would leave the open set, writing nothing (#17798)", () => {
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+
+    const inventory = store.getProjectInventory();
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    const statusOf = (id: string) => inventory.find((p) => p.id === id)?.status;
+    // The pointer's project counts as open though its row says closed; the
+    // other active row stays active rather than demoted.
+    expect(statusOf(currentProjectId)).toBe("active");
+    expect(statusOf(staleActiveId)).toBe("active");
+    expect(statusOf(invalidStatusId)).toBe("bogus-status");
+    const rowStatus = (id: string) =>
+      db.select().from(schema.projects).where(eq(schema.projects.id, id)).get()?.status;
+    expect(rowStatus(currentProjectId)).toBe("closed");
+    expect(rowStatus(staleActiveId)).toBe("active");
+    expect(rowStatus(invalidStatusId)).toBe("bogus-status");
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
   });
 
   it("runs reconciliation inside an IMMEDIATE transaction", () => {
@@ -582,6 +612,176 @@ describe("ProjectStore.getAllProjectIdentities", () => {
   it("returns an empty list when no projects are registered", () => {
     db.delete(schema.projects).run();
     expect(store.getAllProjectIdentities()).toEqual([]);
+  });
+});
+
+/**
+ * The stats poll's read (#17806): every five seconds it needs each workspace's
+ * id and acknowledgement watermark, and nothing `getAllProjects()` adds.
+ */
+describe("ProjectStore.getCompletionWatermarks", () => {
+  let store: ProjectStore;
+  const currentId = "c".repeat(64);
+  const remoteActiveId = "a".repeat(64);
+  const closedId = "d".repeat(64);
+
+  function insert(id: string, status: string | null, lastCompletionSeenAt: number | null) {
+    db.insert(schema.projects)
+      .values({
+        id,
+        path: `/projects/${id.slice(0, 4)}`,
+        name: id.slice(0, 4),
+        emoji: "🌲",
+        lastOpened: 1_000,
+        status,
+        lastCompletionSeenAt,
+      })
+      .run();
+  }
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    // The current project still marked closed, and a project another machine
+    // just switched to, which is `active` without being this window's current.
+    insert(currentId, "closed", 5_000);
+    insert(remoteActiveId, "active", null);
+    insert(closedId, "closed", 0);
+    db.insert(schema.appState).values({ key: "currentProjectId", value: currentId }).run();
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("returns every project's id and raw watermark, stamped or not, and nothing else", () => {
+    const rows = store.getCompletionWatermarks();
+
+    expect(rows.map((row) => row.id).sort()).toEqual([closedId, currentId, remoteActiveId].sort());
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(["id", "lastCompletionSeenAt"]);
+    }
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.lastCompletionSeenAt]))).toEqual({
+      [currentId]: 5_000,
+      [remoteActiveId]: null,
+      [closedId]: 0,
+    });
+  });
+
+  it("reads in one unordered statement with no write and no status repair", () => {
+    const prepareSpy = vi.spyOn(sqlite, "prepare");
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+
+    store.getCompletionWatermarks();
+
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    expect(String(prepareSpy.mock.calls[0]![0]).toLowerCase()).not.toContain("order by");
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    const statuses = Object.fromEntries(
+      db
+        .select({ id: schema.projects.id, status: schema.projects.status })
+        .from(schema.projects)
+        .all()
+        .map((row) => [row.id, row.status])
+    );
+    // A remote switch's `active` survives the read; `getAllProjects()` would
+    // have demoted it to background.
+    expect(statuses[remoteActiveId]).toBe("active");
+    expect(statuses[currentId]).toBe("closed");
+
+    prepareSpy.mockRestore();
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("leaves the watermark map to the stamped projects", () => {
+    expect([...store.getLastCompletionSeenMap()]).toEqual([[currentId, 5_000]]);
+  });
+
+  it("returns an empty list when no projects are registered", () => {
+    db.delete(schema.projects).run();
+    expect(store.getCompletionWatermarks()).toEqual([]);
+  });
+});
+
+describe("ProjectStore.getRankedProjectIds", () => {
+  const NOW = 1_900_000_000_000;
+  const HALF_LIFE = 4 * 24 * 60 * 60 * 1000;
+  let store: ProjectStore;
+
+  function insert(id: string, frecencyScore: number, lastAccessedAt: number, lastOpened: number) {
+    db.insert(schema.projects)
+      .values({
+        id,
+        path: `/projects/${id.slice(0, 4)}`,
+        name: id.slice(0, 4),
+        emoji: "🌲",
+        lastOpened,
+        status: "background",
+        frecencyScore,
+        lastAccessedAt,
+      })
+      .run();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.useRealTimers();
+  });
+
+  it("ranks exactly as getAllProjects, down to a decayed tie broken by the raw score", () => {
+    const main = "a".repeat(64);
+    const legacy = "b".repeat(64);
+    const busiest = "e".repeat(64);
+    const stale = "f".repeat(64);
+    // Inserted before the legacy row, so row order alone would put it first.
+    // Both decay to exactly 1 with the same lastOpened, which only the raw
+    // score's presort can break, and it puts the legacy row first.
+    insert(main, 1, NOW, NOW - 10);
+    insert(legacy, 2, NOW - HALF_LIFE, NOW - 10);
+    insert(stale, 50, NOW - 40 * HALF_LIFE, NOW);
+    insert(busiest, 4, NOW, NOW - 20);
+
+    const ranked = store.getRankedProjectIds();
+
+    expect(ranked).toEqual([busiest, legacy, main, stale]);
+    expect(ranked).toEqual(store.getAllProjects().map((project) => project.id));
+  });
+
+  it("repairs no status on the way", () => {
+    // Active without being current: the row getAllProjects() would demote.
+    const remoteActive = "c".repeat(64);
+    insert(remoteActive, 1, NOW, NOW);
+    db.update(schema.projects)
+      .set({ status: "active" })
+      .where(eq(schema.projects.id, remoteActive))
+      .run();
+    const updateSpy = vi.spyOn(db, "update");
+
+    expect(store.getRankedProjectIds()).toEqual([remoteActive]);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    updateSpy.mockRestore();
+    expect(
+      db
+        .select({ status: schema.projects.status })
+        .from(schema.projects)
+        .where(eq(schema.projects.id, remoteActive))
+        .get()?.status
+    ).toBe("active");
   });
 });
 
@@ -1189,6 +1389,61 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
       [alphaId, betaId, gammaId].sort()
     );
   });
+
+  it("lists the host inventory without repairing the status a remote switch wrote (#17798)", () => {
+    store.recordRemoteActivation(betaId);
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+    const changesBefore = sqlite.prepare("SELECT total_changes() AS n").get() as { n: number };
+
+    const inventory = store.getProjectInventory();
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changesBefore);
+    const row = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+    expect(row.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(alphaId);
+    // Both live projects count as open, the remote one included.
+    const open = inventory.filter((p) => p.status === "active" || p.status === "background");
+    expect(open.map((p) => p.id).sort()).toEqual([alphaId, betaId, gammaId].sort());
+    expect(inventory.find((p) => p.id === betaId)).toStrictEqual({
+      id: betaId,
+      name: "Beta",
+      path: row.path,
+      status: "active",
+    });
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("orders the host inventory by decayed frecency, ties in the stored score's order (#17798)", () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const seed = (id: string, frecencyScore: number, halfLivesAgo: number) =>
+      db
+        .update(schema.projects)
+        .set({
+          frecencyScore,
+          lastAccessedAt: now - halfLivesAgo * FRECENCY_HALF_LIFE_MS,
+          lastOpened: tAlpha,
+        })
+        .where(eq(schema.projects.id, id))
+        .run();
+    // Alpha and Beta both decay to 2 and share lastOpened, so the stored score
+    // (Beta's 8 over Alpha's 2) breaks the tie; Gamma's raw 16 decays to 1.
+    seed(alphaId, 2, 0);
+    seed(betaId, 8, 2);
+    seed(gammaId, 16, 4);
+    try {
+      const order = store.getProjectInventory().map((p) => p.id);
+      expect(order).toEqual([betaId, alphaId, gammaId]);
+      // The worktree list stops at a cap in this order, so it is the app's own.
+      expect(order).toEqual(store.getAllProjects().map((p) => p.id));
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+  });
 });
 
 const PROVIDER = "github.forge.provider";
@@ -1760,6 +2015,20 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
 
     await store.removeProject(beta.id);
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a removed project's hover prefetch, so adding the folder back can't consume it", async () => {
+    const beta = await store.addProject(betaDir);
+    const payload = { project: { id: beta.id } } as unknown as HydrateResult;
+    try {
+      await prefetchHydrateResult(beta.id, async () => payload);
+
+      await store.removeProject(beta.id);
+
+      expect(consumePrefetchedHydrateResult(beta.id)).toBeUndefined();
+    } finally {
+      _resetPrefetchHydrateCacheForTests();
+    }
   });
 
   it("removes a project's scheduled-run history with it, and only its own", async () => {

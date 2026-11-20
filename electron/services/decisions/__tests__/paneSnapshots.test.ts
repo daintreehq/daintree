@@ -143,7 +143,9 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     getPtyClient: () => pane.client,
     watchPanes,
     store: {
-      listQuestions: vi.fn(async () => rows),
+      listQuestions: vi.fn(async (filter?: { status?: QuestionRow["local_status"][] }) =>
+        filter?.status ? rows.filter((r) => filter.status!.includes(r.local_status)) : rows
+      ),
       getQuestion: vi.fn(async (id: string) => rows.find((r) => r.question_id === id) ?? null),
       getMeta: vi.fn(async (key: string) => meta.get(key) ?? null),
       setMeta: vi.fn(async (key: string, value: string) => {
@@ -969,5 +971,17 @@ describe("PaneSnapshots", () => {
     });
 
     expect(published(bridge).map((p) => p.questionId)).toEqual(["q-open", "q-queued"]);
+  });
+
+  it("watches no pane while the only open questions are another machine's or history", async () => {
+    const env = await attached({
+      rows: [
+        row("q-elsewhere", { origin: origin({ host_id: "host_other" }) }),
+        row("q-history", { history_only: true }),
+      ],
+    });
+
+    expect(env.watchPanes).not.toHaveBeenCalled();
+    expect(env.bridge.publishSnapshot).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,8 @@ import { CloudHostStore, type CloudHostsStoreBackend } from "./CloudHostStore.js
 import { CloudHosts } from "./CloudHosts.js";
 import { CloudProviderRegistry } from "./CloudProviderRegistry.js";
 import { watchPluginCloudProviders } from "./pluginCloudProviderRegistrations.js";
+import { setPluginCloudConsentForgetter } from "../../services/plugin/pluginCloudProviders.js";
+import { events } from "../../services/events.js";
 
 export interface CloudHostsRuntime {
   cloudHosts: CloudHosts;
@@ -107,13 +109,24 @@ export function initCloudHosts(params: {
     onAccountRemoved: params.onAccountRemoved,
     beforeAccountRemoved: params.beforeAccountRemoved,
     unavailableReason: (providerId) => pluginProviders.unavailableReason(providerId),
+    pluginConsent: (providerId) => pluginProviders.consentSubject(providerId),
+    // Allowed again: work waiting on its accounts resumes as if the provider came back.
+    onConsentGranted: () => cloudHosts.providersChanged(),
+    pluginProviderLabel: (providerId) => pluginProviders.label(providerId),
   });
   const cloudHosts = new CloudHosts({
     accounts,
     store,
     emit: (snapshot) => params.emit({ type: "cloud-changed", snapshot }),
   });
-  const stopWatchingProviders = providers.onChange(() => cloudHosts.providersChanged());
+  // What a plugin's provider is called is kept with its accounts while it's registered, for when it isn't.
+  const stopWatchingProviders = providers.onChange(() => {
+    accounts.rememberPluginProviders();
+    cloudHosts.providersChanged();
+  });
+  accounts.rememberPluginProviders();
+  // A hand edit picked up by Reload configuration reaches whoever acts on the store, as a write would.
+  const stopWatchingReload = events.on("sys:config:reload", () => store.reloaded());
   // A plugin that failed to load, or finished loading, rewords its accounts' reasons;
   // with no plugin account there is nothing to reword.
   pluginStatusChanged = () => {
@@ -121,6 +134,8 @@ export function initCloudHosts(params: {
       cloudHosts.changed();
     }
   };
+  // An uninstalled plugin's consent goes; its accounts stay until it's allowed again.
+  setPluginCloudConsentForgetter((pluginId) => accounts.forgetPluginConsent(pluginId));
   const unregister = registerRemoteService("cloudHosts", cloudHosts);
   // Views that read before this started got the empty answer; tell them what there is.
   cloudHosts.changed();
@@ -131,6 +146,8 @@ export function initCloudHosts(params: {
     providers,
     dispose() {
       stopWatchingProviders();
+      stopWatchingReload();
+      setPluginCloudConsentForgetter(null);
       pluginProviders.dispose();
       unregister();
       cloudHosts.dispose();

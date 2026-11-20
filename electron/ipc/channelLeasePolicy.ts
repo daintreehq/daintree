@@ -36,6 +36,9 @@ export const CHANNEL_LEASE_POLICY = {
   // Host-wide agent settings, like `agent-settings:set` (#16040).
   "agent-accounts:add": "free",
   "agent-accounts:remove": "free",
+  "agent-accounts:rename": "free",
+  "agent-accounts:list-choices-away": "free",
+  "agent-accounts:apply-everywhere": "free",
   "agent-cli-copies:changed": "free",
   "agent-cli-copies:choose": "free",
   "agent-cli-copies:list": "free",
@@ -150,6 +153,10 @@ export const CHANNEL_LEASE_POLICY = {
   "codex:list-subagents": "free",
   "codex:match-restore-sessions": "free",
   "codex:read-quota": "free",
+  "codex-limit-continue:changed": "free",
+  "codex-limit-continue:list": "free",
+  // The handler holds arming to the project's driver, as for a submit (#17909).
+  "codex-limit-continue:set": "handler",
   "codex:refresh-quota": "free",
   "codex:read-context-usage": "free",
   "codex:read-subagent-transcript": "free",
@@ -180,6 +187,7 @@ export const CHANNEL_LEASE_POLICY = {
   "decisions:get-question-image": "free",
   "decisions:report-composer-drafts": "free",
   "dev-preview:all-sessions-changed": "free",
+  "dev-preview:cancel-destructive-preview-sizes": "free",
   "dev-preview:ensure": "driver",
   "dev-preview:get-all-sessions": "free",
   "dev-preview:get-by-worktree": "free",
@@ -348,9 +356,11 @@ export const CHANNEL_LEASE_POLICY = {
   "git:stage-all": "driver",
   "git:stage-file": "driver",
   "git:stage-files": "driver",
+  "git:stage-hunks": "driver",
   "git:unstage-all": "driver",
   "git:unstage-file": "driver",
   "git:unstage-files": "driver",
+  "git:unstage-hunks": "driver",
   "global-env:get": "free",
   "global-env:set": "free",
   "global:add-recipe": "free",
@@ -884,10 +894,10 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  *   with `when`, only for a call whose argument at `when.at` is `when.equals`,
  *   or, with `absent`, is missing (undefined or null).
  * - `optional: true` skips an argument that is absent; `optional: "caller"`
- *   falls back to the caller's project instead, and `"current-project"` to
- *   this Host's current project, for a handler that falls back to it.
- *   Otherwise an absent argument leaves the target unresolved, and the call
- *   is refused.
+ *   falls back to the caller's project instead, and `"caller-or-none"` to the
+ *   caller's project when it has one and to no project when it shows none,
+ *   for a handler that places the call the same way. Otherwise an absent
+ *   argument leaves the target unresolved, and the call is refused.
  * - `unowned: "allow"`: a path inside no registered project changes none.
  * - `missing: "allow"`: a terminal this Host confirms it no longer has changes
  *   none, for a call that only ends one: the pane closing after the host has
@@ -905,12 +915,12 @@ export type LeaseTargetSource =
   | {
       readonly from: "project" | "worktree";
       readonly at: LeaseArgPath;
-      readonly optional?: true | "caller" | "current-project";
+      readonly optional?: true | "caller" | "caller-or-none";
     }
   | {
       readonly from: "terminal";
       readonly at: LeaseArgPath;
-      readonly optional?: true | "caller" | "current-project";
+      readonly optional?: true | "caller" | "caller-or-none";
       readonly missing?: "allow";
     }
   | {
@@ -994,9 +1004,11 @@ export const CHANNEL_LEASE_TARGETS = {
   "git:stage-all": CWD_ARG,
   "git:stage-file": CWD_FIELD,
   "git:stage-files": CWD_FIELD,
+  "git:stage-hunks": CWD_FIELD,
   "git:unstage-all": CWD_ARG,
   "git:unstage-file": CWD_FIELD,
   "git:unstage-files": CWD_FIELD,
+  "git:unstage-hunks": CWD_FIELD,
   "help:adopt-detached-session": PROJECT_ARG,
   "help:discard-conversation": PROJECT_ARG,
   "help:provision-session": [
@@ -1077,9 +1089,10 @@ export const CHANNEL_LEASE_TARGETS = {
   "terminal:kill": ENDED_TERMINAL_ARG,
   "terminal:restart-service": [{ from: "every-project" }],
   "terminal:restore": TERMINAL_ARG,
-  // With no projectId the handler spawns into this Host's current project.
+  // With no projectId the handler spawns into the caller's project, or into
+  // none from a window that shows none.
   "terminal:spawn": [
-    { from: "project", at: [0, "projectId"], optional: "current-project" },
+    { from: "project", at: [0, "projectId"], optional: "caller-or-none" },
     { from: "path", at: [0, "cwd"], optional: true, unowned: "allow" },
   ],
   "terminal:trash": ENDED_TERMINAL_ARG,

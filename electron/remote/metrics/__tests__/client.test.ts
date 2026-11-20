@@ -637,6 +637,30 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("gives the idle clock only from a summary that came on the asking link lately (#17923)", () => {
+    let at = { wall: 1_000_000, mono: 5_000 };
+    const h = harness([descriptor("studio-01")], { clock: () => at });
+    const link = { pingSentAt: () => null } as unknown as LinkSession;
+    const other = { pingSentAt: () => null } as unknown as LinkSession;
+    const idle = { idleAfterMinutes: 30, lastWorkAt: 10, busy: false, idleEndsAt: 1_800_010 };
+    expect(h.client.idleOn("studio-01", link, 60_000)).toBeNull();
+
+    h.client.record("studio-01", { ...summary(1_900_000), idle }, link);
+    expect(h.client.idleOn("studio-01", link, 60_000)).toEqual({ idle, sampledAt: 1_900_000 });
+    // Another link's word, or one older than asked for by either clock, isn't the host's now.
+    expect(h.client.idleOn("studio-01", other, 60_000)).toBeNull();
+    at = { wall: 1_000_000 + 59_000, mono: 5_000 + 59_000 };
+    expect(h.client.idleOn("studio-01", link, 60_000)).not.toBeNull();
+    at = { wall: 1_000_000 - 10_000, mono: 5_000 + 60_000 };
+    expect(h.client.idleOn("studio-01", link, 60_000)).toBeNull();
+
+    // A summary without the idle clock says nothing of it.
+    at = { wall: 2_000_000, mono: 100_000 };
+    h.client.record("studio-01", summary(1_950_000), link);
+    expect(h.client.idleOn("studio-01", link, 60_000)).toBeNull();
+    h.client.dispose();
+  });
+
   it("tells which link each summary came on, keeping the history across a reconnect (#15736)", () => {
     const h = harness([descriptor("studio-01")]);
     const before = { pingSentAt: () => null } as unknown as LinkSession;

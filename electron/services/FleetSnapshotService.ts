@@ -563,6 +563,6 @@ function sameCanopyRefinement(
   if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
   if (a.kind === "stalled" && b.kind === "stalled") return a.stalledSince === b.stalledSince;
   if (a.kind === "not-asking" && b.kind === "not-asking") return a.seen === b.seen;
-  if (a.kind === "asked" && b.kind === "asked") return a.seen === b.seen;
+  if (a.kind === "asked" && b.kind === "asked") return a.seen === b.seen && a.ask === b.ask;
   return true;
 }

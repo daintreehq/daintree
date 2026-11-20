@@ -8,6 +8,7 @@ import type {
 } from "../../../../shared/types/cloudHosts.js";
 import type {
   CloudProvider,
+  GuestPowerOffCheck,
   ProviderCatalog,
   ProviderCreateRequest,
   ProviderCredentials,
@@ -175,6 +176,9 @@ export function ec2Resource(region: string, instance: Ec2Instance): ProviderReso
   const spec = ec2InstanceType(instance.instanceType);
   const machine = ec2MachineState(instance.state);
   const reason = instance.stateReason;
+  const shutDownByItself =
+    instance.stateReasonCode === "Client.InstanceInitiatedShutdown" ||
+    /^Client\.InstanceInitiatedShutdown/.test(reason ?? "");
   return {
     resourceId: ec2ResourceId(region, instance.instanceId),
     name: instance.tags.Name || instance.instanceId,
@@ -193,9 +197,15 @@ export function ec2Resource(region: string, instance: Ec2Instance): ProviderReso
     snapshotsDisabled: false,
     labels: instance.tags,
     restricted: false,
-    // A stop someone asked for isn't a failure; anything else that stopped it is AWS's word on why.
+    // A stop someone asked for, or the machine powering itself off once idle, isn't a failure;
+    // anything else that stopped it is AWS's word on why.
     error:
-      reason && machine !== "running" && !/^Client\.UserInitiated/.test(reason) ? reason : null,
+      reason &&
+      machine !== "running" &&
+      !/^Client\.UserInitiated/.test(reason) &&
+      !((machine === "stopping" || machine === "stopped") && shutDownByItself)
+        ? reason
+        : null,
   };
 }
 
@@ -474,6 +484,7 @@ export class AwsProvider implements CloudProvider {
         ["MinCount", "1"],
         ["MaxCount", "1"],
         ...(groupId ? ([["SecurityGroupId.1", groupId]] as Params) : []),
+        ["InstanceInitiatedShutdownBehavior", "stop"],
         ["MetadataOptions.HttpTokens", "required"],
         // Tagging at launch is its own permission, for the instance and its volume alike.
         ...tagSpecification(1, "instance", launchTags),
@@ -856,12 +867,13 @@ export class AwsProvider implements CloudProvider {
 
   async stop(
     credentials: ProviderCredentials,
-    resourceId: string
+    resourceId: string,
+    options: { once?: boolean } = {}
   ): Promise<ProviderResource | null> {
     const { region, instanceId } = requireResourceId(resourceId);
     let state: string | null;
     try {
-      state = await this.client.stopInstance(this.ctx(credentials, region), instanceId);
+      state = await this.client.stopInstance(this.ctx(credentials, region), instanceId, options);
     } catch (error) {
       return this.joinTransition(credentials, resourceId, error, ["stopping", "stopped"]);
     }
@@ -948,6 +960,75 @@ export class AwsProvider implements CloudProvider {
         await this.sleep(TERMINATE_RETRIES[attempt]!, ctx.signal);
       }
     }
+  }
+
+  /**
+   * An EBS-backed, on-demand instance whose own shutdown stops it (#17362).
+   * The shutdown setting takes `ec2:DescribeInstanceAttribute`, which managing
+   * machines doesn't need: without it, the machine just doesn't stop itself.
+   */
+  async checkGuestPowerOff(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<GuestPowerOffCheck> {
+    const { region, instanceId } = requireResourceId(resourceId);
+    if (!/^\d{12}$/.test(credentials.scopeId)) {
+      return {
+        eligible: false,
+        target: null,
+        problem: "This account doesn't name an AWS account number.",
+      };
+    }
+    const target = {
+      provider: "aws" as const,
+      accountId: credentials.scopeId,
+      region,
+      instanceId,
+    };
+    const no = (problem: string): GuestPowerOffCheck => ({ eligible: false, target, problem });
+    const ctx = this.ctx(credentials, region);
+    const [instance] = await this.client.describeInstances(ctx, { instanceIds: [instanceId] });
+    if (!instance || ec2MachineState(instance.state) === "deleted") {
+      return no("AWS doesn't list this instance.");
+    }
+    if (instance.rootDeviceType !== "ebs") {
+      return no(
+        "Its root disk isn't an EBS volume, so powering it off would end it rather than stop it."
+      );
+    }
+    if (instance.instanceLifecycle) {
+      return no(
+        `It's a ${instance.instanceLifecycle} instance, so powering it off may not stop it normally.`
+      );
+    }
+    if ("aws:autoscaling:groupName" in instance.tags) {
+      return no("It belongs to an Auto Scaling group, which may replace it once it stops.");
+    }
+    // The types Daintree offers have no instance-store disks, whose data no stop keeps.
+    if (!ec2InstanceType(instance.instanceType)) {
+      return no(
+        `Daintree can't tell whether a ${instance.instanceType ?? "machine of this"} type has local disks a stop would erase.`
+      );
+    }
+    let behavior: string | null;
+    try {
+      behavior = await this.client.shutdownBehavior(ctx, instanceId);
+    } catch (error) {
+      if (error instanceof AwsApiError && error.kind === "forbidden") {
+        return no(
+          "These keys can't read what the instance does when its own OS shuts down (ec2:DescribeInstanceAttribute), so Daintree can't be sure that keeps its disk."
+        );
+      }
+      throw error;
+    }
+    if (behavior !== "stop") {
+      return no(
+        behavior === "terminate"
+          ? "It's set to terminate when its own OS shuts down, which would delete it rather than stop it."
+          : "AWS didn't say it stops when its own OS shuts down."
+      );
+    }
+    return { eligible: true, target };
   }
 
   async sshAccess(

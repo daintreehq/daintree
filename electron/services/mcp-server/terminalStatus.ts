@@ -266,6 +266,11 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     entry.waitingReason = record.waitingReason;
   }
 
+  // Kept on the pty-host record, so this surface sees it too (#17905).
+  if (record.updateInstalled !== undefined) {
+    entry.updateInstalled = record.updateInstalled;
+  }
+
   // Parsed on the pty-host and kept on its record, so unlike `lastCheckResult`
   // this surface can observe it (#12488); absent means none was seen.
   if (record.lastHandback !== undefined) {

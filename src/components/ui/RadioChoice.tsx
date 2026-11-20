@@ -36,6 +36,19 @@ export const CHOICE_SHELL =
 export const CHOICE_PAD = "px-3 py-2.5";
 
 /**
+ * The whole row is the click target, so its edge is the affordance and owes
+ * the 3:1 non-text floor on every theme: the ladder's `border-default` and
+ * `border-strong` are separation values (1.1-1.6:1 on a dark dialog) and left
+ * the options reading as loose radios (#17891). The resting edge is
+ * `border-input`, the same edge as a text field, and the chosen card steps to
+ * `selection-outline`, the neutral indicator ink; the fill alone is only
+ * 1.1:1 over the surface. Both are neutral, so accent stays free for the focus
+ * ring. No hover edge step: `border-strong` is weaker than the resting edge.
+ * `prefers-contrast: more` rebinds `border-input` to `text-secondary`, which
+ * would outweigh the chosen card's edge, so that mode inks it `text-primary`.
+ */
+
+/**
  * The transparent outline is not decoration. Under `forced-colors: active` the
  * UA overrides `outline-color` — including `transparent` — to a system colour,
  * so this is what keeps the chosen card distinguishable once the fill and the
@@ -43,10 +56,9 @@ export const CHOICE_PAD = "px-3 py-2.5";
  * rendering.
  */
 export const CHOICE_SELECTED =
-  "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
+  "border-selection-outline bg-overlay-selected outline outline-2 outline-transparent contrast-more:border-text-primary";
 
-export const CHOICE_UNSELECTED =
-  "border-border-default hover:bg-overlay-soft hover:border-border-strong";
+export const CHOICE_UNSELECTED = "border-border-input hover:bg-overlay-soft";
 
 /**
  * Control + `gap-3`, so a nested control lines up with the label column: the

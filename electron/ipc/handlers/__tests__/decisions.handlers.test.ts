@@ -31,6 +31,8 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
+  DecisionQuestionMarkResult,
+  MarkDecisionQuestionsPayload,
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
@@ -56,6 +58,12 @@ import type {
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
+import { DECISION_QUESTION_MARKS_PER_CALL } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../../shared/types/decisionsInvolvement.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -117,6 +125,12 @@ const decisionsEntry = vi.hoisted(() => ({
       _payload: CancelDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
   ),
+  markDecisionQuestions: vi.fn(
+    async (_payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => ({
+      result: "marked",
+      marked: 0,
+    })
+  ),
   answerDecisionQuestion: vi.fn(
     async (_payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> => ({
       result: "submitted",
@@ -151,6 +165,16 @@ const decisionsEntry = vi.hoisted(() => ({
   getDecisionFollowUpResult: vi.fn(
     async (_payload: GetDecisionFollowUpResultPayload): Promise<DecisionFollowUpResultRead> => ({
       result: "not-found",
+    })
+  ),
+
+  getDecisionsInvolvement: vi.fn(async (): Promise<DecisionsInvolvementRead> => ({
+    result: "not-running",
+  })),
+  setDecisionsInvolvement: vi.fn(
+    async (_payload: SetDecisionsInvolvementPayload): Promise<DecisionsInvolvementSaveResult> => ({
+      result: "saved",
+      revision: 1,
     })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
@@ -325,12 +349,15 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
+    markDecisionQuestions: decisionsEntry.markDecisionQuestions,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
     declineDecisionQuestion: decisionsEntry.declineDecisionQuestion,
     getDecisionDeclineResult: decisionsEntry.getDecisionDeclineResult,
     sendDecisionFollowUp: decisionsEntry.sendDecisionFollowUp,
     getDecisionFollowUpResult: decisionsEntry.getDecisionFollowUpResult,
+    getDecisionsInvolvement: decisionsEntry.getDecisionsInvolvement,
+    setDecisionsInvolvement: decisionsEntry.setDecisionsInvolvement,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -430,6 +457,9 @@ const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReferen
   .handler as unknown as (
   payload: CancelDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionCancelResult>;
+const markQuestions = decisionsNamespace.ops.markQuestions.handler as unknown as (
+  payload: MarkDecisionQuestionsPayload
+) => Promise<DecisionQuestionMarkResult>;
 const answerQuestion = decisionsNamespace.ops.answerQuestion.handler as unknown as (
   payload: AnswerDecisionQuestionPayload
 ) => Promise<DecisionQuestionAnswerResult>;
@@ -448,6 +478,11 @@ const sendFollowUp = decisionsNamespace.ops.sendFollowUp.handler as unknown as (
 const getFollowUpResult = decisionsNamespace.ops.getFollowUpResult.handler as unknown as (
   payload: GetDecisionFollowUpResultPayload
 ) => Promise<DecisionFollowUpResultRead>;
+const getInvolvement = decisionsNamespace.ops.getInvolvement
+  .handler as unknown as () => Promise<DecisionsInvolvementRead>;
+const setInvolvement = decisionsNamespace.ops.setInvolvement.handler as unknown as (
+  payload: SetDecisionsInvolvementPayload
+) => Promise<DecisionsInvolvementSaveResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -554,6 +589,13 @@ const RESTORE: RestoreDecisionsIdentityPayload = {
 
 type SafeParse = { safeParse(value: unknown): { success: boolean } };
 
+const INVOLVEMENT_CHANGE: SetDecisionsInvolvementPayload = {
+  expectedRevision: 3,
+  normalMode: "recommend",
+  consultCount: 2,
+  override: { mode: "involve-early", until: "2026-11-18T17:00:00.000Z" },
+};
+
 const QUESTION_ID = "0190f0aa11112222333344445555aa01";
 const ATTACHMENT_ID = "attach_0001";
 
@@ -597,6 +639,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+  CHANNELS.DECISIONS_MARK_QUESTIONS,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
   CHANNELS.DECISIONS_DECLINE_QUESTION,
@@ -650,12 +693,15 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
+    decisionsEntry.markDecisionQuestions.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
     decisionsEntry.declineDecisionQuestion.mockClear();
     decisionsEntry.getDecisionDeclineResult.mockClear();
     decisionsEntry.sendDecisionFollowUp.mockClear();
     decisionsEntry.getDecisionFollowUpResult.mockClear();
+    decisionsEntry.getDecisionsInvolvement.mockClear();
+    decisionsEntry.setDecisionsInvolvement.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -857,6 +903,9 @@ describe("decisions IPC", () => {
         await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
           result: "off",
         });
+        await expect(
+          markQuestions({ action: "clear", questions: [{ reference: REFERENCE, ask: null }] })
+        ).resolves.toEqual({ result: "off" });
 
         expect(decisionsEntry.evaluated).toBe(0);
         expect(decisionsEntry.libraries).toBe(0);
@@ -962,6 +1011,53 @@ describe("decisions IPC", () => {
     await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toEqual({
       result: "not-running",
     });
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+  ])(
+    "reads and changes no involvement preference with the setting %s, saying it's off, loading none of Decisions (#17237)",
+    async (_label, value) => {
+      saved.value = value;
+
+      await expect(getInvolvement()).resolves.toEqual({ result: "off" });
+      await expect(setInvolvement(INVOLVEMENT_CHANGE)).resolves.toEqual({ result: "off" });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it.each([
+    [
+      "serving its panes",
+      { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null },
+      "not-owner",
+    ],
+    ["turned off by its owner", { deviceId: "dev_host_1", ownerOffAt: 1, revokedAt: null }, "off"],
+    ["revoked", { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 }, "off"],
+  ] as const)(
+    "on an enrolled Remote Host %s, says its key never signs the involvement preference, loading none of Decisions (#17237)",
+    async (_label, host, said) => {
+      saved.value = { enabled: false };
+      saved.host = host;
+
+      await expect(setInvolvement(INVOLVEMENT_CHANGE)).resolves.toEqual(
+        said === "not-owner" ? { result: "refused", reason: "not-owner" } : { result: "off" }
+      );
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("changes no involvement preference once quit has sealed the loader, without loading it (#17237)", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(getInvolvement()).resolves.toEqual({ result: "not-running" });
+    await expect(setInvolvement(INVOLVEMENT_CHANGE)).resolves.toEqual({ result: "not-running" });
     expect(decisionsEntry.evaluated).toBe(0);
   });
 
@@ -1505,6 +1601,47 @@ describe("decisions IPC", () => {
       });
     });
 
+    it("hands the person's marks to Decisions once on, as they were sent (#17895)", async () => {
+      saved.value = { enabled: true };
+      const payload: MarkDecisionQuestionsPayload = {
+        action: "seen",
+        questions: [{ reference: REFERENCE, ask: "msg_agent_0001" }],
+      };
+      const marked: DecisionQuestionMarkResult = { result: "marked", marked: 1 };
+      decisionsEntry.markDecisionQuestions.mockResolvedValueOnce(marked);
+      await expect(markQuestions(payload)).resolves.toBe(marked);
+      expect(decisionsEntry.markDecisionQuestions).toHaveBeenCalledExactlyOnceWith(payload);
+    });
+
+    it("takes marks for whole references, a page at a time, and nothing else (#17895)", () => {
+      const schema = decisionsNamespace.ops.markQuestions.schema as SafeParse;
+      const one = { reference: REFERENCE, ask: null };
+      for (const action of ["seen", "clear", "restore"]) {
+        expect(schema.safeParse({ action, questions: [one] }).success).toBe(true);
+      }
+      expect(
+        schema.safeParse({
+          action: "clear",
+          questions: Array(DECISION_QUESTION_MARKS_PER_CALL).fill(one),
+        }).success
+      ).toBe(true);
+      for (const bad of [
+        { action: "clear", questions: [] },
+        { action: "clear", questions: Array(DECISION_QUESTION_MARKS_PER_CALL + 1).fill(one) },
+        { action: "answer", questions: [one] },
+        { action: "clear", questions: [{ reference: REFERENCE }] },
+        { action: "clear", questions: [{ ...one, ask: "" }] },
+        { action: "clear", questions: [{ ...one, extra: 1 }] },
+        {
+          action: "clear",
+          questions: [{ reference: { ...REFERENCE, questionId: "../q" }, ask: null }],
+        },
+        { action: "clear", questions: [one], projectId: "project-2" },
+      ]) {
+        expect(schema.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+    });
+
     it("takes a whole reference and nothing else", () => {
       const content = decisionsNamespace.ops.getQuestionContentByReference.schema as SafeParse;
       const cancel = decisionsNamespace.ops.cancelQuestionByReference.schema as SafeParse;
@@ -1715,6 +1852,77 @@ describe("decisions IPC", () => {
       expect(result.safeParse({ messageId: FOLLOW_UP.messageId }).success).toBe(true);
       for (const bad of [{}, { messageId: "../x" }, { messageId: FOLLOW_UP.messageId, extra: 1 }]) {
         expect(result.safeParse(bad).success).toBe(false);
+      }
+    });
+  });
+
+  describe("the person's involvement preference (#17237)", () => {
+    it("passes the read and the change to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const conflict: DecisionsInvolvementSaveResult = { result: "conflict", latestRevision: 5 };
+      const read: DecisionsInvolvementRead = {
+        result: "read",
+        role: "owner",
+        settable: true,
+        preference: {
+          status: "unavailable",
+          reason: "not-set",
+          revision: 7,
+          lastSyncedAt: "2026-11-18T09:00:00.000Z",
+          stale: false,
+        },
+      };
+      decisionsEntry.getDecisionsInvolvement.mockResolvedValueOnce(read);
+      decisionsEntry.setDecisionsInvolvement.mockResolvedValueOnce(conflict);
+
+      await expect(getInvolvement()).resolves.toBe(read);
+      await expect(setInvolvement(INVOLVEMENT_CHANGE)).resolves.toBe(conflict);
+
+      expect(decisionsEntry.getDecisionsInvolvement).toHaveBeenCalledOnce();
+      expect(decisionsEntry.setDecisionsInvolvement).toHaveBeenCalledExactlyOnceWith(
+        INVOLVEMENT_CHANGE
+      );
+    });
+
+    it("takes a change within the library's bounds, and nothing else", () => {
+      const schema = decisionsNamespace.ops.setInvolvement.schema as SafeParse;
+      expect(schema.safeParse(INVOLVEMENT_CHANGE).success).toBe(true);
+      for (const good of [
+        { ...INVOLVEMENT_CHANGE, override: null },
+        { ...INVOLVEMENT_CHANGE, consultCount: 1 },
+        { ...INVOLVEMENT_CHANGE, consultCount: 8 },
+        { ...INVOLVEMENT_CHANGE, expectedRevision: 0 },
+        { ...INVOLVEMENT_CHANGE, expectedRevision: Number.MAX_SAFE_INTEGER - 1 },
+        { ...INVOLVEMENT_CHANGE, normalMode: "involve-early" },
+        {
+          ...INVOLVEMENT_CHANGE,
+          override: { mode: "recommend", until: "2026-11-18T17:00:00.123Z" },
+        },
+      ]) {
+        expect(schema.safeParse(good).success, JSON.stringify(good)).toBe(true);
+      }
+      for (const bad of [
+        {},
+        { ...INVOLVEMENT_CHANGE, consultCount: 0 },
+        { ...INVOLVEMENT_CHANGE, consultCount: 9 },
+        { ...INVOLVEMENT_CHANGE, consultCount: 1.5 },
+        { ...INVOLVEMENT_CHANGE, expectedRevision: -1 },
+        { ...INVOLVEMENT_CHANGE, expectedRevision: Number.MAX_SAFE_INTEGER },
+        { ...INVOLVEMENT_CHANGE, expectedRevision: 2.5 },
+        { ...INVOLVEMENT_CHANGE, override: { mode: "ask", until: "2026-11-18T17:00:00.000Z" } },
+        { ...INVOLVEMENT_CHANGE, override: { mode: "recommend" } },
+        { ...INVOLVEMENT_CHANGE, normalMode: "ask" },
+        { ...INVOLVEMENT_CHANGE, override: undefined },
+        { ...INVOLVEMENT_CHANGE, override: { mode: "recommend", until: "2026-11-18T17:00:00Z" } },
+        {
+          ...INVOLVEMENT_CHANGE,
+          override: { mode: "recommend", until: "2026-11-18T17:00:00.000+01:00" },
+        },
+        { ...INVOLVEMENT_CHANGE, override: { ...INVOLVEMENT_CHANGE.override, extra: 1 } },
+        { ...INVOLVEMENT_CHANGE, setOn: "computer" },
+        { ...INVOLVEMENT_CHANGE, revision: 4 },
+      ]) {
+        expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
       }
     });
   });

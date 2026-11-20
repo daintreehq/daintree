@@ -3,7 +3,10 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { readAssistantConfirmationPolicy } from "./assistantConfirmationsPreference.js";
+import {
+  prepareAssistantDelegation,
+  readAssistantConfirmationPolicy,
+} from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
@@ -172,7 +175,14 @@ export interface SessionServerDepsSource {
     sessionOrigin?: McpSessionOrigin,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "approvalOnly" | "approvalReason" | "authorization" | "requester" | "actionsListWalk"
+      | "approvalOnly"
+      | "approvalReason"
+      | "authorization"
+      | "requester"
+      | "delegationOffer"
+      | "onDelegationApproved"
+      | "actionsListWalk"
+      | "confirmationCondition"
     >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
@@ -885,11 +895,16 @@ export function createSessionServerDeps(
     confirmed,
     authorization,
     relayCallId,
-    walk
+    callOptions
   ) => {
     // Main's own `actions.list` walk (#17036), carried only on the routes
     // that can reach a local view. A view-less host's catalog is one page.
-    const actionsListWalk = walk?.actionsListWalk === true;
+    const actionsListWalk = callOptions?.actionsListWalk === true;
+    const delegationOffer = callOptions?.delegationOffer;
+    const onDelegationApproved = callOptions?.onDelegationApproved;
+    // Settled by the view that holds the pane (#17917); a view-less host has
+    // none, so that route asks as it always did.
+    const confirmationCondition = callOptions?.confirmationCondition;
     if (boundWorkspaceId !== null) {
       // A bound external session records no context: unlike a help session,
       // which replays the ActionContext snapshot taken when the user launched
@@ -962,6 +977,15 @@ export function createSessionServerDeps(
                       }),
                   }
                 : {}),
+              ...(relay.local === true && relay.nextFallback && relayCallId !== undefined
+                ? {
+                    nextFallback: bindNextFallback(
+                      relay.nextFallback,
+                      relay.helpSessionId,
+                      relayCallId
+                    ),
+                  }
+                : {}),
             },
           }
         : undefined;
@@ -973,11 +997,12 @@ export function createSessionServerDeps(
             args,
             confirmed,
             sessionOrigin,
-            authorization !== undefined || actionsListWalk
+            authorization !== undefined || actionsListWalk || confirmationCondition !== undefined
               ? {
                   ...options,
                   ...(authorization !== undefined ? { authorization } : {}),
                   ...(actionsListWalk ? { actionsListWalk: true } : {}),
+                  ...(confirmationCondition !== undefined ? { confirmationCondition } : {}),
                 }
               : options
           )
@@ -1002,11 +1027,23 @@ export function createSessionServerDeps(
       // the model's turn (#8317). Absent for context-less sessions, in
       // which case pinned dispatch falls back to live renderer context.
       const boundContext = deps.sessionStore.sessionContextMap.get(sessionId);
-      return authorization !== undefined || assistantRequester !== undefined || actionsListWalk
+      // "Don't ask again" (#16752) only on this route, and only for this
+      // machine's own help session, never one relayed from another Shell.
+      const offer = assistantRequester !== undefined ? delegationOffer : undefined;
+      return authorization !== undefined ||
+        assistantRequester !== undefined ||
+        actionsListWalk ||
+        offer !== undefined ||
+        confirmationCondition !== undefined
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
             ...(authorization !== undefined ? { authorization } : {}),
             ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
             ...(actionsListWalk ? { actionsListWalk: true } : {}),
+            ...(offer !== undefined ? { delegationOffer: offer } : {}),
+            ...(offer !== undefined && onDelegationApproved !== undefined
+              ? { onDelegationApproved }
+              : {}),
+            ...(confirmationCondition !== undefined ? { confirmationCondition } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -1178,6 +1215,28 @@ export function createSessionServerDeps(
           relay: {
             shellName: relay.shellName,
             ...(relay.global === true ? { global: true as const } : {}),
+            // Only the global Assistant's: no other caller closes what it didn't launch.
+            ...(relay.global === true && relay.requestApproval !== undefined
+              ? {
+                  askClose: ((callId, ask) => {
+                    const askShell = relay.requestApproval!;
+                    // Inside the call's own wait, with room for the answer (#15699).
+                    const deadline = relay.callDeadline?.(callId);
+                    if (relay.callDeadline !== undefined && deadline === undefined) {
+                      return Promise.resolve({ decision: "timeout" as const });
+                    }
+                    return askShell({
+                      ...ask,
+                      callId,
+                      ...(deadline !== undefined
+                        ? { holdUntil: deadline - MCP_REMOTE_CONFIRM_MARGIN_MS }
+                        : {}),
+                    });
+                  }) satisfies NonNullable<
+                    NonNullable<import("./sessionServer.js").SessionServerDeps["relay"]>["askClose"]
+                  >,
+                }
+              : {}),
             refuseWrite: (projectId: string | undefined) => {
               if (boundWorkspaceId === null) return null;
               if (projectId !== undefined && projectId !== boundWorkspaceId) {
@@ -1255,6 +1314,10 @@ export function createSessionServerDeps(
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
             reveal: async (target, show) => boundSteer(host).reveal(target, show),
+            // No steer to read with is no agent it may close: the uniform refusal (#16750).
+            closeTarget: async (projectId, terminalId) =>
+              (await host.assistantControlBinding()?.steer?.closeTarget(projectId, terminalId)) ??
+              null,
           },
         }
       : {}),
@@ -1361,6 +1424,14 @@ export function createSessionServerDeps(
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
           : null) ?? null
       ),
+    // The same preference, for the agent the same session runs (#16752).
+    prepareAssistantDelegation: (calledActionId) =>
+      prepareAssistantDelegation(
+        (helpSessionId !== null
+          ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
+          : null) ?? null,
+        calledActionId
+      ),
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -1371,4 +1442,14 @@ export function createSessionServerDeps(
         }
       : {}),
   };
+}
+
+/** A local relay's matcher, bound to the one call a dispatch runs (#17917). */
+function bindNextFallback(
+  nextFallback: import("./shared.js").RelayNextFallback,
+  helpSessionId: string,
+  callId: string
+): NonNullable<NonNullable<WorkspaceDispatchOptions["relay"]>["nextFallback"]> {
+  return (projectId, actionId, args) =>
+    nextFallback({ callId, helpSessionId, projectId, actionId, args });
 }

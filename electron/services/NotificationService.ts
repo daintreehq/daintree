@@ -333,11 +333,16 @@ class NotificationService {
     );
   }
 
-  /** Counts each pane with a question waiting on the person once, however many it holds. */
+  /**
+   * Counts each pane with a question waiting on the person once, however many
+   * it holds. One whose ask they've seen or cleared here (#17895) waits on
+   * the agent's side only, and counts no more until it asks something new.
+   */
   private noteDecisionQuestions(list: DecisionQuestionList): void {
     const panes = new Map<string, string>();
     for (const question of list.questions) {
       if (question.standing.kind !== "waiting") continue;
+      if (question.inbox?.seen === true || question.inbox?.cleared === true) continue;
       const { projectId, terminalId } = question.reference;
       panes.set(paneKey(projectId, terminalId), projectId);
     }

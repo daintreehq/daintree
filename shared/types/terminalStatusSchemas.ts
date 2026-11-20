@@ -11,6 +11,7 @@ import {
   INPUT_LINE_TRUNCATED_DESCRIPTION,
   LAST_OUTPUT_CHANGE_AT_DESCRIPTION,
   LAST_TYPED_INPUT_AT_DESCRIPTION,
+  UPDATE_INSTALLED_DESCRIPTION,
 } from "./terminalStatus.js";
 
 /**
@@ -67,6 +68,11 @@ const TerminalHandbackSchema = z.object({
   truncated: z.boolean(),
 });
 
+/** Claude Code's "Update installed" footer as a run showed it (#17905). */
+export const UpdateInstalledObservationSchema = z
+  .object({ observedAt: z.number(), namesRestart: z.boolean() })
+  .describe(UPDATE_INSTALLED_DESCRIPTION);
+
 /** What a terminal read saw in the agent's input box (#16189), on `getStatus` and `getOutput` alike. */
 export const TerminalInputLineSchema = z
   .object({
@@ -81,6 +87,7 @@ export const TerminalStatusEntrySchema = z.object({
   agentId: z.string().nullable(),
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
+  updateInstalled: UpdateInstalledObservationSchema.optional(),
   lastTransitionAt: z.number().optional(),
   lastOutputChangeAt: z.number().optional().describe(LAST_OUTPUT_CHANGE_AT_DESCRIPTION),
   lastTypedInputAt: z.number().optional().describe(LAST_TYPED_INPUT_AT_DESCRIPTION),

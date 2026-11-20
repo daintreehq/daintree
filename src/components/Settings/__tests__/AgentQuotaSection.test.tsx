@@ -239,6 +239,26 @@ describe("AgentQuotaSection profiles (#13686)", () => {
     expect(document.body.textContent).not.toContain("the signed-in account");
   });
 
+  it("names the default profile after its login once the user names it, lone or not (#17080)", async () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { defaultLoginName: "Work" } } } as AgentSettings,
+    });
+    readQuota.mockResolvedValue(reading(10));
+    await renderFor("codex");
+    expect(labels()).toEqual(["Work · default login 5-hour limit used"]);
+
+    cleanup();
+    readProfiles.mockResolvedValue([
+      { key: "a", isDefault: true, presetNames: ["Personal"], result: reading(10) },
+      { key: "b", isDefault: false, presetNames: ["Lab"], result: reading(80) },
+    ]);
+    await renderFor("codex");
+    expect(labels()).toEqual([
+      "Work · default login · Personal 5-hour limit used",
+      "Lab 5-hour limit used",
+    ]);
+  });
+
   it("leaves a lone profile unnamed, as before presets were read", async () => {
     readQuota.mockResolvedValue(reading(10));
     await renderFor("codex");
@@ -604,6 +624,19 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     await renderFor("claude");
 
     expect(screen.getByText("Default login")).toBeTruthy();
+  });
+
+  it("names a lone default login's group, alias included, once the user names it (#17080)", async () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { claude: { defaultLoginName: "Home" } } } as AgentSettings,
+    });
+    readUsage.mockResolvedValue([claudeAccount({ accountNames: ["Personal"] })]);
+    await renderFor("claude");
+
+    expect(screen.getByText("Home · default login · Personal")).toBeTruthy();
+    expect(meters()[0]?.getAttribute("aria-label")).toBe(
+      "Home · default login · Personal weekly limit used"
+    );
   });
 
   it("offers Retry when the read fails before anything is shown, then shows the readings", async () => {

@@ -370,6 +370,40 @@ describe("hydration batch (#5196)", () => {
     expect(usePanelStore.getState().panelsById["term-6"]).toMatchObject({ agentIncarnation: 3 });
   });
 
+  // A view attached after the footer appeared knows of it only from the host
+  // record restore hands to addPanel (#17905).
+  it("restores a pane with the host's update-installed observation", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const updateInstalled = { observedAt: 1_000, namesRestart: true };
+
+    await addPanel({
+      kind: "terminal",
+      existingId: "term-7",
+      cwd: "/",
+      bypassLimits: true,
+      updateInstalled,
+    });
+
+    expect(usePanelStore.getState().panelsById["term-7"]).toMatchObject({ updateInstalled });
+  });
+
+  it("takes the host's update-installed observation over the pane's on reconnect", async () => {
+    const { addPanel } = usePanelStore.getState();
+    seedTerminal("term-8", { updateInstalled: { observedAt: 1_000, namesRestart: false } });
+
+    await addPanel({
+      kind: "terminal",
+      existingId: "term-8",
+      cwd: "/",
+      bypassLimits: true,
+      updateInstalled: { observedAt: 9_000, namesRestart: true },
+    });
+
+    expect(usePanelStore.getState().panelsById["term-8"]).toMatchObject({
+      updateInstalled: { observedAt: 9_000, namesRestart: true },
+    });
+  });
+
   it("leaves an unattributed panel unattributed across reconnect", async () => {
     const { addPanel } = usePanelStore.getState();
 

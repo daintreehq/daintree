@@ -4,8 +4,9 @@ import type {
   BuiltInPluginCapability,
   PluginCatalogFailure,
   PluginCatalogListing,
+  PluginCatalogSourceBrowse,
 } from "@shared/types/plugin";
-import { describeCatalogRepo } from "@shared/utils/pluginInstallSource";
+import { describeCatalogRepo, describeCatalogSource } from "@shared/utils/pluginInstallSource";
 import { displaySafeText } from "@shared/utils/displaySafeText";
 import { systemClient } from "@/clients/systemClient";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,29 @@ import { usePluginCatalogBrowse } from "./usePluginCatalogBrowse";
 /** What each listing is, and isn't: the catalog's review covers provenance, never safety. */
 export const COMMUNITY_LISTING_NOTE =
   "Community listing, reviewed for its source and bytes. Not a Daintree endorsement, and not checked for safety.";
+
+/**
+ * The same for a catalog the person added (#17434): its curator did the
+ * review, and Daintree didn't.
+ */
+export function addedCatalogListingNote(sourceUrl: string): string {
+  return `Listed by ${describeCatalogSource(sourceUrl)}, reviewed by its curator for source and bytes. Not reviewed by Daintree, and not checked for safety.`;
+}
+
+/** A catalog as Browse names it: Daintree's own, or an added one by its address. */
+export function catalogName(sourceUrl: string | undefined): string {
+  return sourceUrl === undefined ? "Daintree's catalog" : describeCatalogSource(sourceUrl);
+}
+
+/**
+ * An installed plugin as Browse marks its listings: its version, and the
+ * catalog it was installed from (`null` when it isn't a catalog install,
+ * `sourceUrl` absent for Daintree's own).
+ */
+export interface InstalledListingState {
+  version: string;
+  catalog: { sourceUrl?: string } | null;
+}
 
 const UNAVAILABLE_COPY: Record<PluginCatalogFailure, { title: string; description: string }> = {
   "not-published": {
@@ -53,6 +77,7 @@ function matchesQuery(listing: PluginCatalogListing, tokens: readonly string[]):
   const haystack = [
     listing.id,
     describeCatalogRepo(listing.repo),
+    catalogName(listing.sourceUrl),
     ...listing.capabilities,
     ...listing.capabilities.map((c) => capabilityMeta(c)?.label ?? ""),
   ]
@@ -114,19 +139,27 @@ function ListingCapabilities({ capabilities }: { capabilities: readonly string[]
 
 function ListingCard({
   listing,
-  installedVersion,
+  installedState,
   installDisabled,
   onInstall,
   onViewInstalled,
 }: {
   listing: PluginCatalogListing;
-  installedVersion: string | undefined;
+  installedState: InstalledListingState | undefined;
   installDisabled: boolean;
   onInstall: () => void;
   onViewInstalled: () => void;
 }) {
   const idBase = useId();
-  const installed = installedVersion !== undefined;
+  const installedVersion = installedState?.version;
+  // Installed from another catalog (#17434): this listing is a different
+  // source for the same plugin, so it offers to replace the copy rather than
+  // claim it is the one installed.
+  const otherCatalog =
+    installedState?.catalog != null && installedState.catalog.sourceUrl !== listing.sourceUrl
+      ? installedState.catalog
+      : null;
+  const installed = installedVersion !== undefined && otherCatalog === null;
   return (
     <li aria-labelledby={`${idBase}-name`}>
       <Card padding="md" className="flex items-start gap-3">
@@ -143,6 +176,15 @@ function ListingCard({
                   : `Installed v${installedVersion}`}
               </Badge>
             )}
+            {otherCatalog !== null && (
+              <Badge
+                size="xs"
+                className="whitespace-normal break-all"
+                data-testid="community-listing-installed-elsewhere"
+              >
+                {`Installed v${installedVersion} from ${catalogName(otherCatalog.sourceUrl)}`}
+              </Badge>
+            )}
           </div>
           <Button
             variant="link"
@@ -152,7 +194,11 @@ function ListingCard({
           >
             {describeCatalogRepo(listing.repo)}
           </Button>
-          <p className="text-2xs text-text-secondary">{COMMUNITY_LISTING_NOTE}</p>
+          <p className="text-2xs text-text-secondary">
+            {listing.sourceUrl === undefined
+              ? COMMUNITY_LISTING_NOTE
+              : addedCatalogListingNote(listing.sourceUrl)}
+          </p>
           <ListingCapabilities capabilities={listing.capabilities} />
         </div>
         {installed ? (
@@ -164,13 +210,28 @@ function ListingCard({
           >
             View installed
           </Button>
+        ) : otherCatalog !== null ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onInstall}
+            disabled={installDisabled}
+            aria-label={`Replace installed ${listing.id} with the listing from ${catalogName(listing.sourceUrl)}`}
+          >
+            Replace
+          </Button>
         ) : (
           <Button
             variant="outline"
             size="sm"
             onClick={onInstall}
             disabled={installDisabled}
-            aria-label={`Install ${listing.id}`}
+            aria-label={
+              // One plugin can be listed by several catalogs; say which this is.
+              listing.sourceUrl === undefined
+                ? `Install ${listing.id}`
+                : `Install ${listing.id} from ${catalogName(listing.sourceUrl)}`
+            }
           >
             Install
           </Button>
@@ -189,24 +250,83 @@ function RetryButton({ onClick, loading }: { onClick: () => void; loading: boole
   );
 }
 
+/** Why Daintree's own catalog couldn't be read, above the listings the added ones gave. */
+const OWN_UNAVAILABLE_NOTE: Record<PluginCatalogFailure, string> = {
+  "not-published": "The community catalog isn't published yet.",
+  unreachable: "Couldn't reach the community catalog.",
+  invalid: "The community catalog couldn't be read.",
+};
+
+/** Why a catalog the person added couldn't be read, after its name. */
+const ADDED_UNAVAILABLE_REASON: Record<PluginCatalogFailure, string> = {
+  "not-published": "Nothing was found at that address.",
+  unreachable: "Couldn't reach it.",
+  invalid: "It isn't a valid plugin catalog.",
+};
+
+/** A catalog that couldn't be read or refreshed, said above the listings the others gave. */
+function CatalogProblem({
+  catalog,
+  onRetry,
+  refreshing,
+}: {
+  catalog: PluginCatalogSourceBrowse;
+  onRetry: () => void;
+  refreshing: boolean;
+}) {
+  const { sourceUrl, result } = catalog;
+  const name = catalogName(sourceUrl);
+  if (result.status === "available") {
+    return (
+      <Callout
+        severity="warning"
+        size="compact"
+        action={<RetryButton onClick={onRetry} loading={refreshing} />}
+      >
+        <p>
+          {sourceUrl === undefined ? "Showing the catalog" : `Showing ${name}`} from{" "}
+          <TimeAgo timestamp={result.fetchedAt} verbose />. It couldn&apos;t be refreshed, so it may
+          be out of date.
+        </p>
+      </Callout>
+    );
+  }
+  return (
+    <Callout
+      severity="warning"
+      size="compact"
+      action={<RetryButton onClick={onRetry} loading={refreshing} />}
+    >
+      <p>
+        {sourceUrl === undefined
+          ? OWN_UNAVAILABLE_NOTE[result.failure]
+          : `Couldn't read ${name}. ${ADDED_UNAVAILABLE_REASON[result.failure]}`}
+      </p>
+    </Callout>
+  );
+}
+
 /**
- * The community catalog in the plugin manager's wide pane (#16782): each
+ * The plugin catalogs in the plugin manager's wide pane (#16782): each
  * plugin's newest reviewed release, searchable, with its repository, its
- * capabilities and what the listing does and doesn't vouch for. Install starts
- * the catalog route's preview; nothing installs from here directly.
+ * capabilities and what the listing does and doesn't vouch for. Daintree's own
+ * catalog comes first, then each one the person added (#17434), every listing
+ * naming the catalog it came from. Install starts the catalog route's preview;
+ * nothing installs from here directly.
  *
- * Mounting it is what reads the catalog, so only an open Browse view fetches.
- * A catalog that can't be read is this view's own empty state; the installed
- * list beside it never depends on it.
+ * Mounting it is what reads the catalogs, so only an open Browse view fetches.
+ * A catalog that can't be read is said above the others' listings, and only
+ * when none can is it this view's own empty state; the installed list beside
+ * it never depends on it.
  */
 export function PluginCommunityBrowse({
-  installedVersions,
+  installed,
   installDisabled,
   onInstall,
   onViewInstalled,
 }: {
-  /** Installed plugins by id, with their versions. Project plugins aren't installs. */
-  installedVersions: ReadonlyMap<string, string>;
+  /** Installed plugins by id. Project plugins aren't installs. */
+  installed: ReadonlyMap<string, InstalledListingState>;
   installDisabled: boolean;
   onInstall: (listing: PluginCatalogListing) => void;
   onViewInstalled: (pluginId: string) => void;
@@ -243,8 +363,20 @@ export function PluginCommunityBrowse({
   };
   const tokens = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
 
-  const result = answer?.kind === "result" ? answer.result : null;
-  const listings = result?.status === "available" ? result.listings : null;
+  const catalogs = answer?.kind === "result" ? answer.result.catalogs : null;
+  const listings = useMemo(() => {
+    if (!catalogs?.some((c) => c.result.status === "available")) return null;
+    return catalogs.flatMap((c) => (c.result.status === "available" ? c.result.listings : []));
+  }, [catalogs]);
+  const problems = useMemo(
+    () =>
+      (catalogs ?? []).filter(
+        (c) =>
+          c.result.status === "unavailable" || (c.result.status === "available" && c.result.stale)
+      ),
+    [catalogs]
+  );
+  const addedAny = (catalogs?.length ?? 0) > 1;
   const visible = useMemo(
     () => (listings ? listings.filter((listing) => matchesQuery(listing, tokens)) : []),
     [listings, tokens]
@@ -256,8 +388,10 @@ export function PluginCommunityBrowse({
         Community plugins
       </h3>
       <p className="text-sm text-text-secondary mt-1">
-        Plugins listed in the community catalog. Each one runs with full access to your machine, so
-        install only what you trust.
+        {addedAny
+          ? "Plugins listed in the community catalog and the catalogs you added."
+          : "Plugins listed in the community catalog."}{" "}
+        Each one runs with full access to your machine, so install only what you trust.
       </p>
     </div>
   );
@@ -278,7 +412,14 @@ export function PluginCommunityBrowse({
   if (listings === null) {
     // A call that failed outright (a host too old to answer) reads like a
     // catalog that couldn't be read; the hook logged why.
-    const copy = UNAVAILABLE_COPY[result?.status === "unavailable" ? result.failure : "invalid"];
+    const own = catalogs?.[0]?.result;
+    const copy = addedAny
+      ? {
+          title: "Try browsing again later",
+          description:
+            "None of your plugin catalogs could be read. Your installed plugins aren't affected.",
+        }
+      : UNAVAILABLE_COPY[own?.status === "unavailable" ? own.failure : "invalid"];
     return (
       <div ref={rootRef} className="space-y-6">
         {header}
@@ -298,25 +439,25 @@ export function PluginCommunityBrowse({
   return (
     <div ref={rootRef} className="space-y-4">
       {header}
-      {result?.status === "available" && result.stale && (
-        <Callout
-          severity="warning"
-          size="compact"
-          action={<RetryButton onClick={retryAndKeepFocus} loading={refreshing} />}
-        >
-          <p>
-            Showing the catalog from <TimeAgo timestamp={result.fetchedAt} verbose />. It
-            couldn&apos;t be refreshed, so it may be out of date.
-          </p>
-        </Callout>
-      )}
+      {problems.map((catalog) => (
+        <CatalogProblem
+          key={catalog.sourceUrl ?? ""}
+          catalog={catalog}
+          onRetry={retryAndKeepFocus}
+          refreshing={refreshing}
+        />
+      ))}
       {listings.length === 0 ? (
         <div className="flex justify-center pt-8">
           <EmptyState
             variant="zero-data"
             scale="canvas"
             title="Check back for community plugins"
-            description="The community catalog doesn't list any plugins yet."
+            description={
+              addedAny
+                ? "Your plugin catalogs don't list any plugins yet."
+                : "The community catalog doesn't list any plugins yet."
+            }
           />
         </div>
       ) : (
@@ -354,9 +495,10 @@ export function PluginCommunityBrowse({
             <ul role="list" aria-label="Community plugins" className="space-y-3">
               {visible.map((listing) => (
                 <ListingCard
-                  key={listing.id}
+                  // One plugin can be listed by more than one catalog.
+                  key={`${listing.sourceUrl ?? ""} ${listing.id}`}
                   listing={listing}
-                  installedVersion={installedVersions.get(listing.id)}
+                  installedState={installed.get(listing.id)}
                   installDisabled={installDisabled}
                   onInstall={() => onInstall(listing)}
                   onViewInstalled={() => onViewInstalled(listing.id)}

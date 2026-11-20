@@ -1,6 +1,6 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
-// The session-scoped invokes, the live session as other views see it, cleanup prefetched while one runs, and the selection rewrite. The rest of `voiceInput` (settings, permissions,
+// The session-scoped invokes, the live session as other views see it, cleanup prefetched while one runs, the selection rewrite, and the on-device model's files. The rest of `voiceInput` (settings, permissions,
 // correction, the audio send and the event subscriptions) is still wired by
 // hand in `preload.cts`.
 export const VOICE_INPUT_METHOD_CHANNELS = {
@@ -18,6 +18,10 @@ export const VOICE_INPUT_METHOD_CHANNELS = {
   getLastTerms: "voice-input:get-last-terms",
   isAppReplaced: "voice-input:is-app-replaced",
   restartReplacedApp: "voice-input:restart-replaced-app",
+  getLocalModel: "voice-input:get-local-model",
+  downloadLocalModel: "voice-input:download-local-model",
+  cancelLocalModel: "voice-input:cancel-local-model",
+  removeLocalModel: "voice-input:remove-local-model",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_INPUT_METHOD_CHANNELS;

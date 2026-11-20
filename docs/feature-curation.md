@@ -8,26 +8,27 @@ This file is a decision instrument, not reference documentation. Work a proposal
 
 ## What Daintree IS
 
-**Daintree is a habitat for your AI coding agents** — a review-first desktop environment for running many of them in parallel, each in its own worktree, isolated and observable, with you still in the loop.
+**Daintree is a meta-harness and IDE that runs your own agent CLIs as a hierarchy of agents, across multiple hosts, without vendor lock-in** — an attention-first desktop environment for running many of them in parallel, each worker in its own worktree, isolated and observable, with you still in the loop for the calls only you can make.
 
-Agents run as their own CLIs in real terminals. Daintree observes them, puts them in front of you when they need you, gets context into them, and gets their changes reviewed and landed. If VS Code is the workbench where you craft the part, Daintree is the habitat where your agents live and work, and where you watch and guide them.
+Agents run as their own CLIs in real terminals. Long-lived assistants sit at the top: the global Assistant above every project and host, and each project's own assistants below it. They brief short-lived workers that start each task with a clean context. Daintree observes all of them, puts them in front of you when they need you, gets context into them, and gets their changes checked and landed. If VS Code is the workbench where you craft the part, Daintree is the habitat where your agents live and work, and where you watch and guide them.
 
 **Daintree is NOT a code editor (like VS Code), NOT a chat UI (like ChatGPT), and NOT a Git GUI (like SourceTree).** It is the orchestration layer around real terminal agents.
 
 ### Where it has been heading
 
-Three shifts since early 2026 shape most decisions here:
+Four shifts since early 2026 shape most decisions here:
 
 1. **Orchestration runs on the user's own agent CLIs, not on an engine of Daintree's.** The DAG workflow engine (#4623) and the task queue went; a native in-app assistant was rejected twice (#10649, #12189); the Daintree Assistant CLI was retired (#12824, #13513). What replaced them is the MCP control surface: Claude Code, Codex and the rest drive Daintree's actions as tools, hand work to each other, and report back through observable markers.
 2. **New product surface goes into plugins.** The core is "managing agent terminals and panels, and letting the rest exist as plugins" (#5538). GitHub and GitLab are forge plugins, Markdown editing is a built-in plugin, and project plugins can be full applications with their own database and agent tools (#12842).
 3. **Daintree reaches past one machine.** Remote Hosts runs the whole backend on another Mac or Linux machine over SSH (#12838), and on Windows drives Linux Hosts inside WSL (#13431).
+4. **Review stopped being the bottleneck; attention is.** Review bots, a second agent reviewing at the head commit, test gates and CI can now do most of the checking. What holds a fleet up is the person being away, compute for tests, and the cost of inference, so Daintree leads with what keeps agents moving unattended: the global Assistant above every project and host, project assistants, Decisions for what needs a person, and Remote Hosts for capacity. Review Hub stays core, as one of the ways work gets checked rather than the headline (#17293).
 
 Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resume, hooks and remote control. That narrows what is worth building: Daintree's value is what no single agent can see or do for itself — across agents from different vendors, across worktrees and projects, across machines, and from passive observation of all of them.
 
 ## Core Pillars
 
 1. **Panel Grid** — Agents in real terminals, alongside browser, dev preview, review, file, file-browser and diff panels. Layout is automatic and size-driven with dock and maximize, not freeform (#4768).
-2. **Agent State & Attention** — Observed agent state, attention bands (blocked, needs you, review, done…), Pilot across every project, park, snooze and read marks, and notifications that reach you only when an agent needs you.
+2. **Agent State & Attention** — Attention-first: the person's attention is the scarce resource, and review is one of the things competing for it. Observed agent state, attention bands (blocked, needs you, review, done…), Pilot across every project, park, snooze and read marks, and notifications that reach you only when an agent needs you, with the questions agents send through Decisions reaching your phone. A feature that spends the person's attention has to save more of it than it takes.
 3. **Fleet & Automation** — Arm several agents and type once, saved fleets, terminal recipes, and actions that take an issue to a worktree to a running agent.
 4. **Worktree Orchestration** — Worktree lifecycle, scratch workspaces and plain folders, per-worktree dev servers with embedded preview, and status across all of them.
 5. **Context In, Review Out** — Getting the right files, diffs, errors, screenshots and notes into an agent (CopyTree, `@` mentions, drag and drop, send-to-agent, diff notes), and getting its output reviewed and landed (Review Hub, cross-worktree diff, PR and CI signals, the bounded Git operations below).
@@ -41,7 +42,7 @@ Meanwhile the agent CLIs themselves now ship worktrees, subagents, session resum
 
 **Strategic Features** (significant, but not pillars):
 
-- **Daintree Assistant** — The user's own Claude Code or Codex, running in a terminal in the help panel, wired to Daintree's MCP tools, docs and runbooks. Orchestration context without a bespoke chat UI.
+- **Daintree Assistant** — The user's own Claude Code, Codex or Antigravity, running in a terminal in the Assistant panel, wired to Daintree's MCP tools, docs and runbooks: a global Assistant above every project and host, and each project's own assistants below it. Orchestration context without a bespoke chat UI.
 - **Canopy** — A reader that ranks every agent by what it needs from you, quoting each screen as its evidence. On by default, and turned off or hidden from Settings. Reads on the user's own machine with a small open model that ships inside the app (#14448, #16415).
 - **Voice Input** — Hands-free delegation while monitoring other agents.
 
@@ -235,6 +236,8 @@ Each row is a decision that was actually made, with the issue or PR behind it. W
 | Cross-Worktree Diff | **APPROVE** | Manages multiplicity. Provides omniscience. Unique to orchestration. |
 | Diff notes sent to an agent | **APPROVE (bounded)** | A review handoff, not a notes store: sent notes clear and only agent terminals are offered. The diff pane's menu pastes without pressing Enter (#12818); the composer's `@notes` goes with the message it was typed into, resolves per fleet target from that target's own worktree, and clears once the terminal reports the message written (#16396). No notes list or browser in the agent pane. |
 | Review Hub | **APPROVE** | Shortens review. Stage, commit, push, PR status and checks. Not a full Git GUI. |
+| Review-first positioning | **REVISED (attention-first)** | Review is no longer the headline in the README, `docs/vision.md` or this file: reviewing agents, test gates and CI can do most of the checking, and the person's attention is the scarce resource, now pillar 2's framing. Every review feature keeps its place; Review Hub is one of the ways work gets checked (#17293). |
+| Hunk staging | **APPROVE (bounded)** | Stage and unstage git's own hunks from a Review Hub diff, so keeping part of an agent's change doesn't mean dropping to `git add -p` (#17331). Stage/unstage only, no hunk editing and no line ranges; only on a diff that knows its side and was read with whitespace kept. A hunk that changed since it was read is refused and the diff reloads, so nothing unseen is staged. Off the MCP surface, like file staging. The "hunk-level" lines above are about merge editing, which stays in the editor. |
 | Review marks | **APPROVE (bounded)** | Mark a worktree reviewed at the commit, index and working tree Review Hub displayed, then see how much is new since. Shortens the next round of review. Daintree's own state, kept on the host and never written to the repository; anything that can't be proven unchanged counts as changed, and an incomplete comparison says so instead of "nothing new". A fact about content, never a verdict that the work is reviewed or safe: off the MCP surface and out of the readiness rail (#14580, #14585). |
 | Worktree Git operations | **APPROVE (bounded)** | Pull, push, force-with-lease, rebase onto base, merge base in, continue and abort from the worktree card, with the pull, push, rebase and merge rows previewing their real commit set. Getting the base into a worktree shouldn't mean dropping to a terminal (#12098). |
 | Discard changes and delete file | **APPROVE (bounded)** | From file rows, behind a confirm, deleted files to the OS Trash, folders and conflicted files excluded (#13435). |
@@ -351,6 +354,6 @@ When it's decided either way, add or update its row in the [Decision Log](#decis
 - Daintree is opinionated. Not every good feature belongs here, and not every good feature belongs in core.
 - Feature bloat is the new technical debt.
 - Just because we _can_ build something doesn't mean we _should_.
-- The goal is a focused, cohesive tool for AI agent orchestration, not a general-purpose IDE.
+- The goal is a focused, cohesive meta-harness for AI agent orchestration, not a general-purpose code editor.
 - Every feature must justify itself against: "Could the user just switch to their terminal, their editor, or their agent for this?"
 - Themes, visual identity, and polish are not cruft — they're what make Daintree feel like a real product instead of a web page.

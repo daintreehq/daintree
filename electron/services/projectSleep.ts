@@ -12,7 +12,11 @@ import { readPanelRecoveryHold, type PanelRecoveryHold } from "./panelRecoveryQu
 import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { PluginWorkStopped, ProjectSleepResult } from "../../shared/types/ipc/project.js";
+import type {
+  PluginWorkStopped,
+  ProjectSleepResult,
+  SleepRequestWorking,
+} from "../../shared/types/ipc/project.js";
 import { summarizePluginWorkStopped, type ProjectPluginWork } from "./plugin/projectPluginWork.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { AppError } from "../utils/errorTypes.js";
@@ -49,7 +53,11 @@ export interface SleepProjectDependencies {
  * policy owns its own eligibility; Sleep only owns the order it is asked in.
  */
 export type SleepProjectOptions =
-  | { initiator: "user" }
+  | {
+      initiator: "user";
+      /** Agents the request found working; see `ProjectTeardownOptions.workingAtRequest`. */
+      workingAtRequest?: readonly SleepRequestWorking[];
+    }
   | {
       initiator: "policy";
       /** Still a candidate? Synchronous, asked before each step that can't be undone. */
@@ -255,7 +263,12 @@ async function runSleep(
         projectId,
         ptyClient,
         deps.workspaceClient ?? undefined,
-        { preserveSession: true, writeBackSessionIds: true, beforeKill }
+        {
+          preserveSession: true,
+          writeBackSessionIds: true,
+          beforeKill,
+          ...(options.initiator === "user" && { workingAtRequest: options.workingAtRequest }),
+        }
       );
     if (aborted) return skip(killGate.refusal ?? "ineligible");
 

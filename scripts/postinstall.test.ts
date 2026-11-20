@@ -4,6 +4,7 @@ import path from "path";
 import Module from "module";
 import { patchNodePtyFork } from "./patchNodePtyFork.cjs";
 import { patchNodePtyConptySource } from "./patchNodePtyConpty.cjs";
+import { patchNodePtyWindowsResize } from "./patchNodePtyWindowsResize.cjs";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
@@ -47,12 +48,22 @@ const AGENT_SOURCE = fs.readFileSync(
   "utf8"
 );
 const PATCHED_AGENT = patchNodePtyFork(AGENT_SOURCE);
+const TERMINAL_PATH = path.join(path.dirname(AGENT_PATH), "windowsTerminal.js");
+const TERMINAL_SOURCE = `        this._deferNoArgs(function () {
+            _this._agent.resize(cols, rows);`;
+const PATCHED_TERMINAL = patchNodePtyWindowsResize(TERMINAL_SOURCE);
 
-function serveFiles({ gyp = UNPATCHED_GYP, conpty = PATCHED_CONPTY, agent = PATCHED_AGENT } = {}) {
+function serveFiles({
+  gyp = UNPATCHED_GYP,
+  conpty = PATCHED_CONPTY,
+  agent = PATCHED_AGENT,
+  terminal = PATCHED_TERMINAL,
+} = {}) {
   mockReadFileSync.mockImplementation((file: string) => {
     if (file === BINDING_GYP) return gyp;
     if (file === CONPTY_CC) return conpty;
     if (file === AGENT_PATH) return agent;
+    if (file === TERMINAL_PATH) return terminal;
     throw new Error(`ENOENT: unexpected read of ${file}`);
   });
 }
@@ -314,6 +325,16 @@ describe("postinstall", () => {
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy.mock.calls.flat().join(" ")).toMatch(/Windows helper patch/);
     expect(rebuiltModules()).toContain("node-pty");
+  });
+
+  it("installs the Windows deferred resize fix before rebuilding node-pty", async () => {
+    serveFiles({ gyp: PATCHED_GYP, terminal: TERMINAL_SOURCE });
+    await runPostinstall();
+    expect(mockWriteFileSync).toHaveBeenCalledExactlyOnceWith(TERMINAL_PATH, PATCHED_TERMINAL);
+    expect(mockWriteFileSync.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRebuild.mock.invocationCallOrder[0]
+    );
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("patches node-pty's conpty.cc before rebuilding node-pty", async () => {

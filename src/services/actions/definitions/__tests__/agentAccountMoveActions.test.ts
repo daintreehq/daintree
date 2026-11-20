@@ -74,6 +74,22 @@ describe("agent.moveTerminalsToAccount.<agent> (#17089)", () => {
     });
   });
 
+  it("names the default login as the user named it (#17080)", async () => {
+    saveAccounts([{ id: "company", name: "Company" }]);
+    const settings = useAgentSettingsStore.getState().settings!;
+    useAgentSettingsStore.setState({
+      settings: {
+        ...settings,
+        agents: { claude: { ...settings.agents.claude, defaultLoginName: "Home" } },
+      },
+    });
+
+    await claudeMove().run({ accountId: null }, ctx);
+    expect(useMoveTerminalsDialogStore.getState().opening).toMatchObject({
+      account: { id: null, name: "Home · default login" },
+    });
+  });
+
   it("leaves the account to the dialog when the palette names none", async () => {
     await claudeMove().run({}, ctx);
     const opening = useMoveTerminalsDialogStore.getState().opening;

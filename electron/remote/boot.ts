@@ -19,6 +19,7 @@ import { installHostFileClient } from "./files/clientInstall.js";
 import { folderPackDir, sweepFolderPacks } from "./files/localFolderPack.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { installIdleResourcePause } from "./client/idleResourcePauseInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
@@ -60,6 +61,8 @@ import {
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
 import { createLogger } from "../utils/logger.js";
+import { getAgentUsageReadouts } from "../services/agentUsage/AgentUsageReadouts.js";
+import { createAgentUsageHostsSource } from "./metrics/agentUsageHosts.js";
 
 const logger = createLogger("main:boot");
 
@@ -282,6 +285,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       client: client.client,
       sessionFor: usedSessionFor,
       holdHost: (hostId) => client.manager.hold(hostId),
+      onApplied: (hostId, settings) => client.idleTimePicked(hostId, settings),
     })
   );
   const hostEntry = (hostId: string) =>
@@ -328,6 +332,10 @@ function startClient(options: StartRemoteHostsOptions): void {
       openHostForNotice: (windowId, notice) => client.client.openHostForNotice(windowId, notice),
     })
   );
+  // Reads its summaries, so it goes before them on teardown.
+  teardowns.push(
+    installIdleResourcePause({ registry: client.registry, sessionFor: client.sessionFor })
+  );
   // Canopy reading a host the view isn't bound to, This Mac included.
   teardowns.push(
     installCanopyHostsClient({
@@ -354,10 +362,23 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
+  // The sidebar's usage readout takes in what every linked host reports (#17318).
+  teardowns.push(
+    getAgentUsageReadouts().setRemoteSource(
+      createAgentUsageHostsSource({
+        registry: client.registry,
+        manager: client.manager,
+        sessionFor: client.sessionFor,
+        metrics: () => getRemoteService("hostMetrics"),
+      })
+    )
+  );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {
     const metrics = getRemoteService("hostMetrics");
-    return client.client.list().map(({ descriptor, connection, summary }) => {
+    return client.client.list().map(({ descriptor, connection }) => {
+      // From metrics, not the list: the list leaves out an earlier link's, which is reported here as such.
+      const summary = metrics?.latest(descriptor.id) ?? null;
       const onLink =
         summary && metrics ? metrics.cameOn(summary, client.sessionFor(descriptor.id)) : null;
       return {

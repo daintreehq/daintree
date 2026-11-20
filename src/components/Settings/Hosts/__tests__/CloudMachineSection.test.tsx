@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import type {
   CloudHostStatus,
   CloudHostsSnapshot,
@@ -50,7 +51,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 import { CloudMachineSection } from "../CloudMachineSection";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
-import { clockTime } from "@/components/Hosts/cloud/cloudHostLabels";
+import { clockTime, dayTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
 import { ClientAppError } from "@/utils/clientAppError";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
@@ -754,5 +755,271 @@ describe("CloudMachineSection while its provider is missing", () => {
     expect(alert).toContain("Couldn't reach the plugin");
     expect(alert).toContain("Its plugin is turned off.");
     expect(alert).toContain("didn't confirm the machine");
+  });
+});
+
+describe("CloudMachineSection while its plugin's provider is gone (#17353)", () => {
+  const DEADLINE = new Date(Date.now() + 90 * 60_000).toISOString();
+  const lifetimeText = () => screen.getByTestId("cloud-machine-lifetime").textContent ?? "";
+  const gone = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId: "acme.droplets.droplets",
+      providerUnavailable:
+        "Its cloud provider comes from the acme.droplets plugin, which isn't installed.",
+      pluginProvider: {
+        pluginName: "Acme Droplets",
+        providerName: "Droplets",
+        dashboardUrl: "https://cloud.example.com/droplets",
+      },
+      resourceId: "dr_23456789",
+      machine: "running",
+      operation: null,
+      observedAt: Date.now(),
+      ...overrides,
+    });
+
+  it("names the provider and its plugin, reads even a fresh reading as the last one, and links the console", () => {
+    openExternal.mockClear();
+    show(gone());
+    expect(screen.getByTestId("cloud-machine-state").textContent).toMatch(/^Last reported running/);
+    expect(screen.getByText(/Droplets from the Acme Droplets plugin · Personal/)).toBeTruthy();
+    const consoles = screen.getAllByRole("button", { name: "Open Droplets console" });
+    expect(consoles).toHaveLength(1);
+    fireEvent.click(consoles[0]!);
+    expect(openExternal).toHaveBeenCalledWith("https://cloud.example.com/droplets");
+  });
+
+  it("offers the console once beside a cleanup that names it, and never a time it doesn't know", () => {
+    show(
+      gone({
+        observedAt: 0,
+        createdFor: {
+          hostId: null,
+          projectId: "0f1e2d3c",
+          worktreeId: "/Users/me/code/app-worktrees/feature-login",
+          projectName: "app",
+          worktreeName: "feature/login",
+          hostName: null,
+        },
+        worktreeCleanup: { choice: "delete", phase: "failed", worktreeHostId: null, error: null },
+      })
+    );
+    expect(screen.getAllByRole("button", { name: "Open Droplets console" })).toHaveLength(1);
+    expect(screen.getByTestId("cloud-machine-state").textContent).not.toMatch(/checked|1970/);
+  });
+
+  it("never dates a deadline by a reading whose time was cleared", () => {
+    show(gone({ observedAt: 0, autoStopAt: DEADLINE, lifetime: null }));
+    expect(lifetimeText()).not.toContain("As last reported");
+    expect(lifetimeText()).toContain("as last reported");
+  });
+
+  it("shows a stop under way as what it is, not as the provider's last word", () => {
+    show(gone({ operation: { id: "op", kind: "stopping", startedAt: 1, stage: "Stopping" } }));
+    expect(screen.getByTestId("cloud-machine-state").textContent).toMatch(/^Stopping/);
+  });
+});
+
+describe("CloudMachineSection's Idle after row says what its idle time ending does (#17921)", () => {
+  const idleRow = () => screen.getByText("Idle after").parentElement!.parentElement!.textContent;
+  const running = (providerId: string, overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId,
+      resourceId: "m_23456789",
+      machine: "running",
+      operation: null,
+      observedAt: Date.now(),
+      ...overrides,
+    });
+  const digitalOcean = {
+    ...provider({
+      name: "DigitalOcean",
+      stoppedBilling: "DigitalOcean bills a stopped Droplet in full until it's deleted.",
+      lifetime: { kind: "none" },
+    }),
+    id: "digitalocean",
+  };
+
+  it("says a Droplet doesn't stop and bills stopped in full, known with no link", () => {
+    show(running("digitalocean", { lifetime: { kind: "none" } }), [digitalOcean]);
+    expect(idleRow()).toContain(
+      "On DigitalOcean, the machine doesn't stop when the host's idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted."
+    );
+    // Its own lifetime is still said on its own row.
+    expect(screen.getByTestId("cloud-machine-lifetime").textContent).toContain(
+      "DigitalOcean has no lifetime for its machines"
+    );
+  });
+
+  it("says which timer puts an Agent 37 instance to sleep: its own with no link, the host's while connected (#17916)", async () => {
+    const agent37 = {
+      ...provider({
+        name: "Agent 37",
+        stoppedComputeBilled: false,
+        stoppedStorageBilled: true,
+        lifetime: { kind: "idle-sleep", idleSeconds: 1800 },
+      }),
+      id: "agent37",
+    };
+    const sleeper = (overrides: Partial<CloudHostStatus> = {}) =>
+      running("agent37", {
+        lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+        linkedIdleStop: { kind: "sleeps" },
+        idleTimeFollowsHost: true,
+        ...overrides,
+      });
+    show(sleeper(), [agent37]);
+    expect(idleRow()).toContain(
+      "Agent 37's own idle timer (15 minutes) is in charge while no device is connected: it puts the machine to sleep after 15 minutes without activity."
+    );
+    expect(idleRow()).not.toContain("doesn't stop");
+    expect(idleRow()).not.toContain("bills");
+    // Its own idle sleep is still said on its own row.
+    expect(screen.getByText("Sleeps when idle")).toBeTruthy();
+    expect(screen.getByTestId("cloud-machine-lifetime").textContent).toContain(
+      "Agent 37 puts it to sleep by itself after 15 minutes without activity"
+    );
+
+    cleanup();
+    Object.defineProperty(window, "electron", {
+      value: {
+        hostSettings: {
+          read: vi.fn(async () => ({
+            hostId: "build",
+            hostName: "build",
+            scope: "host",
+            instanceId: "launch-1",
+            unavailable: [],
+            settings: [{ key: "hostIdle.idleAfterMinutes", value: 30, revision: "r-30" }],
+          })),
+          update: vi.fn(),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
+    const summary = {
+      hostId: "build",
+      sampledAt: lastWorkAt + 60_000,
+      idle: { idleAfterMinutes: 30, lastWorkAt, busy: false, idleEndsAt: lastWorkAt + 30 * 60_000 },
+    } as unknown as HostMetricsSummary;
+    cloud.snapshot = {
+      providers: [agent37],
+      accounts: [],
+      hosts: [sleeper({ idleTimeFollowsHost: false })],
+    };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain(
+      "The host's idle time is in charge while this device is connected, since the connection keeps Agent 37's own idle timer (15 minutes) from running"
+    );
+    // Imported, its own timer keeps its own length until an idle time is picked here.
+    expect(idleRow()).toContain(
+      "Agent 37 keeps its own idle timer until you pick an idle time here."
+    );
+
+    // One that follows the host is on its way to the host's: nothing is said of the gap.
+    cleanup();
+    cloud.snapshot = { providers: [agent37], accounts: [], hosts: [sleeper()] };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain("The host's idle time is in charge while this device is connected");
+    expect(idleRow()).not.toContain("keeps its own idle timer");
+
+    // With no device connected, the host's hold on it and when that runs out (#17918).
+    cleanup();
+    show(
+      sleeper({
+        keepAwake: {
+          kind: "held",
+          expiresAt: Date.UTC(2026, 10, 26, 15),
+          confirmedAt: Date.UTC(2026, 10, 19, 15),
+          reached: true,
+        },
+      }),
+      [agent37]
+    );
+    expect(idleRow()).toContain(
+      `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(Date.UTC(2026, 10, 26, 15))} (as the host said ${dayTime(Date.UTC(2026, 10, 19, 15))}).`
+    );
+    expect(idleRow()).not.toContain("is in charge while no device is connected");
+    cleanup();
+    show(sleeper({ keepAwake: { kind: "expired", expiredAt: Date.UTC(2026, 10, 26, 15) } }), [
+      agent37,
+    ]);
+    expect(idleRow()).toContain(
+      "Agent 37's own idle timer (15 minutes) is in charge while no device is connected, even while the host sees work"
+    );
+
+    cleanup();
+    show(sleeper({ lifetime: { kind: "none" } }), [agent37]);
+    expect(idleRow()).toContain(
+      "Sleeping when idle is off for this machine on Agent 37, so nothing puts it to sleep. Picking an idle time turns it on."
+    );
+  });
+
+  it("keeps a refused self-stop's reason, word for word", () => {
+    const refused = "This machine can't stop itself when idle: its instance type can't be stopped.";
+    show(running("boat", { selfStopProblem: refused }), [BOAT_PROVIDER]);
+    expect(idleRow()).toContain(`Connect to see or change it. ${refused}`);
+    expect(idleRow()).not.toContain(IDLE_STOP_UNKNOWN);
+  });
+
+  it("says a plugin provider's machine doesn't stop, and that it can't tell once the provider is gone", () => {
+    show(running("acme.droplets.droplets"), [provider({ name: "Droplets" })]);
+    expect(idleRow()).toContain(
+      "On Droplets, the machine doesn't stop when the host's idle time ends."
+    );
+    cleanup();
+    show(running("acme.droplets.droplets", { lifetime: null }));
+    expect(idleRow()).toContain(IDLE_STOP_UNKNOWN);
+  });
+
+  it("keeps a confirmed self-stop's wording on a live link, and says it can't tell without one", async () => {
+    const read = vi.fn(async () => ({
+      hostId: "build",
+      hostName: "build",
+      scope: "host",
+      instanceId: "launch-1",
+      unavailable: [],
+      settings: [{ key: "hostIdle.idleAfterMinutes", value: 30, revision: "r-30" }],
+    }));
+    Object.defineProperty(window, "electron", {
+      value: { hostSettings: { read, update: vi.fn() } },
+      configurable: true,
+      writable: true,
+    });
+    const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
+    const summary = {
+      hostId: "build",
+      sampledAt: lastWorkAt + 60_000,
+      idle: {
+        idleAfterMinutes: 30,
+        lastWorkAt,
+        busy: false,
+        idleEndsAt: lastWorkAt + 30 * 60_000,
+        stopsWhenIdle: true,
+      },
+    } as unknown as HostMetricsSummary;
+    cloud.snapshot = { providers: [BOAT_PROVIDER], accounts: [], hosts: [running("boat")] };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain("It stops by itself");
+    expect(idleRow()).not.toContain(IDLE_STOP_UNKNOWN);
+
+    cleanup();
+    show(running("boat"), [BOAT_PROVIDER]);
+    expect(idleRow()).toContain(IDLE_STOP_UNKNOWN);
+    expect(idleRow()).not.toContain("stops by itself");
   });
 });

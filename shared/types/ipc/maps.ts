@@ -10,6 +10,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -54,6 +55,7 @@ import type {
   AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
   AgentRateLimitObservedPayload,
+  AgentUpdateInstalledChangedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
@@ -126,6 +128,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
+import type { AgentUsageSnapshot } from "./agentUsage.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -882,7 +885,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: AgentSettings;
   };
   "agent-settings:set": {
-    args: [payload: { agentType: AgentId; settings: Record<string, unknown> }];
+    args: [
+      payload: {
+        agentType: AgentId;
+        settings: Record<string, unknown>;
+        /** Keep each preset's stored `continueAtLimitReset` (#17912). */
+        lockContinueAtLimitReset?: boolean;
+      },
+    ];
     result: AgentSettings;
   };
   "agent-settings:reset": {
@@ -1705,6 +1715,7 @@ export interface IpcEventMap {
   "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
   "agent:rate-limit-observed": AgentRateLimitObservedPayload;
+  "agent:update-installed-changed": AgentUpdateInstalledChangedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
@@ -1790,6 +1801,8 @@ export interface IpcEventMap {
 
   // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
   "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // An armed Codex pane's continuation at its limit's reset changed (#17909); every view of its project.
+  "codex-limit-continue:changed": import("../codexLimitContinuation.js").CodexLimitContinueChange;
   // A pane's held composer send changed (#16379); this machine's views of its project.
   "composer-hold:changed": import("./composerHold.js").ComposerHoldChange;
   "bulk-worktree-runs:changed": import("./bulkWorktreeRuns.js").BulkWorktreeRunsChanged;
@@ -1845,10 +1858,14 @@ export interface IpcEventMap {
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
     /** The pane or Assistant tab that sent the call (#14992); set only by main. */
     requester?: import("./mcpServer.js").McpRequester;
+    /** "Don't ask again for this kind of action" (#16752); set only by main, display only. */
+    delegationOffer?: import("./mcpServer.js").McpDelegationOffer;
     /** Main's deadline for the call as sent, epoch ms (#15648); set only by main. */
     dispatchDeadlineAt?: number;
     /** Main's own `actions.list` walk (#17036); set only by main, on a local send. */
     actionsListWalk?: boolean;
+    /** When this unconfirmed dispatch may run unasked (#17917); set only by main. */
+    confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
   };
 
   /**
@@ -2246,6 +2263,9 @@ export interface IpcEventMap {
   "voice-input:reveal-requested": VoiceRevealRequest;
   // The live session's input level, to the views on screen that don't own it.
   "voice-input:live-level": VoiceLiveLevel;
+  // To every view whenever the on-device model's status changes, a
+  // download's progress included.
+  "voice-input:local-model-status": LocalSpeechModelStatus;
   // To the owner: another view's control panel paused or resumed it.
   "voice-input:pause-requested": VoicePauseRequest;
   // To the owner: the project vocabulary its session runs with.
@@ -2339,6 +2359,7 @@ export interface IpcEventMap {
 
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  "agent-usage:changed": AgentUsageSnapshot;
   /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
   "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
@@ -2554,6 +2575,10 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // This machine's list of added plugin catalogs changed (#17434), from any
+  // window. Signal-only: Browse and the settings page re-read it.
+  "plugin:catalog-sources-changed": Record<string, never>;
+
   // A plugin's stored settings changed, from the settings form or the plugin's
   // own `host.settings.set` (main → renderer). Signal-only: receivers re-read
   // what they derive from it. Project-scoped for a project-local instance.
@@ -2714,6 +2739,7 @@ export type IpcEventBusMap = Pick<
   | "agent:all-clear"
   | "agent:detected"
   | "agent:rate-limit-observed"
+  | "agent:update-installed-changed"
   | "agent:exited"
   | "agent:fallback-triggered"
   // Window lifecycle (window-scoped)
@@ -2790,6 +2816,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // This machine's added plugin catalogs changed (global broadcast)
+  | "plugin:catalog-sources-changed"
   // Plugin stored settings changed (global broadcast for an app-global
   // instance, project-scoped send for a project one)
   | "plugin:settings-changed"

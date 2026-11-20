@@ -13,6 +13,7 @@ export const DEV_PREVIEW_METHOD_CHANNELS = {
   getDiagnostics: "dev-preview:get-diagnostics",
   getDestructivePreviewMeta: "dev-preview:get-destructive-preview-meta",
   getDestructivePreviewSizes: "dev-preview:get-destructive-preview-sizes",
+  cancelDestructivePreviewSizes: "dev-preview:cancel-destructive-preview-sizes",
   stopByWorktree: "dev-preview:stop-by-worktree",
   restartByWorktree: "dev-preview:restart-by-worktree",
   stopDevServerByWorktree: "dev-preview:stop-dev-server-by-worktree",

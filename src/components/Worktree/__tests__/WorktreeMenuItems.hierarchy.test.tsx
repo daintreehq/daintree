@@ -645,6 +645,35 @@ describe("WorktreeMenuItems — Runtime", () => {
     expect(screen.queryByText("Resume")).toBeNull();
   });
 
+  it("offers idle pause beside Pause, and opens it", () => {
+    const onIdlePause = vi.fn();
+    renderWorktreeMenu({
+      hasResourceConfig: true,
+      worktreeMode: "staging",
+      resourceStatus: "paused",
+      resourceEnvironmentKeys: ["staging"],
+      onSwitchEnvironment: vi.fn(),
+      onResourcePause: vi.fn(),
+      onIdlePause,
+    });
+
+    // Offered while the box is paused too: it decides what happens next time.
+    fireEvent.click(screen.getByText("Idle pause…"));
+    expect(onIdlePause).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no idle pause in local mode", () => {
+    renderWorktreeMenu({
+      hasResourceConfig: true,
+      worktreeMode: "local",
+      resourceEnvironmentKeys: ["staging"],
+      onSwitchEnvironment: vi.fn(),
+      onIdlePause: vi.fn(),
+    });
+
+    expect(screen.queryByText("Idle pause…")).toBeNull();
+  });
+
   it("renders teardown last within the environment section", () => {
     const { container } = renderWorktreeMenu({
       hasResourceConfig: true,

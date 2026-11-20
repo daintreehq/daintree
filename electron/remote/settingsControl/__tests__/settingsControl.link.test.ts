@@ -84,11 +84,15 @@ let state: ReturnType<typeof fakeHost>;
 let reconcile: ReturnType<typeof vi.fn<() => Promise<void>>>;
 let client: ClientSettingsControl;
 
-function clientOver(session: () => SettingsControlSession | null): ClientSettingsControl {
+function clientOver(
+  session: () => SettingsControlSession | null,
+  onApplied?: ConstructorParameters<typeof ClientSettingsControl>[0]["onApplied"]
+): ClientSettingsControl {
   return new ClientSettingsControl({
     sessionFor: (hostId) => (hostId === HOST ? session() : null),
     isKnownHost: (hostId) => hostId === HOST,
     hostLabel: () => "Studio",
+    onApplied,
   });
 }
 
@@ -444,6 +448,52 @@ describe("host settings over a link, with no project or window on the host", () 
         },
       });
       expect(result).toMatchObject({ outcome: "applied", confirmedBy: "readback" });
+    });
+
+    it("tells what follows a change the host confirmed, and keeps it applied when what follows throws", async () => {
+      const applied = vi.fn(() => {
+        throw new Error("follower failed");
+      });
+      const direct = clientOver(() => sessions.client, applied);
+      const before = await direct.read({ hostId: HOST, keys: ["idleTerminalNotify.enabled"] });
+      const result = await direct.update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.enabled": true },
+        expect: {
+          instanceId: before.instanceId,
+          revisions: { "idleTerminalNotify.enabled": before.settings[0]!.revision },
+        },
+      });
+      expect(result).toMatchObject({ outcome: "applied", confirmedBy: "reply" });
+      expect(applied).toHaveBeenCalledWith(HOST, result.settings);
+    });
+
+    it("tells what follows a change that landed, as the readback shows it, and nothing of one refused", async () => {
+      const applied = vi.fn();
+      const lossy = clientOver(losingReplies, applied);
+      const before = await lossy.read({
+        hostId: HOST,
+        keys: ["idleTerminalNotify.thresholdMinutes"],
+      });
+      const expectBefore = {
+        instanceId: before.instanceId,
+        revisions: { "idleTerminalNotify.thresholdMinutes": before.settings[0]!.revision },
+      };
+      const landed = await lossy.update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.thresholdMinutes": 120 },
+        expect: expectBefore,
+      });
+      expect(applied).toHaveBeenCalledTimes(1);
+      expect(applied).toHaveBeenCalledWith(HOST, landed.settings);
+      // Sent again against the revision read before the first landed: a conflict tells nothing.
+      const stale = await clientOver(() => sessions.client, applied).update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.thresholdMinutes": 90 },
+        expect: expectBefore,
+      });
+      expect(stale.outcome).toBe("conflict");
+      expect(applied).toHaveBeenCalledTimes(1);
     });
 
     it("is a conflict when someone else's change stands there instead", async () => {

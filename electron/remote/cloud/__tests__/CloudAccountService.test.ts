@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
-import { CloudAccountService, normalizeProvisioning } from "../CloudAccountService.js";
+import {
+  CloudAccountService,
+  normalizeProvisioning,
+  type PluginConsentSubject,
+} from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import type { CloudProvider } from "../provider.js";
@@ -94,6 +98,8 @@ function service(
     platform?: NodeJS.Platform;
     apiUrl?: string;
     beforeAccountRemoved?: (accountId: string) => Promise<void>;
+    pluginConsent?: (providerId: CloudProviderId) => PluginConsentSubject | null;
+    onConsentGranted?: () => void;
   } = {}
 ) {
   const backend = memoryBackend();
@@ -109,6 +115,8 @@ function service(
     platform: options.platform ?? "darwin",
     now: () => 1000,
     beforeAccountRemoved: options.beforeAccountRemoved,
+    pluginConsent: options.pluginConsent,
+    onConsentGranted: options.onConsentGranted,
   });
   return { accounts, store, vault, backend, provider, setApiUrl: (url: string) => (apiUrl = url) };
 }
@@ -246,6 +254,7 @@ describe("CloudAccountService", () => {
         operationId: "op",
         idempotencyKey: "key",
         sentAt: 5,
+        lastSentAt: 5,
         name: "pending",
         machineType: "2x4",
       },
@@ -254,6 +263,20 @@ describe("CloudAccountService", () => {
       accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" })
     ).rejects.toThrow(/hasn't been confirmed yet/);
     expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+    // One not yet sent is about to be, with this account's key (#17928).
+    const pending = store.bindings().at(-1)!;
+    store.putBinding({ ...pending, creation: { ...pending.creation!, sentAt: null } });
+    await expect(
+      accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" })
+    ).rejects.toThrow(/hasn't been confirmed yet/);
+    expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+    // Unless its host was never added: a crash between the two writes, and it's never sent.
+    store.putBinding({
+      ...pending,
+      hostId: null,
+      creation: { ...pending.creation!, sentAt: null },
+    });
+    await accounts.replaceCredentials(summary.id, { apiKey: "sk_live_same" });
   });
 
   it("connects a second workspace whose provider can't say who a key is, named after the provider (#17347)", async () => {
@@ -569,30 +592,39 @@ function expectNoSecret(carriers: unknown[], secrets: string[]): void {
 }
 
 describe("CloudAccountService and a plugin's provider", () => {
-  it("connects no account for it, before anything entered is read, checked or kept", async () => {
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
-    const { accounts, vault } = service({ provider });
-    // Malformed on purpose: refused for whose provider it is, before the values are even read.
-    const values = { accessKeyId: 42, unknownField: "x" } as unknown as Record<string, string>;
-    await expect(accounts.checkCredentials("acme.clouds.ec2", values)).rejects.toMatchObject({
-      code: "UNSUPPORTED",
-    });
-    await expect(
-      accounts.addAccount({
-        providerId: "acme.clouds.ec2",
-        credentials: values,
-        scopeId: "personal",
-      })
-    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
-    expect(provider.checkCredentials).not.toHaveBeenCalled();
-    expect(vault.sets.size).toBe(0);
-  });
+  const PLUGIN_ACCOUNT = {
+    providerId: "acme.clouds.ec2",
+    credentials: { accessKeyId: "AKIA1", secretAccessKey: "s3cret", region: "eu" },
+    scopeId: "personal",
+  };
 
-  it("still replaces the credentials of an account it already has", async () => {
-    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
-    const { accounts, store, vault } = service({ provider });
+  /** A registered plugin provider whose declarations hash to whatever `fingerprint` holds now. */
+  function pluginService(overrides: Partial<CloudProvider> = {}) {
+    const declared = { fingerprint: "fp-1" };
+    const onConsentGranted = vi.fn();
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS, {
+      checkCredentials: vi.fn(async () => ({ identity: "octocat", scopes: [personalChoice()] })),
+      ...overrides,
+    });
+    const env = service({
+      provider,
+      onConsentGranted,
+      pluginConsent: (providerId) =>
+        providerId === "acme.clouds.ec2"
+          ? {
+              pluginId: "acme.clouds",
+              pluginName: "Acme Clouds",
+              fingerprint: declared.fingerprint,
+              providerNames: ["EC2"],
+            }
+          : null,
+    });
+    return { ...env, declared, onConsentGranted };
+  }
+
+  function seedAccount(store: CloudHostStore, id = "ca_acmeplugin") {
     store.putAccount({
-      id: "ca_acmeplugin",
+      id,
       providerId: "acme.clouds.ec2",
       displayName: "EC2",
       identity: "octocat",
@@ -603,18 +635,325 @@ describe("CloudAccountService and a plugin's provider", () => {
       addedAt: 1,
       validation: { status: "valid", checkedAt: 1 },
       lastProvisioning: null,
+      pluginProvider: null,
     });
+  }
+
+  it("names the plugin behind it, not yet allowed, and refuses it credentials before reading them", async () => {
+    const { accounts, provider, vault, store } = pluginService();
+    expect(accounts.providerInfos()[0]!.plugin).toEqual({
+      pluginId: "acme.clouds",
+      pluginName: "Acme Clouds",
+      fingerprint: "fp-1",
+      granted: false,
+      providerNames: ["EC2"],
+    });
+    // Malformed on purpose: refused for whose provider it is, before the values are even read.
+    const values = { accessKeyId: 42, unknownField: "x" } as unknown as Record<string, string>;
+    await expect(accounts.checkCredentials("acme.clouds.ec2", values)).rejects.toMatchObject({
+      code: "PERMISSION",
+      userMessage: expect.stringContaining("Acme Clouds"),
+    });
+    await expect(
+      accounts.addAccount({ ...PLUGIN_ACCOUNT, credentials: values })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(provider.checkCredentials).not.toHaveBeenCalled();
+    expect(vault.sets.size).toBe(0);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+  });
+
+  it("keeps the consent with the first account, in the same write, and asks nothing for the next", async () => {
+    const { accounts, provider, store, backend, onConsentGranted } = pluginService();
+    // A check the person agreed to keeps nothing: declining after it leaves nothing saved.
+    await accounts.checkCredentials("acme.clouds.ec2", PLUGIN_ACCOUNT.credentials, "fp-1");
+    expect(provider.checkCredentials).toHaveBeenCalledTimes(1);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    expect(backend.value).toBeUndefined();
+
+    const writes = vi.spyOn(backend, "set");
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes.mock.calls[0]![1]).toMatchObject({
+      accounts: [{ id: summary.id }],
+      providerConsents: [{ pluginId: "acme.clouds", fingerprint: "fp-1", approvedAt: 1000 }],
+    });
+    expect(summary.providerUnavailable).toBeNull();
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(true);
+    expect(onConsentGranted).toHaveBeenCalledTimes(1);
+
+    // Allowed now: the next account carries the same fingerprint and asks nothing more.
+    vi.mocked(provider.checkCredentials).mockResolvedValueOnce({
+      identity: "hubot",
+      scopes: [personalChoice()],
+    });
+    await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    expect(store.accounts()).toHaveLength(2);
+    expect(onConsentGranted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps nothing when the plugin changed while its provider checked the credentials", async () => {
+    let declared: { fingerprint: string } = { fingerprint: "" };
+    const { accounts, vault, store, ...env } = pluginService({
+      checkCredentials: vi.fn(async () => {
+        declared.fingerprint = "fp-2";
+        return { identity: "octocat", scopes: [personalChoice()] };
+      }),
+    });
+    declared = env.declared;
+    const put = vi.spyOn(vault, "put");
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
+      { code: "PERMISSION", userMessage: expect.stringContaining("changed") }
+    );
+    // Refused before anything was sealed, not cleaned up after.
+    expect(put).not.toHaveBeenCalled();
+    expect(vault.sets.size).toBe(0);
+    expect(store.accounts()).toEqual([]);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+  });
+
+  it("removes the sealed set when the plugin changed while it was sealed", async () => {
+    const { accounts, vault, store, declared } = pluginService();
+    const put = vault.put.bind(vault);
+    vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await put(id, values);
+      declared.fingerprint = "fp-2";
+    });
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
+      { code: "PERMISSION" }
+    );
+    expect(vault.sets.size).toBe(0);
+    expect(store.accounts()).toEqual([]);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+  });
+
+  it("pauses its accounts after a change to what it declares, until the person allows it again", async () => {
+    const { accounts, store, vault, provider, declared, onConsentGranted } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    onConsentGranted.mockClear();
+
+    // An update that changes its capabilities: the account stays, unusable, and says why.
+    declared.fingerprint = "fp-2";
+    expect(accounts.providerInfos()[0]!.plugin).toMatchObject({
+      fingerprint: "fp-2",
+      granted: false,
+    });
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("changed what it asks for");
+    expect(() => accounts.provider("acme.clouds.ec2")).toThrow(AppError);
+    await expect(accounts.validate(summary.id)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(accounts.catalog(summary.id)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(provider.validate).not.toHaveBeenCalled();
+    expect(provider.catalog).not.toHaveBeenCalled();
+
+    // Agreement to the old declarations answers for nothing now.
+    expect(() => accounts.allowAccountProvider(summary.id, "fp-1")).toThrow(
+      expect.objectContaining({ code: "PERMISSION" })
+    );
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
+      { code: "PERMISSION" }
+    );
+    expect(store.providerConsent("acme.clouds")!.fingerprint).toBe("fp-1");
+
+    // Reviewed and allowed: the saved account is usable again with no new key.
+    const allowed = accounts.allowAccountProvider(summary.id, "fp-2");
+    expect(allowed.providerUnavailable).toBeNull();
+    expect(store.providerConsent("acme.clouds")!.fingerprint).toBe("fp-2");
+    expect(onConsentGranted).toHaveBeenCalledTimes(1);
+    expect(vault.sets.get(summary.id)).toEqual(PLUGIN_ACCOUNT.credentials);
+    await accounts.validate(summary.id);
+    expect(provider.validate).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing again after an update that leaves what it declares as it was", async () => {
+    const { accounts, declared, onConsentGranted } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    // A new archive whose declarations hash the same.
+    declared.fingerprint = "fp-1";
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(true);
+    expect(accounts.summaries()[0]!.providerUnavailable).toBeNull();
+    await expect(accounts.validate(summary.id)).resolves.toMatchObject({ id: summary.id });
+    expect(onConsentGranted).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before replacing the credentials of an account it already has", async () => {
+    const { accounts, store, vault, provider } = pluginService();
+    seedAccount(store);
     await vault.put("ca_acmeplugin", {
       accessKeyId: "AKIAOLD",
       secretAccessKey: "old",
       region: "eu",
     });
     const fresh = { accessKeyId: "AKIANEW", secretAccessKey: "new-secret", region: "eu" };
-    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh)).resolves.toMatchObject({
-      id: "ca_acmeplugin",
+    // Seeded with no consent, as after an uninstall and a reinstall under the same id.
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("isn't allowed");
+    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh)).rejects.toMatchObject({
+      code: "PERMISSION",
     });
+    expect(provider.checkCredentials).not.toHaveBeenCalled();
+    await expect(
+      accounts.replaceCredentials("ca_acmeplugin", fresh, "fp-1")
+    ).resolves.toMatchObject({ id: "ca_acmeplugin", providerUnavailable: null });
     expect(provider.checkCredentials).toHaveBeenCalledTimes(1);
     expect(vault.sets.get("ca_acmeplugin")).toEqual(fresh);
+    expect(store.providerConsent("acme.clouds")!.fingerprint).toBe("fp-1");
+  });
+
+  it("puts the old set back when the plugin changed while the new one was sealed", async () => {
+    const { accounts, store, vault, declared } = pluginService();
+    seedAccount(store);
+    const old = { accessKeyId: "AKIAOLD", secretAccessKey: "old", region: "eu" };
+    await vault.put("ca_acmeplugin", old);
+    const put = vault.put.bind(vault);
+    vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await put(id, values);
+      declared.fingerprint = "fp-2";
+    });
+    const fresh = { accessKeyId: "AKIANEW", secretAccessKey: "new-secret", region: "eu" };
+    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh, "fp-1")).rejects.toMatchObject(
+      { code: "PERMISSION" }
+    );
+    expect(vault.sets.get("ca_acmeplugin")).toEqual(old);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    expect(store.account("ca_acmeplugin")!.credentialRevision).toBe("rev-1");
+  });
+
+  it("keeps nothing from a connect agreed to before the plugin was uninstalled, same declarations or not", async () => {
+    const { accounts, vault, store } = pluginService();
+    const put = vault.put.bind(vault);
+    vi.spyOn(vault, "put").mockImplementationOnce(async (id, values) => {
+      await put(id, values);
+      // Uninstalled and installed again with exactly the same declarations meanwhile.
+      accounts.forgetPluginConsent("acme.clouds");
+    });
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })).rejects.toMatchObject(
+      { code: "PERMISSION", userMessage: expect.stringContaining("uninstalled") }
+    );
+    expect(vault.sets.size).toBe(0);
+    expect(store.accounts()).toEqual([]);
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    // A fresh agreement afterwards is a fresh decision, and connects.
+    await expect(
+      accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" })
+    ).resolves.toMatchObject({ providerUnavailable: null });
+  });
+
+  it("forgets the consent on uninstall, pausing the plugin's accounts until it's allowed again", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    accounts.forgetPluginConsent("acme.clouds");
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("isn't allowed");
+    expect(accounts.allowAccountProvider(summary.id, "fp-1").providerUnavailable).toBeNull();
+  });
+
+  it("answers with no consent an uninstall couldn't remove, until it's given again", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    vi.spyOn(store, "removeProviderConsent").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(() => accounts.forgetPluginConsent("acme.clouds")).toThrow("disk full");
+    // Still on disk, yet the plugin is asked again and its accounts pause.
+    expect(store.providerConsent("acme.clouds")).not.toBeNull();
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(false);
+    expect(accounts.summaries()[0]!.providerUnavailable).toContain("isn't allowed");
+    expect(accounts.allowAccountProvider(summary.id, "fp-1").providerUnavailable).toBeNull();
+    expect(accounts.providerInfos()[0]!.plugin?.granted).toBe(true);
+  });
+
+  it("answers a replace that gives the consent again as usable at once", async () => {
+    const { accounts, store } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    vi.spyOn(store, "removeProviderConsent").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(() => accounts.forgetPluginConsent("acme.clouds")).toThrow("disk full");
+    await expect(
+      accounts.replaceCredentials(summary.id, PLUGIN_ACCOUNT.credentials, "fp-1")
+    ).resolves.toMatchObject({ id: summary.id, providerUnavailable: null });
+  });
+
+  it("offers no scopes a check read while the plugin changed", async () => {
+    let declared: { fingerprint: string } = { fingerprint: "" };
+    const env = pluginService({
+      checkCredentials: vi.fn(async () => {
+        declared.fingerprint = "fp-2";
+        return { identity: "octocat", scopes: [personalChoice()] };
+      }),
+    });
+    declared = env.declared;
+    await expect(
+      env.accounts.checkCredentials("acme.clouds.ec2", PLUGIN_ACCOUNT.credentials, "fp-1")
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("hands a plugin's provider only the saved values it declares now", async () => {
+    const { accounts, store, vault } = pluginService();
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    // Saved under an earlier declaration that also asked for a field this one dropped.
+    await vault.put(summary.id, { ...PLUGIN_ACCOUNT.credentials, legacyToken: "old-secret" });
+    const handed = await accounts.credentials(store.account(summary.id)!);
+    expect(handed.values).toEqual(PLUGIN_ACCOUNT.credentials);
+    expect(vault.sets.get(summary.id)).toMatchObject({ legacyToken: "old-secret" });
+  });
+
+  it("reads the catalog again once the plugin is allowed under new declarations", async () => {
+    const catalog = vi.fn(async () => ({
+      machineTypes: [],
+      canStart: true,
+      includedHoursRemaining: null,
+      startsRemaining: null,
+      savedSnapshotDayDollars: null,
+    }));
+    const { accounts, declared } = pluginService({ catalog });
+    const summary = await accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "fp-1" });
+    await accounts.catalog(summary.id);
+    await accounts.catalog(summary.id);
+    expect(catalog).toHaveBeenCalledTimes(1);
+    declared.fingerprint = "fp-2";
+    accounts.allowAccountProvider(summary.id, "fp-2");
+    await accounts.catalog(summary.id);
+    expect(catalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a plugin's provider only through an account it already has", () => {
+    const { accounts, store } = pluginService();
+    expect(() => accounts.allowAccountProvider("ca_missing00", "fp-1")).toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" })
+    );
+    expect(store.providerConsent("acme.clouds")).toBeNull();
+  });
+
+  it("never hands credentials to a plugin's provider when nothing says what it declares", async () => {
+    const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
+    const { accounts, vault } = service({ provider });
+    expect(accounts.providerInfos()[0]!.plugin).toMatchObject({ granted: false, fingerprint: "" });
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "" })).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(provider.checkCredentials).not.toHaveBeenCalled();
+    expect(vault.sets.size).toBe(0);
+  });
+
+  it("says a machine's host can stop it once idle only for a provider that implements a way to (#17921)", () => {
+    const hostIdleStop = (provider: CloudProvider) =>
+      service({ provider }).accounts.providerInfos()[0]!.hostIdleStop;
+    expect(hostIdleStop(fakeProvider())).toBe(false);
+    expect(hostIdleStop(fakeProvider({ machineKeys: {} as CloudProvider["machineKeys"] }))).toBe(
+      true
+    );
+    expect(hostIdleStop(fakeProvider({ checkGuestPowerOff: vi.fn() }))).toBe(true);
+  });
+
+  it("asks nothing of a built-in provider", async () => {
+    const { accounts } = service();
+    expect(accounts.providerInfos()[0]!.plugin).toBeUndefined();
+    await expect(
+      accounts.addAccount({
+        providerId: "boat",
+        credentials: { apiKey: "boat_live_0123456789abcd" },
+        scopeId: "team_1",
+      })
+    ).resolves.toMatchObject({ providerUnavailable: null });
   });
 
   it("words an unregistered provider's accounts with its owner's reason, falling back to the generic one", () => {
@@ -1300,6 +1639,7 @@ describe("CloudAccountService with declared credential sets", () => {
       keyHint: "abcd",
       credentialRevision: null,
       lastProvisioning: null,
+      pluginProvider: null,
       addedAt: 1,
       validation: { status: "unknown", checkedAt: null, detail: null },
     });

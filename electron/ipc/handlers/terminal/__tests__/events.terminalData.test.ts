@@ -92,6 +92,8 @@ import {
   unregisterProjectView,
 } from "../../../../window/webContentsRegistry.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { getEndpointRegistry } from "../../../endpointRegistry.js";
+import type { ClientEndpoint } from "../../../endpoint.js";
 
 beforeEach(() => {
   serviceRef.current = null;
@@ -159,6 +161,7 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
   beforeEach(() => {
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => (id === "term-a" ? "project-a" : null)),
+      isUnplacedTerminal: vi.fn((id: string) => id === "term-unplaced"),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -294,6 +297,50 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       ]);
     });
 
+    // #17926: no remote view is bound to it, so the unscoped remote fallback
+    // would push one window's shell to every Shell.
+    it("keeps a terminal placed in no project off remote views, and reaches every local one", () => {
+      const remote: ClientEndpoint = {
+        endpointId: "remote:s1:picker",
+        clientId: "client-b",
+        projectId: null,
+        kind: "remote-view",
+        handle: -7,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: () => ({ dispose: () => undefined }),
+        isClosed: () => false,
+      };
+      getEndpointRegistry().add(remote);
+      try {
+        ptyClient.emit("data", "term-unplaced", "picker output", {
+          portDeliveredWebContentsIds: [activeA.id],
+        });
+        expect(remote.send).not.toHaveBeenCalled();
+        expect(dataSends(activeA)).toHaveLength(0);
+        for (const wc of [cachedB, activeB, cachedA]) {
+          expect(dataSends(wc)).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "picker output"],
+          ]);
+        }
+
+        // With no port taking it, the ordinary fallback reaches every local view.
+        ptyClient.emit("data", "term-unplaced", "prompt");
+        for (const wc of [activeA, cachedB, activeB, cachedA]) {
+          expect(dataSends(wc).filter((call) => call[2] === "prompt")).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "prompt"],
+          ]);
+        }
+        expect(remote.send).not.toHaveBeenCalled();
+
+        // One main can no longer place still reaches them, as before.
+        ptyClient.emit("data", "term-untracked", "late output");
+        expect(remote.send).toHaveBeenCalledTimes(1);
+      } finally {
+        getEndpointRegistry().remove(remote.endpointId);
+      }
+    });
+
     it("falls back to every app view when the terminal's project is unknown", () => {
       // A terminal main no longer tracks answers null — the fallback is what
       // keeps its late output from being swallowed.
@@ -370,7 +417,10 @@ describe("terminal event handlers — captured agent sessions (#12433)", () => {
     acceptCapturedAgentSession.mockReset();
     acceptObservedAgentSession.mockClear();
     releaseSupersededCapturedSession.mockReset();
-    ptyClient = Object.assign(new EventEmitter(), { getTerminalProjectId: vi.fn() });
+    ptyClient = Object.assign(new EventEmitter(), {
+      getTerminalProjectId: vi.fn(),
+      isUnplacedTerminal: vi.fn(() => false),
+    });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
 
@@ -442,6 +492,7 @@ describe("terminal event handlers — broadcast-write-result forwarding", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: (id: string) => PROJECTS[id] ?? null,
+      isUnplacedTerminal: () => false,
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -542,6 +593,7 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn(),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -671,6 +723,7 @@ describe("terminal event handlers — resize-result forwarding (#11641)", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => `project-for-${id}`),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({
       ptyClient,
@@ -905,6 +958,7 @@ describe("terminal event handlers — spawn confirmation (#12754)", () => {
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn(() => "project-a"),
+      isUnplacedTerminal: vi.fn(() => false),
       consumeRestartExitSuppression: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
@@ -987,6 +1041,7 @@ describe("terminal event handlers — submit-status forwarding (#11875)", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => `project-for-${id}`),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({
       ptyClient,

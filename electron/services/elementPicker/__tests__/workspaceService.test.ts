@@ -20,7 +20,7 @@ import type { RegisterWorkspaceOptions } from "../ElementPickerHost.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../../ipc/endpoint.js";
 import { ELEMENT_PICKER_WORKSPACE_CLOSED } from "../../../../shared/types/ipc/elementPicker.js";
 import type { ElementPickerWorkspaceOpenRequest } from "../../../../shared/types/ipc/elementPicker.js";
-import type { PortListener } from "../../../remote/ports/listenerScan.js";
+import type { PortListener } from "../../../utils/localPortListeners.js";
 
 const PROJECT = "project-1";
 const OTHER_PROJECT = "project-2";

@@ -19,6 +19,8 @@ import {
 import { GceApiError, redactGceText } from "../gce/gceErrors.js";
 import { GCE_SSH_USER, GceProvider, gceInstanceName } from "../gce/GceProvider.js";
 import { gceMachineState } from "../gce/gceState.js";
+import type { MetadataFetch } from "../../host/guestPowerOffSystem.js";
+import { cloudMachineHost, IDLE_MINUTES, MINUTE } from "./guestPowerOffHarness.js";
 
 const API = "http://gce.test/compute/v1";
 const TOKEN_URL = "http://gce.test/token";
@@ -71,7 +73,7 @@ interface InsertBody {
   labels?: Record<string, string>;
   scheduling?: Record<string, unknown>;
   metadata: { items: { key: string; value: string }[] };
-  disks: { initializeParams: { sourceImage: string } }[];
+  disks: { type?: string; boot?: boolean; initializeParams?: { sourceImage: string } }[];
   networkInterfaces: { subnetwork: string; accessConfigs?: unknown[] }[];
 }
 
@@ -147,6 +149,8 @@ function fakeGoogle(
         accessConfigs: instance.natIP ? [{ natIP: instance.natIP, type: "ONE_TO_ONE_NAT" }] : [],
       },
     ],
+    disks: instance.body.disks.map((disk) => ({ type: disk.type, boot: disk.boot })),
+    metadata: instance.body.metadata,
   });
   const operation = (
     zone: string,
@@ -492,7 +496,45 @@ function fakeGoogle(
     apiUrl: API,
     ...overrides,
   });
-  return { fetch, requests, instances, state, provider, credentials, tokens };
+  /** The VM's own OS powering off: Compute Engine stops it, with no API call involved. */
+  const guestPowerOff = (id: string) => {
+    instances.get(id)!.status = "TERMINATED";
+  };
+  /** The VM's metadata server, answering only from the VM itself. */
+  const metadataFor =
+    (id: string): MetadataFetch =>
+    async (request) => {
+      const instance = instances.get(id)!;
+      if (request.headers["Metadata-Flavor"] !== "Google") {
+        return { status: 403, headers: {}, body: "" };
+      }
+      const flavor = { "metadata-flavor": "Google" };
+      switch (request.path) {
+        case "/computeMetadata/v1/project/project-id":
+          return { status: 200, headers: flavor, body: PROJECT };
+        case "/computeMetadata/v1/instance/zone":
+          return {
+            status: 200,
+            headers: flavor,
+            body: `projects/123456789/zones/${instance.zone}`,
+          };
+        case "/computeMetadata/v1/instance/id":
+          return { status: 200, headers: flavor, body: instance.id };
+        default:
+          return { status: 404, headers: flavor, body: "" };
+      }
+    };
+  return {
+    fetch,
+    requests,
+    instances,
+    state,
+    provider,
+    credentials,
+    tokens,
+    guestPowerOff,
+    metadataFor,
+  };
 }
 
 /** Reads of the VM itself made after the first DELETE was sent. */
@@ -743,7 +785,7 @@ describe("GceProvider", () => {
     expect(body.networkInterfaces[0]!.accessConfigs).toEqual([
       expect.objectContaining({ type: "ONE_TO_ONE_NAT" }),
     ]);
-    expect(body.disks[0]!.initializeParams.sourceImage).toBe(CREATE.provisioning.image);
+    expect(body.disks[0]!.initializeParams?.sourceImage).toBe(CREATE.provisioning.image);
     expect(body.labels).toEqual(CREATE.labels);
     expect(JSON.stringify(body)).not.toContain("PRIVATE KEY");
     expect(resource.resourceId).toBe(`projects/${PROJECT}/zones/us-central1-a/instances/${BIG_ID}`);
@@ -991,6 +1033,38 @@ describe("GceProvider", () => {
     const stopped = await google.provider.stop(google.credentials(), created.resourceId);
     expect(stopped?.machine).toBe("stopped");
     expect(google.requests.find((request) => request.path.endsWith("/stop"))!.sentBody).toBe(false);
+  });
+
+  it("sends an idle stop once, where a person's stop resends a throttled one (#17924)", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const stops = () => google.requests.filter((request) => request.path.endsWith("/stop"));
+    google.state.script.push({ path: /\/stop$/, status: 429, reason: "rateLimitExceeded" });
+    await expect(
+      google.provider.stop(google.credentials(), created.resourceId, { once: true })
+    ).rejects.toMatchObject({ kind: "rate-limited" });
+    expect(stops()).toHaveLength(1);
+
+    google.state.script.push({ path: /\/stop$/, status: 429, reason: "rateLimitExceeded" });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopped");
+    expect(stops()).toHaveLength(3);
+  });
+
+  it("sends an idle stop refused for its token no second time, where a person's stop gets a fresh token (#17924)", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    const stops = () => google.requests.filter((request) => request.path.endsWith("/stop"));
+    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
+    await expect(
+      google.provider.stop(google.credentials(), created.resourceId, { once: true })
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(stops()).toHaveLength(1);
+
+    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopped");
+    expect(stops()).toHaveLength(3);
   });
 
   it("leaves a stop's progress to the VM when its operation can't be read", async () => {
@@ -1360,5 +1434,144 @@ describe("gceInstanceName", () => {
     expect(gceInstanceName("x".repeat(100), key)).toHaveLength(63);
     expect(gceInstanceName("Build host", other)).toMatch(valid);
     expect(gceInstanceName("Build host", other)).not.toBe(gceInstanceName("Build host", key));
+  });
+});
+
+describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
+  const NO_LIMIT = { ...CREATE, lifetimeSeconds: null };
+
+  it("stops itself after its idle time with no Shell, keeping its disk, with no Google call from the VM", async () => {
+    const google = fakeGoogle();
+    const resource = await google.provider.create(google.credentials(), NO_LIMIT);
+    const check = await google.provider.checkGuestPowerOff(
+      google.credentials(),
+      resource.resourceId
+    );
+    expect(check).toEqual({
+      eligible: true,
+      target: { provider: "gce", project: PROJECT, zone: "us-central1-a", instanceId: BIG_ID },
+    });
+    if (!check.eligible) return;
+    const host = cloudMachineHost({
+      metadata: google.metadataFor(BIG_ID),
+      powerOff: () => google.guestPowerOff(BIG_ID),
+    });
+    // All the Shell hands over: which VM it is. No service-account key, no token.
+    await expect(host.keeper.set({ target: check.target, enabled: true })).resolves.toEqual({
+      armed: true,
+      problem: null,
+    });
+    const requestsBefore = google.requests.length;
+    await host.pass(0);
+    await host.pass((IDLE_MINUTES - 1) * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    await host.pass(2 * MINUTE);
+    expect(host.powerOffs).toEqual([["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "poweroff"]]);
+    await host.pass(MINUTE);
+    expect(host.powerOffs).toHaveLength(1);
+    expect(google.requests.slice(requestsBefore)).toEqual([]);
+
+    await expect(
+      google.provider.inspect(google.credentials(), resource.resourceId)
+    ).resolves.toMatchObject({ resourceId: resource.resourceId, machine: "stopped", error: null });
+    expect([...google.instances.keys()]).toEqual([BIG_ID]);
+    expect(google.instances.get(BIG_ID)!.body.disks).toEqual([
+      expect.objectContaining({ type: "PERSISTENT", boot: true }),
+    ]);
+    expect(
+      google.requests.filter((request) => /\/(stop|setScheduling)$/.test(request.path))
+    ).toEqual([]);
+    expect(google.requests.some((request) => request.method === "DELETE")).toBe(false);
+    host.dispose();
+  });
+
+  it("holds while the host sees work, past the old two-hour limit, and counts a full idle time after", async () => {
+    const google = fakeGoogle();
+    const resource = await google.provider.create(google.credentials(), NO_LIMIT);
+    const check = await google.provider.checkGuestPowerOff(
+      google.credentials(),
+      resource.resourceId
+    );
+    if (!check.eligible) throw new Error("not eligible");
+    const host = cloudMachineHost({
+      metadata: google.metadataFor(BIG_ID),
+      powerOff: () => google.guestPowerOff(BIG_ID),
+    });
+    await host.keeper.set({ target: check.target, enabled: true });
+    host.setBusy(true);
+    for (let elapsed = 0; elapsed < 3 * 60; elapsed += 10) {
+      await host.pass(10 * MINUTE);
+    }
+    expect(host.powerOffs).toEqual([]);
+    expect(google.instances.get(BIG_ID)!.status).toBe("RUNNING");
+    expect(google.instances.get(BIG_ID)!.scheduling).toEqual({});
+    host.setBusy(false);
+    await host.pass(MINUTE);
+    await host.pass((IDLE_MINUTES - 2) * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    await host.pass(2 * MINUTE);
+    expect(host.powerOffs).toHaveLength(1);
+    expect(google.instances.get(BIG_ID)!.status).toBe("TERMINATED");
+    host.dispose();
+  });
+
+  it("lets a VM with only persistent disks power itself off, and no other", async () => {
+    const google = fakeGoogle();
+    const resource = await google.provider.create(google.credentials(), NO_LIMIT);
+    const target = { provider: "gce", project: PROJECT, zone: "us-central1-a", instanceId: BIG_ID };
+    const check = () =>
+      google.provider.checkGuestPowerOff(google.credentials(), resource.resourceId);
+    const body = google.instances.get(BIG_ID)!.body;
+    body.disks.push({ type: "PERSISTENT" });
+    await expect(check()).resolves.toEqual({ eligible: true, target });
+    body.disks.push({ type: "SCRATCH" });
+    await expect(check()).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("local SSD"),
+    });
+    // Disks it can't see are disks it can't vouch for.
+    body.disks = [];
+    await expect(check()).resolves.toMatchObject({ eligible: false, target });
+  });
+
+  it("never lets a VM a managed instance group may replace power itself off", async () => {
+    const google = fakeGoogle();
+    const resource = await google.provider.create(google.credentials(), NO_LIMIT);
+    google.instances.get(BIG_ID)!.body.metadata.items.push({
+      key: "created-by",
+      value: "projects/1/zones/z/instanceGroupManagers/g",
+    });
+    await expect(
+      google.provider.checkGuestPowerOff(google.credentials(), resource.resourceId)
+    ).resolves.toEqual({
+      eligible: false,
+      target: { provider: "gce", project: PROJECT, zone: "us-central1-a", instanceId: BIG_ID },
+      problem: expect.stringContaining("managed instance group"),
+    });
+  });
+
+  it("refuses to power off a VM whose metadata names another one", async () => {
+    const google = fakeGoogle();
+    await google.provider.create(google.credentials(), NO_LIMIT);
+    const host = cloudMachineHost({
+      metadata: google.metadataFor(BIG_ID),
+      powerOff: () => google.guestPowerOff(BIG_ID),
+    });
+    const here = { provider: "gce" as const, project: PROJECT, zone: "us-central1-a" };
+    for (const other of [
+      { ...here, instanceId: "9007199254740993999" },
+      { ...here, zone: "us-central1-b", instanceId: BIG_ID },
+      { ...here, project: OTHER_PROJECT, instanceId: BIG_ID },
+    ]) {
+      await expect(host.keeper.set({ target: other, enabled: true })).resolves.toEqual({
+        armed: false,
+        problem: expect.stringContaining("another machine"),
+      });
+    }
+    await host.pass(0);
+    await host.pass(2 * IDLE_MINUTES * MINUTE);
+    expect(host.powerOffs).toEqual([]);
+    host.dispose();
   });
 });

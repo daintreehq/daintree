@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import type { PR } from "../../../../shared/types/forge.js";
 import {
   evaluateMergedWorktrees,
@@ -11,7 +12,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const HEAD = "a".repeat(40);
 const MERGED_AT = 1_700_000_000_000;
 const NOW = MERGED_AT + DAY + 1;
-const WT = "/repo-worktrees/feature-x";
+const WT = path.resolve("/repo-worktrees/feature-x");
 
 const main: ListedWorktree = {
   path: "/repo",
@@ -151,12 +152,14 @@ describe("evaluateMergedWorktrees", () => {
     ).toMatchObject({ reason: "has-panels" });
     expect(
       await judge({
-        readSavedLayout: vi.fn(async () => ({ panels: [{ cwd: `${WT}/packages/app` }] })),
+        readSavedLayout: vi.fn(async () => ({
+          panels: [{ cwd: path.join(WT, "packages", "app") }],
+        })),
       })
     ).toMatchObject({ reason: "has-panels" });
     expect(
       await judge({
-        readSavedLayout: vi.fn(async () => ({ panels: [{ cwd: `${WT}/..cache` }] })),
+        readSavedLayout: vi.fn(async () => ({ panels: [{ cwd: path.join(WT, "..cache") }] })),
       })
     ).toMatchObject({ reason: "has-panels" });
     expect(

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { FALLBACK_CHAIN_MAX } from "@shared/config/agentRegistry";
+import { ACCOUNT_NAME_MAX_CHARS } from "@shared/utils/agentAccounts";
+import { DANGEROUS_MODES } from "@shared/types/dangerousMode";
 import { withWorktreeLocation } from "./locationArgs";
 import { AgentIdSchema } from "./schemas";
 
@@ -72,6 +74,56 @@ export const AgentListPresetsArgsSchema = z.object({
     ),
 });
 
+// A plain string, as the preset writes take: the run refuses an agent with no
+// accounts, and the launch union would cost every account tool its wire budget.
+export const AgentListAccountsArgsSchema = z.object({
+  agentId: z.string().min(1).describe("Agent id from the agent listing."),
+  worktreeId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Also say which account a launch in this worktree uses when it names no account or preset."
+    ),
+});
+
+/** Rows one `agent.addAccount` call may carry: the checklist scale a batch kill uses. */
+export const MAX_ADD_ACCOUNT_ROWS = 32;
+
+// Strict, so a misspelt field is refused rather than dropped: the person
+// approves the rows the dialog shows, and a field that never reached main is
+// a change nobody approved. The name is refused past what main keeps rather
+// than cut, so the dialog never shows a name the caller didn't send.
+export const AgentAddAccountArgsSchema = z
+  .object({
+    accounts: z
+      .array(
+        z
+          .object({
+            agentId: z.string().min(1).describe("Agent id from the agent listing."),
+            name: z.string().min(1).max(ACCOUNT_NAME_MAX_CHARS),
+            folder: z
+              .discriminatedUnion("kind", [
+                z.object({ kind: z.literal("create") }).strict(),
+                z
+                  .object({
+                    kind: z.literal("existing"),
+                    path: z.string().min(1).describe("Full path to a folder already on disk."),
+                  })
+                  .strict(),
+              ])
+              .describe("create makes ~/.<cli folder>-<name>; existing uses a folder as it is."),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(MAX_ADD_ACCOUNT_ROWS)
+      .describe(
+        `1-${MAX_ADD_ACCOUNT_ROWS} accounts, any agents, put to the user as one checklist.`
+      ),
+  })
+  .strict();
+
 // Worktree-scoped so the caller must assert WHERE the session lives, using the
 // shared location vocabulary (#11543) rather than a bespoke `worktreeId` field.
 // The selector scopes the lookup; it never chooses the launch directory, which
@@ -111,9 +163,9 @@ export const SessionHistoryListArgsSchema = z
 // of these tools over the wire budget.
 const PresetAgentIdSchema = z.string().min(1).describe("Agent id from the agent listing.");
 const PresetEnvSchema = z.record(z.string(), z.string());
-const PresetModeSchema = z.enum(["inherit", "on", "off"]);
+const PresetModeSchema = z.enum(DANGEROUS_MODES);
 const PRESET_ARGS_DESCRIPTION = "CLI argv, one argument each.";
-const PRESET_SKIP_DESCRIPTION = "Skip permissions.";
+const PRESET_SKIP_DESCRIPTION = "on skips prompts; auto is the agent's Auto mode.";
 const PRESET_COLOR_DESCRIPTION = "Hex colour, e.g. #3b82f6.";
 const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
 const PRESET_FALLBACKS_DESCRIPTION = `Up to ${FALLBACK_CHAIN_MAX} of this agent's preset ids, tried if its provider fails.`;

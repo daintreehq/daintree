@@ -31,10 +31,19 @@ import {
   getDefaultDangerousArgs,
   getPluginBypassArgHistory,
   agentClipboardDirectory,
+  getPermissionAutoArgs,
+  permissionArgsForLevel,
+  reconcilePermissionFlags,
+  resolveEffectivePermissionLevel,
+  userPermissionArgs,
+  stripPermissionAutoArgs,
+  type DangerousMode,
+  type PermissionLevel,
 } from "../agentSettings.js";
 import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
 import { quoteLaunchPrompt } from "../../utils/launchPromptArg.js";
+import { applyPresetBehaviorOverrides } from "../../utils/agentPresets.js";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
@@ -2669,5 +2678,342 @@ describe("a plugin agent's assigned session id (#16470)", () => {
       expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
       expect(stripConversationSelectorArgs("", "pi")).toBe("");
     });
+  });
+});
+
+describe("Auto permission mode (#17435)", () => {
+  const LEVELS: PermissionLevel[] = ["cli-default", "auto", "skip"];
+  const MODE_FOR: Record<PermissionLevel, DangerousMode> = {
+    "cli-default": "off",
+    auto: "auto",
+    skip: "on",
+  };
+
+  describe("resolveEffectivePermissionLevel", () => {
+    it("resolves an explicit Auto to Auto for the agents that declare it, whatever the global switch", () => {
+      for (const agentId of ["claude", "codex"]) {
+        for (const global of [false, true]) {
+          expect(
+            resolveEffectivePermissionLevel({ dangerousMode: "auto" }, agentId, global),
+            `${agentId} global=${global}`
+          ).toBe("auto");
+          expect(resolveEffectiveBypass({ dangerousMode: "auto" }, agentId, global)).toBe(false);
+        }
+      }
+    });
+
+    it("never lets a saved Auto the agent can't honour fall through to the global Skip all", () => {
+      for (const agentId of ["gemini", "antigravity", "opencode", "toString"]) {
+        expect(
+          resolveEffectivePermissionLevel({ dangerousMode: "auto" }, agentId, true),
+          agentId
+        ).toBe("cli-default");
+        expect(resolveEffectiveBypass({ dangerousMode: "auto" }, agentId, true), agentId).toBe(
+          false
+        );
+      }
+    });
+
+    it("keeps the existing on / off / inherit resolution", () => {
+      expect(resolveEffectivePermissionLevel({ dangerousMode: "on" }, "codex", false)).toBe("skip");
+      expect(resolveEffectivePermissionLevel({ dangerousMode: "off" }, "codex", true)).toBe(
+        "cli-default"
+      );
+      expect(resolveEffectivePermissionLevel({}, "codex", true)).toBe("skip");
+      expect(resolveEffectivePermissionLevel({}, "codex", false)).toBe("cli-default");
+      expect(resolveEffectivePermissionLevel({ dangerousEnabled: true }, "codex", false)).toBe(
+        "skip"
+      );
+    });
+
+    it("lets a preset's Auto beat the agent's Skip all, and a preset's Skip all beat the agent's Auto", () => {
+      const preset = (dangerousMode?: DangerousMode) => ({
+        id: "p",
+        name: "P",
+        ...(dangerousMode && { dangerousMode }),
+      });
+      const level = (agent: DangerousMode, presetMode?: DangerousMode) =>
+        resolveEffectivePermissionLevel(
+          applyPresetBehaviorOverrides({ dangerousMode: agent }, preset(presetMode)),
+          "claude",
+          true
+        );
+      expect(level("on", "auto")).toBe("auto");
+      expect(level("auto", "on")).toBe("skip");
+      expect(level("auto")).toBe("auto");
+      expect(
+        applyPresetBehaviorOverrides({ dangerousMode: "on" }, preset("auto")).dangerousEnabled
+      ).toBe(false);
+    });
+
+    it("offers Auto args only through the agent's own key", () => {
+      expect(getPermissionAutoArgs("toString")).toEqual([]);
+      expect(getPermissionAutoArgs(undefined)).toEqual([]);
+      expect(getPermissionAutoArgs("gemini")).toEqual([]);
+    });
+  });
+
+  describe("launch flags", () => {
+    it("adds the declared Auto args instead of the bypass flag, even with the global switch on", () => {
+      for (const agentId of ["claude", "codex"]) {
+        const flags = generateAgentFlags({ dangerousMode: "auto" }, agentId, {
+          globalSkipPermissions: true,
+        });
+        const autoArgs = getPermissionAutoArgs(agentId);
+        expect(flags.slice(0, autoArgs.length), agentId).toEqual([...autoArgs]);
+        expect(flags, agentId).not.toContain(DEFAULT_DANGEROUS_ARGS[agentId]);
+      }
+    });
+
+    it("leaves a user's own Auto args as the only copy, from custom flags, a preset or the caller", () => {
+      const count = (flags: readonly string[]) =>
+        flags.filter((flag) => flag === "--approve-for-me").length;
+      // Without a copy of the user's, the setting adds exactly one.
+      expect(
+        count(generateAgentFlags({ dangerousMode: "auto", customFlags: "--search" }, "codex"))
+      ).toBe(1);
+      const custom = generateAgentFlags(
+        { dangerousMode: "auto", customFlags: "--approve-for-me --search" },
+        "codex"
+      );
+      expect(custom).toEqual(["--approve-for-me", "--search", "-c", "tui.whimsy=false"]);
+      const withCaller = buildAgentLaunchFlags({ dangerousMode: "auto" }, "codex", {
+        callerArgs: ["--approve-for-me"],
+      });
+      expect(count(withCaller)).toBe(0);
+      expect(
+        generateAgentCommand("codex", { dangerousMode: "auto" }, "codex", {
+          callerArgs: ["--approve-for-me"],
+        })
+      ).not.toContain("--approve-for-me");
+
+      const command = generateAgentCommand("codex", { dangerousMode: "auto" }, "codex", {
+        presetArgs: ["--approve-for-me"],
+      });
+      expect(command.match(/--approve-for-me/g)).toHaveLength(1);
+      const persisted = buildAgentLaunchFlags({ dangerousMode: "auto" }, "codex", {
+        presetArgs: ["--approve-for-me"],
+      });
+      expect(persisted.filter((flag) => flag === "--approve-for-me")).toHaveLength(1);
+    });
+
+    it("persists the same Auto args the launch command carries, in order", () => {
+      const persisted = buildAgentLaunchFlags({ dangerousMode: "auto" }, "claude");
+      const command = generateAgentCommand("claude", { dangerousMode: "auto" }, "claude");
+      const at = persisted.indexOf("--permission-mode");
+      expect(persisted.slice(at, at + 2)).toEqual(["--permission-mode", "auto"]);
+      expect(command).toMatch(/--permission-mode '?auto'?(\s|$)/);
+    });
+
+    it("names the args each level adds, honouring a custom bypass for Skip all", () => {
+      expect(permissionArgsForLevel("auto", {}, "codex")).toEqual(["--approve-for-me"]);
+      expect(permissionArgsForLevel("cli-default", {}, "codex")).toEqual([]);
+      expect(permissionArgsForLevel("skip", { dangerousArgs: "--yolo  --fast" }, "codex")).toEqual([
+        "--yolo",
+        "--fast",
+      ]);
+    });
+  });
+
+  describe("reconcilePermissionFlags", () => {
+    const launchFlags = (agentId: string, level: PermissionLevel, customFlags?: string) =>
+      buildAgentLaunchFlags({ dangerousMode: MODE_FOR[level], customFlags }, agentId);
+
+    it("moves a restored launch to every level and back, carrying what a fresh launch carries", () => {
+      for (const agentId of ["claude", "codex"]) {
+        for (const from of LEVELS) {
+          for (const to of LEVELS) {
+            const label = `${agentId} ${from} → ${to}`;
+            const once = reconcilePermissionFlags(launchFlags(agentId, from), agentId, to);
+            const fresh = launchFlags(agentId, to);
+            expect([...once].sort(), label).toEqual([...fresh].sort());
+            // A snapshot with a permission slot keeps it; one without gains the args at the end.
+            if (from !== "cli-default") expect(once, label).toEqual(fresh);
+            expect(reconcilePermissionFlags(once, agentId, to), `${label} idempotent`).toEqual(
+              once
+            );
+          }
+        }
+      }
+    });
+
+    it("replaces in place, keeping the user's flags where they were", () => {
+      const skipped = ["--dangerously-skip-permissions", "--model", "opus"];
+      expect(reconcilePermissionFlags(skipped, "claude", "auto")).toEqual([
+        "--permission-mode",
+        "auto",
+        "--model",
+        "opus",
+      ]);
+      expect(reconcilePermissionFlags(["--approve-for-me", "-c", "a=b"], "codex", "skip")).toEqual([
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c",
+        "a=b",
+      ]);
+    });
+
+    it("tells a user's own Auto args from Daintree's by today's settings", () => {
+      // Two panes saved with identical flags: one whose user typed the pair into
+      // their custom flags, one that got it from the Auto setting since switched off.
+      const saved = ["--permission-mode", "auto", "--append-system-prompt", "Keep answers short"];
+      const own = { customFlags: "--permission-mode auto" };
+      expect(
+        reconcilePermissionFlags(saved, "claude", "cli-default", {
+          userArgs: userPermissionArgs(own),
+        })
+      ).toEqual(saved);
+      expect(
+        reconcilePermissionFlags(saved, "claude", "cli-default", {
+          userArgs: userPermissionArgs({}),
+        })
+      ).toEqual(["--append-system-prompt", "Keep answers short"]);
+      // A preset's args count as the user's too.
+      expect(
+        reconcilePermissionFlags(["--approve-for-me"], "codex", "skip", {
+          userArgs: userPermissionArgs({}, ["--approve-for-me"]),
+        })
+      ).toEqual(["--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"]);
+    });
+
+    it("never adds a second copy beside one the snapshot already carries", () => {
+      const flags = ["--search", "--approve-for-me"];
+      expect(reconcilePermissionFlags(flags, "codex", "auto")).toEqual(flags);
+    });
+
+    it("leaves another permission mode the user chose alone at every level", () => {
+      const flags = ["--permission-mode", "plan"];
+      expect(reconcilePermissionFlags(flags, "claude", "cli-default")).toEqual(flags);
+      expect(reconcilePermissionFlags(flags, "claude", "auto")).toEqual([
+        ...flags,
+        "--permission-mode",
+        "auto",
+      ]);
+      expect(reconcilePermissionFlags(flags, "claude", "skip")).toEqual([
+        ...flags,
+        "--dangerously-skip-permissions",
+      ]);
+    });
+
+    it("reads a custom bypass that spells the Auto flag the same way on every pass", () => {
+      const options = { bypassArgs: "--approve-for-me" };
+      for (const level of LEVELS) {
+        const once = reconcilePermissionFlags(["--approve-for-me"], "codex", level, options);
+        expect(reconcilePermissionFlags(once, "codex", level, options), level).toEqual(once);
+      }
+      expect(reconcilePermissionFlags(["--approve-for-me"], "codex", "auto", options)).toEqual([
+        "--approve-for-me",
+      ]);
+    });
+
+    it("reads a flag after a -- terminator as a positional, not as the launch's Auto copy", () => {
+      const positional = ["--", "--approve-for-me"];
+      expect(
+        buildAgentLaunchFlags({ dangerousMode: "auto" }, "codex", { callerArgs: positional })
+      ).toContain("--approve-for-me");
+      expect(
+        reconcilePermissionFlags(["--search"], "codex", "auto", { carriedArgs: positional })
+      ).toEqual(["--search", "--approve-for-me"]);
+      expect(
+        reconcilePermissionFlags(["--approve-for-me"], "codex", "cli-default", {
+          userArgs: positional,
+        })
+      ).toEqual([]);
+    });
+
+    it("reads everything after a terminator as positional, in launch order", () => {
+      // A `--` in the custom flags makes the caller's token positional.
+      expect(
+        generateAgentFlags({ dangerousMode: "auto", customFlags: "--" }, "codex", {
+          followingArgs: ["--approve-for-me"],
+        })
+      ).toContain("--approve-for-me");
+      // The snapshot's own terminator: a copy after it isn't the launch's Auto,
+      // and neither is the caller's tail that follows it.
+      expect(
+        reconcilePermissionFlags(["--search", "--", "--approve-for-me"], "codex", "cli-default")
+      ).toEqual(["--search", "--", "--approve-for-me"]);
+      expect(
+        reconcilePermissionFlags(["--", "x"], "codex", "auto", {
+          carriedArgs: ["--approve-for-me"],
+        })
+      ).toEqual(["--", "x", "--approve-for-me"]);
+    });
+
+    it("keeps one copy of the Auto args, and none when the caller's tail carries it", () => {
+      const doubled = ["--approve-for-me", "--search", "--approve-for-me"];
+      expect(reconcilePermissionFlags(doubled, "codex", "auto")).toEqual([
+        "--approve-for-me",
+        "--search",
+      ]);
+      expect(
+        reconcilePermissionFlags(doubled, "codex", "cli-default", {
+          userArgs: ["--approve-for-me"],
+        })
+      ).toEqual(["--approve-for-me", "--search"]);
+      expect(
+        reconcilePermissionFlags(["--search"], "codex", "auto", {
+          carriedArgs: ["--approve-for-me"],
+        })
+      ).toEqual(["--search"]);
+      expect(
+        reconcilePermissionFlags(["--approve-for-me", "--search"], "codex", "auto", {
+          carriedArgs: ["--approve-for-me"],
+        })
+      ).toEqual(["--search"]);
+    });
+
+    it("keeps the boolean form's behaviour for callers that only know bypass", () => {
+      const flags = ["--model", "opus", "--approve-for-me"];
+      expect(reconcileBypassFlags(flags, "codex", true)).toEqual([
+        "--model",
+        "opus",
+        "--dangerously-bypass-approvals-and-sandbox",
+      ]);
+      expect(reconcileBypassFlags(flags, "codex", false)).toEqual(["--model", "opus"]);
+    });
+  });
+});
+
+describe("stripPermissionAutoArgs (#17435)", () => {
+  it("removes Claude's Auto pair however the launch command spelled it", () => {
+    for (const command of [
+      "claude --permission-mode auto --model opus",
+      "claude --permission-mode 'auto' --model opus",
+      'claude --permission-mode "auto" --model opus',
+      "claude --permission-mode=auto --model opus",
+    ]) {
+      expect(stripPermissionAutoArgs(command, "claude"), command).toBe("claude --model opus");
+    }
+  });
+
+  it("removes every copy of Codex's flag, with any =value after it", () => {
+    expect(
+      stripPermissionAutoArgs("codex --approve-for-me -c a=b --approve-for-me=true", "codex")
+    ).toBe("codex -c a=b");
+  });
+
+  it("leaves a launch prompt that mentions the flag whole, apostrophes included", () => {
+    const prompt = quoteLaunchPrompt("Don't drop --approve-for-me from the example");
+    const command = `codex --approve-for-me ${prompt}`;
+    expect(stripPermissionAutoArgs(command, "codex")).toBe(`codex ${prompt}`);
+    const path = "'/Users/O'\\''Brien/bin/codex'";
+    expect(stripPermissionAutoArgs(`${path} --approve-for-me --search`, "codex")).toBe(
+      `${path} --search`
+    );
+  });
+
+  it("leaves another permission mode alone, spaced or fused", () => {
+    for (const command of ["claude --permission-mode plan", "claude --permission-mode=plan"]) {
+      expect(stripPermissionAutoArgs(command, "claude")).toBe(command);
+    }
+  });
+
+  it("leaves the command alone for an agent with no Auto mode, or a quote left open", () => {
+    expect(stripPermissionAutoArgs("gemini --approve-for-me", "gemini")).toBe(
+      "gemini --approve-for-me"
+    );
+    expect(stripPermissionAutoArgs("codex --approve-for-me 'open", "codex")).toBe(
+      "codex --approve-for-me 'open"
+    );
   });
 });

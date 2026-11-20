@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assistantPolicyChecksNextFallback,
   assistantPolicySkips,
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
@@ -75,9 +76,64 @@ describe("assistantPolicySkips (#16752)", () => {
     ).toBe(true);
   });
 
+  // The add's checklist is where the person ticks each folder (#17079): no
+  // mode skips it, and it can't be ticked away under ask-except either.
+  it("never skips adding agent accounts, in any mode", () => {
+    for (const mode of ["inherit", "always-ask", "never-ask", "ask-except", undefined] as const) {
+      const policy = resolveAssistantConfirmationPolicy(mode, ["agent.addAccount"], true);
+      expect(assistantPolicySkips(policy, "agent.addAccount"), String(mode)).toBe(false);
+    }
+    // The same never-ask still skips everything else it did.
+    expect(
+      assistantPolicySkips(
+        resolveAssistantConfirmationPolicy("never-ask", [], false),
+        "agent.createPreset"
+      )
+    ).toBe(true);
+  });
+
   it("reads ask-except as a valid mode that skips nothing on its own", () => {
     expect(isHelpAssistantDaintreeConfirmations("ask-except")).toBe(true);
     expect(assistantSkipsDaintreeConfirmations("ask-except", true)).toBe(false);
+  });
+});
+
+describe("assistantPolicyChecksNextFallback (#17917)", () => {
+  const MOVE = "terminal.restartOnPresetOwned";
+  const NEXT = "terminal.restartOnPresetOwned.nextFallback";
+
+  it("hands the pane's view a preset move only under ask-except with its tick", () => {
+    const policy = resolveAssistantConfirmationPolicy("ask-except", [NEXT], false);
+    expect(assistantPolicyChecksNextFallback(policy, MOVE)).toBe(true);
+    // The tick never skips the move outright, nor reaches the account twin.
+    expect(assistantPolicySkips(policy, MOVE)).toBe(false);
+    expect(assistantPolicyChecksNextFallback(policy, "terminal.restartOnAccountOwned")).toBe(false);
+    expect(assistantPolicyChecksNextFallback(policy, "terminal.restartOnPreset")).toBe(false);
+  });
+
+  it("is off without its tick, and a stored plain move id hands over nothing", () => {
+    const others = resolveAssistantConfirmationPolicy(
+      "ask-except",
+      ["worktree.deleteOwned"],
+      false
+    );
+    expect(assistantPolicyChecksNextFallback(others, MOVE)).toBe(false);
+    const policy = resolveAssistantConfirmationPolicy("ask-except", [MOVE], false);
+    expect(policy.delegated.has(MOVE)).toBe(false);
+    expect(assistantPolicySkips(policy, MOVE)).toBe(false);
+    expect(assistantPolicyChecksNextFallback(policy, MOVE)).toBe(false);
+  });
+
+  it("leaves Always ask asking and Never ask a plain skip", () => {
+    for (const mode of ["always-ask", "never-ask", "inherit"] as const) {
+      for (const agentSkips of [false, true]) {
+        const policy = resolveAssistantConfirmationPolicy(mode, [NEXT], agentSkips);
+        expect(assistantPolicyChecksNextFallback(policy, MOVE)).toBe(false);
+        expect(assistantPolicySkips(policy, MOVE)).toBe(
+          mode === "never-ask" || (mode === "inherit" && agentSkips)
+        );
+      }
+    }
   });
 });
 

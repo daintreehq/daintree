@@ -45,6 +45,10 @@ export const TRANSCRIBER_NOTES: Record<VoiceTranscriptionProvider, string> = {
 - It spells dictated symbols out as words ("slash", "dash dash", "dot").
 - It gets rare names and context-bound words wrong in fluent-looking ways ("Tara", "we'd" for "would"), so a misheard word can read like a real one.
 - It flags no unsure words, so a misheard word is never tagged.`,
+  local: `TRANSCRIBER: The target was transcribed on the speaker's device by NVIDIA's Nemotron speech model. Its habits:
+- It punctuates and capitalises as it goes.
+- It is given no project vocabulary, so it writes project and technical names as the ordinary words it heard ("Dantree" for "Daintree", "PTY client" for "PtyClient", "use Shallow" for "useShallow"): repair them where the sentence plainly means the name.
+- It flags no unsure words, so a misheard word is never tagged.`,
   deepgram: `TRANSCRIBER: The target was transcribed by Deepgram. Its habits:
 - It takes fillers out itself and writes numbers as digits.
 - It splits project and technical words into the sounds it heard ("x term", "zoo stand", "p t y").

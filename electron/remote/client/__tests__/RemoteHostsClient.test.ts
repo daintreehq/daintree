@@ -2984,6 +2984,44 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  it("stops what nothing else would before the record goes, once the link is down, and removes it either way", async () => {
+    const seen: Array<{ listed: boolean; disconnects: number }> = [];
+    const removing = vi.fn(async () => {
+      seen.push({
+        listed: registry.get("studio-01") !== null,
+        disconnects: manager.disconnect.mock.calls.length,
+      });
+      throw new Error("ssh: connect to host studio.example port 22: Connection refused");
+    });
+    const removed = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: () => null },
+      windows,
+      installRouter,
+      emit: () => {},
+      listViews: () => [],
+      onRemoving: removing,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(removed.forget({ hostId: "studio-01" })).resolves.toBeUndefined();
+    warn.mockRestore();
+    expect(removing).toHaveBeenCalledWith(expect.objectContaining({ id: "studio-01" }));
+    // Still listed (a cloud machine's access goes with the record), its link already closed.
+    expect(seen).toEqual([{ listed: true, disconnects: 1 }]);
+    expect(registry.list()).toEqual([]);
+
+    // A change of target lets the old machine go without stopping anything there.
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+    await removed.update({
+      hostId: "studio-02",
+      connection: { kind: "ssh", target: "s3.example" },
+    });
+    expect(removing).toHaveBeenCalledTimes(1);
+  });
+
   it("still removes the host when no replacement window could be opened", async () => {
     manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
@@ -3500,9 +3538,49 @@ describe("RemoteHostsClient", () => {
     const summary = { agentsObserved: { working: 2 } };
     registerRemoteService("hostMetrics", {
       latest: (hostId: string) => (hostId === "studio-01" ? summary : null),
+      // Came on no link, as this machine's own do: nothing to hold it back for.
+      cameOn: () => null,
     } as unknown as HostMetricsClient);
     try {
       expect(client.list()).toEqual([expect.objectContaining({ summary })]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
+  });
+
+  it("leaves out a summary from an earlier link after a reconnect, until one comes on the new link (#17921)", () => {
+    const linkA = { isOpen: false };
+    const linkB = { isOpen: true };
+    const fromA = { sampledAt: 1, idle: { stopsWhenIdle: true } };
+    const fromB = { sampledAt: 2, idle: {} };
+    const arrivedOn = new Map<object, object>([
+      [fromA, linkA],
+      [fromB, linkB],
+    ]);
+    let latest: object = fromA;
+    registerRemoteService("hostMetrics", {
+      latest: () => latest,
+      cameOn: (summary: object, session: object | null) =>
+        session !== null && arrivedOn.get(summary) === session,
+    } as unknown as HostMetricsClient);
+    const connection = manager.connect("studio-01") as ReturnType<typeof manager.connect> & {
+      currentSession?: object | null;
+    };
+    try {
+      // Back up on B before B has reported: A's "stops by itself" isn't about the host now.
+      connection.currentSession = linkB;
+      expect(client.list()).toEqual([
+        expect.objectContaining({
+          connection: expect.objectContaining({ status: "connected" }),
+          summary: null,
+        }),
+      ]);
+      // Between links, with A closed and B not yet attached, it's no current host's either.
+      connection.currentSession = null;
+      expect(client.list()[0]!.summary).toBeNull();
+      connection.currentSession = linkB;
+      latest = fromB;
+      expect(client.list()[0]!.summary).toBe(fromB);
     } finally {
       _resetRemoteServicesForTest();
     }

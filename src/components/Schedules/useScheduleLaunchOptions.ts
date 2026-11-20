@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { getMergedPresets } from "@/config/agents";
 import {
-  resolveSkipPermissions,
+  resolvePermissionLevel,
   savedPresetStatus,
 } from "@/components/Settings/AgentScopeEditor/scopeUtils";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -10,7 +10,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { ownedProjectPresets, presetInventoryState } from "@/utils/presetInventory";
-import { getAgentSettingsEntry } from "@shared/types/agentSettings";
+import { getAgentSettingsEntry, permissionArgsForLevel } from "@shared/types/agentSettings";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 
 export interface ScheduleLaunchOptions {
@@ -23,8 +23,11 @@ export interface ScheduleLaunchOptions {
    */
   presetStatus: "none" | "found" | "missing" | "loading";
   /**
-   * True when the launch would stop at permission prompts, read the way the
-   * launch resolves it. Null until agent settings and the chosen preset have loaded.
+   * True when the launch adds no permission flag, so the CLI's own defaults
+   * decide whether it stops at prompts; read the way the launch resolves it.
+   * Auto and Skip all count as false where they add a flag, and Skip all on an
+   * agent with no bypass flag counts as true. Null until agent settings and the
+   * chosen preset have loaded.
    */
   stopsAtPrompts: boolean | null;
 }
@@ -56,7 +59,11 @@ export function useScheduleLaunchOptions(
     const presetStatus = status === "missing" && !settings ? "loading" : status;
     const stopsAtPrompts =
       settings && agentId && presetStatus !== "loading"
-        ? !resolveSkipPermissions(agentId, entry, preset, settings.globalSkipPermissions ?? false)
+        ? permissionArgsForLevel(
+            resolvePermissionLevel(agentId, entry, preset, settings.globalSkipPermissions ?? false),
+            entry,
+            agentId
+          ).length === 0
         : null;
     return { presets, preset, presetStatus, stopsAtPrompts };
   }, [

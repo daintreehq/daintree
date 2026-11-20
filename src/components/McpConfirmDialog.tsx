@@ -13,7 +13,11 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
-import type { McpApprovalScope, McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import type {
+  McpApprovalScope,
+  McpConfirmationDecision,
+  McpDelegationOffer,
+} from "@shared/types/ipc/mcpServer";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -283,6 +287,14 @@ export function McpConfirmDialog() {
   const [allowForSession, setAllowForSession] = useState(false);
   useLayoutEffect(() => {
     setAllowForSession(false);
+  }, [resetKey]);
+
+  // "Don't ask again for this kind of action" (#16752), reset on every
+  // promotion for the same reason: a tick on one request must never hand over
+  // the next one's action.
+  const [handOver, setHandOver] = useState(false);
+  useLayoutEffect(() => {
+    setHandOver(false);
   }, [resetKey]);
 
   // The request whose requester the user went to look at (#14992). It stays
@@ -565,6 +577,10 @@ export function McpConfirmDialog() {
     current.sessionOrigin === "help" &&
     !current.callerInfo &&
     current.offerSessionApproval !== true;
+  // Main offers it only for its own assistant's call, local or relayed, and
+  // never beside the pane-only session grant.
+  const delegationOffer =
+    current.offerSessionApproval === true ? undefined : current.delegationOffer;
 
   // `alertdialog` is for a brief, important message; APG reserves it for text
   // the screen reader should read out whole on open. This body carries a
@@ -575,7 +591,8 @@ export function McpConfirmDialog() {
     previewState !== "none" ||
     hasArgs ||
     selectableTargets !== undefined ||
-    showAssistantPreference;
+    showAssistantPreference ||
+    delegationOffer !== undefined;
 
   const offersSession = current.offerSessionApproval === true;
   // Queue depth stays out of a typed-name request's footer: the slot belongs to
@@ -610,7 +627,9 @@ export function McpConfirmDialog() {
     title: confirmTitle(current),
     confirmLabel: offersSession
       ? sessionConfirmLabel(current.actionTitle, allowForSession)
-      : selectionConfirmLabel(current, selectedCount),
+      : delegationOffer !== undefined && handOver && !expired
+        ? `${selectionConfirmLabel(current, selectedCount)} and don't ask again`
+        : selectionConfirmLabel(current, selectedCount),
     cancelLabel: expired ? "Close" : "Cancel",
     onConfirm: () => {
       if (expired || blockedBy !== undefined) return;
@@ -620,7 +639,11 @@ export function McpConfirmDialog() {
         current.requestId,
         "approved",
         approvedTargetIds,
-        offersSession && allowForSession ? "session" : undefined
+        offersSession && allowForSession
+          ? "session"
+          : delegationOffer !== undefined && handOver
+            ? "delegate"
+            : undefined
       );
     },
     hasPreview: hasScrollableContent,
@@ -648,6 +671,7 @@ export function McpConfirmDialog() {
     // there would hide the question instead of answering it.
     initialFocus:
       showAssistantPreference ||
+      delegationOffer !== undefined ||
       offersSession ||
       current.requester !== undefined ||
       followsExpired !== undefined
@@ -764,12 +788,26 @@ export function McpConfirmDialog() {
         </LaterRequests>
       )}
 
-      {/* Not keyed per request: one assistant request promoting into another
-          would otherwise unmount a focused segment and drop focus to the body.
-          The value is app-wide, so it carries across requests unchanged. */}
-      {showAssistantPreference && (
+      {/* The preference isn't keyed per request: one assistant request
+          promoting into another would otherwise unmount a focused segment and
+          drop focus to the body. The value is app-wide, so it carries across
+          requests unchanged. The hand-over is keyed, and holds its slot ahead
+          of the preference either way, so the preference never moves in the
+          tree when one request offers it and the next doesn't. */}
+      {(showAssistantPreference || delegationOffer !== undefined) && (
         <LaterRequests>
-          <AssistantConfirmationPreference />
+          {delegationOffer !== undefined && (
+            <DelegationOption
+              // Its own node per request: a press begun on one request's box
+              // that ends after the next is promoted can't tick that one.
+              key={`hand-over:${current.requestId}`}
+              offer={delegationOffer}
+              checked={handOver && !expired}
+              disabled={expired}
+              onCheckedChange={setHandOver}
+            />
+          )}
+          {showAssistantPreference && <AssistantConfirmationPreference />}
         </LaterRequests>
       )}
     </div>
@@ -1057,6 +1095,58 @@ function SessionApprovalOption({
         <span id={detailId} className="text-2xs text-text-secondary">
           Later {actionTitle} calls from {requesterName ? `'${requesterName}'` : "this agent"}{" "}
           <FactSeparator /> any arguments <FactSeparator /> up to 30 minutes
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * "Don't ask again for this kind of action" (#16752): hands the action the
+ * assistant called over to it under "Ask, except for…", from the dialog that
+ * asks about it. Unlike the preference below it saves nothing on its own:
+ * main writes it only beside the approval, for the action and machine it
+ * settled when it asked. Says when approving also switches the mode, since
+ * that drops any ticks Settings kept from an earlier "Ask, except for…".
+ */
+function DelegationOption({
+  offer,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  offer: McpDelegationOffer;
+  checked: boolean;
+  /** Timed out: there is no approval left for it to ride on. */
+  disabled: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  const checkboxId = useId();
+  const detailId = useId();
+  return (
+    <div className="flex items-start gap-2">
+      <Checkbox
+        id={checkboxId}
+        size="sm"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+        aria-describedby={detailId}
+        className="mt-0.5"
+      />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <label htmlFor={checkboxId} className="w-fit text-xs text-text-primary">
+          Don&apos;t ask again for this kind of action
+        </label>
+        <span id={detailId} className="flex flex-col gap-0.5 text-2xs text-text-secondary">
+          <span>
+            {offer.label} <FactSeparator /> {offer.detail}
+          </span>
+          <span>
+            {offer.switchesMode
+              ? "Saved when you approve, as Ask, except for… with only this action. Untick it in Settings > Daintree Assistant."
+              : "Saved when you approve. Untick it in Settings > Daintree Assistant."}
+          </span>
         </span>
       </span>
     </div>
@@ -1476,27 +1566,37 @@ function TargetChecklist({
                   <span className="truncate text-xs text-text-primary">{target.name}</span>
                   {target.agentRunning && <Badge size="xs">Agent running</Badge>}
                 </span>
-                {/* The id is the column's tiebreaker, so it never truncates: two panels
-                    in one worktree can carry the same title, and then only the id
-                    tells their checkboxes apart. It is also what the caller named, so
-                    it is what a human cross-referencing the tool call looks for. A
-                    long worktree name gives way instead. */}
-                <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
-                  {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
-                  {/* Bare spaces, not inside either span: the name computation
+                {target.detail !== undefined ? (
+                  // Wraps rather than truncates, and keeps every space: a folder
+                  // cut short or with two spaces read as one is not the folder
+                  // being approved.
+                  <span className="text-2xs text-text-secondary">
+                    {target.kindLabel} <FactSeparator />{" "}
+                    <span className="font-mono break-all whitespace-pre-wrap">{target.detail}</span>
+                  </span>
+                ) : (
+                  // The id is the column's tiebreaker, so it never truncates: two
+                  // panels in one worktree can carry the same title, and then only
+                  // the id tells their checkboxes apart. It is also what the caller
+                  // named, so it is what a human cross-referencing the tool call
+                  // looks for. A long worktree name gives way instead.
+                  <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
+                    {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
+                    {/* Bare spaces, not inside either span: the name computation
                       trims each element's text and skips the hidden dot, so without
                       them the worktree would fuse onto the kind in the checkbox's name. */}
-                  {target.worktree && (
-                    <>
-                      {" "}
-                      <FactSeparator />{" "}
-                    </>
-                  )}
-                  <span className="shrink-0">
-                    {target.kindLabel} <FactSeparator />{" "}
-                    <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                    {target.worktree && (
+                      <>
+                        {" "}
+                        <FactSeparator />{" "}
+                      </>
+                    )}
+                    <span className="shrink-0">
+                      {target.kindLabel} <FactSeparator />{" "}
+                      <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                    </span>
                   </span>
-                </span>
+                )}
               </span>
             </li>
           );

@@ -7,6 +7,7 @@ import {
   type ClaudeUsageRecord,
 } from "../ClaudeUsageObservations.js";
 import {
+  claudeLiveAccountKey,
   defaultClaudeConfigDir,
   paneDisplayTitle,
   readClaudeUsageAccounts,
@@ -45,6 +46,28 @@ function deps(overrides: Partial<ClaudeUsageDeps> = {}): ClaudeUsageDeps {
     ...overrides,
   };
 }
+
+describe("claudeLiveAccountKey (#17318)", () => {
+  afterEach(() => clearClaudeUsageObservations());
+
+  it("matches a live pane to the group its folder's readings are under, however the folder is spelled", async () => {
+    recordClaudeUsageObservation(record({ configDir: WORK }));
+    const [work] = await readClaudeUsageAccounts(deps());
+    expect(await claudeLiveAccountKey(LINK_TO_WORK, deps())).toBe(work!.key);
+  });
+
+  it("takes no login for a pane its shell's profile may have moved to another folder", async () => {
+    recordClaudeUsageObservation(record({ configDir: WORK, shell: "/bin/bash" }));
+    const moved = deps({
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: STRAY } }),
+    });
+    const accounts = await readClaudeUsageAccounts(moved);
+    const key = await claudeLiveAccountKey(WORK, moved);
+    expect(accounts.find((account) => account.key === key)).toBeUndefined();
+    // On the folder the profile exports, the pane is certain.
+    expect(await claudeLiveAccountKey(STRAY, moved)).not.toBe(key);
+  });
+});
 
 describe("readClaudeUsageAccounts (#16370)", () => {
   afterEach(() => clearClaudeUsageObservations());
@@ -247,6 +270,47 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     ).toEqual([
       ["account", ["t1"]],
       ["unknown", ["t3", "t2"]],
+    ]);
+  });
+
+  it("keeps an earlier launch's verdict on its readings, whatever the probe says now (#17610)", async () => {
+    recordClaudeUsageObservation(
+      record({ terminalId: "saved-work", configDir: WORK, shell: null, savedIdentity: WORK })
+    );
+    recordClaudeUsageObservation(
+      // Its own pane was on WORK, but the launch that saw it couldn't tell.
+      record({
+        terminalId: "saved-unknown",
+        window: "5-hour limit",
+        configDir: WORK,
+        shell: null,
+        savedIdentity: null,
+      })
+    );
+    // This launch's zsh pane on the same folder is moved by the profile's export.
+    recordClaudeUsageObservation(
+      record({ terminalId: "live", window: "Opus limit", configDir: WORK })
+    );
+
+    const exporting = await readClaudeUsageAccounts(
+      deps({
+        readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: STRAY } }),
+      })
+    );
+    const silent = await readClaudeUsageAccounts(deps({ readShellObservation: () => undefined }));
+
+    const placed = (accounts: Awaited<ReturnType<typeof readClaudeUsageAccounts>>) =>
+      accounts.map((account) => [
+        account.kind,
+        account.readings.map((reading) => reading.terminalId),
+      ]);
+    expect(placed(exporting)).toEqual([
+      ["account", ["saved-work"]],
+      ["unknown", ["saved-unknown", "live"]],
+    ]);
+    expect(placed(silent)).toEqual([
+      ["account", ["saved-work", "live"]],
+      ["unknown", ["saved-unknown"]],
     ]);
   });
 

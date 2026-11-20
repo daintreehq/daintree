@@ -478,6 +478,22 @@ describe("routeHostEvent", () => {
     expect(brokerCalls).toEqual([{ requestId: "req-2", result: ["a", "b"] }]);
   });
 
+  it("resolves broker with a project's terminal records, defaulting to none", () => {
+    const { deps, brokerCalls } = makeDeps();
+    const record = { id: "a", projectId: "p1", kind: "terminal" } as never;
+    routeHostEvent({ type: "project-terminals", requestId: "req-3", terminals: [record] }, deps);
+    routeHostEvent(
+      { type: "project-terminals", requestId: "req-4" } as unknown as Parameters<
+        typeof routeHostEvent
+      >[0],
+      deps
+    );
+    expect(brokerCalls).toEqual([
+      { requestId: "req-3", result: [record] },
+      { requestId: "req-4", result: [] },
+    ]);
+  });
+
   it("preserves the legacy terminalTypes fallback shape on missing project-stats", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent(

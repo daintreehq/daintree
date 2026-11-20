@@ -1,271 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
-  CallToolRequestSchema,
-  ErrorCode,
-  McpError,
-  type CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
+  McpDiscoveryFile,
+  discoveryProcessStamp,
+} from "../electron/services/mcp-server/discoveryFile.js";
+import {
+  daintreeProfileDir,
+  startFakeDaintreeApp,
+  stopProcess,
+  writeRuntimeFile,
+  type FakeDaintreeApp,
+} from "../electron/services/mcp-server/__tests__/helpers/fakeDaintreeApp.js";
+import {
+  NEGOTIATED_VERSION,
+  OTHER_TOKEN,
+  TOKEN,
+  startFixture,
+  type Fixture,
+} from "./__tests__/helpers/mcpCallFixture.js";
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
-const TOKEN = "pane-bearer-1234";
-// The fixture answers initialize with this older revision whatever was asked,
-// so a client that sent a constant instead of the negotiated one is refused.
-const NEGOTIATED_VERSION = "2025-06-18";
-
-// `daintree call` against the real SDK transport Daintree serves `/mcp` with,
-// so the handshake, headers, SSE framing and session teardown are checked
-// against what the server actually accepts rather than against a restatement.
-interface Seen {
-  method: string;
-  path: string;
-  host: string | undefined;
-  sessionId: string | undefined;
-  protocolVersion: string | undefined;
-  rpc: { method?: string; params?: { name?: string; arguments?: unknown } } | undefined;
-  /** What the server wrote back, as sent. */
-  response: string;
-}
-
-interface FixtureOptions {
-  jsonResponse?: boolean;
-  /** Opens a session for initialize, then sends a reply body that never completes. */
-  brokenInitialize?: boolean;
-  /** Opens a session for initialize, then closes the connection partway through the body. */
-  droppedInitialize?: boolean;
-  /** Refuses initialize with a 401 whose body is cut short. */
-  truncatedRefusal?: boolean;
-  /** Answers initialize with this instead of opening a session. */
-  initialize?: { status: number; body: string; sessionId?: string };
-  /** Answers tools/call with this body as an SSE stream instead of running a tool. */
-  callReply?: string;
-  /** Answers this JSON-RPC method with a 401, as for a bearer revoked mid-call. */
-  refuse?: string;
-}
-
-interface Fixture {
-  url: string;
-  seen: Seen[];
-  sessions: Map<string, StreamableHTTPServerTransport>;
-  /** Resolves when the server receives a `tools/call`. */
-  callArrived: Promise<void>;
-  close: () => Promise<void>;
-}
-
-async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
-  const seen: Seen[] = [];
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
-  let signalCall: () => void = () => {};
-  const callArrived = new Promise<void>((resolve) => {
-    signalCall = resolve;
-  });
-  let releaseSlow: () => void = () => {};
-  const slowReleased = new Promise<void>((resolve) => {
-    releaseSlow = resolve;
-  });
-
-  const tools: Record<
-    string,
-    (args: Record<string, unknown>, notify: () => Promise<void>) => Promise<CallToolResult>
-  > = {
-    "fixture.echo": async (args) => ({
-      content: [{ type: "text", text: JSON.stringify(args) }],
-      structuredContent: { echoed: args },
-    }),
-    "fixture.refuse": async () => ({
-      isError: true,
-      content: [{ type: "text", text: "RESOURCE_NOT_OWNED: not yours" }],
-    }),
-    "fixture.errorLooking": async () => ({
-      content: [{ type: "text", text: '{"isError":true,"error":"only a field"}' }],
-    }),
-    "fixture.blocks": async () => ({
-      content: [
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-      ],
-    }),
-    "fixture.image": async () => ({
-      content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
-    }),
-    "fixture.chatty": async (_args, notify) => {
-      await notify();
-      return { content: [{ type: "text", text: "done" }] };
-    },
-    "fixture.slow": async () => {
-      await slowReleased;
-      return { content: [{ type: "text", text: "late" }] };
-    },
-  };
-
-  const newSessionServer = () => {
-    const server = new Server(
-      { name: "daintree-fixture", version: "1.0.0" },
-      { capabilities: { tools: {}, logging: {} } }
-    );
-    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-      const tool = tools[request.params.name];
-      if (!tool)
-        throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`);
-      return tool(request.params.arguments ?? {}, () =>
-        extra.sendNotification({
-          method: "notifications/message",
-          params: { level: "info", data: "working" },
-        })
-      );
-    });
-    return server;
-  };
-
-  const httpServer = http.createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk as Buffer);
-    const raw = Buffer.concat(chunks).toString("utf8");
-    let rpc: Seen["rpc"];
-    try {
-      rpc = raw ? JSON.parse(raw) : undefined;
-    } catch {
-      rpc = undefined;
-    }
-    const header = (name: string) => {
-      const value = req.headers[name];
-      return Array.isArray(value) ? value[0] : value;
-    };
-    const entry: Seen = {
-      method: req.method ?? "",
-      path: req.url ?? "",
-      host: header("host"),
-      sessionId: header("mcp-session-id"),
-      protocolVersion: header("mcp-protocol-version"),
-      rpc,
-      response: "",
-    };
-    seen.push(entry);
-    if (rpc?.method === "tools/call") signalCall();
-
-    const capture = (chunk: unknown) => {
-      if (chunk === undefined || typeof chunk === "function") return chunk;
-      let text = typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString();
-      if (rpc?.method === "initialize") {
-        text = text.replace(
-          /"protocolVersion":"[^"]*"/,
-          `"protocolVersion":"${NEGOTIATED_VERSION}"`
-        );
-      }
-      entry.response += text;
-      return text;
-    };
-    const write = res.write.bind(res) as (...args: unknown[]) => boolean;
-    const end = res.end.bind(res) as (...args: unknown[]) => http.ServerResponse;
-    res.write = ((chunk: unknown, ...rest: unknown[]) =>
-      write(capture(chunk), ...rest)) as typeof res.write;
-    res.end = ((chunk?: unknown, ...rest: unknown[]) =>
-      end(capture(chunk), ...rest)) as typeof res.end;
-
-    if (
-      req.headers.authorization !== `Bearer ${TOKEN}` ||
-      (options.refuse !== undefined && rpc?.method === options.refuse)
-    ) {
-      res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
-      return;
-    }
-    if (req.url !== "/mcp") {
-      res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
-      return;
-    }
-    // Fewer bytes than the declared length, then the end of the connection once
-    // they are on the wire: curl has the headers and fails the transfer.
-    const cutShort = (status: number, headers: Record<string, string>) => {
-      res.writeHead(status, {
-        "Content-Type": "application/json",
-        "Content-Length": "100",
-        ...headers,
-      });
-      res.write('{"jsonrpc":', () => res.socket?.end());
-    };
-    if (options.droppedInitialize && rpc?.method === "initialize") {
-      cutShort(200, { "Mcp-Session-Id": "dropped" });
-      return;
-    }
-    if (options.truncatedRefusal && rpc?.method === "initialize") {
-      cutShort(401, {});
-      return;
-    }
-    if (options.initialize && rpc?.method === "initialize") {
-      const { status, body, sessionId: id } = options.initialize;
-      res
-        .writeHead(status, {
-          "Content-Type": body.startsWith("{") ? "application/json" : "text/event-stream",
-          ...(id ? { "Mcp-Session-Id": id } : {}),
-        })
-        .end(body);
-      return;
-    }
-    if (options.callReply !== undefined && rpc?.method === "tools/call") {
-      const status = options.callReply.startsWith("{") ? 413 : 200;
-      res.writeHead(status, { "Content-Type": "text/event-stream" }).end(options.callReply);
-      return;
-    }
-    if (options.brokenInitialize && rpc?.method === "initialize") {
-      res
-        .writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "half-open" })
-        .end('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":\n\n');
-      return;
-    }
-    const sessionId = header("mcp-session-id");
-    let transport = sessionId ? sessions.get(sessionId) : undefined;
-    if (sessionId && !transport) {
-      res.writeHead(404, { "Content-Type": "application/json" }).end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          error: { code: -32001, message: "Session not found" },
-          id: null,
-        })
-      );
-      return;
-    }
-    if (!transport) {
-      const created = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        enableJsonResponse: options.jsonResponse === true,
-        onsessioninitialized: (id) => {
-          sessions.set(id, created);
-        },
-      });
-      created.onclose = () => {
-        if (created.sessionId) sessions.delete(created.sessionId);
-      };
-      await newSessionServer().connect(created);
-      transport = created;
-    }
-    await transport.handleRequest(req, res, rpc);
-  });
-
-  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
-  const { port } = httpServer.address() as AddressInfo;
-
-  return {
-    url: `http://127.0.0.1:${port}/mcp`,
-    seen,
-    sessions,
-    callArrived,
-    close: async () => {
-      releaseSlow();
-      for (const transport of sessions.values()) await transport.close().catch(() => {});
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    },
-  };
-}
 
 interface CallRun {
   status: number | null;
@@ -277,17 +36,20 @@ interface CallRun {
 describe.skipIf(process.platform === "win32")("daintree call", () => {
   let fixture: Fixture;
   let tmpDir: string;
+  /** HOME for each run: the profile a call outside a pane looks in, never the real one. */
+  let home: string;
   const children = new Set<ChildProcess>();
 
   function start(
     args: string[],
     env: Record<string, string | undefined> = {},
-    stdin?: string | null
+    stdin?: string | null,
+    command = "call"
   ) {
-    const child = spawn("bash", [SCRIPT, "call", ...args], {
+    const child = spawn("bash", [SCRIPT, command, ...args], {
       env: {
         PATH: process.env.PATH,
-        HOME: process.env.HOME,
+        HOME: home,
         TMPDIR: tmpDir,
         DAINTREE_MCP_URL: fixture.url,
         DAINTREE_MCP_TOKEN: TOKEN,
@@ -313,9 +75,22 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
 
   const call = (args: string[], env?: Record<string, string | undefined>, stdin?: string) =>
     start(args, env, stdin).done;
+  const session = (args: string[], env?: Record<string, string | undefined>) =>
+    start(args, env, undefined, "session").done;
+
+  /** Opens a held session and returns its handle. */
+  async function held(): Promise<string> {
+    const run = await session(["start"]);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    const handle = run.stdout.replace(/\n$/, "");
+    expect(handle).not.toContain("\n");
+    return handle;
+  }
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-call-tmp-"));
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-call-home-"));
     fixture = await startFixture();
   });
 
@@ -323,6 +98,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     for (const child of children) child.kill("SIGKILL");
     await fixture.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   it("makes one call in a session of its own, with the bearer throughout, and closes it", async () => {
@@ -529,8 +305,9 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   });
 
   it.each([
-    [{ DAINTREE_MCP_URL: undefined }, "not set"],
-    [{ DAINTREE_MCP_TOKEN: undefined }, "not set"],
+    [{ DAINTREE_MCP_URL: undefined }, "no running Daintree has published"],
+    [{ DAINTREE_MCP_TOKEN: undefined }, "DAINTREE_MCP_TOKEN is not set"],
+    [{ DAINTREE_MCP_URL: undefined, DAINTREE_MCP_TOKEN: undefined }, "DAINTREE_MCP_URL too"],
     [{ DAINTREE_MCP_URL: "http://example.com:45454/mcp" }, "local endpoint"],
     [{ DAINTREE_MCP_URL: "https://127.0.0.1:45454/mcp" }, "local endpoint"],
     [{ DAINTREE_MCP_URL: "http://127.0.0.1:0/mcp" }, "local endpoint"],
@@ -757,5 +534,510 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(JSON.parse(run.stdout)).toEqual({ a: "b" });
     expect(fixture.seen[2].response.startsWith("{")).toBe(true);
     expect(fixture.sessions.size).toBe(0);
+  });
+
+  describe("held session", () => {
+    const sessionOf = (handle: string) => {
+      const opened = fixture.seen.find((r) => r.rpc?.method === "notifications/initialized");
+      expect(opened?.sessionId).toBeTruthy();
+      expect(handle).toBe(`${NEGOTIATED_VERSION}:${opened?.sessionId}`);
+      return opened?.sessionId ?? "";
+    };
+
+    it("lets a later process drive what an earlier one launched, where one-shot calls can't", async () => {
+      expect((await call(["fixture.launch", "--arg", "terminalId=t-0"])).status).toBe(0);
+      const oneShot = await call(["fixture.send", "--arg", "terminalId=t-0"]);
+      expect(oneShot.status).toBe(1);
+      expect(oneShot.stderr).toContain("RESOURCE_NOT_OWNED");
+      fixture.seen.length = 0;
+
+      const handle = await held();
+      expect(handle).not.toContain(TOKEN);
+      const sessionId = sessionOf(handle);
+      const env = { DAINTREE_MCP_SESSION: handle };
+
+      const launched = await call(["fixture.launch", "--arg", "terminalId=t-1", "--json"], env);
+      expect(launched.stderr).toBe("");
+      expect(launched.status).toBe(0);
+      expect(JSON.parse(launched.stdout)).toEqual({
+        content: [{ type: "text", text: "launched t-1" }],
+      });
+      const sent = await call(["fixture.send", "--arg", "terminalId=t-1"], env);
+      expect(sent.stderr).toBe("");
+      expect(sent.status).toBe(0);
+      expect(sent.stdout).toBe("sent to t-1\n");
+
+      expect(fixture.seen.map((request) => [request.method, request.rpc?.method])).toEqual([
+        ["POST", "initialize"],
+        ["POST", "notifications/initialized"],
+        ["POST", "tools/call"],
+        ["POST", "tools/call"],
+      ]);
+      const calls = fixture.seen.filter((request) => request.rpc?.method === "tools/call");
+      for (const request of calls) {
+        expect(request.sessionId).toBe(sessionId);
+        expect(request.protocolVersion).toBe(NEGOTIATED_VERSION);
+        expect(Number.isSafeInteger(request.rpc?.id)).toBe(true);
+        expect(request.rpc?.id).not.toBe(fixture.seen[0].rpc?.id);
+      }
+      expect(calls[0].rpc?.id).not.toBe(calls[1].rpc?.id);
+      // Held open between calls, and nothing left on disk by any of them.
+      expect(fixture.sessions.size).toBe(1);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("gives concurrent calls in one session different ids", async () => {
+      const env = { DAINTREE_MCP_SESSION: await held() };
+
+      const runs = await Promise.all(
+        Array.from({ length: 4 }, (_, i) => call(["fixture.echo", "--arg", `n=${i}`], env))
+      );
+
+      expect(runs.map((run) => run.status)).toEqual([0, 0, 0, 0]);
+      expect(runs.map((run) => JSON.parse(run.stdout))).toEqual(
+        Array.from({ length: 4 }, (_, i) => ({ n: String(i) }))
+      );
+      const ids = fixture.seen
+        .filter((request) => request.rpc?.method === "tools/call")
+        .map((request) => request.rpc?.id);
+      expect(new Set(ids).size).toBe(4);
+    });
+
+    it("ends the session, after which its handle fails with its own status", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+
+      const ended = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+
+      expect(ended.stderr).toBe("");
+      expect(ended.status).toBe(0);
+      const last = fixture.seen.at(-1);
+      expect(last?.method).toBe("DELETE");
+      expect(last?.sessionId).toBe(sessionId);
+      expect(last?.protocolVersion).toBe(NEGOTIATED_VERSION);
+      expect(fixture.sessions.size).toBe(0);
+
+      const after = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+      expect(after.status).toBe(5);
+      expect(after.stderr).toContain("DAINTREE_MCP_SESSION");
+      const again = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+      expect(again.status).toBe(5);
+      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(
+        1
+      );
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("fails a handle whose session has gone, without opening another", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+      // As the server's idle reaper, a listener stop or a key rotation would.
+      await fixture.sessions.get(sessionId)?.close();
+      fixture.seen.length = 0;
+
+      const run = await call(["fixture.launch", "--arg", "terminalId=t-1"], {
+        DAINTREE_MCP_SESSION: handle,
+      });
+
+      expect(run.status).toBe(5);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("session start");
+      expect(fixture.seen.map((request) => [request.method, request.rpc?.method])).toEqual([
+        ["POST", "tools/call"],
+      ]);
+      expect(fixture.sessions.size).toBe(0);
+
+      const ended = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+      expect(ended.status).toBe(5);
+    });
+
+    it("leaves the session open when a held call is stopped mid-call", async () => {
+      const handle = await held();
+      const { child, done } = start(["fixture.slow"], { DAINTREE_MCP_SESSION: handle });
+      await fixture.callArrived;
+
+      child.kill("SIGTERM");
+      const run = await done;
+
+      expect(run.status).toBe(143);
+      expect(fixture.seen.some((request) => request.method === "DELETE")).toBe(false);
+      expect(fixture.sessions.size).toBe(1);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("exits 4 when Daintree refuses the bearer on a held call", async () => {
+      const handle = await held();
+
+      const run = await call(["fixture.echo"], {
+        DAINTREE_MCP_SESSION: handle,
+        DAINTREE_MCP_TOKEN: "rotated",
+      });
+
+      expect(run.status).toBe(4);
+      expect(fixture.seen.some((request) => request.method === "DELETE")).toBe(false);
+    });
+
+    it("takes a 200 to end as ended even when its reply is cut short", async () => {
+      await fixture.close();
+      fixture = await startFixture({ truncatedDelete: true });
+      const handle = await held();
+
+      const run = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+
+      expect(run.stderr).toBe("");
+      expect(run.status).toBe(0);
+      expect(fixture.sessions.size).toBe(0);
+    });
+
+    it("exits 4 when Daintree refuses the bearer on end, leaving the session open", async () => {
+      const handle = await held();
+
+      const run = await session(["end"], {
+        DAINTREE_MCP_SESSION: handle,
+        DAINTREE_MCP_TOKEN: "rotated",
+      });
+
+      expect(run.status).toBe(4);
+      expect(fixture.sessions.size).toBe(1);
+    });
+
+    it("fails a handle sent with another credential, leaving the session to its own", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+      const foreign = { DAINTREE_MCP_SESSION: handle, DAINTREE_MCP_TOKEN: OTHER_TOKEN };
+
+      const run = await call(["fixture.launch", "--arg", "terminalId=t-1"], foreign);
+      expect(run.status).toBe(5);
+      const ended = await session(["end"], foreign);
+      expect(ended.status).toBe(5);
+
+      expect(fixture.sessions.has(sessionId)).toBe(true);
+      expect(fixture.seen.filter((r) => r.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fixture.seen.filter((r) => r.rpc?.method === "tools/call")).toHaveLength(1);
+      const own = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+      expect(own.status).toBe(0);
+    });
+
+    it("closes the session when stopped while start is opening it", async () => {
+      await fixture.close();
+      fixture = await startFixture({ stall: "notifications/initialized" });
+
+      const { child, done } = start(["start"], {}, undefined, "session");
+      await fixture.stalled;
+      child.kill("SIGTERM");
+      const run = await done;
+
+      expect(run.status).toBe(143);
+      expect(run.stdout).toBe("");
+      expect(fixture.seen.at(-1)).toMatchObject({
+        method: "DELETE",
+        sessionId: fixture.seen[1].sessionId,
+      });
+      expect(fixture.sessions.size).toBe(0);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("closes a session it opened but couldn't hand over", async () => {
+      await fixture.close();
+      fixture = await startFixture({ refuse: "notifications/initialized" });
+
+      const refused = await session(["start"]);
+      expect(refused.status).toBe(4);
+      expect(refused.stdout).toBe("");
+      expect(fixture.seen.at(-1)).toMatchObject({
+        method: "DELETE",
+        sessionId: fixture.seen[1].sessionId,
+      });
+      expect(fixture.sessions.size).toBe(0);
+
+      // stdout closed: the handle can't reach the script, so the session closes.
+      await fixture.close();
+      fixture = await startFixture();
+      const child = spawn("bash", ["-c", 'exec 1>&-; exec bash "$0" session start', SCRIPT], {
+        env: {
+          PATH: process.env.PATH,
+          TMPDIR: tmpDir,
+          DAINTREE_MCP_URL: fixture.url,
+          DAINTREE_MCP_TOKEN: TOKEN,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      children.add(child);
+      const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+      children.delete(child);
+      expect(code).toBe(3);
+      expect(fixture.seen.at(-1)?.method).toBe("DELETE");
+      expect(fixture.sessions.size).toBe(0);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it.each([
+      [[], "start or end"],
+      [["bogus"], "start or end"],
+      [["start", "extra"], "start or end"],
+      [["end", "extra"], "start or end"],
+    ])("refuses session %j before contacting Daintree", async (args, message) => {
+      const run = await session(args);
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain(message);
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each([
+      [["end"], { DAINTREE_MCP_SESSION: undefined }],
+      [["end"], { DAINTREE_MCP_SESSION: "" }],
+      [["end"], { DAINTREE_MCP_SESSION: "no-version" }],
+      // Replacing a held session would leave it open with no handle to end it.
+      [["start"], { DAINTREE_MCP_SESSION: `${NEGOTIATED_VERSION}:held` }],
+    ])("refuses session %j with %j before contacting Daintree", async (args, env) => {
+      const run = await session(args, env);
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each(["no-version", "2025-06-18:", ":abc", "2025-06-18:has space", "v 1:abc"])(
+      "refuses a malformed handle %j before contacting Daintree",
+      async (handle) => {
+        const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+
+        expect(run.status).toBe(2);
+        expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
+        expect(fixture.seen).toEqual([]);
+      }
+    );
+
+    it("makes a one-shot call when the handle is empty", async () => {
+      const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: "" });
+
+      expect(run.status).toBe(0);
+      expect(fixture.seen.map((request) => request.method)).toEqual([
+        "POST",
+        "POST",
+        "POST",
+        "DELETE",
+      ]);
+    });
+
+    it("needs the credential to start", async () => {
+      const run = await session(["start"], { DAINTREE_MCP_TOKEN: undefined });
+
+      expect(run.status).toBe(4);
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it("explains itself with --help", async () => {
+      const run = await session(["--help"]);
+
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain("Usage: daintree session start");
+      expect(fixture.seen).toEqual([]);
+    });
+  });
+
+  // Outside a pane only the key is exported: the port comes from the runtime
+  // file the running app publishes, which a crash can leave behind (#17904).
+  describe("finding Daintree outside a pane", () => {
+    const apps: FakeDaintreeApp[] = [];
+    let app: FakeDaintreeApp | null = null;
+
+    afterEach(async () => {
+      for (const started of apps.splice(0)) await stopProcess(started.process);
+      app = null;
+    });
+
+    const fixturePort = () => Number(new URL(fixture.url).port);
+
+    async function startApp(proxyTo = fixturePort(), root = home): Promise<FakeDaintreeApp> {
+      const started = await startFakeDaintreeApp(root, { proxyTo });
+      apps.push(started);
+      return started;
+    }
+
+    function publish(from: FakeDaintreeApp, port = from.port) {
+      fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
+      new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: from.process.pid! }).publish(
+        port
+      );
+      const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
+      return JSON.parse(fs.readFileSync(file, "utf8")) as {
+        pid: number;
+        port: number;
+        startedAt: string;
+      };
+    }
+
+    /** Publishes as the app does, from a process the CLI takes for it, whose port reaches `proxyTo`. */
+    async function publishFromApp(proxyTo = fixturePort()) {
+      app = await startApp(proxyTo);
+      return publish(app);
+    }
+
+    const outsidePane = { DAINTREE_MCP_URL: undefined };
+
+    it("calls the port the running app published, with only the key exported", async () => {
+      await publishFromApp();
+
+      const run = await call(["fixture.echo", "--arg", "a=b"], outsidePane);
+
+      expect(run.stderr).toBe("");
+      expect(run.status).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual({ a: "b" });
+      expect(fixture.seen.map((request) => [request.method, request.rpc?.method])).toEqual([
+        ["POST", "initialize"],
+        ["POST", "notifications/initialized"],
+        ["POST", "tools/call"],
+        ["DELETE", undefined],
+      ]);
+    });
+
+    it("goes where DAINTREE_MCP_URL says, whatever the runtime file names", async () => {
+      let reached = 0;
+      const other = net.createServer((socket) => {
+        reached++;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve));
+      try {
+        await publishFromApp((other.address() as AddressInfo).port);
+
+        const run = await call(["fixture.echo"]);
+
+        expect(run.status).toBe(0);
+        expect(fixture.seen.length).toBeGreaterThan(0);
+        expect(reached).toBe(0);
+      } finally {
+        await new Promise<void>((resolve) => other.close(() => resolve()));
+      }
+    });
+
+    it("sends nothing when the app that wrote the runtime file has exited", async () => {
+      await publishFromApp();
+      await stopProcess(app!.process);
+
+      const run = await call(["fixture.echo"], outsidePane);
+
+      expect(run.status).toBe(4);
+      expect(run.stderr).toContain("no running Daintree has published");
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each<[string, (record: { pid: number; port: number; startedAt: string }) => unknown]>([
+      [
+        "names a live process that isn't Daintree",
+        (r) => ({ ...r, pid: process.pid, startedAt: discoveryProcessStamp(process.pid) }),
+      ],
+      ["names the app with another start time", (r) => ({ ...r, startedAt: "Thu Jan 1 1970" })],
+      ["has no start time", (r) => ({ pid: r.pid, port: r.port })],
+      ["has the port as a string", (r) => ({ ...r, port: String(r.port) })],
+      ["has a port out of range", (r) => ({ ...r, port: 65536 + r.port })],
+      [
+        "has a fractional port",
+        (r) => `{"pid":${r.pid},"port":${r.port}.0,"startedAt":"${r.startedAt}"}`,
+      ],
+      ["has more after the object", (r) => `${JSON.stringify(r)} {}`],
+      ["is cut short", (r) => JSON.stringify(r).slice(0, -1)],
+    ])("sends nothing when the runtime file %s", async (_name, change) => {
+      writeRuntimeFile(home, change(await publishFromApp()));
+
+      const run = await call(["fixture.echo"], outsidePane);
+
+      expect(run.status).toBe(4);
+      expect(run.stderr).toContain("no running Daintree has published");
+      expect(fixture.seen).toEqual([]);
+    });
+
+    // The app is alive and the record its own, but the port is someone else's:
+    // a record left standing after the app let the port go.
+    it("sends nothing to a port the live app that published it doesn't hold", async () => {
+      const holder = await startApp();
+      const stranger = await startApp();
+      publish(holder, stranger.port);
+
+      const run = await call(["fixture.echo"], outsidePane);
+
+      expect(run.status).toBe(4);
+      expect(run.stderr).toContain("no running Daintree has published");
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it("sends nothing when the runtime file is a link to a record", async () => {
+      await publishFromApp();
+      const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
+      const real = path.join(home, "elsewhere.json");
+      fs.renameSync(file, real);
+      fs.symlinkSync(real, file);
+
+      const run = await call(["fixture.echo"], outsidePane);
+
+      expect(run.status).toBe(4);
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each([
+      {
+        stage: "initialize",
+        how: "names another live app",
+        message: "while the session was opening",
+        reached: ["initialize"],
+      },
+      {
+        stage: "notifications/initialized",
+        how: "goes",
+        message: "before the call to fixture.echo was sent",
+        reached: ["initialize", "notifications/initialized"],
+      },
+    ])(
+      "drops the session, without the call or the close, when the runtime file $how at $stage",
+      async ({ stage, message, reached }) => {
+        await fixture.close();
+        let onStage = () => {};
+        fixture = await startFixture({
+          onRequest: (method) => {
+            if (method === stage) onStage();
+          },
+        });
+        await publishFromApp();
+        const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
+        if (stage === "initialize") {
+          // A record the client would trust on its own: dropped for not matching.
+          const other = await startApp(fixturePort(), path.join(home, "other"));
+          onStage = () => publish(other);
+        } else {
+          onStage = () => fs.rmSync(file);
+        }
+
+        const run = await call(["fixture.echo"], outsidePane);
+
+        expect(run.status).toBe(3);
+        expect(run.stderr).toContain(message);
+        expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(reached);
+        expect(fs.readdirSync(tmpDir)).toEqual([]);
+      }
+    );
+
+    it("opens and ends a held session at the published endpoint too", async () => {
+      await publishFromApp();
+
+      const started = await session(["start"], outsidePane);
+      expect(started.status).toBe(0);
+      const handle = started.stdout.replace(/\n$/, "");
+      const held = { ...outsidePane, DAINTREE_MCP_SESSION: handle };
+      const called = await call(["fixture.echo", "--arg", "a=b"], held);
+      const ended = await session(["end"], held);
+
+      expect(called.status).toBe(0);
+      expect(JSON.parse(called.stdout)).toEqual({ a: "b" });
+      expect(ended.status).toBe(0);
+      expect(fixture.seen.map((request) => request.rpc?.method ?? request.method)).toEqual([
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "DELETE",
+      ]);
+      expect(new Set(fixture.seen.slice(1).map((request) => request.sessionId)).size).toBe(1);
+    });
   });
 });

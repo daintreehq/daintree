@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
+import type {
+  HostModeObservation,
+  HostProbeResult,
+  HostRestartImpact,
+} from "@shared/types/ipc/remoteHosts";
 import type { HostConnectionState } from "@shared/types/remoteHosts";
 import {
   canWaitForIdle,
+  checkVerdict,
   connectionLabel,
   defaultHostName,
+  hostModeSwitchedOn,
   isLoginRefused,
   localNameSuggestion,
   removeHostOutcome,
@@ -13,6 +19,7 @@ import {
   restartTerminalCount,
   shellWord,
   sshRefusalAdvice,
+  verdictCopy,
 } from "../hostLabels";
 
 const unresolved = (name: string) =>
@@ -227,6 +234,17 @@ describe("removeHostOutcome", () => {
     expect(outcome.sentence).toBe("Projects and Daintree on studio-01 keep running.");
   });
 
+  it("says Daintree on a machine where it starts on connect is stopped, its projects kept", () => {
+    const outcome = removeHostOutcome({ kind: "ssh", target: "box" }, "box", true);
+    expect(outcome.label).toBe("Daintree on box stops, with its terminals and agents");
+    expect(outcome.sentence).toContain("is stopped if it can be reached");
+    expect(outcome.sentence).toContain("Its projects and the Daintree install stay there.");
+    // A WSL distro keeps its own account, whatever its record says.
+    expect(removeHostOutcome({ kind: "wsl", distro: "Ubuntu" }, "Ubuntu", true).label).toBe(
+      "Terminals and agents in Ubuntu end once WSL stops it"
+    );
+  });
+
   it("says a WSL distro's terminals and agents end once WSL stops it", () => {
     const outcome = removeHostOutcome({ kind: "wsl", distro: "Ubuntu-24.04" }, "Ubuntu");
     expect(outcome.label).toBe("Terminals and agents in Ubuntu end once WSL stops it");
@@ -305,5 +323,67 @@ describe("shellWord", () => {
 
   it("keeps a quote inside the word from ending it", () => {
     expect(shellWord("o'brien@studio")).toBe(`'o'\\''brien@studio'`);
+  });
+});
+
+describe("hostModeSwitchedOn where Daintree starts on connect", () => {
+  const record = (overrides: Partial<HostModeObservation> = {}): HostModeObservation => ({
+    pid: 7,
+    enabled: true,
+    startMethod: "on-connect",
+    startAtLogin: false,
+    startAtLoginInstalled: null,
+    startAtLoginError: null,
+    keychain: { state: "ok", detail: "ok", checked: true },
+    ...overrides,
+  });
+  const seen = (state: HostModeObservation | null, startsOnConnect = true): HostProbeResult => ({
+    connection: { kind: "ssh", target: "box" },
+    reachable: true,
+    sshError: null,
+    platform: "linux",
+    arch: "x64",
+    install: { path: "/opt/Daintree", version: "1.4.0", commit: "c", packaging: "deb" },
+    hostModeListening: true,
+    suggestedCommands: [],
+    appRunning: true,
+    appImages: [],
+    canDownload: true,
+    matchesClient: true,
+    hostBuild: null,
+    stagedUpdate: null,
+    advice: {
+      sleepObserved: null,
+      sleepDisabled: null,
+      keyring: null,
+      linger: null,
+      hostModeUnit: false,
+      startAtLoginInstalled: false,
+      fuse: true,
+      systemd: !startsOnConnect,
+    },
+    hostModeState: state,
+    startsOnConnect,
+  });
+
+  it("takes the on-connect record as on for good, and nothing short of it", () => {
+    expect(hostModeSwitchedOn(seen(record()))).toBe(true);
+    expect(checkVerdict(seen(record()))).toBe("up-to-date");
+    expect(hostModeSwitchedOn(seen(record({ enabled: false })))).toBe(false);
+    expect(hostModeSwitchedOn(seen(record({ startMethod: undefined })))).toBe(false);
+    expect(hostModeSwitchedOn(seen(null))).toBe(false);
+    expect(hostModeSwitchedOn({ ...seen(record()), hostModeListening: false })).toBe(false);
+  });
+
+  it("never takes it where start at login applies", () => {
+    expect(hostModeSwitchedOn(seen(record(), false))).toBe(false);
+  });
+
+  it("asks for Host mode on for good so a connection starts it, not for start at login", () => {
+    const temporary = seen(record({ enabled: false }));
+    expect(checkVerdict(temporary)).toBe("host-mode-temporary");
+    expect(verdictCopy("host-mode-temporary", temporary, "box", "1.4.0", false).detail).toContain(
+      "so connecting from Daintree starts it again"
+    );
   });
 });

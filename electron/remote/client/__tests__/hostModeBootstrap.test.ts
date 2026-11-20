@@ -3,7 +3,12 @@ import { systemdUnitFor } from "../../host/startAtLogin.js";
 import type { CommandInput, CommandResult } from "../commandRunner.js";
 import {
   bootstrapHostMode,
+  detachedAliveScript,
+  detachedStartScript,
+  detachedStopScript,
   ENABLE_LINGER_SCRIPT,
+  parseDetachedAlive,
+  parseDetachedLaunch,
   hostModeConfirmed,
   DROP_UNIT_BACKUP_SCRIPT,
   lastRunError,
@@ -697,5 +702,194 @@ describe("lastRunError", () => {
   it("finds nothing in a run that printed no error", () => {
     expect(lastRunError("Started daintree-host.service.\n[INFO] starting\n")).toBeNull();
     expect(lastRunError("")).toBeNull();
+  });
+});
+
+describe("bootstrapHostMode on a Linux machine with no init system", () => {
+  const onConnect = (opts: Parameters<typeof linux>[0]) =>
+    linux(opts).replace("@@dt:end", "@@dt:init docker-init\n@@dt:end");
+  const onConnectState = (overrides: Record<string, unknown> = {}) =>
+    state({
+      startMethod: "on-connect",
+      startAtLogin: false,
+      startAtLoginInstalled: null,
+      ...overrides,
+    });
+  /** Starts answer with `launch`, a launch asked about is `alive`, and the log holds `log`. */
+  const detached =
+    (launch: string, alive = true, log = "") =>
+    (script: string) =>
+      script.includes("nohup")
+        ? ok(`@@dt:launched ${launch}\n`)
+        : script.includes("alive yes")
+          ? ok(alive ? "@@dt:alive yes\n" : "")
+          : script.includes("host.log")
+            ? ok(log)
+            : handedOver(script);
+
+  it("starts Daintree in a session of its own with the enable request, and confirms it started on connect", async () => {
+    const { channel, calls } = scripted(detached("777 123456 new"));
+    const before = await outcomeOf(onConnect({ install: "appimage", fuse: false, settings: "no" }));
+    expect(before.result.startsOnConnect).toBe(true);
+    const result = await bootstrapHostMode({ kind: "ssh", target: "box" }, before, {
+      channel,
+      probe: probes([
+        onConnect({ install: "appimage", fuse: false }),
+        onConnect({ install: "appimage", fuse: false, listening: true, state: onConnectState() }),
+      ]).probe,
+      sleep: async () => {},
+      now: clock(),
+      updateChannel: "nightly",
+    });
+    const scripts = calls.map((c) => c.script);
+    const start = scripts.find((script) => script.includes("nohup"))!;
+    expect(start).toBe(
+      detachedStartScript(
+        {
+          executable: "/home/greg/Applications/Daintree.AppImage",
+          appPath: null,
+          appImageExtractAndRun: true,
+        },
+        ["--enable-host-mode", "--update-channel=nightly"]
+      )
+    );
+    expect(start).toContain(
+      "'/home/greg/Applications/Daintree.AppImage' '--host-mode' '--ozone-platform=headless' '--enable-host-mode' '--update-channel=nightly'"
+    );
+    expect(start).toContain("APPIMAGE_EXTRACT_AND_RUN=1");
+    // No service, lingering, unit backup or handoff: there is nothing for any of them.
+    expect(scripts).not.toContain(ENABLE_LINGER_SCRIPT);
+    expect(scripts).not.toContain(SAVE_UNIT_SCRIPT);
+    expect(scripts.some((script) => script.includes("systemctl"))).toBe(false);
+    expect(scripts.some((script) => script.includes("--host-mode-handoff"))).toBe(false);
+    expect(result.probe.hostModeState).toMatchObject({ enabled: true, startMethod: "on-connect" });
+    expect(result.lingerRefused).toBeNull();
+  });
+
+  it("hands the request to a Daintree already running there, starting nothing", async () => {
+    const { channel, calls } = scripted(detached("777 123456 new"));
+    await bootstrapHostMode(
+      { kind: "cloud", bindingId: "b1" },
+      await outcomeOf(onConnect({ running: true })),
+      {
+        channel,
+        probe: probes([onConnect({ listening: true, state: onConnectState() })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      }
+    );
+    const scripts = calls.map((c) => c.script);
+    expect(scripts.some((script) => script.includes("nohup"))).toBe(false);
+    expect(scripts.filter((script) => script.includes("--host-mode-handoff"))).toHaveLength(1);
+  });
+
+  it("hands the request over once an earlier start still unpacking listens", async () => {
+    const { channel, calls } = scripted(detached("555 99 running"));
+    await bootstrapHostMode({ kind: "ssh", target: "box" }, await outcomeOf(onConnect({})), {
+      channel,
+      probe: probes([
+        onConnect({}),
+        onConnect({ listening: true, state: onConnectState({ enabled: false }) }),
+        onConnect({ listening: true, state: onConnectState() }),
+      ]).probe,
+      sleep: async () => {},
+      now: clock(),
+    });
+    const scripts = calls.map((c) => c.script);
+    const startAt = scripts.findIndex((script) => script.includes("nohup"));
+    const handoffAt = scripts.findIndex((script) => script.includes("--host-mode-handoff"));
+    expect(startAt).toBeGreaterThanOrEqual(0);
+    expect(handoffAt).toBeGreaterThan(startAt);
+    // Not this setup's start, so not this setup's to stop.
+    expect(scripts.some((script) => script.includes("kill -TERM"))).toBe(false);
+  });
+
+  it("gives up as soon as the start exits, with the log's first error, and leaves nothing running", async () => {
+    const log = [
+      "Started Daintree host Thu Nov 19 2026",
+      "/home/greg/Applications/Daintree.AppImage: error while loading shared libraries: libnss3.so: cannot open shared object file",
+    ].join("\n");
+    const { channel, calls } = scripted(detached("777 123456 new", false, log));
+    const seen = probes([onConnect({})]);
+    await expect(
+      bootstrapHostMode({ kind: "ssh", target: "box" }, await outcomeOf(onConnect({})), {
+        channel,
+        probe: seen.probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(
+      /Daintree exited on box as it started: .*libnss3\.so.* \(more in ~\/\.cache\/daintree\/host\.log there\)/
+    );
+    // Seen gone at the first look, not after the whole wait.
+    expect(seen.count()).toBe(1);
+    expect(calls.map((c) => c.script)).toContain(
+      detachedStopScript({ pid: 777, startedAt: "123456", fresh: true })
+    );
+  });
+
+  it("stops its own start when Daintree there never records starting on connect", async () => {
+    const { channel, calls } = scripted(detached("777 123456 new"));
+    await expect(
+      bootstrapHostMode({ kind: "ssh", target: "box" }, await outcomeOf(onConnect({})), {
+        channel,
+        probe: probes([onConnect({ listening: true, state: state() })]).probe,
+        sleep: async () => {},
+        now: clock(),
+      })
+    ).rejects.toThrow(/didn't record that it runs without systemd/);
+    expect(calls.map((c) => c.script)).toContain(
+      detachedStopScript({ pid: 777, startedAt: "123456", fresh: true })
+    );
+  });
+
+  it("confirms on the on-connect record alone where no init system runs, and never there otherwise", async () => {
+    const live = await outcomeOf(onConnect({ listening: true, state: onConnectState() }));
+    expect(hostModeConfirmed(live)).toBe(true);
+    // The same record on a systemd machine says nothing about its login item.
+    const systemdHost = await outcomeOf(
+      linux({ listening: true, unit: "missing", state: onConnectState() })
+    );
+    expect(hostModeConfirmed(systemdHost)).toBe(false);
+    expect(hostModeConfirmed(await outcomeOf(onConnect({ listening: true, state: state() })))).toBe(
+      false
+    );
+    expect(
+      hostModeConfirmed(
+        await outcomeOf(onConnect({ listening: true, state: onConnectState({ pid: 1 }) }))
+      )
+    ).toBe(false);
+  });
+});
+
+describe("detached start reports", () => {
+  it("reads what a start said, and nothing that only looks like it", () => {
+    expect(parseDetachedLaunch("noise\n@@dt:launched 42 9001 new\n")).toEqual({
+      pid: 42,
+      startedAt: "9001",
+      fresh: true,
+    });
+    expect(parseDetachedLaunch("@@dt:launched 42  running")).toEqual({
+      pid: 42,
+      startedAt: null,
+      fresh: false,
+    });
+    expect(parseDetachedLaunch("@@dt:launched 42; rm -rf ~ new")).toBeNull();
+    expect(parseDetachedLaunch("")).toBeNull();
+    expect(parseDetachedAlive("@@dt:alive yes\n")).toBe(true);
+    expect(parseDetachedAlive("")).toBe(false);
+  });
+
+  it("signals a launch only while it is still the process that was started", () => {
+    expect(detachedStopScript({ pid: 42, startedAt: "9001", fresh: true })).toContain(
+      `[ "$n" = '9001' ]`
+    );
+    // Without a start time there is nothing to tell it from a stranger given its pid.
+    expect(detachedStopScript({ pid: 42, startedAt: null, fresh: true })).toContain(
+      `if [ -n "$n" ] && [ "$n" = '' ]; then`
+    );
+    expect(detachedAliveScript({ pid: 42, startedAt: null, fresh: true })).toMatch(
+      /^p=42; if kill -0 "\$p" 2>\/dev\/null; then /
+    );
   });
 });

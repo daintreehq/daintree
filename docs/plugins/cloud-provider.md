@@ -5,7 +5,7 @@ A cloud provider lets Daintree create, start, stop and delete machines on someon
 ## Before you start
 
 - **Installed plugins only.** A plugin with `"scope": "project"` (or an `"instanceMode": "project"` package) can't declare cloud providers: the manifest is refused. A repository must never be able to add something that creates machines on the person's account just by being opened.
-- **No new accounts yet.** Until Daintree asks the person's consent before handing a plugin credentials ([#17352](https://github.com/daintreehq/daintree/issues/17352)), a plugin's provider is not offered in **Connect account**, and main refuses to check or connect credentials for it. Everything else on this page works, and is how the provider will run once that consent exists.
+- **The person consents first.** Connecting the first account for any of your providers asks the person, once per plugin, whether to let your plugin receive the credentials they enter, choose the machines Daintree connects to and vouch for their identity, and create machines that bill their account ([Trust model → Cloud providers](./trust-model.md#cloud-providers-contributescloudproviders)). The answer is tied to what your providers declare: an update that changes any provider's credential fields, capabilities, `apiUrl` origin or `createReplay`, or adds or drops a provider, asks again, and its accounts pause until the person allows it. Changing only a provider's name, description or `apiKeyUrl`/`dashboardUrl`/`docsUrl` asks nothing; a field's label or help, the persistence wording and a tunnel's `installUrl` are part of what's agreed to.
 - Read `shared/types/pluginCloudProvider.ts` for the contract (`CloudProviderImpl`, the request and answer shapes) and `shared/types/cloudHosts.ts` for the capability vocabulary. When this page and the types disagree, the types win.
 
 ## How it fits together
@@ -206,7 +206,9 @@ Accounts and machines are kept whatever happens to the plugin. While its provide
 - it failed to load (the message is its load error), or its worker failed to start this session (the message is why; it comes back once the plugin starts again, from Settings → Plugins or anything else that starts it);
 - it isn't installed, or a newer version no longer declares the provider.
 
-A plugin that is installed and turned on but not running isn't unavailable: its next call starts it. When the plugin is back, its provider registers again and the accounts and machines pick up where they were, with no new connect.
+A plugin that is installed and turned on but not running isn't unavailable: its next call starts it. When the plugin is back with the same declarations, its provider registers again and the accounts and machines pick up where they were, with no new connect. When its declarations changed, or it was uninstalled and installed again, they stay unavailable until the person allows the plugin again with **Review access** in Settings → Hosts.
+
+Each account keeps your provider's `name`, your plugin's display name and its `dashboardUrl` from the last time the provider registered, so while the plugin is gone Settings → Hosts still names them, lists the account's machines with their last known state and when it was seen, and links the console. Uninstalling the plugin from the plugin manager asks whether to keep its cloud accounts, credentials sealed for a reinstall, or remove them with their hosts. Either way, nothing is asked of the provider, so every machine keeps running in its account. `daintree-plugin uninstall` always keeps them.
 
 ## Testing
 

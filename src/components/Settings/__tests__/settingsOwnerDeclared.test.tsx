@@ -176,6 +176,7 @@ describe("the declared settings behind each section", () => {
       worktreeSidebar: "device",
       toolbarLayout: "device",
       pluginSilences: "host",
+      pluginCatalogs: "device",
       hardwareAcceleration: "device",
       logging: "device",
       developerTools: "device",

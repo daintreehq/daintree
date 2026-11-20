@@ -1538,6 +1538,14 @@ describe("onExit — stale flow state cleared (#9899)", () => {
     expect(panel?.exitCode).toBe(1);
   });
 
+  it("drops the update footer the exited run showed (#17905)", () => {
+    setupPanel({ updateInstalled: { observedAt: 1_000, namesRestart: true } });
+
+    getExitHandler()("term-1", 1);
+
+    expect(getPanel("term-1")?.updateInstalled).toBeUndefined();
+  });
+
   it("a buffered flow-status patch does not resurrect the pill after exit", () => {
     setupPanel({ flowStatus: "paused-backpressure", flowStatusTimestamp: 1 });
 

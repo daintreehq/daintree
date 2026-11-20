@@ -1,3 +1,4 @@
+import { compareProjectStrict, compareProjectNames } from "@/lib/projectSort";
 import { classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import type {
   ProjectSwitcherRow,
@@ -829,13 +830,13 @@ export function rankSwitcherMatches(
     // Kinds are equal by here, so this never compares a frecency against a
     // timestamp — the two scales never have to be commensurable.
     if (a.recency !== b.recency) return b.recency - a.recency;
-    const byName = a.row.name.localeCompare(b.row.name, undefined, { sensitivity: "base" });
+    const byName = compareProjectNames(a.row.name, b.row.name);
     if (byName !== 0) return byName;
     // Ends on the id for the same reason `compareProjectsByMode` does: without
     // it two rows alike on every key above compare equal, and a sort that
     // reports a tie between distinct rows can seat them either way between
     // renders. Activity ties are far more common than score ties were.
-    return a.row.id.localeCompare(b.row.id);
+    return compareProjectStrict(a.row.id, b.row.id);
   });
 
   return scored.map((entry) => entry.row);

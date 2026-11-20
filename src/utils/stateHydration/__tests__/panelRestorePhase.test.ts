@@ -120,6 +120,7 @@ vi.mock("../statePatcher", async () => {
         allowResumeLatest?: boolean;
         allowSessionIdResume?: boolean;
         resolvedResumeLatestSessionId?: string;
+        restoredAt?: number;
         coldLaunch?: {
           cwd: string;
           conversationCwd?: string;
@@ -152,6 +153,15 @@ vi.mock("../statePatcher", async () => {
       savedRestoreRecovery: s.restoreRecovery,
       // The real builder brings a plain terminal back showing its saved exit.
       ...(s.exitCode !== undefined && { restoredExitCode: s.exitCode }),
+      // Stands in for the builder's own verdict on the launch; a fixture sets it
+      // on the saved panel to say what the builder decided (#17883).
+      ...(s.restoreProvenance !== undefined && {
+        restoreProvenance: {
+          at: options?.restoredAt ?? 0,
+          disposition: s.restoreProvenance.disposition,
+        },
+      }),
+      ...(s.title !== undefined && { title: s.title }),
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
     // election's identity resolution can't silently diverge from production.
@@ -373,6 +383,117 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).not.toHaveBeenCalled();
     expect(restoreTasks).toEqual([]);
     expect(ctx.backendTerminalMap.has("dead")).toBe(false);
+  });
+
+  it("reports each agent it relaunched, and what the launch did with its conversation", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+    // The pane comes back under an id the store chose, which is the one to name.
+    ctx.addPanel.mockImplementation(async (args: { requestedId?: string }) =>
+      args.requestedId === "fresh" ? "fresh-restored" : (args.requestedId ?? "x")
+    );
+    ctx.backendTerminalMap.set("live", backend("live", { launchAgentId: "claude" }));
+    const before = Date.now();
+    const { wakeCandidates } = await restorePanelsPhase(
+      [
+        panel("resumed", {
+          kind: "agent",
+          launchAgentId: "claude",
+          worktreeId: "w1",
+          // What the previous wake recorded; this pass records its own.
+          restoreProvenance: { at: 1, disposition: "resume" },
+        }),
+        panel("shell"),
+        panel("fresh", {
+          kind: "agent",
+          launchAgentId: "codex",
+          restoreProvenance: { at: 1, disposition: "fresh" },
+        }),
+        // Its PTY survived, so nothing stopped it and there is nothing to wake.
+        panel("live", { kind: "agent", launchAgentId: "claude" }),
+      ],
+      ctx
+    );
+    const after = Date.now();
+    expect(
+      wakeCandidates.map(({ terminalId, title, agentId, worktreeId, outcome }) => ({
+        terminalId,
+        title,
+        agentId,
+        worktreeId,
+        outcome,
+      }))
+    ).toEqual([
+      {
+        terminalId: "resumed",
+        title: "resumed",
+        agentId: "claude",
+        worktreeId: "w1",
+        outcome: "resumed",
+      },
+      {
+        terminalId: "fresh-restored",
+        title: "fresh",
+        agentId: "codex",
+        worktreeId: null,
+        outcome: "fresh",
+      },
+    ]);
+    // One restore pass, one time, and it is this pass's: what the pane does
+    // afterwards is read against the provenance it records.
+    for (const { restoredAt } of wakeCandidates) {
+      expect(restoredAt).toBeGreaterThanOrEqual(before);
+      expect(restoredAt).toBeLessThanOrEqual(after);
+    }
+    expect(new Set(wakeCandidates.map((c) => c.restoredAt)).size).toBe(1);
+  });
+
+  it("reports what each relaunched agent was last seen doing before it was stopped", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+    const { wakeCandidates } = await restorePanelsPhase(
+      [
+        // A Sleep that waited for it to settle: its last report is the settle,
+        // the stop recorded the working reading the request took.
+        panel("slept", {
+          kind: "agent",
+          launchAgentId: "claude",
+          lastAgentObservation: { agentState: "waiting", at: 30 },
+          stopObservation: { agentState: "working", at: 10 },
+        }),
+        // Stopped by a crash, so nothing recorded the stop.
+        panel("crashed", {
+          kind: "agent",
+          launchAgentId: "codex",
+          lastAgentObservation: { agentState: "working", at: 20 },
+        }),
+        panel("legacy", { kind: "agent", launchAgentId: "claude" }),
+        panel("garbled", {
+          kind: "agent",
+          launchAgentId: "claude",
+          stopObservation: { agentState: "directing", at: 5 } as never,
+          lastAgentObservation: { agentState: "idle", at: 6 },
+        }),
+        // Resumed, and idle when stopped, whatever the report after the stop said.
+        panel("resumedIdle", {
+          kind: "agent",
+          launchAgentId: "claude",
+          restoreProvenance: { at: 1, disposition: "resume" },
+          stopObservation: { agentState: "idle", at: 7 },
+          lastAgentObservation: { agentState: "working", at: 8 },
+        }),
+      ],
+      ctx
+    );
+    expect(
+      Object.fromEntries(wakeCandidates.map((c) => [c.terminalId, [c.outcome, c.lastSeen]]))
+    ).toStrictEqual({
+      slept: ["fresh", { agentState: "working", at: 10 }],
+      crashed: ["fresh", { agentState: "working", at: 20 }],
+      legacy: ["fresh", undefined],
+      garbled: ["fresh", { agentState: "idle", at: 6 }],
+      resumedIdle: ["resumed", { agentState: "idle", at: 7 }],
+    });
   });
 
   it("respawns a PTY agent panel when reconnect returns not_found on cold restart", async () => {

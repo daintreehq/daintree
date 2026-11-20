@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { PluginCatalogSourcesSection } from "@/components/Settings/PluginCatalogSourcesSection";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -187,6 +188,7 @@ export function PluginsTab() {
           )}
         </SettingsGroup>
       </SettingsSection>
+      <PluginCatalogSourcesSection />
     </div>
   );
 }

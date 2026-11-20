@@ -683,6 +683,47 @@ describe("applySaved (#14700)", () => {
     expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe("ab");
   });
 
+  it("never shows a locked write's own copy of a preset's continuation switch (#17912)", async () => {
+    const savedWith = (continueAtLimitReset: boolean | undefined): AgentSettings => ({
+      settingsVersion: 3,
+      agents: {
+        codex: {
+          customPresets: [
+            { id: "work", name: "Work", ...(continueAtLimitReset && { continueAtLimitReset }) },
+          ],
+        },
+      },
+    });
+    useAgentSettingsStore.getState().applySaved(savedWith(true));
+    let answer: (value: unknown) => void = () => {};
+    clientMock.set.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+
+    // Planned from a view that still had the switch on.
+    const write = useAgentSettingsStore
+      .getState()
+      .updateAgent(
+        "codex",
+        { customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: true }] },
+        { lockContinueAtLimitReset: true }
+      );
+    expect(clientMock.set).toHaveBeenCalledWith(
+      "codex",
+      { customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: true }] },
+      { lockContinueAtLimitReset: true }
+    );
+    // Another view turns it off while the write travels.
+    useAgentSettingsStore.getState().applySaved(savedWith(undefined));
+    expect(useAgentSettingsStore.getState().settings?.agents.codex?.customPresets).toEqual([
+      { id: "work", name: "Work (renamed)" },
+    ]);
+
+    answer({
+      settingsVersion: 3,
+      agents: { codex: { customPresets: [{ id: "work", name: "Work (renamed)" }] } },
+    });
+    await write;
+  });
+
   it("takes a reset's answer without writing anything back (#14702)", async () => {
     const answer: AgentSettings = { agents: { claude: {}, codex: {} } };
     clientMock.reset.mockResolvedValueOnce(answer);

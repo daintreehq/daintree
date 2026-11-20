@@ -62,6 +62,7 @@ import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
+import { PluginUninstallCloudAccounts } from "./PluginUninstallCloudAccounts";
 import { containTab, handFocusBack, isFocusStranded } from "./pluginManagerFocus";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
@@ -70,7 +71,11 @@ import {
   describePluginInstallSource,
 } from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
-import { PluginCommunityBrowse } from "./PluginCommunityBrowse";
+import {
+  PluginCommunityBrowse,
+  catalogName,
+  type InstalledListingState,
+} from "./PluginCommunityBrowse";
 import { Store } from "@/components/icons";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
@@ -435,8 +440,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   const showingBrowse = browsing && selectedPlugin === null && selectedProjectPlugin === null;
   // Installed copies by id, for Browse's markers. Project plugins are a
   // project's own folder, not installs, so they never mark a listing.
-  const installedVersions = useMemo(
-    () => new Map(pm.plugins.map((p) => [p.manifest.name, p.manifest.version])),
+  // A catalog install also says which catalog (#17434), so a listing from
+  // another one offers to replace it rather than claim it.
+  const installedListings = useMemo(
+    () =>
+      new Map<string, InstalledListingState>(
+        pm.plugins.map((p) => [
+          p.manifest.name,
+          {
+            version: p.manifest.version,
+            catalog: p.catalog
+              ? p.catalog.sourceUrl === undefined
+                ? {}
+                : { sourceUrl: p.catalog.sourceUrl }
+              : null,
+          },
+        ])
+      ),
     [pm.plugins]
   );
 
@@ -1303,7 +1323,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         >
           {showingBrowse ? (
             <PluginCommunityBrowse
-              installedVersions={installedVersions}
+              installed={installedListings}
               installDisabled={pm.isInstalling || pm.urlReview !== null}
               onInstall={pm.previewCatalogListing}
               onViewInstalled={(pluginId) => {
@@ -1367,7 +1387,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
+        description={`Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below.${pm.pendingUninstall?.cloudAccounts?.length ? " Its cloud accounts follow the choice below." : ""}`}
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}
@@ -1376,6 +1396,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         zIndex="nested"
       >
         <UnsavedPanelsCallout verb="Uninstalling" panels={pm.uninstallPanels} className="mb-3" />
+        {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0 && (
+          <PluginUninstallCloudAccounts
+            accounts={pm.pendingUninstall.cloudAccounts}
+            remove={pm.removeCloudAccounts}
+            onRemoveChange={pm.setRemoveCloudAccounts}
+            disabled={pm.isUninstalling}
+          />
+        )}
         <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
           <Checkbox
             checked={pm.deleteSettings}
@@ -1390,6 +1418,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           Covers every project on this machine, secrets included, and signs the plugin out.
           Databases and files the plugin created are kept, as are settings under a repository's
           .daintree/.
+          {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0
+            ? " Cloud accounts follow the choice above."
+            : null}
         </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so
@@ -1609,6 +1640,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         kind: "catalog",
                         repoLabel: describeCatalogRepo(pm.urlReview.catalog.repo),
                         installedOnDisk: pm.urlReview.installedOnDisk,
+                        ...(pm.urlReview.catalog.sourceUrl === undefined
+                          ? {}
+                          : { catalogLabel: catalogName(pm.urlReview.catalog.sourceUrl) }),
+                        ...(pm.urlReview.replacesCatalog === undefined
+                          ? {}
+                          : {
+                              replacesCatalogLabel: catalogName(
+                                pm.urlReview.replacesCatalog.sourceUrl
+                              ),
+                            }),
                       },
               }
         }

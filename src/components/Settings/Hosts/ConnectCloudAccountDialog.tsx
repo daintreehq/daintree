@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Textarea } from "@/components/ui/textarea";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { credentialsNoun } from "@/components/Hosts/cloud/cloudHostLabels";
+import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { systemClient } from "@/clients/systemClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -122,9 +124,9 @@ function KeyFileControl({
       {(fileName || failed) && (
         <>
           {fileName && (
-            <span className="min-w-0 truncate text-sm text-text-primary" title={fileName}>
-              {fileName}
-            </span>
+            <TruncatedTooltip content={fileName}>
+              <span className="min-w-0 truncate text-sm text-text-primary">{fileName}</span>
+            </TruncatedTooltip>
           )}
           <Button
             type="button"
@@ -150,7 +152,18 @@ function KeyFileControl({
  * against the same account and wallet before it takes the old one's place,
  * whole.
  */
-export function ConnectCloudAccountDialog({
+export function ConnectCloudAccountDialog(props: ConnectCloudAccountDialogProps) {
+  // A plugin whose declarations change starts the form over: what was entered, read,
+  // checked or agreed to under the old ones never carries into the new ones.
+  return (
+    <ConnectCloudAccountForm
+      key={`${props.provider.id}:${props.provider.plugin?.fingerprint ?? ""}`}
+      {...props}
+    />
+  );
+}
+
+function ConnectCloudAccountForm({
   isOpen,
   onClose,
   provider,
@@ -166,6 +179,14 @@ export function ConnectCloudAccountDialog({
   // Every edit moves this on, so a check of an earlier set is never taken for this one.
   const [edits, setEdits] = useState(0);
   const editsRef = useRef(0);
+  // An answer for a form that's gone (its provider left) never closes or picks for what came after it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const fileReads = useRef(new Map<string, number>());
   const [checked, setChecked] = useState<CloudAccountCheckResult | null>(null);
   const [checkedEdits, setCheckedEdits] = useState<number | null>(null);
@@ -173,7 +194,15 @@ export function ConnectCloudAccountDialog({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState<"check" | "connect" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The plugin declarations the person agreed to in this dialog; nothing is kept until an account is. */
+  const [agreed, setAgreed] = useState<string | null>(null);
 
+  const plugin = provider.plugin;
+  // Asked again whenever what the plugin declares changes, even with the form open.
+  const needsConsent = plugin !== undefined && !plugin.granted && agreed !== plugin.fingerprint;
+  const consent = plugin?.fingerprint;
+  // A built-in's calls stay as they were: there is nothing to have agreed to.
+  const consentArgs: [] | [string] = consent === undefined ? [] : [consent];
   const entered = enteredValues(fields, values);
   // A file that couldn't be used is cleared or replaced before anything is sent without it.
   const complete =
@@ -258,7 +287,7 @@ export function ConnectCloudAccountDialog({
     setBusy("check");
     setError(null);
     const asked = editsRef.current;
-    cloudHostsClient.checkAccountCredentials(provider.id, entered).then(
+    cloudHostsClient.checkAccountCredentials(provider.id, entered, ...consentArgs).then(
       (result) => {
         setBusy(null);
         if (editsRef.current !== asked) return;
@@ -278,6 +307,7 @@ export function ConnectCloudAccountDialog({
   };
 
   const finish = (account: CloudAccountSummary) => {
+    if (!mounted.current) return;
     setBusy(null);
     setValues({});
     onConnected?.(account);
@@ -294,6 +324,7 @@ export function ConnectCloudAccountDialog({
         credentials: entered,
         scopeId,
         displayName: name.trim() || undefined,
+        ...(consent !== undefined ? { consent } : {}),
       })
       .then(finish, (err: unknown) => {
         setBusy(null);
@@ -306,7 +337,7 @@ export function ConnectCloudAccountDialog({
     setBusy("connect");
     setError(null);
     cloudHostsClient
-      .replaceAccountCredentials(replacing.id, entered)
+      .replaceAccountCredentials(replacing.id, entered, ...consentArgs)
       .then(finish, (err: unknown) => {
         setBusy(null);
         setError(errorText(err, `Couldn't replace the ${noun}`));
@@ -357,6 +388,19 @@ export function ConnectCloudAccountDialog({
       chosenScope.kind === "account")
       ? chosenScope.name
       : (checked?.identity ?? provider.name);
+
+  if (needsConsent) {
+    return (
+      <CloudProviderConsentDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        provider={provider}
+        plugin={plugin}
+        purpose={replacing ? "replace" : "connect"}
+        onAllow={() => setAgreed(plugin.fingerprint)}
+      />
+    );
+  }
 
   return (
     <AppDialog

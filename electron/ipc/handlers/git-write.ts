@@ -57,6 +57,7 @@ import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { parsePorcelainV1Z } from "../../services/git/fileMutation.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { runExclusive } from "../../utils/keyedMutex.js";
+import { gitIndexWriteKey } from "../../utils/gitIndexWriteKey.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -1817,8 +1818,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = await createHardenedGit(payload.cwd);
-    await git.add(["--", payload.filePath]);
+    await runExclusive(gitIndexWriteKey(payload.cwd), async () => {
+      const git = await createHardenedGit(payload.cwd);
+      await git.add(["--", payload.filePath]);
+    });
     invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILE, handleStageFile));
@@ -1830,17 +1833,19 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = await createHardenedGit(payload.cwd);
+    await runExclusive(gitIndexWriteKey(payload.cwd), async () => {
+      const git = await createHardenedGit(payload.cwd);
 
-    if (await hasHeadCommit(git, payload.cwd)) {
-      await git.reset([
-        "HEAD",
-        "--",
-        ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])).flat(),
-      ]);
-    } else {
-      await git.raw(["rm", "--cached", "--", payload.filePath]);
-    }
+      if (await hasHeadCommit(git, payload.cwd)) {
+        await git.reset([
+          "HEAD",
+          "--",
+          ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])).flat(),
+        ]);
+      } else {
+        await git.raw(["rm", "--cached", "--", payload.filePath]);
+      }
+    });
     invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILE, handleUnstageFile));
@@ -1865,8 +1870,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
    * confirmed; "at least", because a failed `add` can still stage some of its
    * own batch. A failure before any batch landed passes through unchanged.
    *
-   * Plural writes to one worktree run one at a time: two interleaving their
-   * batches could leave an index that neither order of the two would. Each
+   * Index writes to one worktree run one at a time (`gitIndexWriteKey`): two
+   * interleaving their batches could leave an index that neither order of the
+   * two would, and a hunk stage must not see the index move between its read
+   * and its apply. Each
    * picks its write command once its turn comes, from the repository as it is
    * then.
    */
@@ -1880,7 +1887,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       groups?: string[][];
     }>
   ): Promise<void> =>
-    runExclusive(`git-index-batches:${path.resolve(cwd)}`, async () => {
+    runExclusive(gitIndexWriteKey(cwd), async () => {
       const requested = new Set(paths);
       let confirmed = 0;
       try {
@@ -1952,8 +1959,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_STAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = await createHardenedGit(cwd);
-    await git.add("-A");
+    await runExclusive(gitIndexWriteKey(cwd), async () => {
+      const git = await createHardenedGit(cwd);
+      await git.add("-A");
+    });
     invalidateStagingDiffStatCache(cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_ALL, handleStageAll));
@@ -1962,13 +1971,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_UNSTAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = await createHardenedGit(cwd);
+    await runExclusive(gitIndexWriteKey(cwd), async () => {
+      const git = await createHardenedGit(cwd);
 
-    if (await hasHeadCommit(git, cwd)) {
-      await git.reset(["HEAD"]);
-    } else {
-      await git.raw(["rm", "--cached", "-r", "."]);
-    }
+      if (await hasHeadCommit(git, cwd)) {
+        await git.reset(["HEAD"]);
+      } else {
+        await git.raw(["rm", "--cached", "-r", "."]);
+      }
+    });
     invalidateStagingDiffStatCache(cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_ALL, handleUnstageAll));

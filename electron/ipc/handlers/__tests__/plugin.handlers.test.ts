@@ -314,6 +314,7 @@ import {
 } from "../../../services/plugin/PluginHostedViewRegistry.js";
 import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
 import { MAX_PROJECT_SURFACE_UPDATES } from "../../../../shared/types/plugin.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1152,6 +1153,135 @@ describe("registerPluginHandlers", () => {
     const handler = getHandler("plugin:uninstall");
     await expect(handler({}, "acme.my-plugin", "true")).rejects.toThrow(/must be a boolean/);
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
+  });
+
+  describe("a plugin's cloud accounts on uninstall (#17353)", () => {
+    function cloud(overrides: Record<string, unknown> = {}) {
+      const order: string[] = [];
+      const service = {
+        pluginCloudAccounts: vi.fn(
+          () =>
+            new Map([
+              [
+                "acme.clouds",
+                [{ id: "ca_acmeplugin1", name: "Work", providerName: "EC2", hosts: [] }],
+              ],
+            ])
+        ),
+        requirePluginAccounts: vi.fn(() => {
+          order.push("require");
+        }),
+        removePluginAccounts: vi.fn(async () => {
+          order.push("remove");
+        }),
+        ...overrides,
+      };
+      mockUninstallPlugin.mockImplementation(async () => {
+        order.push("uninstall");
+      });
+      registerRemoteService("cloudHosts", service as never);
+      return { service, order };
+    }
+
+    afterEach(() => {
+      _resetRemoteServicesForTest();
+      mockUninstallPlugin.mockReset();
+    });
+
+    it("removes the listed accounts only after the plugin is gone, checking them first", async () => {
+      const { service, order } = cloud();
+      await getHandler("plugin:uninstall")({}, "acme.clouds", false, [
+        "ca_acmeplugin1",
+        "ca_acmeplugin1",
+      ]);
+      expect(order).toEqual(["require", "uninstall", "remove"]);
+      expect(service.requirePluginAccounts).toHaveBeenCalledWith("acme.clouds", ["ca_acmeplugin1"]);
+      expect(service.removePluginAccounts).toHaveBeenCalledWith("acme.clouds", ["ca_acmeplugin1"]);
+    });
+
+    it("answers only once the removal has finished, with its failure", async () => {
+      let fail: (error: Error) => void = () => {};
+      const { service } = cloud({
+        removePluginAccounts: vi.fn(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              fail = reject;
+            })
+        ),
+      });
+      let settled = false;
+      const answer = (
+        getHandler("plugin:uninstall")({}, "acme.clouds", false, [
+          "ca_acmeplugin1",
+        ]) as Promise<void>
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(service.removePluginAccounts).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      fail(new Error("Work is still on this device"));
+      await expect(answer).rejects.toThrow("Work is still on this device");
+    });
+
+    it("keeps every account when none is named, and when the uninstall fails", async () => {
+      const { service } = cloud();
+      await getHandler("plugin:uninstall")({}, "acme.clouds", true);
+      expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.clouds", true);
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+
+      mockUninstallPlugin.mockRejectedValueOnce(new Error("files busy"));
+      await expect(
+        getHandler("plugin:uninstall")({}, "acme.clouds", false, ["ca_acmeplugin1"])
+      ).rejects.toThrow("files busy");
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+    });
+
+    it("uninstalls nothing for a removal it can't do", async () => {
+      const { service } = cloud({
+        requirePluginAccounts: vi.fn(() => {
+          throw new Error("Boat doesn't belong to that plugin's cloud provider.");
+        }),
+      });
+      const handler = getHandler("plugin:uninstall");
+      await expect(handler({}, "acme.clouds", false, ["ca_builtin0001"])).rejects.toThrow(
+        /doesn't belong/
+      );
+      await expect(handler({}, "acme.clouds", false, ["not-an-id"])).rejects.toThrow(
+        /cloud account ids/
+      );
+      await expect(handler({}, "acme.clouds", false, "ca_acmeplugin1")).rejects.toThrow(
+        /cloud account ids/
+      );
+      expect(mockUninstallPlugin).not.toHaveBeenCalled();
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+
+      _resetRemoteServicesForTest();
+      await expect(handler({}, "acme.clouds", false, ["ca_acmeplugin1"])).rejects.toThrow(
+        /no cloud accounts on this machine/
+      );
+      expect(mockUninstallPlugin).not.toHaveBeenCalled();
+    });
+
+    it("lists an installed plugin's cloud accounts with it, and leaves the rest as they were", async () => {
+      cloud();
+      const installed = {
+        instanceId: "acme.clouds",
+        origin: "global",
+        manifest: { name: "acme.clouds" },
+      };
+      const other = {
+        instanceId: "acme.other",
+        origin: "global",
+        manifest: { name: "acme.other" },
+      };
+      mockListPlugins.mockReturnValueOnce([installed, other]);
+      const listed = (await getHandler("plugin:list")()) as Array<Record<string, unknown>>;
+      expect(listed[0]!.cloudAccounts).toEqual([
+        { id: "ca_acmeplugin1", name: "Work", providerName: "EC2", hosts: [] },
+      ]);
+      expect(listed[1]).toBe(other);
+    });
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {

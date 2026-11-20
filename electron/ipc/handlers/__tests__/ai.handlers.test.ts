@@ -415,6 +415,96 @@ describe("ai handler payload validation", () => {
     expect(result.agents.claude).toEqual({ customFlags: "--new" });
   });
 
+  it("saves the default login's name clean, and drops one with nothing left (#17080)", async () => {
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings" ? { agents: { codex: { defaultLoginName: "Work" } } } : defaultValue
+    );
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
+
+    await handler(
+      {} as never,
+      { agentType: "codex", settings: { defaultLoginName: "  Home\u0007Lab " } } as never
+    );
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { defaultLoginName: "Home Lab" },
+    });
+
+    await handler({} as never, { agentType: "codex", settings: { defaultLoginName: 7 } } as never);
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", { codex: {} });
+
+    // One already saved wrong is cleaned by a write that doesn't touch it.
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings"
+        ? { agents: { codex: { defaultLoginName: { name: "Work" } } } }
+        : defaultValue
+    );
+    await handler({} as never, { agentType: "codex", settings: { customFlags: "--x" } } as never);
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { customFlags: "--x" },
+    });
+  });
+
+  it("keeps each stored preset's continuation switch for a locked write (#17912)", async () => {
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings"
+        ? {
+            agents: {
+              codex: {
+                customPresets: [
+                  // An entry an import let through malformed, and one the
+                  // sanitiser drops, answer for nothing.
+                  { id: "on", name: 7, continueAtLimitReset: false },
+                  { id: "on", name: "<bad>", continueAtLimitReset: false },
+                  { id: "on", name: "On", continueAtLimitReset: true },
+                  { id: "off", name: "Off" },
+                  // A later duplicate isn't the one a launch reads.
+                  { id: "off", name: "Shadowed", continueAtLimitReset: true },
+                ],
+              },
+            },
+          }
+        : defaultValue
+    );
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
+
+    await handler(
+      {} as never,
+      {
+        agentType: "codex",
+        lockContinueAtLimitReset: true,
+        settings: {
+          customPresets: [
+            { id: "on", name: "On (renamed)" },
+            { id: "off", name: "Off", continueAtLimitReset: true },
+            { id: "new", name: "New", continueAtLimitReset: true },
+          ],
+        },
+      } as never
+    );
+
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: {
+        customPresets: [
+          { id: "on", name: "On (renamed)", continueAtLimitReset: true },
+          { id: "off", name: "Off" },
+          { id: "new", name: "New" },
+        ],
+      },
+    });
+
+    // Settings' own editor writes it as given.
+    await handler(
+      {} as never,
+      {
+        agentType: "codex",
+        settings: { customPresets: [{ id: "off", name: "Off", continueAtLimitReset: true }] },
+      } as never
+    );
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { customPresets: [{ id: "off", name: "Off", continueAtLimitReset: true }] },
+    });
+  });
+
   it("trims AGENT_SETTINGS_RESET agentType and blocks reserved values after trimming", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
 

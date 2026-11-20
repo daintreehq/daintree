@@ -215,6 +215,8 @@ class FakeRelay {
   preference: InvolvementRecord | null | undefined = undefined;
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
+  /** Devices that can't reach the relay while the rest can: the Host's away while its owner isn't. */
+  readonly away = new Set<string>();
   /** The device the socket greets: the Host's, or the owner's when the owner itself connects. */
   hostDeviceId = "";
   helloRole: "desktop-host" | "owner-desktop" = "desktop-host";
@@ -339,7 +341,9 @@ class FakeRelay {
       deviceId: /(?:^|[ ,])d=([^,]+)/.exec(auth ?? "")?.[1] ?? null,
       body,
     });
-    if (this.down) throw new TypeError("fetch failed");
+    if (this.down || this.away.has(this.requests.at(-1)!.deviceId ?? "")) {
+      throw new TypeError("fetch failed");
+    }
     // A 0.4.0 relay advertises threads; nothing is sent to a desktop that doesn't declare them.
     if (method === "GET" && pathname === "/api/v1/info") {
       return json(200, { features: this.features });
@@ -593,7 +597,7 @@ class FakeRelay {
   };
 
   readonly webSocket = (url: string): WebSocketLike => {
-    if (this.down) throw new Error("unreachable");
+    if (this.down || this.away.has(this.hostDeviceId)) throw new Error("unreachable");
     const socket = new FakeSocket(url, this);
     this.sockets.push(socket);
     return socket;
@@ -944,7 +948,7 @@ function ownerAnswerPath(owner: Awaited<ReturnType<typeof makeOwner>>, relay: Fa
     }),
     pumpIntervalMs: 0,
   });
-  return new QuestionBridge({
+  const path = new QuestionBridge({
     source: {
       identity: () => owner.identity,
       live: () => live,
@@ -953,6 +957,8 @@ function ownerAnswerPath(owner: Awaited<ReturnType<typeof makeOwner>>, relay: Fa
     },
     isCurrent: () => false,
   });
+  // Its outbox sent as the owner's running bridge would on its next pump.
+  return Object.assign(path, { flushOwner: () => live.pump() });
 }
 
 /** The Host's question as the owner's view read it: the reference and revision an answer names. */
@@ -2256,6 +2262,139 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     expect(sent.map((r) => r.deviceId)).toEqual([owner.deviceId]);
     const { action } = sent[0]!.body as { action: { record: Record<string, unknown> } };
     expect(action.record).toMatchObject({ action: "cancel", decline: true });
+  }, 60_000);
+
+  it("declines a Host's question by the revision the owner last read while the Host is away, filed once it's back and told only to an agent still listening (#17946)", async () => {
+    const { owner, relay, host, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
+    const listening = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    const gone = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(
+      () => expect(relay.questions.has(listening) && relay.questions.has(gone)).toBe(true),
+      { timeout: 15_000 }
+    );
+    expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-declines-v1");
+    // What the owner's view last read of each over the Host's link, before the Host went away.
+    const listeningRead = await readOnHost(service, "pane-1", listening);
+    const goneRead = await readOnHost(service, "pane-2", gone);
+
+    // The Host can't reach the relay; its owner still can. The agent that asked the second exits.
+    relay.away.add(host.config.deviceId);
+    relay.liveSocket()!.drop();
+    await vi.waitFor(() => expect(service.getStatus().state).toBe("reconnecting"), {
+      timeout: 15_000,
+    });
+    terminals.terminals.delete("pane-2");
+
+    const owners = ownerAnswerPath(owner, relay);
+    // Signed against a revision the relay doesn't hold it at: refused, and nothing is cancelled.
+    await expect(
+      owners.declineForPerson(
+        {
+          reference: listeningRead.reference,
+          declineId: "0190f0aa-1111-4222-8333-44445555dd01",
+          expectedRevision: listeningRead.revision + 1,
+        },
+        "host_owner_mac"
+      )
+    ).resolves.toEqual({
+      result: "submitted",
+      declineId: "0190f0aa-1111-4222-8333-44445555dd01",
+      outcome: { status: "changed" },
+    });
+    expect(relay.events.some((e) => e.event_type === "decision.cancelled")).toBe(false);
+    for (const [read, declineId] of [
+      [listeningRead, "0190f0aa-1111-4222-8333-44445555dd02"],
+      [goneRead, "0190f0aa-1111-4222-8333-44445555dd03"],
+    ] as const) {
+      await expect(
+        owners.declineForPerson(
+          { reference: read.reference, declineId, expectedRevision: read.revision },
+          "host_owner_mac"
+        )
+      ).resolves.toEqual({ result: "submitted", declineId, outcome: { status: "declined" } });
+    }
+
+    // What a phone syncs: each declined once, by the owner's computer, while the Host is away.
+    for (const questionId of [listening, gone]) {
+      const settled = relay.events.filter(
+        (e) => e.question_id === questionId && e.event_type === "decision.cancelled"
+      );
+      expect(settled.map((e) => e.origin_device_id)).toEqual([owner.deviceId]);
+      expect((settled[0]!.data as { record: Record<string, unknown> }).record).toMatchObject({
+        action: "cancel",
+        decline: true,
+      });
+    }
+    expect(terminals.submitted).toHaveLength(0);
+
+    // Back: the Host catches up and files both declined, telling only the agent still listening.
+    relay.away.delete(host.config.deviceId);
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    expect(terminals.submitted[0]!.id).toBe("pane-1");
+    expect(terminals.submitted[0]!.text).toContain(
+      "source: human\nstatus: declined\nauthorised: no\nnote: "
+    );
+    expect(await readOnHost(service, "pane-1", listening)).toMatchObject({
+      status: "cancelled",
+      closedReason: "declined",
+    });
+    const store = new DaintreeLocalStore(sqlite);
+    await vi.waitFor(
+      async () =>
+        expect(parseAnswers((await store.getQuestion(gone))!.answers_json)).toEqual([
+          expect.objectContaining({ kind: "declined", deliver: false, delivered: false }),
+        ]),
+      { timeout: 15_000 }
+    );
+    expect((await store.getQuestion(gone))!.local_status).toBe("cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(1);
+    // The Host signed none of it.
+    const declines = relay.requests.filter((r) => r.path.endsWith("/cancel"));
+    expect(new Set(declines.map((r) => r.deviceId))).toEqual(new Set([owner.deviceId]));
+  }, 60_000);
+
+  it("queues the owner's decline while it and the Host are both away, and the Host files it once the relay takes it (#17946)", async () => {
+    const { owner, relay, terminals, listener, service } = await startHost();
+    relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    const question = await readOnHost(service, "pane-1", asked);
+
+    relay.down = true;
+    relay.liveSocket()!.drop();
+    await vi.waitFor(() => expect(service.getStatus().state).toBe("reconnecting"), {
+      timeout: 15_000,
+    });
+    const owners = ownerAnswerPath(owner, relay);
+    const declineId = "0190f0aa-1111-4222-8333-44445555dd04";
+    await expect(
+      owners.declineForPerson(
+        { reference: question.reference, declineId, expectedRevision: question.revision },
+        "host_owner_mac"
+      )
+    ).resolves.toEqual({ result: "submitted", declineId, outcome: { status: "queued" } });
+    expect(relay.events.some((e) => e.event_type === "decision.cancelled")).toBe(false);
+
+    // The relay is back: the owner's outbox sends the same signed decline, and the Host files it.
+    relay.down = false;
+    await vi.waitFor(
+      async () => {
+        await owners.flushOwner();
+        await expect(owners.declineResultForPerson(declineId)).resolves.toMatchObject({
+          result: "read",
+          outcome: { status: "declined" },
+        });
+      },
+      { timeout: 20_000, interval: 500 }
+    );
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 20_000 });
+    expect(terminals.submitted[0]!.id).toBe("pane-1");
+    expect(terminals.submitted[0]!.text).toContain("status: declined");
+    expect(
+      relay.events.filter((e) => e.question_id === asked && e.event_type === "decision.cancelled")
+    ).toHaveLength(1);
   }, 60_000);
 
   it("reports a relay too old for declines made on the computer, sending it nothing and typing nothing (#17239)", async () => {

@@ -348,6 +348,11 @@ export const terminalQueryActionRuns = {
         entry.waitingReason = terminal.waitingReason;
       }
 
+      // Whatever the agent's state: a working agent with the footer is still working (#17905).
+      if (isPtyPanel(terminal) && terminal.updateInstalled !== undefined) {
+        entry.updateInstalled = terminal.updateInstalled;
+      }
+
       // Both batch fetches below can fail independently, and each is a
       // separate thing the caller lost. Appending rather than assigning stops
       // the later one reporting as the only failure while the earlier one

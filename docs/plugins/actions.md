@@ -39,6 +39,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.kimi` | Launch Kimi Code | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.kiro` | Launch Kiro | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.launch` | Launch agent | safe | `agentId`, `accountId?`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
+| `agent.listAccounts` | List agent accounts | safe | `agentId`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
 | `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
@@ -215,6 +216,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `diff.nextChange` | Next hunk | safe | `panelId?` |
+| `diff.nextFile` | Next file in diff | safe | `panelId?` |
+| `diff.previousChange` | Previous hunk | safe | `panelId?` |
+| `diff.previousFile` | Previous file in diff | safe | `panelId?` |
+| `diff.toggleViewed` | Toggle viewed | safe | `panelId?` |
 | `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
@@ -233,8 +239,10 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.retryAuthFetch` | Retry suspended fetches | safe | — |
 | `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.stageHunk` | Stage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 | `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.unstageFile` | Unstage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.unstageHunk` | Unstage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 
 ## help
 
@@ -368,6 +376,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.sleep` | Sleep project | confirm | `projectId?` |
+| `project.sleepAll` | Sleep all projects | confirm | — |
 | `project.sleepIdle` | Sleep idle projects | confirm | — |
 | `project.switch` | Switch project | safe | `projectId` |
 | `project.switcherPalette` | Open project switcher | safe | — |

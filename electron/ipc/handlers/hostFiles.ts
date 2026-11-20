@@ -5,11 +5,13 @@ import { defineIpcNamespace, op } from "../define.js";
 import { HOST_FILES_METHOD_CHANNELS } from "./hostFiles.preload.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type {
-  HostDirectoryEntry,
-  HostDirectoryListing,
-  HostPickerRoots,
-  ListHostDirectoryPayload,
+import {
+  HOST_HOME_PATH,
+  type HostDirectoryEntry,
+  type HostDirectoryMetadata,
+  type HostDirectoryListing,
+  type HostPickerRoots,
+  type ListHostDirectoryPayload,
 } from "../../../shared/types/ipc/hostFiles.js";
 
 /**
@@ -22,6 +24,13 @@ import type {
 export const HOST_DIRECTORY_MAX_ENTRIES = 2_000;
 const MAX_PATH_LENGTH = 4_096;
 const LSTAT_BATCH = 64;
+
+let nameCollator: Intl.Collator | undefined;
+// A fresh localeCompare with options builds a collator per call; sorting 2,000 entries is ~18x slower that way.
+function compareNames(a: string, b: string): number {
+  nameCollator ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return nameCollator.compare(a, b);
+}
 
 const PROJECT_DIR_CANDIDATES = ["Projects", "projects", "Developer", "code", "src", "dev", "repos"];
 const MAX_PROJECT_PARENT_ROOTS = 6;
@@ -76,22 +85,28 @@ function kindOf(entry: {
 
 async function describeEntries(
   directory: string,
-  names: Array<{ name: string; kind: HostDirectoryEntry["kind"] }>
+  names: Array<{ name: string; kind: HostDirectoryEntry["kind"] }>,
+  metadata: HostDirectoryMetadata
 ): Promise<HostDirectoryEntry[]> {
-  const out: HostDirectoryEntry[] = [];
-  for (let i = 0; i < names.length; i += LSTAT_BATCH) {
-    const batch = names.slice(i, i + LSTAT_BATCH);
+  const out: HostDirectoryEntry[] = names.map((entry) => ({
+    name: entry.name,
+    kind: entry.kind,
+    size: null,
+    mtimeMs: null,
+  }));
+  // The picker shows only file sizes, so a folder of folders costs no metadata reads at all.
+  const wanted = metadata === "picker" ? out.filter((entry) => entry.kind === "file") : out;
+  for (let i = 0; i < wanted.length; i += LSTAT_BATCH) {
+    const batch = wanted.slice(i, i + LSTAT_BATCH);
     const stats = await Promise.all(
       batch.map((entry) => fs.lstat(path.join(directory, entry.name)).catch(() => null))
     );
     batch.forEach((entry, index) => {
       const stat = stats[index];
-      out.push({
-        name: entry.name,
-        kind: entry.kind,
-        size: stat && entry.kind === "file" ? stat.size : null,
-        mtimeMs: stat ? stat.mtimeMs : null,
-      });
+      if (!stat) return;
+      // A file swapped for something else since enumeration has no size to show.
+      if (entry.kind === "file" && stat.isFile()) entry.size = stat.size;
+      if (metadata === "full") entry.mtimeMs = stat.mtimeMs;
     });
   }
   return out;
@@ -108,8 +123,10 @@ export async function listHostDirectory(
   payload: ListHostDirectoryPayload,
   maxEntries = HOST_DIRECTORY_MAX_ENTRIES
 ): Promise<HostDirectoryListing> {
-  const directory = validatePath(payload?.path);
+  const requested = payload?.path;
+  const directory = validatePath(requested === HOST_HOME_PATH ? os.homedir() : requested);
   const showHidden = payload?.showHidden === true;
+  const metadata: HostDirectoryMetadata = payload?.metadata === "picker" ? "picker" : "full";
 
   const names: Array<{ name: string; kind: HostDirectoryEntry["kind"] }> = [];
   let truncated = false;
@@ -135,12 +152,8 @@ export async function listHostDirectory(
     await dir.close().catch(() => {});
   }
 
-  const entries = await describeEntries(directory, names);
-  entries.sort(
-    (a, b) =>
-      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
-  );
+  const entries = await describeEntries(directory, names, metadata);
+  entries.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || compareNames(a.name, b.name));
   const parent = path.dirname(directory);
   return {
     path: directory,

@@ -19,7 +19,6 @@ vi.mock("../../driveLeaseTargetResolvers.js", () => ({
     projectsForOperation: () => [],
     projectsForDevPreviewPanel: () => [],
     projectsForHelpSession: () => [],
-    currentProjectId: () => null,
   }),
 }));
 

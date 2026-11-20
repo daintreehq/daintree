@@ -1,0 +1,2 @@
+-- Decisions questions of a resumable agent still missing its session (#17783): delivery looks for these after every pane signal, so a lookup seeks this host's rows here, already in alias order, instead of reading every question. A row leaves it once its session is recorded. The agent list is the one delivery resumes, sorted, as the lookup writes it.
+CREATE INDEX IF NOT EXISTS `decisions_questions_missing_session_idx` ON `decisions_questions` (`origin_host_id`,`alias`) WHERE `agent_kind` IN ('claude', 'codex') AND (`agent_session_id` IS NULL OR `agent_session_id` = '');

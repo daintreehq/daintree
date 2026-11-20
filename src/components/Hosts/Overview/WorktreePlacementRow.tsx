@@ -525,7 +525,7 @@ export function WorktreePlacementRow({
                 value={`${NEW_MACHINE_PREFIX}${account.id}`}
                 description={`Created for this worktree on ${provider.name}`}
               >
-                New machine · {account.displayName}
+                New machine <FactSeparator /> {account.displayName}
               </SelectItem>
             ))}
           </SelectContent>

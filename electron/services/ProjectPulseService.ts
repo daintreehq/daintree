@@ -207,6 +207,8 @@ export class ProjectPulseService {
   private historyCache = new Map<string, HistoryEntry>();
   private historyInFlight = new Map<string, Promise<HistoryResult>>();
   private historyLoadSeq = 0;
+  // By worktree ID, then path, so invalidate() drops exactly one worktree's probes.
+  private probeInFlight = new Map<string, Map<string, Promise<HeadProbeResult>>>();
 
   private getHistoryKey(worktreeId: string, worktreePath: string): string {
     return `${worktreeId}:${worktreePath}`;
@@ -250,6 +252,7 @@ export class ProjectPulseService {
     for (const key of Array.from(this.historyInFlight.keys())) {
       if (key.startsWith(`${worktreeId}:`)) this.historyInFlight.delete(key);
     }
+    this.probeInFlight.delete(worktreeId);
 
     logProjectPulseDebug("ProjectPulse cache invalidated", {
       worktreeId,
@@ -266,7 +269,7 @@ export class ProjectPulseService {
       // the cached entry, serve the cache. Falls through to recompute when
       // either changes so commits, rebases, AND branch switches (e.g.
       // checkout to a new branch at the same SHA) surface inside the TTL.
-      const probe = await this.probeHead(options.worktreePath);
+      const probe = await this.probeHeadShared(options.worktreeId, options.worktreePath);
       // Re-check the cache entry: invalidate() may have fired during the
       // await above, deleting the entry. Use the freshly-fetched entry so
       // we don't serve data that was just invalidated.
@@ -376,6 +379,29 @@ export class ProjectPulseService {
     }
   }
 
+  // Callers validating caches of one worktree at once share its probe. Each still re-checks its
+  // entry after the await, and invalidate() drops the probe so later callers don't join a read
+  // that may predate the change behind it.
+  private probeHeadShared(worktreeId: string, worktreePath: string): Promise<HeadProbeResult> {
+    let byPath = this.probeInFlight.get(worktreeId);
+    const existing = byPath?.get(worktreePath);
+    if (existing) return existing;
+    if (!byPath) {
+      byPath = new Map();
+      this.probeInFlight.set(worktreeId, byPath);
+    }
+    const owner = byPath;
+    const probe = this.probeHead(worktreePath).finally(() => {
+      if (owner.get(worktreePath) !== probe) return;
+      owner.delete(worktreePath);
+      if (owner.size === 0 && this.probeInFlight.get(worktreeId) === owner) {
+        this.probeInFlight.delete(worktreeId);
+      }
+    });
+    owner.set(worktreePath, probe);
+    return probe;
+  }
+
   // Reads HEAD + current branch with the shared no-commits taxonomy. Used by
   // the cheap probe in getPulse — no signal so a pending invalidate can't
   // abort the validity check and trick the caller into a needless recompute.
@@ -388,19 +414,19 @@ export class ProjectPulseService {
     }
     try {
       const git = await createStrictExitGit(worktreePath);
-      const shaOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
-      const sha = shaOut.trim() || null;
-      let branch: string | undefined;
-      try {
-        const branchOut = await git.raw(["rev-parse", "--abbrev-ref", "HEAD"]);
-        const trimmed = branchOut.trim();
-        branch = trimmed === "HEAD" ? undefined : trimmed;
-      } catch {
-        // `undefined` is a detached HEAD; a failed read must not match a
-        // cached detached snapshot at the same SHA, so recompute instead.
+      // One process prints the SHA, then the branch (`HEAD` when detached); an
+      // unborn branch fails the whole read with the no-commits error.
+      const lines = (await git.raw(["rev-parse", "HEAD", "--abbrev-ref", "HEAD"]))
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => line.trim());
+      if (lines.length !== 2) {
+        // `undefined` is a detached HEAD; an answer that can't establish both
+        // values must not match a cached detached snapshot, so recompute.
         return { sha: PROBE_ERROR_SENTINEL, branch: undefined };
       }
-      return { sha, branch };
+      const [sha, branch] = lines;
+      return { sha, branch: branch === "HEAD" ? undefined : branch };
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to probe git HEAD");
       if (isNoCommitsError(message)) {

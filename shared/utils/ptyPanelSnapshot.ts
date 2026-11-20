@@ -43,6 +43,7 @@ export type PtySnapshotSource = Pick<
   | "restoreRecovery"
   | "restoreProvenance"
   | "lastAgentObservation"
+  | "stopObservation"
   | "launchedByPluginId"
   | "holdOnRestart"
   | "scratchpad"
@@ -110,6 +111,9 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     // state observed for it, never a process the hold would start.
     ...(t.restoreProvenance && { restoreProvenance: t.restoreProvenance }),
     ...(t.lastAgentObservation && { lastAgentObservation: t.lastAgentObservation }),
+    // Only while held: a pane that has run since has been stopped since, and
+    // Main records that stop itself (#17886).
+    ...(held && t.stopObservation && { stopObservation: t.stopObservation }),
     ...(t.launchedByPluginId && { launchedByPluginId: t.launchedByPluginId }),
     ...(t.holdOnRestart === true && { holdOnRestart: true as const }),
     // Written for a held pane too: the notes belong to the pane, not its process.

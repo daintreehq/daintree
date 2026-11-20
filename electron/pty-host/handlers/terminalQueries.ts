@@ -2,7 +2,8 @@ import { stripAnsi } from "../../services/pty/AgentPatternDetector.js";
 import { toHostSnapshot } from "../index.js";
 import type { SemanticSearchMatch } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerMap, HostContext } from "./types.js";
-import { mapTerminalInfo } from "./terminalInfo.js";
+import type { PtyHostTerminalStatusFields } from "../../../shared/types/pty-host.js";
+import { mapTerminalInfo, mapTerminalStatusFields } from "./terminalInfo.js";
 import { findCaseInsensitiveLiteral } from "./caseInsensitiveLiteralMatch.js";
 
 export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
@@ -46,8 +47,25 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
         // one `get-terminal` per id, so correlating a submission costs it no
         // extra round trip. Only this query passes it — the bulk families keep
         // the unconditional projection.
-        terminal: terminal ? mapTerminalInfo(terminal, ctx, msg.submissionToken) : null,
+        terminal: terminal
+          ? mapTerminalInfo(terminal, ctx, msg.submissionToken, msg.codexLimit)
+          : null,
       });
+    },
+
+    "get-terminal-status-fields": (msg) => {
+      // A malformed list reads nothing rather than throwing the whole query away.
+      const ids: unknown[] = Array.isArray(msg.ids) ? msg.ids : [];
+      const token = typeof msg.submissionToken === "string" ? msg.submissionToken : undefined;
+      const seen = new Set<string>();
+      const terminals: PtyHostTerminalStatusFields[] = [];
+      for (const id of ids) {
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        const terminal = ptyManager.getTerminal(id);
+        if (terminal) terminals.push(mapTerminalStatusFields(terminal, ctx, token));
+      }
+      sendEvent({ type: "terminal-status-fields", requestId: msg.requestId, terminals });
     },
 
     "get-available-terminals": (msg) => {
@@ -82,6 +100,21 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
         type: "terminals-for-project",
         requestId: msg.requestId,
         terminalIds: ptyManager.getTerminalsForProject(msg.projectId),
+      });
+    },
+
+    // Restore's whole inventory in one reply (#17776), in the registry's id
+    // order. An id whose record is gone by the time it is read is skipped,
+    // the same answer a per-id `get-terminal` would have given it.
+    "get-project-terminals": (msg) => {
+      sendEvent({
+        type: "project-terminals",
+        requestId: msg.requestId,
+        terminals: ptyManager
+          .getTerminalsForProject(msg.projectId)
+          .map((id) => ptyManager.getTerminal(id))
+          .filter((terminal) => terminal !== undefined)
+          .map((terminal) => mapTerminalInfo(terminal, ctx)),
       });
     },
 

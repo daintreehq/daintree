@@ -10,6 +10,7 @@ import type {
   HostWorktreeEntry,
   RemoteProcessInventory,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import type {
   ProcessInventorySnapshot,
   ProcessTreeSample,
@@ -25,7 +26,7 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type HostSummaryFrame } from "../link/messages.js";
-import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
+import { elapsedSince, stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import type { LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
@@ -334,6 +335,26 @@ export class HostMetricsClient {
     const token = this.arrivedOn.get(summary);
     if (token === undefined) return null;
     return session !== null && this.linkTokens.get(session) === token;
+  }
+
+  /**
+   * The host's idle clock as its latest summary gave it, and when that summary
+   * was taken by the host's clock (#17923): only for one that came on
+   * `session` less than `maxAgeMs` ago by this machine's clocks, so it is the
+   * host's word now rather than one kept from before a drop or a sleep.
+   */
+  idleOn(
+    hostId: HostId,
+    session: LinkSession,
+    maxAgeMs: number
+  ): { idle: HostIdleObservation; sampledAt: number } | null {
+    const summary = this.latest(hostId);
+    if (!summary?.idle || this.cameOn(summary, session) !== true) return null;
+    const receipt = this.receiptOf(summary);
+    if (!receipt || elapsedSince(receipt.at, (this.options.clock ?? stampNow)()) >= maxAgeMs) {
+      return null;
+    }
+    return { idle: summary.idle, sampledAt: summary.sampledAt };
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */

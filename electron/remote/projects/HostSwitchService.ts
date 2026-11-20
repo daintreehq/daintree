@@ -746,6 +746,7 @@ export class HostSwitchService {
     return this.gateway(payload.toHostId).listDirectory({
       path: payload.path,
       showHidden: payload.showHidden === true,
+      metadata: payload.metadata === "picker" ? "picker" : undefined,
     });
   }
 

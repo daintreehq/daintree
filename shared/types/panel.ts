@@ -4,6 +4,7 @@ import type { TerminalHandback } from "./handback.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -813,6 +814,12 @@ export interface PtyPanelData extends BasePanelData {
    * classified leaves it unchanged.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905), owned by the host and only ever copied here. Not persisted, and
+   * cleared when the run ends or a restart re-stamps `startedAt`.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -965,6 +972,15 @@ export interface PtyPanelData extends BasePanelData {
    * pane, not a process the hold would start.
    */
   lastAgentObservation?: TerminalAgentObservation;
+  /**
+   * What was observed of the agent when Main last stopped its process for a
+   * quit or Sleep (#17886): the reading just before the kill, or the working
+   * reading taken when the user asked for a Sleep that then waited for the
+   * agent to settle. Main writes it into the saved snapshot; the restore after
+   * it judges the continue-note offer by it. The live store keeps it only on a
+   * pane restore held, which has run nothing since. Persisted.
+   */
+  stopObservation?: TerminalAgentObservation;
   /**
    * The plugin whose `agent.launch` created this pane (#14017), taken from the
    * host-stamped dispatch context, never from arguments. Only that plugin may

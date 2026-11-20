@@ -7,24 +7,28 @@ import {
 } from "@/components/ui/SegmentedRadioGroup";
 import { SettingsRow } from "../SettingsGroup";
 import type { ScopeKind } from "./scopeUtils";
-import type { DangerousMode } from "@shared/types";
+import type { DangerousMode, PermissionLevel } from "@shared/types";
+import { EXPLICIT_MODE_LABELS, PERMISSION_LEVEL_LABELS } from "@/lib/permissionLabels";
 
 interface BehavioralControlsProps {
   scopeKind: ScopeKind;
   scopeLabel: string;
-  /** Current bypass mode for the active scope (agent Default or preset). */
+  /** Current permission mode for the active scope (agent Default or preset). */
   dangerousMode: DangerousMode;
-  /** Final resolved bypass for the active scope (incl. global baseline). */
-  effectiveSkipPerms: boolean;
-  /** What the "Default" (inherit) option resolves to, given the parent state. */
-  inheritResolvesToOn: boolean;
-  /** Where "Default" inherits from, or why the global setting doesn't reach this agent. */
+  /** Final resolved level for the active scope (incl. global baseline). */
+  effectiveLevel: PermissionLevel;
+  /** The args that level adds to the command, space-separated; empty for none. */
+  effectivePermissionArgs: string;
+  /** Whether the agent declares its own Auto mode. */
+  autoSupported: boolean;
+  /** What the "Inherit" option resolves to, given the parent state. */
+  inheritLevel: PermissionLevel;
+  /** Where "Inherit" inherits from, or why the global setting doesn't reach this agent. */
   inheritHint: string;
   customArgsValue: string;
   customArgsPlaceholder: string;
   customArgsDescription: string;
   customFlagsOverride: string | undefined;
-  defaultDangerousArg: string;
   onDangerousModeChange: (mode: DangerousMode) => void;
   onCustomFlagsChange: (value: string) => void;
   onCustomFlagsOverrideReset: () => void;
@@ -34,27 +38,34 @@ export function BehavioralControls({
   scopeKind,
   scopeLabel,
   dangerousMode,
-  effectiveSkipPerms,
-  inheritResolvesToOn,
+  effectiveLevel,
+  effectivePermissionArgs,
+  autoSupported,
+  inheritLevel,
   inheritHint,
   customArgsValue,
   customArgsPlaceholder,
   customArgsDescription,
   customFlagsOverride,
-  defaultDangerousArg,
   onDangerousModeChange,
   onCustomFlagsChange,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
   // The inherit segment carries what it resolves to, so the rail alone says what the
-  // agent will actually get without reading the description.
+  // agent will actually get without reading the description. Auto is offered only
+  // where the agent declares it; a saved Auto it can't honour stays visible, disabled,
+  // so it can be read and changed.
+  const showAuto = autoSupported || dangerousMode === "auto";
   const dangerousModeOptions = useMemo<SegmentedRadioOption<DangerousMode>[]>(
     () => [
-      { value: "inherit", label: `Default (${inheritResolvesToOn ? "On" : "Off"})` },
-      { value: "on", label: "On" },
-      { value: "off", label: "Off" },
+      { value: "inherit", label: `Inherit (${PERMISSION_LEVEL_LABELS[inheritLevel]})` },
+      { value: "off", label: EXPLICIT_MODE_LABELS.off },
+      ...(showAuto
+        ? [{ value: "auto" as const, label: EXPLICIT_MODE_LABELS.auto, disabled: !autoSupported }]
+        : []),
+      { value: "on", label: EXPLICIT_MODE_LABELS.on },
     ],
-    [inheritResolvesToOn]
+    [inheritLevel, showAuto, autoSupported]
   );
 
   return (
@@ -86,16 +97,29 @@ export function BehavioralControls({
 
       <SettingsRow
         id="agents-skip-permissions"
-        label="Skip permissions"
+        label="Permission prompts"
         description={
           <>
-            Auto-approve all file, command and network actions. Off overrides the global setting for
-            this scope.
+            {autoSupported
+              ? "Auto lets the agent approve actions under its own rules; Skip all approves every file, command and network action. A choice here overrides the global setting for this scope."
+              : "Skip all approves every file, command and network action. A choice here overrides the global setting for this scope."}
             {dangerousMode === "inherit" && <span className="block mt-1">{inheritHint}</span>}
-            {effectiveSkipPerms && defaultDangerousArg && (
+            {dangerousMode === "auto" && !autoSupported && (
+              <span className="block mt-1">
+                This agent has no Auto mode, so it launches with its CLI default
+              </span>
+            )}
+            {effectivePermissionArgs && (
               <span className="flex items-center gap-1.5 mt-1.5">
-                <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
-                <code className="font-mono text-xs text-text-primary">{defaultDangerousArg}</code>
+                {effectiveLevel === "skip" && (
+                  <ShieldOff
+                    className="h-3.5 w-3.5 shrink-0 text-status-error"
+                    aria-hidden="true"
+                  />
+                )}
+                <code className="font-mono text-xs text-text-primary">
+                  {effectivePermissionArgs}
+                </code>
                 <span>added to the command</span>
               </span>
             )}
@@ -103,10 +127,10 @@ export function BehavioralControls({
         }
         isModified={dangerousMode !== "inherit"}
         onReset={() => onDangerousModeChange("inherit")}
-        resetAriaLabel={`Reset skip permissions for ${scopeLabel} to default`}
+        resetAriaLabel={`Reset permission prompts for ${scopeLabel} to default`}
         control={({ descriptionId, disabled }) => (
           <SegmentedRadioGroup<DangerousMode>
-            aria-label="Skip permissions"
+            aria-label="Permission prompts"
             aria-describedby={descriptionId}
             value={dangerousMode}
             onChange={onDangerousModeChange}

@@ -920,9 +920,9 @@ await host.onDidChangeFocusedPanel(({ kind, agent, worktreeId }) => {
 });
 ```
 
-Each delivery is a frozen `PluginFocusedPanel`: `{ kind, agent, worktreeId }` and nothing else — never a panel's id, title, URL, cwd or content. `kind` is a built-in panel kind (`terminal`, `browser`, `dev-preview`, `review`, `file`, `file-browser`, `diff`), `"plugin"` for every plugin panel (your own included), `"portal"` for the Portal dock, or `null` when Daintree is not the foreground window or focus is on something that is not a panel (the sidebar, an app dialog, the assistant). `agent` is `true` only for a terminal running an agent. `worktreeId` is the focused panel's worktree, or `null` when it has none and always for `"portal"`.
+Each delivery is a frozen `PluginFocusedPanel`: `{ kind, agent, worktreeId }` and nothing else — never a panel's id, title, URL, cwd or content. `kind` is a built-in panel kind (`terminal`, `browser`, `dev-preview`, `review`, `file`, `file-browser`, `diff`), `"plugin"` for every plugin panel (your own included), or `null` when Daintree is not the foreground window or focus is on something that is not a panel (the sidebar, an app dialog, the assistant). `agent` is `true` only for a terminal running an agent. `worktreeId` is the focused panel's worktree, or `null` when it has none. `"portal"` is deprecated and never reported: it was the Portal (web chat) dock, which Daintree no longer has, and it stays in `PluginFocusedPanelKind` only so a plugin that still compares against it keeps compiling.
 
-The current focus is delivered once just after subscribing, then every change. Deliveries coalesce to the latest value with a 250 ms default window ([`PluginHostSubscriptionOptions`](#pluginhostapi)), and a value equal to the last one delivered is never repeated. A project plugin sees focus only inside its own project; anywhere else, the Portal included, reads as `kind: null`. An installed plugin sees whichever project has focus. Subscribing is revoke-guarded — subscribe during `activate()`.
+The current focus is delivered once just after subscribing, then every change. Deliveries coalesce to the latest value with a 250 ms default window ([`PluginHostSubscriptionOptions`](#pluginhostapi)), and a value equal to the last one delivered is never repeated. A project plugin sees focus only inside its own project; anywhere else reads as `kind: null`. An installed plugin sees whichever project has focus. Subscribing is revoke-guarded — subscribe during `activate()`.
 
 ## `onDidChangeProjectPresence`
 
@@ -1794,12 +1794,15 @@ It resolves to one of:
 ```ts
 const agents = await host.agents.list();
 // [{ terminalId, title, agentId, worktree: { id, name, branch? } | null,
-//    observedState?, isFocused, canDraft, draftRefusal?, launchedByThisPlugin }]
+//    observedState?, isFocused, canDraft, draftRefusal?, launchedByThisPlugin,
+//    band?, canopy?: { readAt, ask?, quote? } }]
 ```
 
 The live agent panes in this plugin's project (for an installed plugin, the project the user is looking at), in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
 
 `launchedByThisPlugin` is `true` for an agent this plugin started with its own `agent.launch`: the same record `agents.interrupt`, `sendKeys` and `submit` honour, answered by main rather than the view, so a pane the user, an assistant or another plugin started is always `false`. It survives a Daintree restart for a pane restored under the id it was launched with, while the record lasts (it lapses when the pane hasn't come back in 30 days, and only the 200 most recent are kept), and goes when the plugin is disabled or uninstalled. A launch that named its own `requestedId` is never counted. While the user looks at a Remote Host's project, it is `true` for a pane this plugin launched there with `{ hostId }` since this machine last started, the agents `interrupt(terminalId, { hostId })` reaches. It says who launched the pane, not that input will land: the input methods still need `agent:input`, consent and a live process.
+
+`band` and `canopy` say where Pilot places the pane, read by main from the same record `agents.listAll` reports — see [Where Pilot places a run](#where-pilot-places-a-run). Both are absent before the host has read its agents once, for a pane it hasn't read yet, and while the user looks at a Remote Host's project.
 
 ## `agents.listAll` — every agent in every open project
 
@@ -1808,7 +1811,8 @@ The live agent panes in this plugin's project (for an installed plugin, the proj
 await host.onDidChangeAllAgents((snapshot) => render(snapshot));
 render(await host.agents.listAll());
 // { agents: [{ workspaceId, workspaceKind: "project" | "scratch", terminalId,
-//              worktreeId?, title?, agentId?, observedState? }],
+//              worktreeId?, title?, agentId?, observedState?,
+//              band, canopy?: { readAt, ask?, quote? } }],
 //   degraded, lastSuccessfulAt }
 ```
 
@@ -1818,7 +1822,15 @@ An empty list only means "no agents" when `degraded` is `false`. `degraded: true
 
 Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one — in a worker, `listAll` rejects with it, while a refused `onDidChangeAllAgents` is logged by main and resolves a disposer that never fires, like every worker subscription. `listAll` is NOT revoke-guarded; subscribing is.
 
-`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title, worktree, band or Canopy note changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
+### Where Pilot places a run
+
+`band` is the band Pilot sorts the run into, worst first: `blocked` (stopped on an error), `needs-you` (asking the user something), `quiet` (working, but silent long enough to look stalled), `review` (stopped after work, or on an approval or question wait, the user hasn't looked at since), `running`, `done` (stopped after work the user has seen), `parked`, `snoozed` and `idle` (nothing to report, including an ask already seen). It is the same placement every Daintree surface uses, in the same order: the user's park or snooze first, then the agent's own needs-you report, then Canopy's reading when Canopy is on, then the state Daintree observed off the terminal. Sort by it rather than rebuilding it from `observedState`, which carries none of the user's decisions or read marks. It is an ordering, not a promise about what the agent is doing.
+
+`canopy` is present only when Canopy's reading is what placed the run in its band. It is a suggestion from the local model the user turned on, never an observation: show it as "read by Canopy", with `readAt` (epoch ms) for when the screen behind it was read. What it read follows from the band: an ask for `needs-you` (or `idle` once seen), a question wait that asks nothing for `review` (or `done` once seen), a screen standing still behind its spinner for `quiet`. On an ask, `ask` says which one Canopy saw: `"approval"` of something the agent is about to do, or a `"question"` only the user can answer. Both place the run the same way, but a policy can settle an approval and never a question. Placement covers the runs on the machine the plugin runs on: a plugin on a Remote Host sees that Host's.
+
+`quote` is the ask's question, verbatim from the screen and cut to 160 characters. It is text off a terminal, so it rides only for a plugin that declares `terminal:read` and either is a built-in or holds the user's lasting grant of it. Reading a list never raises the consent prompt: a plugin without the grant gets the note without the quote, and gets it from the next read or push once the user grants `terminal:read` by choosing **Allow and remember** at a [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows) prompt.
 
 ## `agents.interrupt`, `sendKeys`, `submit` — driving agents you launched
 
@@ -2863,7 +2875,7 @@ It validates argument shapes the way the real host does — `registerAction` des
 | `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
 | `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
 | `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
-| `focusedPanel` | `{ kind: null, agent: false, worktreeId: null }` | The focus `onDidChangeFocusedPanel` replays on subscribe. For a project plugin it counts as inside its own project, and `"portal"` reads as `kind: null`, as in production. |
+| `focusedPanel` | `{ kind: null, agent: false, worktreeId: null }` | The focus `onDidChangeFocusedPanel` replays on subscribe. For a project plugin it counts as inside its own project. The deprecated `"portal"` reads as `kind: null`, as in production. |
 | `projectPresence` | its own project, `"foreground"`, for a project plugin; none for an installed one | The open projects `onDidChangeProjectPresence` replays on subscribe. A project plugin replays its own project only, `"closed"` when it is not listed. |
 | `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`; its `inputLine`, when the fixture sets one, comes back unchanged. There is no rate limit and no byte cap. |
 | `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
@@ -2897,7 +2909,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 | `simulateTerminalLifecycleChange(event)` | Notifies `onDidChangeTerminalLifecycle` with the event re-projected through the production allowlist and frozen; a project plugin hears only events whose `workspaceId` is its own project. Throws on a malformed event. |
 | `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
 | `simulateAllAgentsChange(snapshot)` | Replaces what `agents.listAll()` returns and notifies `onDidChangeAllAgents` at once, ignoring its window. |
-| `simulateFocusedPanelChange(focus)` | Moves focus and notifies `onDidChangeFocusedPanel` at once, ignoring its window. A value equal to the one a subscriber last received is not repeated, as in production. |
+| `simulateFocusedPanelChange(focus)` | Moves focus and notifies `onDidChangeFocusedPanel` at once, ignoring its window. A value equal to the one a subscriber last received is not repeated, as in production. The deprecated `"portal"` reads as `kind: null`, so it arrives as no panel, or not at all after one. |
 | `simulateProjectPresenceChange(presence)` | Moves one project and notifies `onDidChangeProjectPresence` at once, ignoring its window; a project plugin hears only its own project. `"closed"` drops it from later replays. A state equal to the last one delivered for that project is not repeated, and an installed plugin is not told a project it never saw open has closed, as in production. |
 | `simulateTerminalScreen(terminalId, screen \| null)` | Sets what `terminals.readScreen(terminalId)` finds; `null` forgets the terminal, so it reads `not-found`. Every call that passes validation lands in `readScreenCalls` as `{ terminalId, lines, result }`. |
 | `simulateSendToAgentPick(terminalId \| null)` | What the picker "chooses" when `sendToAgent` has no `terminalId`; `null` (the default) cancels. A pane with `canDraft: false` refuses with its `draftRefusal`, an unknown one with `unknown-terminal`. |

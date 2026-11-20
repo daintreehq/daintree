@@ -179,6 +179,13 @@ export type BuiltInKeyAction =
   // Dev preview actions
   | "devPreview.reloadPreview"
 
+  // Diff viewer actions
+  | "diff.nextChange"
+  | "diff.previousChange"
+  | "diff.nextFile"
+  | "diff.previousFile"
+  | "diff.toggleViewed"
+
   // Action palette
   | "action.palette"
   | "action.palette.open"
@@ -197,6 +204,7 @@ export type BuiltInKeyAction =
   | "project.sleep"
   | "project.restart"
   | "project.sleepIdle"
+  | "project.sleepAll"
 
   // Remote Hosts (bound only where Remote Hosts is supported)
   | "host.switch"
@@ -385,6 +393,11 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "panel.diagnosticsMessages",
   "notifications.toggle",
   "devPreview.reloadPreview",
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
   "action.palette",
   "action.palette.open",
   "action.repeatLast",
@@ -400,6 +413,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "host.switch",
   "help.shortcuts",
   "help.shortcutsAlt",

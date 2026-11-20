@@ -5,6 +5,7 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   checkAccountKey: "cloud-hosts:check-account-key",
   addAccount: "cloud-hosts:add-account",
   replaceAccountKey: "cloud-hosts:replace-account-key",
+  allowAccountProvider: "cloud-hosts:allow-account-provider",
   renameAccount: "cloud-hosts:rename-account",
   removeAccount: "cloud-hosts:remove-account",
   validateAccount: "cloud-hosts:validate-account",

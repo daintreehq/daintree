@@ -36,6 +36,7 @@ describe("presetLaunchContent", () => {
     ["the fallback chain", { fallbacks: ["other", "third"] }],
     ["the rate-limit fallback switch", { fallbackOnRateLimit: true }],
     ["keeping the conversation", { keepConversationOnRateLimit: true }],
+    ["continuing at the limit's reset", { continueAtLimitReset: true }],
     ["the name", { name: "Z.ai (work)" }],
     ["the description", { description: "routes to Z.ai" }],
     ["the title", { displayTitle: "Z" }],
@@ -79,6 +80,9 @@ describe("presetLaunchContent", () => {
     // A stored screen mode no longer reaches a launch, so it is no part of one.
     const withLegacyMode = { ...preset, inlineMode: "off" } as AgentPreset;
     expect(presetLaunchContent(withLegacyMode)).toBe(presetLaunchContent(preset));
+    // Nor does a continuation switch left off (#17912).
+    const continuationOff = { ...preset, continueAtLimitReset: false };
+    expect(presetLaunchContent(continuationOff)).toBe(presetLaunchContent(preset));
   });
 });
 

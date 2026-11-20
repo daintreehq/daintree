@@ -387,7 +387,8 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       // validators this task would have wired.
       if (!store.get("mcpServer").enabled) return;
       const { mcpServerService } = await import("../services/McpServerService.js");
-      const { helpSessionService } = await import("../services/HelpSessionService.js");
+      const { helpSessionService, conversationOwnershipFor } =
+        await import("../services/HelpSessionService.js");
       // Register the help-token validator before start() so the very first
       // request can authenticate against a help session if the renderer
       // races ahead of us. (Also wired in HelpSessionService.ensureMcpServerReady
@@ -410,6 +411,10 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       );
       helpSessionService.setOnMcpSessionRepinned((token) =>
         mcpServerService.resetHelpTransports(token)
+      );
+      // What an Assistant launches follows its conversation (#17919).
+      helpSessionService.setConversationOwnershipListener(
+        conversationOwnershipFor(mcpServerService)
       );
       // Before the first session, so none opens without what keeps assistants
       // out of its reach (#13496).
@@ -544,6 +549,19 @@ export async function initGlobalServices(
     } catch (error) {
       console.error("[MAIN] Legacy audit ring import failed:", error);
     }
+  }
+
+  // The Claude usage readings an earlier launch saw (#17610), before a pty host
+  // can report a new one or Settings or MCP can ask. Here rather than deferred:
+  // the windowless Host starts its pty host and MCP before the deferred queue.
+  try {
+    const [{ restoreClaudeUsageObservations }, { appStateClaudeUsageStorage }] = await Promise.all([
+      import("../services/claude/ClaudeUsageObservations.js"),
+      import("../services/persistence/claudeUsageStore.js"),
+    ]);
+    restoreClaudeUsageObservations(appStateClaudeUsageStorage);
+  } catch (error) {
+    console.error("[MAIN] Claude usage readings restore failed:", error);
   }
 
   // Adaptive-recovery + watchdog E2E seams (#9599), gated on

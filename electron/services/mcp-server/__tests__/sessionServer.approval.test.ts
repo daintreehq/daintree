@@ -402,13 +402,15 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
-  // A target-picking tool's dialog is where the user picks the targets, so an
+  // A panel-picking tool's dialog is where the user picks the targets, so an
   // approval could never stand in for it. None is within the pane ceiling any
   // more — `terminal.killBatch` and `terminal.killAll` left MCP, and
   // `terminal.closeAll` is reserved for the assistant — so a pane is refused
-  // one outright rather than asked.
-  it("refuses a target-picking tool outright rather than asking for it", async () => {
+  // one outright rather than asked. The account add (#17079) is asked for, and
+  // its own checklist still follows: `tierAuth.test.ts` pins that.
+  it("refuses a panel-picking tool outright rather than asking for it", async () => {
     for (const id of Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES)) {
+      if (id === "agent.addAccount") continue;
       expect(PANE_APPROVAL_CEILING.has(id)).toBe(false);
     }
     const pane = paneServer("core");

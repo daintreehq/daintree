@@ -1,5 +1,10 @@
 import type { VoiceInputSettings } from "@shared/types";
-import { hasTranscriptionKey } from "@shared/config/voiceProviders";
+import { transcribesOnDevice, transcriptionProviderReady } from "@shared/config/voiceProviders";
+import {
+  isLocalModelReady,
+  readLocalModelStatus,
+  subscribeLocalModelStatus,
+} from "@/clients/localSpeechModelClient";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { isDragCancelEscape } from "@/lib/dragCancelEscape";
 import { keybindingService } from "@/services/KeybindingService";
@@ -20,9 +25,16 @@ const LOG_PREFIX = "[VoiceRecordingRuntime]";
 let service: VoiceRecordingServiceInstance | null = null;
 let loading: Promise<VoiceRecordingServiceInstance> | null = null;
 
-/** Configured means the selected provider has its own key; the cleanup key is separate. */
-export function isVoiceInputConfigured(settings: VoiceInputSettings): boolean {
-  return settings.enabled && hasTranscriptionKey(settings);
+/**
+ * Configured means the selected provider has what it transcribes with: its own
+ * key, or for on-device transcription, the model installed and checked (as
+ * this view last heard). The cleanup key is separate.
+ */
+export function isVoiceInputConfigured(
+  settings: VoiceInputSettings,
+  localModelReady: boolean = isLocalModelReady()
+): boolean {
+  return settings.enabled && transcriptionProviderReady(settings, localModelReady);
 }
 
 /**
@@ -253,8 +265,14 @@ export function startVoiceRecordingRuntime(): () => void {
     const readAt = generation;
     voiceInput
       .getSettings()
-      .then((settings) => {
+      .then(async (settings) => {
         if (disposed || service || generation !== readAt) return;
+        // On-device transcription is ready once its model is: ask main, which
+        // checks the files, before deciding.
+        if (settings.enabled && transcribesOnDevice(settings.transcriptionProvider)) {
+          await readLocalModelStatus();
+          if (disposed || service || generation !== readAt) return;
+        }
         if (isVoiceInputConfigured(settings)) load(settings);
       })
       .catch((error: unknown) => {
@@ -274,6 +292,17 @@ export function startVoiceRecordingRuntime(): () => void {
     if (!loadRequested) readSettings();
   };
   window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+  // A model downloaded from any view makes on-device dictation ready here too.
+  // Only the change counts: this view's own reads publish the status as well.
+  let localModelReady = isLocalModelReady();
+  unsubscribers.push(
+    subscribeLocalModelStatus((status) => {
+      const ready = status.state === "ready";
+      if (ready === localModelReady) return;
+      localModelReady = ready;
+      if (ready) handleSettingsChanged();
+    })
+  );
   unsubscribers.push(() =>
     window.removeEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged)
   );

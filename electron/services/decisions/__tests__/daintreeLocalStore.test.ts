@@ -291,6 +291,106 @@ describe("DaintreeLocalStore", () => {
     expect(plan.map((step) => step.detail).join("\n")).toContain("decisions_questions_status_idx");
   });
 
+  it("reads only the questions still missing a session on this host, never the linked history (#17783)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const unlinked = (over: Partial<QuestionOrigin>) =>
+      origin({ agent_kind: "codex", agent_session_id: null, ...over });
+    await store.commitNewQuestion(
+      row("open", 1, { origin: unlinked({}), local_status: "open" }),
+      item("o1", "open")
+    );
+    // A delivered question still counts: a correction can reopen it after its pane is gone.
+    await store.commitNewQuestion(
+      row("delivered", 2, {
+        origin: unlinked({ agent_kind: "claude" }),
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+      }),
+      item("o2", "delivered")
+    );
+    await store.commitNewQuestion(
+      row("empty", 3, { origin: unlinked({ agent_session_id: "" }) }),
+      item("o3", "empty")
+    );
+    await store.commitNewQuestion(
+      row("remote", 4, { origin: unlinked({ host_id: "host-remote" }) }),
+      item("o4", "remote")
+    );
+    await store.commitNewQuestion(
+      row("gemini", 5, { origin: unlinked({ agent_kind: "gemini" }) }),
+      item("o5", "gemini")
+    );
+    const columns = (
+      sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
+        name: string;
+      }[]
+    )
+      .map((c) => c.name)
+      .filter((name) => name !== "question_id" && name !== "alias");
+    sqlite
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+         INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
+         SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
+         WHERE question_id = 'open'`
+      )
+      .run();
+    // Statistics taken while all of them still waited for a session, so they
+    // overstate the index by ten thousand rows once those are linked.
+    sqlite.exec("ANALYZE");
+    // Linked, and unable even to decode: reading one would throw.
+    sqlite
+      .prepare(
+        `UPDATE decisions_questions SET agent_session_id = 'session-' || alias,
+           attachment_digests = 'not json' WHERE question_id LIKE 'history-%'`
+      )
+      .run();
+
+    let materialized = 0;
+    const prepare = sqlite.prepare.bind(sqlite);
+    const prepared: string[] = [];
+    vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+      const statement = prepare(source);
+      if (!/FROM decisions_questions/.test(source)) return statement;
+      prepared.push(source);
+      const all = statement.all.bind(statement);
+      statement.all = ((...args: unknown[]) => {
+        const rows = all(...args) as unknown[];
+        materialized += rows.length;
+        return rows;
+      }) as typeof statement.all;
+      return statement;
+    }) as typeof sqlite.prepare);
+
+    const ids = async (hostId: string, kinds: string[]) =>
+      (await store.listSessionlessQuestions(hostId, kinds)).map((q) => q.question_id);
+    expect(await ids("host-local", ["claude", "codex"])).toEqual(["open", "delivered", "empty"]);
+    expect(materialized).toBe(3);
+    expect(await ids("host-local", [])).toEqual([]);
+    expect(prepared).toHaveLength(1);
+    const plan = (
+      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local") as {
+        detail: string;
+      }[]
+    )
+      .map((step) => step.detail)
+      .join("\n");
+    expect(plan).toContain(
+      "USING INDEX decisions_questions_missing_session_idx (origin_host_id=?)"
+    );
+    expect(plan).not.toContain("TEMP B-TREE");
+
+    expect(await ids("host-local", ["codex", "claude", "codex"])).toEqual([
+      "open",
+      "delivered",
+      "empty",
+    ]);
+    expect(prepared).toHaveLength(1);
+    expect(await ids("host-remote", ["codex"])).toEqual(["remote"]);
+    expect(await ids("host-local", ["gemini"])).toEqual(["gemini"]);
+    expect(await ids("host-local", ["it's"])).toEqual([]);
+  });
+
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const other = reader();
@@ -1357,6 +1457,64 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
 
     expect(heard).toEqual([]);
     expect(await store.deletedQuestionIds()).toEqual(new Set());
+  });
+
+  it("reads applied deletions through an index of them alone, however long the event history (#17791)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const created = sqlite.prepare(
+      `INSERT INTO decisions_inbound_events
+         (seq, event_id, event_type, json, received_at, processed_at)
+       VALUES (?, ?, 'decision.created', '{}', 1, 2)`
+    );
+    sqlite.transaction(() => {
+      for (let seq = 1; seq <= 500; seq++) created.run(seq, `c${seq}`);
+    })();
+    const prepare = vi.spyOn(sqlite, "prepare");
+
+    const empty = await store.deletedQuestionIds();
+    const read = prepare.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("'decision.deleted'"));
+    prepare.mockRestore();
+    expect(empty).toEqual(new Set());
+    expect(read).toBeDefined();
+    const usesIndex = /USING (COVERING )?INDEX decisions_inbound_events_deleted_idx\b/;
+    const plan = () =>
+      (sqlite.prepare(`EXPLAIN QUERY PLAN ${read}`).all() as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+    expect(plan()).toMatch(usesIndex);
+
+    // A few deletions, one applied, one refused and one unreadable, still read
+    // through it and still name only the question actually withdrawn.
+    await store.commitNewQuestion(row("q1", 1, { local_status: "open" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q2", 2, { local_status: "cancelled", history_only: true }),
+      item("o2", "q2")
+    );
+    await store.insertEvent(deletion(501, "q1"));
+    await store.insertEvent(deletion(502, "q2"));
+    await store.insertEvent({ ...deletion(503, null), json: "not json" });
+    await store.updateQuestion("q1", { local_status: "cancelled", remote_event_seq: 501 });
+    for (const seq of [501, 502, 503]) await store.markEventProcessed(seq, 5);
+    // Neither an unprocessed deletion nor another processed kind of event belongs in it.
+    await store.insertEvent(deletion(504, "q-pending"));
+    await store.insertEvent({
+      ...deletion(505, "q1"),
+      event_type: "decision.answered",
+      json: JSON.stringify({ seq: 505, event_type: "decision.answered", question_id: "q1" }),
+    });
+    await store.markEventProcessed(505, 5);
+    expect(await store.deletedQuestionIds()).toEqual(new Set(["q1"]));
+    expect(plan()).toMatch(usesIndex);
+    // The same once `PRAGMA optimize` has gathered statistics, which also
+    // count the index's rows: the three processed deletions alone.
+    sqlite.exec("ANALYZE");
+    expect(plan()).toMatch(usesIndex);
+    const stat = sqlite
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'decisions_inbound_events_deleted_idx'")
+      .get() as { stat: string } | undefined;
+    expect(stat?.stat.split(" ")[0]).toBe("3");
   });
 });
 

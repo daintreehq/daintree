@@ -5,8 +5,10 @@ import type {
 } from "../../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionCancelResult,
+  DecisionQuestionLastRead,
   DecisionQuestionListItem,
   DecisionQuestionReference,
+  DecisionQuestionStatus,
 } from "../../../shared/types/decisionsQuestion.js";
 import {
   boundedDetail,
@@ -37,10 +39,13 @@ import {
   HostQuestionCancelResultSchema,
   HostQuestionContentResultSchema,
   HostQuestionImagePartResultSchema,
+  HostQuestionAskSchema,
   HostQuestionItemSchema,
   HostQuestionListSchema,
+  HostQuestionListV2Schema,
   HostQuestionSummariesResultSchema,
   HostQuestionsChangedPayloadSchema,
+  HostQuestionsChangedV2PayloadSchema,
   MAX_HOST_IMAGE_PART_BYTES,
   type HostQuestionListPayload,
 } from "./questionSchemas.js";
@@ -94,7 +99,46 @@ interface HostQuestionsReport {
   session: DecisionsHostSession;
   owner: string;
   questionHostId: string;
-  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /** What each in Needs you asks now (#17895), by question id; absent from a Host from before it. */
+  asks?: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * A Host's questions as this computer last read them over its link (#17946),
+ * under one owner identity and one Host device: what the owner dismisses one
+ * by while the Host is away.
+ */
+interface HostReads {
+  owner: string;
+  deviceId: string | null;
+  questions: Map<string, HostQuestionRead>;
+}
+
+interface HostQuestionRead {
+  /** When the read went out, so one answered after a later read can't replace it. */
+  turn: number;
+  /** What it found; null once the Host said it no longer holds the question. */
+  found: {
+    reference: DecisionQuestionReference;
+    revision: number;
+    alias: number;
+    status: DecisionQuestionStatus;
+    at: number;
+  } | null;
+}
+
+/** A content read as it went out to a Host: its question, who it was for, and its turn. */
+interface ReadGoingOut {
+  reference: DecisionQuestionReference;
+  owner: string | null;
+  deviceId: string | null;
+  turn: number;
+}
+
+/** The Decisions device a Host reports itself enrolled as; null before it reports one. */
+function deviceOf(runtime: DecisionsHostRuntime | undefined): string | null {
+  return runtime === undefined || runtime.state === "not-enrolled" ? null : runtime.deviceId;
 }
 
 function ownerKey(state: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">): string {
@@ -295,7 +339,25 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly questionTurns = new Map<string, number>();
   /** Sessions whose Host answered a read of its questions UNSUPPORTED: from before #17230. */
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
+  private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
+  /**
+   * Reads of the list with its asks out, per session. A Host answers one with
+   * its list as it stands then, after any v1 push it sent before the read
+   * reached it, so such a push never supersedes the read.
+   */
+  private readonly readingAsks = new WeakMap<DecisionsHostSession, number>();
+  /**
+   * Sessions whose Host lists asks to this Shell: from then on it pushes only
+   * v2, so a v1 push that arrives later was sent before and is stale.
+   */
+  private readonly listsAsks = new WeakSet<DecisionsHostSession>();
+  /** The newest v2 list each session has delivered, by its `seq`. */
+  private readonly listSeqs = new WeakMap<DecisionsHostSession, number>();
   private readonly questionListeners = new Set<() => void>();
+  /** Each Host's questions as this computer last read them (#17946), kept when its link closes. */
+  private readonly lastReads = new Map<string, HostReads>();
+  private readTurns = 0;
   private readonly now: () => number;
 
   constructor(private readonly deps: DecisionsHostsClientDeps) {
@@ -317,6 +379,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       for (const unwire of [...this.unwires]) unwire();
       this.listeners.clear();
       this.questionListeners.clear();
+      this.lastReads.clear();
     };
   }
 
@@ -332,6 +395,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   }
 
   announceOwnerState(): void {
+    // Read for an owner identity this computer no longer speaks as: none of it stands, nor for that one again.
+    const owner = ownerKeyOf(this.deps.ownerState());
+    for (const [hostId, reads] of [...this.lastReads]) {
+      if (reads.owner !== owner) this.lastReads.delete(hostId);
+    }
     for (const { hostId } of this.deps.hosts()) {
       const session = this.deps.sessionFor(hostId);
       if (session?.isOpen) void this.announce(hostId, session);
@@ -362,9 +430,13 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     const owner = ownerKeyOf(this.deps.ownerState());
     const hosts = this.deps.hosts();
     const present = new Set(hosts.map((host) => host.hostId));
-    // A Host taken off the host list takes what it reported with it.
+    // A Host taken off the host list takes what it reported, and what was read of it, with it.
     for (const hostId of [...this.questionReports.keys()]) {
       if (!present.has(hostId)) this.questionReports.delete(hostId);
+    }
+    for (const [hostId, reads] of [...this.lastReads]) {
+      // Read for another owner identity: nothing of it stands for this one, nor for that one again.
+      if (!present.has(hostId) || reads.owner !== owner) this.lastReads.delete(hostId);
     }
     if (owner === null) return [];
     const heard: DecisionsHostQuestions[] = [];
@@ -381,6 +453,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         connected: report.session.isOpen && this.deps.sessionFor(hostId) === report.session,
         questionHostId: report.questionHostId,
         questions: report.questions,
+        ...(report.asks !== undefined ? { asks: report.asks } : {}),
       });
     }
     const claims = new Map<string, number>();
@@ -406,12 +479,109 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   ): Promise<HostCallOutcome<DecisionsHostQuestionAnswer<R>>> | null {
     const hostId = this.hostAsking(questionHostId);
     if (hostId === null) return null;
+    const going: ReadGoingOut | null =
+      read.read === "content"
+        ? {
+            reference: read.reference,
+            owner: ownerKeyOf(this.deps.ownerState()),
+            deviceId: deviceOf(this.reports.get(hostId)?.runtime),
+            turn: ++this.readTurns,
+          }
+        : null;
     return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read)).then(
-      (answered): HostCallOutcome<DecisionsHostQuestionAnswer<R>> =>
-        answered.ok && !answersRead(read, answered.value)
-          ? { ok: false, failure: "unexpected-answer" }
-          : (answered as HostCallOutcome<DecisionsHostQuestionAnswer<R>>)
+      (answered): HostCallOutcome<DecisionsHostQuestionAnswer<R>> => {
+        if (!answered.ok) return answered;
+        if (!answersRead(read, answered.value)) return { ok: false, failure: "unexpected-answer" };
+        if (going !== null) {
+          this.noteRead(hostId, going, answered.value as DecisionQuestionContentResultLike);
+        }
+        return answered as HostCallOutcome<DecisionsHostQuestionAnswer<R>>;
+      }
     );
+  }
+
+  lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null {
+    const host = this.hostQuestions().find((heard) => heard.questionHostId === reference.hostId);
+    const standing = host?.questions.find((question) =>
+      sameReference(question.reference, reference)
+    )?.standing;
+    // Open for the person, or not sent yet, as the Host last listed it: an answered question
+    // waiting on a reply, or one already settled, has nothing to dismiss.
+    const waiting =
+      standing !== undefined &&
+      ((standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued");
+    // Only while its link is down: a Host connected answers for itself, whatever it says.
+    if (host === undefined || this.deps.sessionFor(host.hostId)?.isOpen || !waiting) return null;
+    const reads = this.lastReads.get(host.hostId);
+    const read = reads?.questions.get(reference.questionId)?.found;
+    const current =
+      reads !== undefined &&
+      reads.owner === ownerKeyOf(this.deps.ownerState()) &&
+      reads.deviceId === deviceOf(this.reports.get(host.hostId)?.runtime);
+    if (!current || read == null || !sameReference(read.reference, reference)) {
+      return { result: "not-read" };
+    }
+    switch (read.status) {
+      case "open":
+        return { result: "read", revision: read.revision, alias: read.alias, readAt: read.at };
+      case "queued":
+        return { result: "not-sent" };
+      // Read as moved on where the list still has it waiting: which revision it waits at is unknown.
+      default:
+        return { result: "not-read" };
+    }
+  }
+
+  /**
+   * Keeps what a content read found, while the Host still answers for the
+   * same owner as the same device and its questions still route to it, unless
+   * a read that went out later already landed. One that went out to the owner
+   * or device before is dropped untouched. A question its Host no longer
+   * holds is remembered as gone, so an earlier read landing later can't bring it back.
+   */
+  private noteRead(
+    hostId: string,
+    going: ReadGoingOut,
+    result: DecisionQuestionContentResultLike
+  ): void {
+    const { reference } = going;
+    const owner = ownerKeyOf(this.deps.ownerState());
+    const deviceId = deviceOf(this.reports.get(hostId)?.runtime);
+    if (
+      owner === null ||
+      going.owner !== owner ||
+      going.deviceId !== deviceId ||
+      this.hostAsking(reference.hostId) !== hostId
+    ) {
+      return;
+    }
+    if (result.result !== "read" && result.result !== "not-found") return;
+    let reads = this.lastReads.get(hostId);
+    if (reads !== undefined && (reads.owner !== owner || reads.deviceId !== deviceId)) {
+      this.lastReads.delete(hostId);
+      reads = undefined;
+    }
+    const known = reads?.questions.get(reference.questionId);
+    if (known !== undefined && known.turn > going.turn) return;
+    if (reads === undefined) {
+      reads = { owner, deviceId, questions: new Map() };
+      this.lastReads.set(hostId, reads);
+    }
+    if (result.result === "not-found") {
+      reads.questions.set(reference.questionId, { turn: going.turn, found: null });
+      return;
+    }
+    const { question } = result;
+    reads.questions.set(reference.questionId, {
+      turn: going.turn,
+      found: {
+        reference: question.reference,
+        revision: question.revision,
+        alias: question.alias,
+        status: question.status,
+        at: this.now(),
+      },
+    });
   }
 
   cancelHostQuestion(
@@ -464,12 +634,34 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     const turn = (this.questionTurns.get(hostId) ?? 0) + 1;
     this.questionTurns.set(hostId, turn);
     let raw: unknown;
+    let withAsks = !this.beforeAsks.has(session);
     try {
-      raw = await session.call(
-        DecisionsLinkMethod.QUESTIONS,
-        { read: "list" },
-        { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
-      );
+      if (withAsks) {
+        this.readingAsks.set(session, (this.readingAsks.get(session) ?? 0) + 1);
+        try {
+          raw = await session.call(
+            DecisionsLinkMethod.QUESTION_LIST_V2,
+            {},
+            { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+          );
+        } catch (error) {
+          // A Host from before #17895 lists its questions without what each asks.
+          if (codeOf(error) !== "UNSUPPORTED") throw error;
+          this.beforeAsks.add(session);
+          withAsks = false;
+        } finally {
+          const out = (this.readingAsks.get(session) ?? 1) - 1;
+          if (out > 0) this.readingAsks.set(session, out);
+          else this.readingAsks.delete(session);
+        }
+      }
+      if (!withAsks) {
+        raw = await session.call(
+          DecisionsLinkMethod.QUESTIONS,
+          { read: "list" },
+          { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+        );
+      }
     } catch (error) {
       // A Host from before #17230 lists none, whatever an earlier build of it reported;
       // anything else is read again on the next announcement.
@@ -478,6 +670,16 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         if (this.deps.sessionFor(hostId) === session && this.questionReports.delete(hostId)) {
           this.questionsChanged();
         }
+      }
+      return;
+    }
+    if (withAsks) {
+      // Ordered by the Host's own count, not by turns: a push can arrive after a newer reply.
+      const parsed = HostQuestionListV2Schema.safeParse(raw);
+      if (!parsed.success) return;
+      this.listsAsks.add(session);
+      if (this.listCounts(hostId, session, parsed.data)) {
+        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
       }
       return;
     }
@@ -494,20 +696,56 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private hearQuestions(
     hostId: string,
     session: DecisionsHostSession,
-    payload: HostQuestionListPayload
+    payload: HostQuestionListPayload,
+    rawAsks?: readonly unknown[]
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
     if (owner === null || payload.hostId === null || !this.takesList(hostId, session, payload)) {
       return;
     }
     const questionHostId = payload.hostId;
-    const questions: Omit<DecisionQuestionListItem, "remoteHost">[] = [];
+    const questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[] = [];
     for (const raw of payload.questions) {
       const item = HostQuestionItemSchema.safeParse(raw);
       if (item.success && item.data.reference.hostId === questionHostId) questions.push(item.data);
     }
-    this.questionReports.set(hostId, { session, owner, questionHostId, questions });
+    // Each ask read on its own, and kept only for a question the list kept.
+    let asks: Map<string, string | null> | undefined;
+    if (rawAsks !== undefined) {
+      asks = new Map();
+      const listed = new Set(questions.map((question) => question.reference.questionId));
+      for (const raw of rawAsks) {
+        const ask = HostQuestionAskSchema.safeParse(raw);
+        if (ask.success && listed.has(ask.data.questionId)) {
+          asks.set(ask.data.questionId, ask.data.ask);
+        }
+      }
+    }
+    this.questionReports.set(hostId, {
+      session,
+      owner,
+      questionHostId,
+      questions,
+      ...(asks !== undefined ? { asks } : {}),
+    });
     this.questionsChanged();
+  }
+
+  /**
+   * Whether a v2 list is newer than any `session` delivered, taking it as the
+   * newest when it is. Only a list counts: one that serves none (`hostId`
+   * null), or was served to another owner, changes nothing, so it never puts
+   * an older list still on its way out of date.
+   */
+  private listCounts(
+    hostId: string,
+    session: DecisionsHostSession,
+    payload: HostQuestionListPayload & { seq: number }
+  ): boolean {
+    if (payload.hostId === null || !this.takesList(hostId, session, payload)) return false;
+    if (payload.seq <= (this.listSeqs.get(session) ?? 0)) return false;
+    this.listSeqs.set(session, payload.seq);
+    return true;
   }
 
   /** A list heard over the Host's current link, served to the owner this computer speaks as now. */
@@ -555,15 +793,31 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       (payload) => {
         // A replaced link's list, or one served to another owner, moves nothing: not even a read's turn.
         if (!this.takesList(hostId, session, payload)) return null;
-        // Newer than any read still waiting for its answer.
-        this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        // Sent before the Host knew this Shell reads asks: what it listed since is newer.
+        if (this.listsAsks.has(session)) return null;
+        // Newer than any read still waiting for its answer, except one of the list with its asks.
+        if (!this.readingAsks.has(session)) {
+          this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        }
         this.hearQuestions(hostId, session, payload);
+        return null;
+      }
+    );
+    const offQuestionsV2 = session.registerCallHandler(
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V2,
+      HostQuestionsChangedV2PayloadSchema,
+      (payload) => {
+        if (!this.takesList(hostId, session, payload)) return null;
+        this.listsAsks.add(session);
+        if (!this.listCounts(hostId, session, payload)) return null;
+        this.hearQuestions(hostId, session, payload, payload.asks);
         return null;
       }
     );
     const unwire = () => {
       offReport();
       offQuestions();
+      offQuestionsV2();
       offClose();
       this.unwires.delete(unwire);
     };
@@ -632,6 +886,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     runtime: DecisionsHostRuntime
   ): void {
     if (!session.isOpen) return;
+    // Another Decisions device now: nothing read of the one before stands for it, nor if it returns.
+    const reads = this.lastReads.get(hostId);
+    if (reads !== undefined && reads.deviceId !== deviceOf(runtime)) this.lastReads.delete(hostId);
     this.reports.set(hostId, { session, runtime, at: this.now() });
     this.changed();
     // Whether its questions are listed follows what it reports of its enrollment.

@@ -1486,6 +1486,21 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               waitingReason: {
                 type: "string",
               },
+              updateInstalled: {
+                type: "object",
+                properties: {
+                  observedAt: {
+                    type: "number",
+                  },
+                  namesRestart: {
+                    type: "boolean",
+                  },
+                },
+                required: ["observedAt", "namesRestart"],
+                additionalProperties: false,
+                description:
+                  'Claude Code showed "Update installed" this run: when, and if its text named /restart.',
+              },
               lastTransitionAt: {
                 type: "number",
               },

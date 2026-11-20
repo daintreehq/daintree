@@ -24,7 +24,7 @@ import { PluginGrantSwitch } from "./PluginGrantSwitch";
 import { PluginPresetGrants } from "./PluginPresetGrants";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FactSeparator } from "@/components/ui/FactSeparator";
-import { describeCatalogRepo } from "@shared/utils/pluginInstallSource";
+import { describeCatalogRepo, describeCatalogSource } from "@shared/utils/pluginInstallSource";
 import {
   SettingsSubtabBar,
   subtabPanelProps,
@@ -748,7 +748,24 @@ export function PluginDetailPane({
                   — the one fact the Dev badge implies but never states. A
                   reload action would be the other half, and needs a runtime
                   operation that does not exist yet. */}
-                {plugin.catalog && !plugin.devMode && (
+                {plugin.catalog && !plugin.devMode && plugin.catalog.sourceUrl !== undefined && (
+                  <p
+                    className="text-2xs text-text-secondary mt-0.5 break-words"
+                    data-testid="plugin-catalog-listing"
+                  >
+                    Listed by{" "}
+                    <span className="font-mono break-all select-text">
+                      {describeCatalogSource(plugin.catalog.sourceUrl)}
+                    </span>{" "}
+                    from{" "}
+                    <span className="font-mono break-all select-text">
+                      {describeCatalogRepo(plugin.catalog.repo)}
+                    </span>
+                    , reviewed by its curator for its source and bytes, not by Daintree. Updates
+                    come from that catalog.
+                  </p>
+                )}
+                {plugin.catalog && !plugin.devMode && plugin.catalog.sourceUrl === undefined && (
                   <p
                     className="text-2xs text-text-secondary mt-0.5 break-words"
                     data-testid="plugin-catalog-listing"

@@ -2166,6 +2166,41 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(twice).toHaveBeenCalledTimes(1);
     });
 
+    it("reports a seeded band and Canopy note, quoting Canopy only with terminal:read", async () => {
+      const canopy = { readAt: 5, ask: "question" as const, quote: "Which branch?" };
+      const placed = { ...panes[0]!, band: "needs-you" as const, canopy };
+      const run = {
+        workspaceId: "12345678-1234-4abc-8def-123456789abc",
+        workspaceKind: "scratch" as const,
+        terminalId: "t-1",
+        band: "needs-you" as const,
+        canopy: { ...canopy, seen: false } as typeof canopy,
+      };
+      const seed = { agents: [run], degraded: false, lastSuccessfulAt: 1 };
+
+      const reader = createMockHost({
+        capabilities: ["agent:read", "terminal:read"],
+        agents: [placed],
+        allAgents: seed,
+      });
+      expect((await reader.agents.list())[0]).toMatchObject({ band: "needs-you", canopy });
+      const listed = (await reader.agents.listAll()).agents[0]!;
+      expect(listed.canopy).toEqual(canopy);
+      expect(Object.isFrozen(listed.canopy)).toBe(true);
+
+      const blind = createMockHost({ agents: [placed] });
+      const pane = (await blind.agents.list())[0]!;
+      expect(pane.band).toBe("needs-you");
+      expect(pane.canopy).toEqual({ readAt: 5, ask: "question" });
+      const pushed: unknown[] = [];
+      await blind.onDidChangeAllAgents((s) => pushed.push(s), { debounceMs: 0 });
+      blind.simulateAllAgentsChange(seed);
+      const blindRun = (await blind.agents.listAll()).agents[0]!;
+      expect(blindRun.band).toBe("needs-you");
+      expect(blindRun.canopy).toEqual({ readAt: 5, ask: "question" });
+      expect(pushed).toHaveLength(1);
+    });
+
     it("onDidChangeFocusedPanel gates, replays and dedupes like production", async () => {
       expect(() => createMockHost().onDidChangeFocusedPanel(() => {})).toThrow(
         /PERMISSION_REQUIRED:.*panel:focus-read/
@@ -2194,7 +2229,25 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(received).toHaveLength(2);
     });
 
-    it("onDidChangeFocusedPanel hides the Portal from a project plugin and survives a throw", async () => {
+    it("onDidChangeFocusedPanel never delivers the retired portal kind to an installed plugin", async () => {
+      const host = createMockHost({
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "portal", agent: false, worktreeId: "w" },
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeFocusedPanel((f) => received.push(f));
+      await Promise.resolve();
+      host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
+
+      expect(received).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
+      ]);
+    });
+
+    it("onDidChangeFocusedPanel reads the retired portal kind as no panel and survives a throw", async () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       const host = createMockHost({
         pluginId: `project__${"a".repeat(64)}__acme.board`,
@@ -2208,10 +2261,12 @@ describe("createMockHost production-parity validation (#10617)", () => {
       });
       await Promise.resolve();
       host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
 
       expect(received).toEqual([
         { kind: null, agent: false, worktreeId: null },
         { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
       ]);
       expect(errors).toHaveBeenCalled();
 

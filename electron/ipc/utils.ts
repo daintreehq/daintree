@@ -665,6 +665,20 @@ export function broadcastToProjectRenderersExcept(
   );
 }
 
+/**
+ * {@link broadcastToProjectRenderersExcept} for this machine's own views only,
+ * for a terminal placed in no project on purpose (#17926): no remote view is
+ * bound to it, and the unscoped remote fallback would push its output to
+ * every Shell.
+ */
+export function broadcastToLocalRenderersExcept(
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  ...args: unknown[]
+): void {
+  deliverToLocalProjectViews(null, exclude, channel, args);
+}
+
 function deliverToLocalProjectViews(
   projectId: string | null,
   exclude: ReadonlySet<number> | null,

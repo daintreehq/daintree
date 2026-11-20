@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginCapabilityConfirmDialog,
+  presetBypassLabel,
   presetLaunchTitleFor,
 } from "../PluginCapabilityConfirmDialog";
 import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
@@ -53,14 +54,14 @@ const summary: PluginPresetLaunchSummary = {
   source: "project",
   args: ["--model", "glm"],
   dangerousMode: "inherit",
-  skipsPermissions: true,
+  permissionLevel: "skip",
   envNames: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
   fallbacks: [
     {
       presetName: "Backup",
       args: ["--fast"],
       dangerousMode: "on",
-      skipsPermissions: true,
+      permissionLevel: "skip",
       envNames: ["BACKUP_KEY"],
     },
   ],
@@ -109,6 +110,30 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     expect(text).toContain("--fast");
     expect(text).toContain("BACKUP_KEY=••••");
     expect(text).toContain("Skipped: the preset turns bypass on");
+  });
+
+  it("says when the preset's panes continue by themselves at a usage limit (#17912)", () => {
+    act(() => {
+      void ask("preset-continue", {
+        ...summary,
+        agentId: "codex",
+        agentName: "Codex",
+        source: "custom",
+        continuesAtLimitReset: true,
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Continues by itself once the limit resets"
+    );
+  });
+
+  it("says nothing about continuing for a preset that doesn't", () => {
+    act(() => {
+      void ask("preset-no-continue");
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).not.toContain("once the limit resets");
   });
 
   it("answers approved-and-pin on allow and rejected on deny", async () => {
@@ -163,5 +188,39 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     });
     await expect(second).resolves.toBe("rejected");
     expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+  });
+});
+
+describe("presetBypassLabel — Auto (#17435)", () => {
+  it("names Auto whether the preset sets it or inherits it, and never calls it skipped", () => {
+    expect(presetBypassLabel({ dangerousMode: "auto", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: the preset turns on Codex's Auto mode"
+    );
+    expect(presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: from Codex's settings"
+    );
+  });
+
+  it("names the CLI default, not a promise to ask, when Daintree adds no flag", () => {
+    for (const label of [
+      presetBypassLabel({ dangerousMode: "auto", permissionLevel: "cli-default" }, "Gemini"),
+      presetBypassLabel({ dangerousMode: "off", permissionLevel: "cli-default" }, "Claude"),
+      presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "cli-default" }, "Claude"),
+    ]) {
+      expect(label.startsWith("CLI default: ")).toBe(true);
+    }
+  });
+
+  it("shows a fallback's Auto in the dialog itself", () => {
+    act(() => {
+      void ask("preset-auto", {
+        ...summary,
+        fallbacks: [{ ...summary.fallbacks[0]!, dangerousMode: "auto", permissionLevel: "auto" }],
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Auto: the preset turns on Claude's Auto mode"
+    );
   });
 });

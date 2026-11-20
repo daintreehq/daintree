@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import { rehypeHeadingIds } from "./headingIds";
+import { rehypeMarkdownAlerts } from "./markdownAlerts";
 import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
 import { MARKDOWN_REMARK_PLUGINS } from "./markdownRemarkPlugins";
 import { rehypeTableHeadings } from "./MarkdownTable";
@@ -37,7 +38,8 @@ export const MARKDOWN_FONT_SIZE_TOKEN = {
 /** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
 
-const REHYPE_PLUGINS = [rehypeHeadingIds, rehypeTableHeadings];
+// Alerts go last: see `rehypeMarkdownAlerts`.
+const REHYPE_PLUGINS = [rehypeHeadingIds, rehypeTableHeadings, rehypeMarkdownAlerts];
 
 export interface MarkdownDocumentProps {
   /** Markdown source text */

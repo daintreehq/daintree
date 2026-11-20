@@ -3,13 +3,15 @@ import {
   cloudMachineLabel,
   type CloudHostStatus,
   type CloudLifetimeModel,
+  type CloudKeepAwake,
+  type CloudLinkedIdleStop,
   type CloudProviderInfo,
   type CloudProviderPersistence,
 } from "@shared/types/cloudHosts";
 import type { HostIdleObservation } from "@shared/types/hostIdle";
 
 /** The parts of a provider's declaration that decide what stopping and deleting mean. */
-export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities">;
+export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities" | "hostIdleStop">;
 
 /** The provider a host's machine runs on, or null while it isn't registered. */
 export function cloudProviderFor<P extends { id: string }>(
@@ -18,6 +20,17 @@ export function cloudProviderFor<P extends { id: string }>(
 ): P | null {
   if (!status) return null;
   return providers.find((provider) => provider.id === status.providerId) ?? null;
+}
+
+/**
+ * What a provider is called: the registered one's own name, else what its
+ * plugin's provider was last known as (#17353), else its id.
+ */
+export function cloudProviderName(
+  provider: Pick<CloudProviderInfo, "name"> | null,
+  subject: Pick<CloudHostStatus, "providerId" | "pluginProvider">
+): string {
+  return provider?.name ?? subject.pluginProvider?.providerName ?? subject.providerId;
 }
 
 /** Whether a stopped machine on this provider still bills for compute; false when it isn't known. */
@@ -46,15 +59,36 @@ export function stoppedBillingSentence(provider: CloudProviderTerms | null): str
     const stopPaying = provider.capabilities.deletion
       ? "remove the host and delete its machine"
       : `delete the machine in ${provider.name}'s console`;
-    const bills =
-      provider.capabilities.persistence.stoppedBilling ??
-      `${provider.name} keeps billing a stopped machine for compute until it's deleted.`;
-    return `${bills} To stop paying for it, ${stopPaying}.`;
+    return `${stoppedComputeBilling(provider)} To stop paying for it, ${stopPaying}.`;
   }
   if (!provider.capabilities.persistence.stoppedStorageBilled) return null;
   const parked =
     provider.capabilities.lifetime.kind === "idle-sleep" ? "stopped or asleep" : "stopped";
   return `${provider.name} bills only for its disk while it's ${parked}.`;
+}
+
+/** What starting a machine bills, said where the start is decided. */
+export function startBillingSentence(
+  status: Pick<CloudHostStatus, "accountName" | "hourlyDollars" | "machine">,
+  provider: CloudProviderTerms | null
+): string {
+  const hourly =
+    status.hourlyDollars !== null
+      ? `about $${status.hourlyDollars.toFixed(3)} an hour`
+      : "for the time it runs";
+  const stopped = stoppedBillingSentence(provider);
+  // Starting doesn't start the billing there: the stopped machine is billed already.
+  return stopped && status.machine === "stopped"
+    ? `It bills ${status.accountName} ${hourly} while it runs. ${stopped}`
+    : `Starting it bills ${status.accountName} ${hourly} while it runs.`;
+}
+
+/** That a stopped machine keeps billing for compute, in the provider's own words where it gave them. */
+function stoppedComputeBilling(provider: CloudProviderTerms): string {
+  return (
+    provider.capabilities.persistence.stoppedBilling ??
+    `${provider.name} keeps billing a stopped machine for compute until it's deleted.`
+  );
 }
 
 /** That a stopped machine on this provider is still billing, for a line of short facts. */
@@ -142,6 +176,17 @@ export function clockTime(iso: string | null): string | null {
     : at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
+/** "Wed 26 Nov, 15:00" in this device's locale, for a time up to weeks away. */
+export function dayTime(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** What the host's idle time counts from, and where it is kept. */
 export const IDLE_TIME_COUNTED =
   "Counted on the host from the last time an agent there was working or waiting, or a window showed it, so it runs with this device away";
@@ -172,6 +217,163 @@ export function idleClockSentence(
       : `Idle since ${since}. It stops by itself ${ends} if it stays idle.`;
   }
   return `Idle since ${since}. Its idle time ${ended ? "ended" : "ends"} ${ends}.`;
+}
+
+/** Said where nothing current shows what a host's idle time ending does to its machine. */
+export const IDLE_STOP_UNKNOWN =
+  "Daintree can't tell whether the machine stops when the host's idle time ends.";
+
+/** Said of a plugin provider's machine this device stops once idle while it's linked (#17923). */
+export const LINKED_IDLE_STOP =
+  "While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.";
+
+/** What the details know of a machine whose provider sleeps it once its host's idle time ends (#17916). */
+export interface IdleSleepMachine {
+  /** This device's link to the host is up. */
+  connected: boolean;
+  /** The machine's own idle sleep, as its provider last reported it. */
+  lifetime: CloudLifetimeModel | null;
+  /** Its own idle timeout follows the host's idle time (`CloudHostStatus.idleTimeFollowsHost`). */
+  followsHost: boolean;
+  /** What the host holds the machine awake with while it sees work (`CloudHostStatus.keepAwake`, #17918). */
+  keepAwake?: CloudKeepAwake | null;
+}
+
+const UNKNOWN_SLEEPER: IdleSleepMachine = { connected: false, lifetime: null, followsHost: true };
+
+/**
+ * Which timer puts a machine to sleep on a provider whose own idle timer an
+ * open link keeps from running, Agent 37's (#17916): the host's idle time
+ * while this device is connected, the provider's own otherwise. An imported
+ * machine's own timer keeps its own length until the person picks one here.
+ */
+export function idleSleepTimerSentence(
+  provider: Pick<CloudProviderTerms, "name">,
+  idle: HostIdleObservation | undefined,
+  machine: IdleSleepMachine
+): string {
+  const name = provider.name;
+  const lifetime = machine.lifetime;
+  if (lifetime?.kind === "none") {
+    return `Sleeping when idle is off for this machine on ${name}, so nothing puts it to sleep. Picking an idle time turns it on.`;
+  }
+  const own = lifetime?.kind === "idle-sleep" ? lifetime.idleSeconds : null;
+  const ownTimer = `${name}'s own idle timer${own === null ? "" : ` (${durationLabel(own)})`}`;
+  const afterIdle =
+    own === null
+      ? "once it's been idle for a while"
+      : `after ${durationLabel(own)} without activity`;
+  const away = awaySentence(ownTimer, afterIdle, machine);
+  const inCharge = machine.connected
+    ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.${away.connected ? ` ${away.connected}` : ""}`
+    : `${away.offline} The host's idle time takes over while this device is connected.`;
+  const differs =
+    !machine.followsHost &&
+    idle !== undefined &&
+    own !== null &&
+    own !== idle.idleAfterMinutes * 60;
+  return differs
+    ? `${inCharge} ${name} keeps its own idle timer until you pick an idle time here.`
+    : inCharge;
+}
+
+/**
+ * What holds the machine awake, or doesn't, with no device connected
+ * (#17918): the host, while it sees work, through the link this device last
+ * heard it holds; otherwise the provider's own timer, with why. `connected`
+ * is said after the connected sentence, and is null when there is nothing
+ * worth adding there; `offline` stands on its own.
+ */
+function awaySentence(
+  ownTimer: string,
+  afterIdle: string,
+  machine: IdleSleepMachine
+): { connected: string | null; offline: string } {
+  const keepAwake = machine.keepAwake ?? null;
+  const ownInCharge = `${sentenceCase(ownTimer)} is in charge while no device is connected`;
+  if (keepAwake?.kind === "held") {
+    const said = machine.connected ? "" : ` (as the host said ${dayTime(keepAwake.confirmedAt)})`;
+    const untried = keepAwake.reached
+      ? ""
+      : ", though no request through it has reached the host yet";
+    const held = `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(keepAwake.expiresAt)}${untried}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
+    return { connected: held, offline: held };
+  }
+  if (keepAwake?.kind === "expired") {
+    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host kept the machine awake with expired ${dayTime(keepAwake.expiredAt)}.`;
+    return { connected: expired, offline: `${expired} Connecting renews it.` };
+  }
+  if (keepAwake?.kind === "none" && keepAwake.problem) {
+    const problem = /[.!?]$/.test(keepAwake.problem) ? keepAwake.problem : `${keepAwake.problem}.`;
+    const refused = `${ownInCharge}, even while the host sees work: ${problem}`;
+    return { connected: refused, offline: refused };
+  }
+  const own = `${ownInCharge}: it puts the machine to sleep ${afterIdle}.`;
+  // The host said it holds none: said while connected too, where someone decides to leave.
+  if (keepAwake?.kind === "none") return { connected: own, offline: own };
+  return { connected: null, offline: own };
+}
+
+/**
+ * Said after why a machine can't stop itself, where this device stops it
+ * instead while linked (#17924). Nothing about every device being away: a
+ * machine with a runtime limit still stops when that runs out.
+ */
+export const LINKED_IDLE_STOP_INSTEAD =
+  "While this device is linked to the host, it stops the machine once the host's idle time ends instead.";
+
+function sentences(first: string, second: string): string {
+  return `${/[.!?]$/.test(first) ? first : `${first}.`} ${second}`;
+}
+
+/**
+ * What a host's idle time ending does to its machine, beside its idle clock:
+ * nothing more once the host says it stops the machine itself, which the
+ * clock already says (#17361, #17362). Otherwise why it can't, as this device
+ * found; which timer is in charge, where this device puts the machine to
+ * sleep while connected (#17916); that it doesn't, for a provider whose hosts
+ * have no way to stop their machines, with what a stopped one would still
+ * cost; and unknown while the provider isn't registered or its host hasn't
+ * said. A plugin provider's machine this device stops while it's linked says
+ * so, with what happens with every device away, or why it doesn't (#17923). A
+ * machine that can't stop itself, where this device stops it instead, says
+ * both, as does one where a stop from here is blocked too (#17924). `idle` is
+ * only ever from a summary on the current link: one from an earlier link says
+ * nothing about now.
+ */
+export function idleEndSentence(
+  idle: HostIdleObservation | undefined,
+  provider: CloudProviderTerms | null,
+  selfStopProblem: string | null,
+  linkedIdleStop: CloudLinkedIdleStop | null = null,
+  machine: IdleSleepMachine = UNKNOWN_SLEEPER
+): string | null {
+  if (idle?.stopsWhenIdle) return null;
+  if (selfStopProblem) {
+    if (provider && linkedIdleStop?.kind === "stops") {
+      return sentences(selfStopProblem, LINKED_IDLE_STOP_INSTEAD);
+    }
+    if (provider && linkedIdleStop?.kind === "blocked") {
+      return sentences(selfStopProblem, linkedIdleStop.problem);
+    }
+    return selfStopProblem;
+  }
+  if (provider && linkedIdleStop) {
+    switch (linkedIdleStop.kind) {
+      case "stops":
+        return LINKED_IDLE_STOP;
+      case "sleeps":
+        return idleSleepTimerSentence(provider, idle, machine);
+      case "blocked":
+        return linkedIdleStop.problem;
+      case "unknown":
+        return IDLE_STOP_UNKNOWN;
+    }
+  }
+  if (provider?.hostIdleStop !== false) return IDLE_STOP_UNKNOWN;
+  // Its own idle sleep or lifetime, if it has one, is described on its own.
+  const doesnt = `On ${provider.name}, the machine doesn't stop when the host's idle time ends.`;
+  return billsWhileStopped(provider) ? `${doesnt} ${stoppedComputeBilling(provider)}` : doesnt;
 }
 
 /**
@@ -333,8 +535,9 @@ export function lifetimeSentence(
     case "none":
       return "It runs until you stop it.";
     case "fixed-at-create":
+      // Nothing on the provider's side, though its host may still stop it once idle (#17362).
       return lifetimeSeconds === null
-        ? "It runs until you stop it."
+        ? "It has no runtime limit."
         : `It stops by itself ${durationLabel(lifetimeSeconds)} after starting, and that can't be extended while it runs.`;
     case "renewable":
       return lifetimeSeconds === null

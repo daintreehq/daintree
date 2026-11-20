@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -24,6 +24,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { AssistantIdentitySection } from "./Assistant/AssistantIdentitySection";
 import { AssistantConfirmationExceptions } from "./Assistant/AssistantConfirmationExceptions";
+import { DELEGABLE_ASSISTANT_CONFIRMATIONS } from "@shared/config/assistantConfirmationDelegation";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
@@ -399,8 +400,33 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeConfirmations: value });
   };
 
-  const setDaintreeConfirmationsExcept = (next: string[]) => {
-    void persist({ daintreeConfirmationsExcept: next });
+  // Each tick lands on the list as stored when it's saved, one at a time, and
+  // never on this tab's copy: the confirm dialog can change the list while
+  // Settings is open (#16752), dropping ticks a stale copy would send back.
+  const exceptWritesRef = useRef<Promise<void>>(Promise.resolve());
+  // The newest save, so a queued tick that fails rolls back to what the tab
+  // shows by then rather than what it showed when it was clicked.
+  const persistRef = useRef(persist);
+  useEffect(() => {
+    persistRef.current = persist;
+  });
+  const toggleDaintreeConfirmationExcept = (id: string, on: boolean) => {
+    exceptWritesRef.current = exceptWritesRef.current
+      .then(async () => {
+        // Nothing is written without the stored list: this tab's copy may hold
+        // ticks the dialog has since dropped, so the box just stays as it was.
+        const fresh = await window.electron.helpAssistant.getSettings();
+        if (!Array.isArray(fresh.daintreeConfirmationsExcept)) return;
+        const next = new Set(fresh.daintreeConfirmationsExcept);
+        if (on) next.add(id);
+        else next.delete(id);
+        await persistRef.current({
+          daintreeConfirmationsExcept: DELEGABLE_ASSISTANT_CONFIRMATIONS.map(
+            (entry) => entry.id
+          ).filter((candidate) => next.has(candidate)),
+        });
+      })
+      .catch(() => {});
   };
 
   const toggleAcceptRemoteControl = () => {
@@ -805,7 +831,7 @@ export function DaintreeAssistantSettingsTab() {
           {settings.daintreeConfirmations === "ask-except" && delegatedConfirmations !== null && (
             <AssistantConfirmationExceptions
               selected={delegatedConfirmations}
-              onChange={setDaintreeConfirmationsExcept}
+              onToggle={toggleDaintreeConfirmationExcept}
               disabled={settingsUnavailable}
             />
           )}

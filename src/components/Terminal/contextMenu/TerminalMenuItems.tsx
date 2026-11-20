@@ -227,6 +227,7 @@ export function TerminalFleetMenuItems({
   isAgent,
   isWatched,
   whenDone,
+  continueAtLimitReset,
   onRequestPark,
   onAction,
 }: {
@@ -238,6 +239,8 @@ export function TerminalFleetMenuItems({
   isWatched: boolean;
   /** The pane's When done choice (#16171); absent where it can't be armed. */
   whenDone?: TerminalWhenDone;
+  /** Whether the pane continues once its usage limit resets (#17909); absent where it can't. */
+  continueAtLimitReset?: boolean;
   onRequestPark: () => void;
   onAction: MenuActionHandler;
 }) {
@@ -259,7 +262,7 @@ export function TerminalFleetMenuItems({
   const hasRunItems = canSnooze || canPark || isParked || hasReadMark;
   const hasFleetMenu = fleetEligible || hasRunItems;
   const showWhenDone = whenDone !== undefined && (isAgent || whenDone !== "keep");
-  if (!isAgent && !hasFleetMenu && !showWhenDone) return null;
+  if (!isAgent && !hasFleetMenu && !showWhenDone && continueAtLimitReset === undefined) return null;
 
   return (
     <>
@@ -271,6 +274,14 @@ export function TerminalFleetMenuItems({
         >
           Watch
           <ContextMenuShortcut shortcut={watchShortcut} />
+        </ContextMenuCheckboxItem>
+      )}
+      {continueAtLimitReset !== undefined && (
+        <ContextMenuCheckboxItem
+          checked={continueAtLimitReset}
+          onSelect={() => onAction("toggle-continue-at-limit-reset")}
+        >
+          Continue when usage limit resets
         </ContextMenuCheckboxItem>
       )}
       {hasFleetMenu && (
