@@ -1098,7 +1098,13 @@ describe("decisions IPC", () => {
     sealDecisionsModule();
     const ctx = { projectId: "project-1" };
 
-    await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
+    const reference: DecisionQuestionReference = {
+      hostId: "host_1",
+      projectId: "project-1",
+      terminalId: "pane-a",
+      questionId: QUESTION_ID,
+    };
+    await expect(getQuestionPaneByReference({ reference })).resolves.toEqual({
       result: "not-running",
     });
     await expect(
