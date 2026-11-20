@@ -1077,9 +1077,12 @@ describe("AnswerDelivery", () => {
     expect(sessionless).toHaveBeenCalledTimes(1);
     expect(lists).not.toHaveBeenCalled();
 
-    // Found by the next minute's read, with nothing else asking.
+    // Found by the next minute's read, with nothing else asking. The idle
+    // minute passes in coarse steps; the answer's decrypt and commits after
+    // that read take real turns, so the wait for its line is fine-grained.
     await answered(h.store, Q1, 1, "approve");
-    await until(() => h.client.submitted.length === 1, DELIVERY_CHECK_INTERVAL_MS + 10_000, 5_000);
+    await until(() => pending.mock.calls.length - before === 4, DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    await until(() => h.client.submitted.length === 1, 10_000);
     await stopped(h.delivery);
   });
 
