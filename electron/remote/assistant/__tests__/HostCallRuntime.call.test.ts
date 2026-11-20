@@ -302,7 +302,11 @@ describe("HostCallRuntime host.call (#13493)", () => {
         });
         // A resend keeps its id, which the host may hold.
         await expect(
-          runtime.call("a", { ...CALL, callId: "earlier" }, { tier: "core", signal: controller.signal })
+          runtime.call(
+            "a",
+            { ...CALL, callId: "earlier" },
+            { tier: "core", signal: controller.signal }
+          )
         ).resolves.toMatchObject({ ok: true, value: { outcome: "ok", callId: "earlier" } });
       });
 

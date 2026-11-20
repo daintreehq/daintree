@@ -308,7 +308,10 @@ export function projectRelayResult(
 }
 
 /** A failure the host's MCP server raised rather than answered, as the tool error it reads like. */
-const CANCELLED_BEFORE = { status: "cancelled", dispatch: "before" } as const satisfies McpCallAnswer;
+const CANCELLED_BEFORE = {
+  status: "cancelled",
+  dispatch: "before",
+} as const satisfies McpCallAnswer;
 const CANCELLED_AFTER = { status: "cancelled", dispatch: "after" } as const satisfies McpCallAnswer;
 
 function errorResult(error: unknown): Extract<McpCallAnswer, { status: "done" }>["result"] {

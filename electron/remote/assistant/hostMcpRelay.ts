@@ -228,18 +228,22 @@ export function installHostMcpRelay(
     // A cancel (#17985) reaches only this session's sender's calls from the
     // help session it names, whichever of its sessions sent them. Taken even
     // with control off since: stopping a call needs no consent.
-    session.registerCallHandler(AssistantLinkMethod.MCP_CANCEL, McpCancelPayloadSchema, (payload) => {
-      if (disposed) throw noSender();
-      const senderId = deps.senders()?.senderOf(session);
-      if (!senderId) throw noSender();
-      if (runner.cancel(senderId, payload.helpSessionId, payload.callId) === "full") {
-        throw new AppError({
-          code: "RATE_LIMITED",
-          message: "This host already holds as many cancels for calls not yet here as it keeps",
-        });
+    session.registerCallHandler(
+      AssistantLinkMethod.MCP_CANCEL,
+      McpCancelPayloadSchema,
+      (payload) => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        if (runner.cancel(senderId, payload.helpSessionId, payload.callId) === "full") {
+          throw new AppError({
+            code: "RATE_LIMITED",
+            message: "This host already holds as many cancels for calls not yet here as it keeps",
+          });
+        }
+        return {};
       }
-      return {};
-    });
+    );
     session.registerCallHandler(
       AssistantLinkMethod.THROWAWAY_CALL,
       ThrowawayCallPayloadSchema,

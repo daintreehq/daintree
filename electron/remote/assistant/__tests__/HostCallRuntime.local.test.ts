@@ -515,9 +515,13 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       });
       // Its answer is held for a resend, which runs nothing again.
       await expect(
-        runtime.call("a", { ...LIST, callId: "00000000-0000-4000-8000-000000000001" }, {
-          tier: "full",
-        })
+        runtime.call(
+          "a",
+          { ...LIST, callId: "00000000-0000-4000-8000-000000000001" },
+          {
+            tier: "full",
+          }
+        )
       ).resolves.toMatchObject({ ok: true, value: { outcome: "ambiguous" } });
       expect(opened[0]!.calls).toHaveLength(1);
     });
