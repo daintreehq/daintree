@@ -19,9 +19,11 @@ import {
   readResultPayload,
   requiredOutputKeys,
   RESOURCE_TAG_ARG,
+  SELF_GATED_TOOLS,
   taggedTerminalId,
 } from "../lib/mcpSessionFixture";
 import { mcpSessionScenarios } from "../scenarios/mcpSession";
+import { OWNED_RESOURCE_TOOLS } from "../../../electron/services/mcp-server/sessionCallOwnership";
 
 /**
  * PERF-280..285 drive the real `createSessionServer`, the real SDK request
@@ -336,5 +338,12 @@ describe("mcp session scenario family", () => {
       // never carry either.
       expect(scenario.warmups ?? 0).toBeGreaterThan(0);
     }
+  });
+
+  it("holds every ownership-gated tool out of PERF-282's battery", () => {
+    // Each of these refuses a probe that names no pane of the session's own,
+    // and PERF-282 reads that correct refusal as a call miss (#17996).
+    const notHeldOut = Object.keys(OWNED_RESOURCE_TOOLS).filter((id) => !SELF_GATED_TOOLS.has(id));
+    expect(notHeldOut).toEqual([]);
   });
 });

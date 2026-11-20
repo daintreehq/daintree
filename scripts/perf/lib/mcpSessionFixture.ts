@@ -831,7 +831,8 @@ export function forbiddenCallSample(
  * them in both directions instead.
  *
  * Every `*Owned` tool belongs here, so a new one is a line to add. Left out, it
- * is called by a battery that reads its correct refusal as a miss.
+ * is called by a battery that reads its correct refusal as a miss;
+ * `mcpSession.test.ts` names any `OWNED_RESOURCE_TOOLS` entry missing here.
  */
 export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
@@ -843,6 +844,7 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendKeysOwned",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "worktree.retireOwned",
