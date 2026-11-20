@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AgentUsageReadout, AgentUsageSnapshot } from "@shared/types/ipc/agentUsage";
+import { currentHostId } from "@/hooks/useHostPlatform";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 
 const NONE: AgentUsageReadout[] = [];
@@ -17,12 +18,15 @@ function newer(
 }
 
 /**
- * Every usage readout this machine knows of (#17318): its own agents' and
- * every linked host's. Main watches them only while some view that shows
- * them can be seen, so this follows while this view is observable; changes
- * arrive pushed, and a seed a newer push overtook is dropped. A refused
- * follow clears what this view held from before, unless a push has since
- * confirmed it, and tries again while the view stays observable.
+ * The usage readouts of the machine this view shows (#17318): this machine's
+ * own in a local view, the host's in a host's. Main holds every machine's,
+ * but each host may run its agents on a different login, so no other
+ * machine's reading ever reaches this view's caller (#17979). Main watches
+ * them only while some view that shows them can be seen, so this follows
+ * while this view is observable; changes arrive pushed, and a seed a newer
+ * push overtook is dropped. A refused follow clears what this view held from
+ * before, unless a push has since confirmed it, and tries again while the
+ * view stays observable.
  */
 export function useAgentUsageReadouts(): AgentUsageReadout[] {
   const [snapshot, setSnapshot] = useState<AgentUsageSnapshot | null>(null);
@@ -79,5 +83,7 @@ export function useAgentUsageReadouts(): AgentUsageReadout[] {
     };
   }, [observable]);
 
-  return snapshot?.readouts ?? NONE;
+  const hostId = currentHostId();
+  const readouts = snapshot?.readouts;
+  return readouts ? readouts.filter((readout) => readout.hostId === hostId) : NONE;
 }
