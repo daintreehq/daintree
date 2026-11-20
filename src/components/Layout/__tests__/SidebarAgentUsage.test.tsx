@@ -165,8 +165,8 @@ describe("SidebarAgentUsage", () => {
     installBridge([
       codex(91, VPS),
       codex(40),
-      claude(),
       claude({ statement: "used", usedPercent: 20 }),
+      claude(),
       claude({ statement: "reached" }, VPS),
     ]);
     const { container } = await renderUsage();
@@ -203,9 +203,14 @@ describe("SidebarAgentUsage", () => {
     expect(shown[0]!.textContent).toMatch(/^Claude 45% · studio-03 · resets /);
     expect(shown[0]!.textContent).not.toMatch(/This machine/);
     expect(shown[0]!.hasAttribute("data-attention")).toBe(false);
+    expect(shown[0]!.tagName).toBe("BUTTON");
     fireEvent.click(shown[0]!);
-    expect(dispatch.mock.calls.map(([, args]) => args)).toEqual([
-      { tab: "agents", subtab: "claude", sectionId: "agents-account-quota" },
+    expect(dispatch.mock.calls).toEqual([
+      [
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude", sectionId: "agents-account-quota" },
+        { source: "user" },
+      ],
     ]);
   });
 
@@ -244,7 +249,7 @@ describe("SidebarAgentUsage", () => {
     here.unmount();
 
     showHost("vps");
-    installBridge(readouts.toReversed());
+    installBridge([...readouts].reverse());
     const there = await renderUsage();
     expect(rows(there.container).map((row) => row.textContent)).toEqual([
       "Claude 90% · Personal · Build VPS12m ago",
