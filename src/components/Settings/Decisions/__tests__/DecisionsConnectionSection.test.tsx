@@ -783,6 +783,92 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(screen.getByText(/The last setup check stopped at push configuration/)).toBeTruthy();
   });
 
+  function renderWithAgentsOff(status: DecisionsStatus, agentsOff = true) {
+    // A connected relay is checked on mount; that check never answers here.
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    return render(
+      <TooltipProvider>
+        <DecisionsConnectionSection status={status} agentsOff={agentsOff} />
+      </TooltipProvider>
+    );
+  }
+
+  it("keeps setup unfinished after every step passed while no agent is switched on, and takes the person to Agents (#18057)", () => {
+    const agents = document.createElement("section");
+    agents.id = "decisions-agents";
+    const firstSwitch = document.createElement("button");
+    firstSwitch.setAttribute("role", "switch");
+    agents.append(firstSwitch);
+    document.body.append(agents);
+    try {
+      renderWithAgentsOff({
+        state: "connected",
+        relayOrigin: ORIGIN,
+        recoveryKitVerifiedAt: 1,
+        setupCheck: { checkedAt: 2, failedStep: null },
+      });
+
+      expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+      expect(screen.getByText(/No agents are switched on for new launches/)).toBeTruthy();
+      expect(statusRow()).toContain("Connected to decisions.example.workers.dev");
+
+      fireEvent.click(screen.getByRole("button", { name: "Choose agents" }));
+      expect(document.activeElement).toBe(firstSwitch);
+    } finally {
+      agents.remove();
+    }
+  });
+
+  it("offers Agents beside the kit or the check while both are left", () => {
+    const onFinishSetup = vi.fn();
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "connected", relayOrigin: ORIGIN }}
+          onFinishSetup={onFinishSetup}
+          agentsOff
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByText(/none of it can be recovered/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save recovery kit" }));
+    expect(onFinishSetup).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    renderWithAgentsOff({ state: "connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.getByText(/Run the setup check/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("button", { name: "Check setup" })
+        .some((button) => !button.hasAttribute("data-decisions-setup-check-start"))
+    ).toBe(true);
+  });
+
+  it("says nothing about agents with no relay set up, or for a relay revoked or unusable", () => {
+    renderWithAgentsOff({ state: "not-connected" });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({ state: "revoked", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      problem: "storage",
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose agents" })).toBeNull();
+  });
+
   it("leaves a revoked relay, or one that can't be used, to say so on its own row", () => {
     renderSection({ state: "revoked", relayOrigin: ORIGIN });
     expect(statusRow()).toContain("Revoked by decisions.example.workers.dev");

@@ -6,13 +6,16 @@ import type {
   DecisionsConnectResult,
   DecisionsDevicesResult,
   DecisionsKitVerifyResult,
+  DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsStatus,
   VerifyDecisionsRecoveryKitPayload,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { _resetHostPlatformForTests } from "@/hooks/useHostPlatform";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { DecisionsSettingsTab } from "../DecisionsSettingsTab";
 
 const ORIGIN = "https://decisions.example.workers.dev";
@@ -438,6 +441,106 @@ describe("DecisionsSettingsTab", () => {
       pushStatus({ state: "off", consentedAt: 1, relayOrigin: ORIGIN, revision: 3 })
     );
     expect(listDevices).toHaveBeenCalledTimes(2);
+  });
+
+  describe("no agent switched on (#18057)", () => {
+    const FINISHED: DecisionsStatus = {
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    };
+    function policy(askHumanAgents: string[], revision: number): DecisionsPolicy {
+      return {
+        gates: [],
+        proxyAllowlisted: false,
+        defaultQuestionExpiryMs: null,
+        maxQuestionExpiryMs: null,
+        askHumanAgents,
+        revision,
+      };
+    }
+    /** Each policy read main is asked for, answered by the test. */
+    let reads: Array<{ resolve: (p: DecisionsPolicy) => void; reject: (e: unknown) => void }>;
+    const agentsOffWarning = () => screen.queryByText(/No agents are switched on/);
+    const probed = useCliAvailabilityStore.getState();
+
+    beforeEach(() => {
+      useCliAvailabilityStore.setState({
+        availability: { claude: "ready" },
+        hasRealData: true,
+        error: null,
+      });
+      reads = [];
+      window.electron.decisions.getPolicy = () =>
+        new Promise<DecisionsPolicy>((resolve, reject) => reads.push({ resolve, reject }));
+      getStatus.mockResolvedValue(FINISHED);
+      checkRelay.mockReturnValue(new Promise(() => {}));
+    });
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+      useCliAvailabilityStore.setState({
+        availability: probed.availability,
+        hasRealData: probed.hasRealData,
+        error: probed.error,
+      });
+    });
+
+    it("says so only once main has answered, and follows what it answers next", async () => {
+      await renderTab();
+      // Unread is never taken for none.
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByText("Setup isn't finished")).toBeNull();
+
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+      expect(agentsOffWarning()).toBeTruthy();
+
+      // Another window switches one on; main pushes the status and the policy is read again.
+      act(() => pushStatus({ ...FINISHED, revision: 2 }));
+      await act(async () => reads.at(-1)!.resolve(policy(["claude"], 2)));
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByText("Setup isn't finished")).toBeNull();
+
+      act(() => pushStatus({ ...FINISHED, revision: 3 }));
+      await act(async () => reads.at(-1)!.resolve(policy([], 3)));
+      expect(agentsOffWarning()).toBeTruthy();
+    });
+
+    it("stops saying so once a read fails, since what it showed may be stale", async () => {
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeTruthy();
+
+      act(() => pushStatus({ ...FINISHED, revision: 2 }));
+      await act(async () => reads.at(-1)!.reject(new Error("bridge closed")));
+      expect(agentsOffWarning()).toBeNull();
+    });
+
+    it("waits for the CLI probe, and counts the switches as Agents and the facts line do (#18059)", async () => {
+      useCliAvailabilityStore.setState({ hasRealData: false });
+      await renderTab();
+      // Codex is switched on but not installed: no launch of it can ask.
+      await act(async () => reads.at(-1)!.resolve(policy(["codex"], 1)));
+      expect(agentsOffWarning()).toBeNull();
+
+      act(() => useCliAvailabilityStore.setState({ hasRealData: true }));
+      expect(agentsOffWarning()).toBeTruthy();
+      expect(screen.getByTestId("decisions-status-facts").textContent).toContain(
+        "No agents switched on"
+      );
+    });
+
+    it("never says so in a remote window, whose agents are the Host's", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio" };
+      _resetHostPlatformForTests();
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Choose agents" })).toBeNull();
+    });
   });
 
   it("closes Settings before it opens the inbox (#17231)", async () => {

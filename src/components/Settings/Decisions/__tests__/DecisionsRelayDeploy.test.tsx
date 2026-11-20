@@ -450,38 +450,61 @@ describe("Decisions relay deploy offer", () => {
       expect(screen.queryByText(/CLAIM_SECRET/)).toBeNull();
     });
 
-    it("shows a claimed relay beside the connection, says when agents get ask_human, and moves on to pairing", () => {
+    const CLAIMED_HERE: DecisionsStatus = {
+      state: "connected",
+      relayOrigin: DEPLOYED_ORIGIN,
+      relayDeploy: {
+        id: "deploy-1",
+        state: "completed",
+        url: DEPLOYED_URL,
+        claimState: "unclaimed",
+        claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
+      },
+    };
+
+    it("shows a claimed relay beside the connection, says agents start off, and moves on to pairing or to Agents (#18057)", () => {
       const devices = document.createElement("section");
       devices.id = "decisions-devices";
       const pair = document.createElement("button");
       pair.setAttribute("data-decisions-pair-phone", "");
       pair.textContent = "Pair a phone";
       devices.append(pair);
-      document.body.append(devices);
+      const agents = document.createElement("section");
+      agents.id = "decisions-agents";
+      const firstSwitch = document.createElement("button");
+      firstSwitch.setAttribute("role", "switch");
+      agents.append(firstSwitch);
+      document.body.append(devices, agents);
       try {
-        renderSection({
-          state: "connected",
-          relayOrigin: DEPLOYED_ORIGIN,
-          relayDeploy: {
-            id: "deploy-1",
-            state: "completed",
-            url: DEPLOYED_URL,
-            claimState: "unclaimed",
-            claim: { state: "claimed", origin: DEPLOYED_ORIGIN },
-          },
-        });
+        renderSection(CLAIMED_HERE);
 
         const row = outcomeRow();
         expect(row.textContent).toMatch(/Relay deployed and claimed/);
-        expect(row.textContent).toMatch(/Supported agents launched from now on get ask_human/);
-        expect(row.textContent).toMatch(/already running get it at their next launch/);
+        expect(row.textContent).not.toMatch(/launched from now on get ask_human/);
+        expect(row.textContent).toMatch(/Under Agents, switch on the agents you want to ask you/);
+        expect(row.textContent).toMatch(/each is off until you do/);
         expect(screen.queryByRole("group", { name: "Don't have a relay yet?" })).toBeNull();
 
         fireEvent.click(within(row).getByRole("button", { name: "Pair a phone" }));
         expect(document.activeElement).toBe(pair);
+
+        fireEvent.click(within(row).getByRole("button", { name: "Choose agents" }));
+        expect(document.activeElement).toBe(firstSwitch);
       } finally {
         devices.remove();
+        agents.remove();
       }
+    });
+
+    it("leaves Agents out of a claimed relay's outcome in a remote window, whose agents are the Host's", () => {
+      view.remote = true;
+      renderSection(CLAIMED_HERE);
+
+      const row = outcomeRow();
+      expect(row.textContent).toMatch(/Relay deployed and claimed/);
+      expect(row.textContent).not.toMatch(/Agents/);
+      expect(within(row).getByRole("button", { name: "Pair a phone" })).toBeTruthy();
+      expect(within(row).queryByRole("button", { name: "Choose agents" })).toBeNull();
     });
 
     it("shows no claimed outcome for a relay other than the one set up here", () => {

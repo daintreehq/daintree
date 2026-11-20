@@ -65,6 +65,18 @@ export function useDecisionsAgentSupport(): DecisionsAgentSupport {
 }
 
 /**
+ * The agents Agents shows switched on: the supported installed ones the saved
+ * policy lists. One left on for an agent since removed isn't counted, since
+ * no launch of it can ask.
+ */
+export function switchedOnAgents(
+  askHumanAgents: readonly string[],
+  supported: readonly string[]
+): string[] {
+  return supported.filter((id) => askHumanAgents.includes(id));
+}
+
+/**
  * Whether a launch now is handed `ask_human`. The route opens once the relay
  * identity has loaded, before the first attempt goes out, and stays open
  * between attempts; a launch while it is still loading waits a bounded time
