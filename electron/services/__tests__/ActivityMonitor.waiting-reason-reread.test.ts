@@ -436,7 +436,17 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     monitor.onData("selector under the input row");
     show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, " ❯ 1. Allow", "   2. Deny"]));
     vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual([]);
 
+    // Boxed, with the ASCII highlight, or lettered.
+    for (const selector of [
+      ["│ > 1. Continue │", "│   2. Cancel   │"],
+      ["  a) keep", "  b) drop"],
+    ]) {
+      monitor.onData("another selector under the input row");
+      show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, ...selector]));
+      vi.advanceTimersByTime(5000);
+    }
     expect(reasonUpdates(onStateChange)).toEqual([]);
   });
 

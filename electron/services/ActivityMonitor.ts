@@ -217,8 +217,10 @@ const WHOLE_VIEWPORT_ROWS = 1000;
 /** The most rows an input row's block runs to: its frame and the footer rows under it. */
 const DRAWN_COMPOSER_BLOCK_ROWS = 8;
 
-/** A selector's row: a highlighted one or a numbered option, as a footer row never is. */
-const SELECTOR_ROW = /^\s*(?:[❯›▶➜→●>]\s*\S|\d+[.)]\s)/;
+/** A selector's row: a highlighted one or a numbered or lettered option, as a footer row never is. */
+const SELECTOR_ROW = /^\s*(?:[❯›▶➜→●>]\s*\S|(?:\d+|[A-Za-z])[.)]\s)/;
+/** A row's box borders, drawn on both sides of a dialog's rows. */
+const BOX_EDGES = /^\s*[│┃║]|[│┃║]\s*$/g;
 
 /**
  * Whether the last block drawn, however many blank rows lie under it, is the
@@ -240,7 +242,9 @@ function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): b
   const block = viewport.slice(start, end);
   const inputRow = findEmptyComposerRow(block, patterns);
   if (inputRow === undefined) return false;
-  return !block.slice(inputRow + 2).some((row) => SELECTOR_ROW.test(stripAnsi(row)));
+  return !block
+    .slice(inputRow + 2)
+    .some((row) => SELECTOR_ROW.test(stripAnsi(row).replace(BOX_EDGES, "")));
 }
 
 export class ActivityMonitor {

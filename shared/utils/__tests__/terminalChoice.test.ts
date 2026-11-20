@@ -589,6 +589,12 @@ describe("endsOnDrawnChoiceDialog (#18014)", () => {
   it("reads the ASCII selector a Windows console draws Claude's trust prompt with", () => {
     const ascii = TRUST.map((row) => row.replace("❯", ">"));
     expect(endsOnDrawnChoiceDialog(pane(ascii))).toBe(true);
+    // Under a hint that names no verb, only the numbered reading can take it.
+    expect(
+      endsOnDrawnChoiceDialog(
+        pane(["> 1. Trust and continue", "  2. Quit", "", "  enter continue · esc quit"])
+      )
+    ).toBe(true);
     expect(
       endsOnDrawnChoiceDialog(
         pane(["> No, exit", "  Yes, I trust this folder", "", "Enter to confirm · Esc to cancel"])
@@ -624,6 +630,11 @@ describe("endsOnDrawnChoiceDialog (#18014)", () => {
       "   2. No, and tell Claude what to do differently (esc)",
     ];
     expect(endsOnDrawnChoiceDialog(pane(approval))).toBe(true);
+  });
+
+  it("needs a key hint under an ASCII highlight, which a quote or an input row can draw", () => {
+    expect(endsOnDrawnChoiceDialog(pane(["> 1. First", "  2. Second", "architect>"]))).toBe(false);
+    expect(endsOnDrawnChoiceDialog(pane(["> 1. First", "  2. Second"]))).toBe(false);
   });
 
   it("never counts a dialog left above later output", () => {
