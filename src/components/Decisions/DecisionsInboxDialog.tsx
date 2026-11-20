@@ -33,6 +33,7 @@ import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useRovingRows } from "@/hooks/useRovingRows";
+import { listStepOf } from "@/lib/listStepChord";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -107,6 +108,46 @@ const SUMMARY_BATCH = 64;
 
 /** While another project's question is shown, how often its terminal is looked for again. */
 const REACH_RECHECK_MS = 15_000;
+
+/**
+ * How long the arrow keys rest on a row before its question shows (#18038):
+ * long enough that arrowing past a row reads nothing and marks nothing seen.
+ */
+const SELECTION_DWELL_MS = 300;
+
+/** Where the keyboard goes in a question it's sent to: its words, or its answer. */
+type FocusDestination = "words" | "answer";
+
+/**
+ * The answer's first control, as Tab would reach it: the choice made, else the
+ * first that can be made, else its field. Null when it takes no answer here.
+ */
+function answerControl(scope: HTMLElement): HTMLElement | null {
+  const answer = scope.querySelector<HTMLElement>("[data-decision-answer]");
+  if (answer === null) return null;
+  return (
+    answer.querySelector<HTMLElement>('input[type="radio"]:checked:not(:disabled)') ??
+    answer.querySelector<HTMLElement>('input[type="radio"]:not(:disabled)') ??
+    answer.querySelector<HTMLElement>("textarea")
+  );
+}
+
+/** Puts the keyboard in the question shown: its answer when sent there and it takes one, else its words. */
+function landIn(detail: HTMLElement, wordsId: string, to: FocusDestination): void {
+  const control = to === "answer" ? answerControl(detail) : null;
+  // Scrolled to, since the answer can sit below the images.
+  if (control !== null) control.focus();
+  else (document.getElementById(wordsId) ?? detail).focus({ preventScroll: true });
+}
+
+/** Brings a question's row into the list's view once it has rendered as chosen. */
+function revealRow(key: string): void {
+  requestAnimationFrame(() => {
+    document
+      .querySelector(`[data-inbox-key="${encodeURIComponent(key)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  });
+}
 
 type ListRead =
   { state: "loading" } | { state: "failed" } | { state: "listed"; list: DecisionQuestionList };
@@ -380,10 +421,12 @@ function InboxRow({
   agent,
   where,
   selected,
+  describedBy,
   tabStop,
   rowRef,
   onFocus,
   onSelect,
+  onAnswer,
   nowMs,
 }: {
   item: DecisionQuestionListItem;
@@ -392,10 +435,13 @@ function InboxRow({
   agent: string;
   where: readonly string[];
   selected: boolean;
+  /** The list's keys, said with the row Tab lands on: the region's own description isn't read there. */
+  describedBy: string | undefined;
   tabStop: boolean;
   rowRef: (element: HTMLElement | null) => void;
   onFocus: (element: HTMLElement) => void;
   onSelect: () => void;
+  onAnswer: () => void;
   nowMs: number | null;
 }) {
   const note = inboxRowNote(item, nowMs);
@@ -436,11 +482,19 @@ function InboxRow({
         // One tab stop for the whole list; the arrow keys move it.
         tabIndex={tabStop ? 0 : -1}
         aria-current={selected || undefined}
+        aria-describedby={describedBy}
         data-roving-row=""
         data-inbox-key={encodeURIComponent(rowKey)}
         data-selected={selected ? "true" : undefined}
         onFocus={(event) => onFocus(event.currentTarget)}
         onClick={onSelect}
+        // Across to the question beside the list, into its answer. Enter and Space stay the button's.
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowRight") return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          event.preventDefault();
+          onAnswer();
+        }}
         className="decisions-inbox-row flex w-full cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
         data-testid="decisions-inbox-row"
       >
@@ -545,6 +599,7 @@ function InboxList({
   partsOf,
   selectedKey,
   onSelect,
+  onAnswer,
   nowMs,
 }: {
   listRef: RefObject<HTMLDivElement | null>;
@@ -555,9 +610,12 @@ function InboxList({
   partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
   selectedKey: string | null;
   onSelect: (key: string, index: number) => void;
+  /** Show this row's question now and take the keyboard into its answer. */
+  onAnswer: (key: string) => void;
   nowMs: number | null;
 }) {
   const labelId = useId();
+  const hintId = useId();
   const ordered = groups.flatMap((group) => group.items);
   const keys = ordered.map((item) => referenceKey(item.reference));
   const roving = useRovingRows({ keys, preferredKey: selectedKey, containerRef: listRef });
@@ -566,6 +624,30 @@ function InboxList({
   const shape = groups
     .flatMap((group) => group.items.map((item) => `${group.id}:${referenceKey(item.reference)}`))
     .join("\n");
+  // The arrows' rest before the row they reached shows. Armed only by the list's own keys:
+  // a click shows at once, and focus put back on a row (a regroup, a dialog closing) shows nothing new.
+  const dwell = useRef<{ timer?: ReturnType<typeof setTimeout> }>({});
+  useEffect(() => {
+    const held = dwell.current;
+    return () => clearTimeout(held.timer);
+  }, []);
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    roving.onKeyDown(event);
+    if (!event.isDefaultPrevented()) return;
+    clearTimeout(dwell.current.timer);
+    const landed = lastFocused.current;
+    if (landed === null || landed.key === selectedKey) return;
+    dwell.current.timer = setTimeout(() => {
+      const now = lastFocused.current;
+      // Only while the keyboard is still on it: another press, a blur, or its row going ends it.
+      if (now === null || now.key !== landed.key || document.activeElement !== now.element) return;
+      const position = [...(listRef.current?.querySelectorAll("[data-roving-row]") ?? [])].indexOf(
+        now.element
+      );
+      if (position !== -1) onSelect(now.key, position);
+    }, SELECTION_DWELL_MS);
+  };
 
   // A row that moves to another group is a new element, and the old one took
   // focus with it; the keyboard goes back to the row, or to the list's stop.
@@ -606,7 +688,7 @@ function InboxList({
             return;
           }
         }
-        roving.onKeyDown(event);
+        onKeyDown(event);
       }}
       // The dialog's first stop while it has no rows, so the keyboard still starts on the list; with
       // rows, the rows are, and the list only holds focus a row it lost (or a control under it) hands back.
@@ -615,6 +697,8 @@ function InboxList({
         const next = event.relatedTarget;
         if (next instanceof Node && !event.currentTarget.contains(next)) {
           lastFocused.current = null;
+          // Gone somewhere else on purpose: coming back is not resting on it.
+          clearTimeout(dwell.current.timer);
         } else if (next === null) {
           // Focus left for nowhere: a row a regroup replaced is gone by the
           // next task, and one still in place was blurred some other way.
@@ -634,6 +718,9 @@ function InboxList({
     >
       <span id={labelId} className="sr-only">
         Questions
+      </span>
+      <span id={hintId} className="sr-only">
+        Up and down arrows show each question. Right arrow moves into it.
       </span>
       {lead}
       {groups.map((group) => {
@@ -691,6 +778,7 @@ function InboxList({
                     agent={parts.agent}
                     where={parts.where}
                     selected={key === selectedKey}
+                    describedBy={key === selectedKey ? hintId : undefined}
                     tabStop={key === roving.tabStopKey}
                     rowRef={roving.rowRef(key)}
                     onFocus={(element) => {
@@ -698,6 +786,10 @@ function InboxList({
                       roving.onRowFocus(key);
                     }}
                     onSelect={() => onSelect(key, keys.indexOf(key))}
+                    onAnswer={() => {
+                      clearTimeout(dwell.current.timer);
+                      onAnswer(key);
+                    }}
                     nowMs={nowMs}
                   />
                 );
@@ -804,7 +896,13 @@ export function DecisionsInboxDialog() {
           : null;
   const { reach, markGone } = useTerminalReach(selected, active);
   const questionHeadingId = useId();
-  const pendingFocus = useRef<{ seq: number; key: string } | null>(null);
+  // `reached` once its question has been the one shown, so a later choice of another abandons it.
+  const pendingFocus = useRef<{
+    seq: number;
+    key: string;
+    to: FocusDestination;
+    reached?: true;
+  } | null>(null);
   const detailRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const detailHeadingId = useId();
@@ -856,20 +954,37 @@ export function DecisionsInboxDialog() {
   }, []);
   const clearHintId = useId();
   const clearHint = clearText(selectedGroup === "cleared");
+  const choose = (key: string) => {
+    const index = ordered.findIndex((item) => referenceKey(item.reference) === key);
+    setChoice({ seq: request.seq, key, index, picked: true });
+  };
+  // Sends the keyboard into a question. The one already read takes it at once; another is
+  // shown, and the keyboard waits in the pane until it's read (the effect below), since
+  // what it was on goes with the question it followed.
+  const handOff = (key: string, to: FocusDestination) => {
+    const detail = detailRef.current;
+    if (detail === null) return;
+    if (key === selectedKey && readResult !== null) {
+      pendingFocus.current = null;
+      // One that can't be read: the pane, on why.
+      if (shownRead !== null) landIn(detail, questionHeadingId, to);
+      else detail.focus({ preventScroll: true });
+      return;
+    }
+    choose(key);
+    // Already the question shown, still being read: it has reached it.
+    pendingFocus.current =
+      key === selectedKey
+        ? { seq: request.seq, key, to, reached: true }
+        : { seq: request.seq, key, to };
+    detail.focus({ preventScroll: true });
+  };
   const showNext = () => {
     if (nextUp === null) return;
     const key = referenceKey(nextUp.reference);
-    setChoice({ seq: request.seq, key, index: ordered.indexOf(nextUp), picked: true });
-    // The button goes with the question it followed: the keyboard waits in the pane, and
-    // moves to the next question's words once they're read (the effect below), so the
-    // next Tab leads into its answer. The list shows where that question sits.
-    pendingFocus.current = { seq: request.seq, key };
-    detailRef.current?.focus({ preventScroll: true });
-    requestAnimationFrame(() => {
-      document
-        .querySelector(`[data-inbox-key="${encodeURIComponent(key)}"]`)
-        ?.scrollIntoView({ block: "nearest" });
-    });
+    // To its words, so the next Tab leads into its answer. The list shows where it sits.
+    handOff(key, "words");
+    revealRow(key);
   };
 
   // Each look before going elsewhere belongs to the question shown when it
@@ -879,8 +994,9 @@ export function DecisionsInboxDialog() {
     navigation.current += 1;
   }, [isOpen, request.seq, selectedKey]);
 
-  // Next question's hand-off: once the question it asked for is read, its words take the keyboard,
-  // unless the keyboard went somewhere else meanwhile or another question was chosen.
+  // A hand-off's landing: once the question it asked for is read, its words or answer take the
+  // keyboard, unless the keyboard went somewhere else meanwhile or another question was chosen.
+  const readResult = reader.current?.result ?? null;
   const shownRead = reader.current?.result === "read" ? reader.current.question : null;
   useDecisionQuestionSeen(selected, shownRead, active, detailRef);
   // Clearing waits while the read on screen predates what the list says it asks now; with
@@ -892,15 +1008,97 @@ export function DecisionsInboxDialog() {
     !askShownIn(selected, shownRead);
   useEffect(() => {
     const pending = pendingFocus.current;
-    if (pending === null || shownRead === null) return;
+    if (pending === null) return;
     if (pending.seq !== request.seq || pending.key !== selectedKey) {
-      pendingFocus.current = null;
+      // Left alone until its question has shown: it may be for one chosen after this commit,
+      // whose effect comes next. Once it has, another chosen since abandons it.
+      if (pending.reached) pendingFocus.current = null;
+      return;
+    }
+    if (readResult === null) {
+      if (!pending.reached) pendingFocus.current = { ...pending, reached: true };
       return;
     }
     pendingFocus.current = null;
-    if (document.activeElement !== detailRef.current) return;
-    document.getElementById(questionHeadingId)?.focus({ preventScroll: true });
-  }, [shownRead, selectedKey, request.seq, questionHeadingId]);
+    // One that can't be read leaves the keyboard in the pane, on why.
+    const detail = detailRef.current;
+    if (detail === null || document.activeElement !== detail || shownRead === null) return;
+    landIn(detail, questionHeadingId, pending.to);
+  }, [readResult, shownRead, selectedKey, request.seq, questionHeadingId]);
+
+  // ⌘↑/⌘↓ (Alt+↑/↓ off the Mac) from anywhere in the inbox, as Canopy steps between agents:
+  // the question above or below, stopping at the ends, with the keyboard where it was in the
+  // last one: on its row, in its answer, or in the pane. Anywhere else it stays put.
+  const onStepKeyDownCapture = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = listStepOf(event);
+    if (step === null || !active || ordered.length === 0) return;
+    const target = event.target;
+    // A dialog opened over this one (an image at full size) keeps its own keys.
+    if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const row = target.closest<HTMLElement>("[data-roving-row]");
+    const rowKey = row?.dataset.inboxKey;
+    // From the row the arrows rest on, before it has shown; else from the question shown.
+    const fromKey = rowKey !== undefined ? decodeURIComponent(rowKey) : selectedKey;
+    const from = ordered.findIndex((item) => referenceKey(item.reference) === fromKey);
+    const to =
+      from === -1
+        ? step > 0
+          ? 0
+          : ordered.length - 1
+        : Math.min(ordered.length - 1, Math.max(0, from + step));
+    const key = referenceKey(ordered[to]!.reference);
+    if (row !== null) {
+      choose(key);
+      // Its focus moves the list's tab stop with it, and scrolls it into view.
+      document.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`)?.focus();
+      return;
+    }
+    const detail = detailRef.current;
+    if (detail !== null && detail.contains(target)) {
+      if (key === selectedKey) return;
+      // Still waiting in the pane from the last step: where that one was going.
+      const pending = pendingFocus.current;
+      const into: FocusDestination =
+        target === detail &&
+        pending !== null &&
+        pending.seq === request.seq &&
+        pending.key === selectedKey
+          ? pending.to
+          : target.closest("[data-decision-answer]") !== null
+            ? "answer"
+            : "words";
+      handOff(key, into);
+      revealRow(key);
+      return;
+    }
+    if (key !== selectedKey) choose(key);
+    revealRow(key);
+  };
+
+  // The question shown, said as it changes: by its id while the keyboard is on its row, whose
+  // name has just been read, and with its line from anywhere else, once that line or the question
+  // itself is read. Not the one an opening shows by itself, which the focus on its row says, nor
+  // a regroup or a late line, which change nothing shown.
+  const picked = chosen?.picked === true;
+  const announced = useRef<{ seq: number; key: string } | null>(null);
+  useEffect(() => {
+    if (!active || selected === null || selectedKey === null) return;
+    const last = announced.current;
+    if (last !== null && last.seq === request.seq && last.key === selectedKey) return;
+    if ((last === null || last.seq !== request.seq) && !picked) {
+      announced.current = { seq: request.seq, key: selectedKey };
+      return;
+    }
+    const focusedRow = document.activeElement?.closest("[data-roving-row]");
+    const onRow = focusedRow?.getAttribute("data-inbox-key") === encodeURIComponent(selectedKey);
+    const line = lines.get(selectedKey);
+    if (!onRow && line === undefined && readResult === null) return;
+    announced.current = { seq: request.seq, key: selectedKey };
+    const alias = aliasLabel(selected.alias);
+    announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
+  }, [active, selected, selectedKey, request.seq, picked, lines, readResult, announce]);
 
   // Each question is read from its top, wherever the last one was scrolled to.
   useLayoutEffect(() => {
@@ -1016,6 +1214,7 @@ export function DecisionsInboxDialog() {
         // Going to a panel of this view, the close leaves focus for the panel to take.
         restoreFocusOnClose={going?.reach !== "here"}
         onCloseComplete={onCloseComplete}
+        onKeyDownCapture={onStepKeyDownCapture}
         data-testid="decisions-inbox-dialog"
       >
         <AppDialog.Header>
@@ -1102,9 +1301,13 @@ export function DecisionsInboxDialog() {
                   partsOf={partsOf}
                   nowMs={nowMs}
                   selectedKey={selectedKey}
-                  onSelect={(key, index) =>
-                    setChoice({ seq: request.seq, key, index, picked: true })
-                  }
+                  onSelect={(key, index) => {
+                    // A dwell that ends as the inbox closes changes nothing shown.
+                    if (stillShowing(request.seq)) {
+                      setChoice({ seq: request.seq, key, index, picked: true });
+                    }
+                  }}
+                  onAnswer={(key) => handOff(key, "answer")}
                 />
               )}
             </div>
@@ -1131,6 +1334,10 @@ export function DecisionsInboxDialog() {
               id={detailDomId}
               // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
               tabIndex={selected !== null ? 0 : -1}
+              // A hand-off waits only while the keyboard waits here with it.
+              onBlur={(event) => {
+                if (event.target === event.currentTarget) pendingFocus.current = null;
+              }}
               aria-labelledby={selected !== null ? detailHeadingId : undefined}
               aria-label={selected === null ? "Question details" : undefined}
               className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"

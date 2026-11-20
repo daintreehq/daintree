@@ -287,7 +287,12 @@ export function DecisionAnswerComposer({
   if (mode !== "form") {
     const lost = submission?.phase.kind === "lost";
     return (
-      <section className="flex flex-col gap-1.5" aria-label="Your answer" {...trackFocus}>
+      <section
+        className="flex flex-col gap-1.5"
+        aria-label="Your answer"
+        data-decision-answer=""
+        {...trackFocus}
+      >
         <h3 className="text-xs font-medium text-text-secondary">Your answer</h3>
         <div
           ref={statusRef}
@@ -320,6 +325,8 @@ export function DecisionAnswerComposer({
     <section
       className="flex flex-col gap-3"
       aria-label="Your answer"
+      // Where a surface that shows the question sends the keyboard to answer it.
+      data-decision-answer=""
       data-testid="decision-answer-composer"
       // From anywhere in the answer, a choice as much as the words: the chips on Send say so.
       onKeyDown={(event) => {
