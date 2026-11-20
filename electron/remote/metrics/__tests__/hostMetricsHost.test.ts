@@ -11,6 +11,7 @@ import {
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
 import {
+  AgentStopChangePayloadSchema,
   AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   MAX_PROCESS_TERMINALS,
@@ -32,7 +33,12 @@ import {
   type MetricsSessionSource,
   type WaitingEvent,
 } from "../hostMetricsHost.js";
-import type { AgentWaitingPayload, AttentionPayload } from "../linkMethods.js";
+import type {
+  AgentStopChangePayload,
+  AgentWaitingPayload,
+  AttentionPayload,
+} from "../linkMethods.js";
+import type { AgentStopChange } from "../agentStops.js";
 import { SummaryLoop } from "../summaryLoop.js";
 
 let dir: string;
@@ -110,8 +116,10 @@ const NO_QUIET_HOURS = {
 
 function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
   fireWaiting: (payload: WaitingEvent) => void;
+  fireStop: (change: AgentStopChange) => void;
 } {
   let waiting: ((payload: WaitingEvent) => void) | null = null;
+  let stops: ((change: AgentStopChange) => void) | null = null;
   let clock = 0;
   return {
     loop: { subscribe: () => () => {}, latest: () => null },
@@ -130,11 +138,16 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
       waiting = listener;
       return () => (waiting = null);
     },
+    onAgentStopChanges(listener) {
+      stops = listener;
+      return () => (stops = null);
+    },
     notificationSettings: () => NO_QUIET_HOURS,
     shellDecides: () => false,
     acceptsRemoteControl: () => true,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
+    fireStop: (change) => stops?.(change),
     ...overrides,
   };
 }
@@ -1095,6 +1108,100 @@ describe("installHostMetricsHostWith", () => {
     await waitFor(() => heard.legacy === 1);
     expect(heard.mac).toBe(1);
     dispose();
+  });
+});
+
+describe("agent stops (#17933)", () => {
+  function hear(p: { client: LinkSession }): AgentStopChangePayload[] {
+    const heard: AgentStopChangePayload[] = [];
+    p.client.registerCallHandler(
+      MetricsLinkMethod.AGENT_STOP_CHANGED,
+      AgentStopChangePayloadSchema,
+      (body) => {
+        heard.push(body);
+        return null;
+      }
+    );
+    return heard;
+  }
+
+  it("tells every Shell that reads them, summary-only too, with facts and its own ping", async () => {
+    const server = new FakeServer();
+    const d = deps({ now: () => 5_000, acceptsRemoteControl: () => false });
+    const dispose = installHostMetricsHostWith(server, d);
+    const a = await pair();
+    const b = await pair();
+    const heardA = hear(a);
+    const heardB = hear(b);
+    b.client.ping();
+    b.client.ping();
+    await waitFor(() => b.host.peerPingNonce === 1);
+    server.attach(a.host, "a", undefined, { agentStopChanges: true });
+    server.attach(b.host, "b", undefined, { agentStopChanges: true });
+
+    d.fireStop({ terminalId: "t1", projectId: "p1", state: "completed", seenAt: 4_200 });
+    d.fireStop({ terminalId: "t1", projectId: "p1", state: null, seenAt: 4_900 });
+    await waitFor(() => heardA.length === 2 && heardB.length === 2);
+    expect(heardA).toEqual([
+      {
+        terminalId: "t1",
+        projectId: "p1",
+        state: "completed",
+        seenAt: 4_200,
+        ageMs: 800,
+        afterPing: null,
+      },
+      { terminalId: "t1", projectId: "p1", state: null, seenAt: 4_900, ageMs: 100, afterPing: null },
+    ]);
+    // Each Shell's frame names that Shell's own newest ping.
+    expect(heardB.map((body) => body.afterPing)).toEqual([1, 1]);
+    dispose();
+  });
+
+  it("sends none to a Shell whose HELLO doesn't say it reads them, so nothing is refused", async () => {
+    const server = new FakeServer();
+    const d = deps();
+    const dispose = installHostMetricsHostWith(server, d);
+    const older = await pair();
+    const declined = await pair();
+    const current = await pair();
+    const heardCurrent = hear(current);
+    const sent = [vi.spyOn(older.host, "call"), vi.spyOn(declined.host, "call")];
+    server.attach(older.host, "older");
+    server.attach(declined.host, "declined", undefined, { agentStopChanges: false });
+    server.attach(current.host, "current", undefined, { agentStopChanges: true });
+
+    d.fireStop({ terminalId: "t1", projectId: null, state: "exited", seenAt: 0 });
+    await waitFor(() => heardCurrent.length === 1);
+    for (const spy of sent) {
+      expect(spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED)).toEqual(
+        []
+      );
+    }
+    dispose();
+  });
+
+  it("holds nothing for a Shell whose link is down, and sends nothing after it's disposed", async () => {
+    const server = new FakeServer();
+    const d = deps();
+    const dispose = installHostMetricsHostWith(server, d);
+    const gone = await pair();
+    const live = await pair();
+    const heardLive = hear(live);
+    server.attach(gone.host, "gone", undefined, { agentStopChanges: true });
+    server.attach(live.host, "live", undefined, { agentStopChanges: true });
+    gone.host.close("link down");
+    await waitFor(() => gone.client.isClosed);
+    const sentOnGone = vi.spyOn(gone.host, "call");
+
+    d.fireStop({ terminalId: "t1", projectId: null, state: "completed", seenAt: 0 });
+    await waitFor(() => heardLive.length === 1);
+    expect(sentOnGone).not.toHaveBeenCalled();
+
+    dispose();
+    d.fireStop({ terminalId: "t2", projectId: null, state: "completed", seenAt: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heardLive.map((body) => body.terminalId)).toEqual(["t1"]);
   });
 });
 

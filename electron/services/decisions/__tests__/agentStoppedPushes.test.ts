@@ -12,6 +12,7 @@ import {
   AGENT_STOPPED_WAKE_GRACE_MS,
   AgentStoppedPushes,
   type AgentTransition,
+  type ReportedStop,
 } from "../agentStoppedPushes.js";
 
 function harness(initial: UserPresence = "away") {
@@ -22,6 +23,7 @@ function harness(initial: UserPresence = "away") {
   const putAside = new Set<string>();
   const transitions = new Set<(t: AgentTransition) => void>();
   const parks = new Set<(terminalId: string) => void>();
+  const reports = new Set<(report: ReportedStop) => void>();
   const suspend = new Set<() => void>();
   const resume = new Set<() => void>();
   const change = new Set<() => void>();
@@ -45,6 +47,7 @@ function harness(initial: UserPresence = "away") {
     putAside: (id) => putAside.has(id),
     watchTransitions: (l) => (transitions.add(l), () => transitions.delete(l)),
     watchPutAside: (l) => (parks.add(l), () => parks.delete(l)),
+    watchReportedStops: (l) => (reports.add(l), () => reports.delete(l)),
     send,
     watch,
     now: () => Date.now(),
@@ -70,11 +73,15 @@ function harness(initial: UserPresence = "away") {
       putAside.add(id);
       parks.forEach((l) => l(id));
     },
+    /** A Remote Host's agent stopping, or that stop taken back, as the port passes it on. */
+    report: (key: string, stopped = true) => reports.forEach((l) => l({ key, stopped })),
     stillDue: () => stillDue(),
     suspend: () => suspend.forEach((l) => l()),
     resume: () => resume.forEach((l) => l()),
     change: () => change.forEach((l) => l()),
-    listeners: () => transitions.size + parks.size + suspend.size + resume.size + change.size,
+    listeners: () =>
+      transitions.size + parks.size + reports.size + suspend.size + resume.size + change.size,
+    reportListeners: () => reports.size,
   };
 }
 
@@ -524,6 +531,98 @@ describe("AgentStoppedPushes", () => {
     expect(h.send).toHaveBeenCalledTimes(2);
     warn.mockRestore();
     h.pushes.stop();
+  });
+
+  describe("stops a Remote Host reports (#17933)", () => {
+    it("counts one like this computer's own, in the same batch and request", async () => {
+      const h = harness();
+      h.pushes.update();
+      h.stop("a");
+      h.report("host-x");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      // And under the same minute: the next one waits for it.
+      await vi.advanceTimersByTimeAsync(0);
+      h.report("host-y");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+      expect(h.send).toHaveBeenCalledTimes(2);
+      h.pushes.stop();
+    });
+
+    it("waits for one to settle, and drops it when the Host takes it back first", () => {
+      const h = harness();
+      h.pushes.update();
+      h.report("host-x");
+      vi.advanceTimersByTime(AGENT_STOPPED_SETTLE_MS - 1);
+      h.report("host-x", false);
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
+      expect(h.send).not.toHaveBeenCalled();
+      // A repeat while one is pending is the one stop; taking back one Host's leaves the other's.
+      h.report("host-x");
+      h.report("host-x");
+      h.report("host-y");
+      h.report("host-x", false);
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("drops one taken back while it waits out the relay's minute", async () => {
+      const h = harness();
+      h.pushes.update();
+      h.stop("a");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.report("host-x");
+      vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS / 2);
+      h.report("host-x", false);
+      await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("admits one only while away, outside quiet hours and awake, as this computer's own", () => {
+      const h = harness("present");
+      h.pushes.update();
+      h.report("host-x");
+      h.setPresence("away");
+      h.setQuiet(true);
+      h.report("host-y");
+      h.setQuiet(false);
+      h.suspend();
+      h.report("host-z");
+      h.resume();
+      h.report("host-w");
+      vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS + AGENT_STOPPED_BATCH_MS);
+      expect(h.send).not.toHaveBeenCalled();
+      h.report("host-v");
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      h.pushes.stop();
+    });
+
+    it("listens for them only while allowed", () => {
+      const h = harness();
+      h.allow(false);
+      h.pushes.update();
+      expect(h.reportListeners()).toBe(0);
+      h.allow(true);
+      h.pushes.update();
+      h.pushes.update();
+      expect(h.reportListeners()).toBe(1);
+      h.report("host-x");
+      h.allow(false);
+      h.pushes.update();
+      expect(h.reportListeners()).toBe(0);
+      h.allow(true);
+      h.pushes.update();
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
+      expect(h.send).not.toHaveBeenCalled();
+      h.pushes.stop();
+    });
   });
 
   it("survives a send that throws", async () => {

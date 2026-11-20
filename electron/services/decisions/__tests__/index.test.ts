@@ -836,6 +836,7 @@ describe("Decisions entry", () => {
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
       lastHostRead: () => null,
+      onAgentStopChanges: () => () => {},
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(
@@ -1639,6 +1640,7 @@ describe("Decisions entry", () => {
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
           lastHostRead: () => null,
+          onAgentStopChanges: () => () => {},
           ...over,
         });
       }
@@ -2018,6 +2020,7 @@ describe("Decisions entry", () => {
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
         lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -2528,6 +2531,81 @@ describe("Decisions entry", () => {
       // Only away counts as away, as the shared reading says it.
       expect(stopped.presence).toBe(readUserPresence);
     });
+
+    it("hears connected Hosts' agents' stops through the Remote Hosts port, as it comes and goes (#17933)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+      type StopListener = Parameters<DecisionsHostsPort["onAgentStopChanges"]>[0];
+      const publishStops = () => {
+        const listeners = new Set<StopListener>();
+        const withdraw = setDecisionsHostsPort({
+          hosts: () => [],
+          linkFor: () => null,
+          onLinkOpened: () => () => {},
+          onHostsChanged: () => () => {},
+          runtimeOf: () => null,
+          announceOwnerState: () => {},
+          hostQuestions: () => [],
+          onHostQuestionsChanged: () => () => {},
+          readHostQuestion: () => null,
+          cancelHostQuestion: () => null,
+          lastHostRead: () => null,
+          onAgentStopChanges: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        });
+        const tell = (hostId: string, terminalId: string, isStopped = true) =>
+          listeners.forEach((listener) => listener(hostId, { terminalId, stopped: isStopped }));
+        return { listeners, withdraw, tell };
+      };
+
+      const first = publishStops();
+      const reports: Array<{ key: string; stopped: boolean }> = [];
+      const off = stopped.watchReportedStops!((report) => reports.push(report));
+      expect(first.listeners.size).toBe(1);
+      first.tell("studio", "t-1");
+      first.tell("lab", "t-1");
+      first.tell("studio", "t-2");
+      first.tell("studio", "t-2", false);
+      // The same terminal id on two Hosts, and on this computer, is three agents.
+      const [studioKey, labKey, studioOther] = reports.map((report) => report.key);
+      expect(new Set([studioKey, labKey, studioOther, "t-1"]).size).toBe(4);
+      expect(reports.map((report) => report.stopped)).toEqual([true, true, true, false]);
+      expect(reports[3]!.key).toBe(studioOther);
+
+      // A Host judged its own run's park and snooze: this computer's records don't speak for it.
+      setRunAttentionServiceRef({
+        getParkRecord: () => ({ parkedAt: 1 }),
+        isSnoozed: () => true,
+      } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
+      expect(stopped.putAside(studioKey!)).toBe(false);
+      expect(stopped.putAside("t-1")).toBe(true);
+
+      // Withdrawn, the port takes back the stops it passed on that still stood.
+      reports.length = 0;
+      first.withdraw();
+      expect(first.listeners.size).toBe(0);
+      expect(reports).toEqual([
+        { key: studioKey, stopped: false },
+        { key: labKey, stopped: false },
+      ]);
+
+      // A port published later is heard in its place.
+      const second = publishStops();
+      expect(second.listeners.size).toBe(1);
+      reports.length = 0;
+      second.tell("studio", "t-1");
+      expect(reports).toEqual([{ key: studioKey, stopped: true }]);
+
+      off();
+      expect(second.listeners.size).toBe(0);
+      second.tell("studio", "t-3");
+      expect(reports).toHaveLength(1);
+      second.withdraw();
+    });
   });
 
   describe("policy", () => {
@@ -2961,6 +3039,7 @@ describe("Decisions entry", () => {
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
         lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -4937,6 +5016,7 @@ describe("Decisions entry", () => {
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
         lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -4984,6 +5064,7 @@ describe("Decisions entry", () => {
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
         lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       };
       const withdraw = setDecisionsHostsPort(port);
       return {
