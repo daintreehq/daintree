@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import type {
+  InjectionIntent,
   LocalStore,
   OutboxItem,
   QuestionOrigin,
@@ -24,9 +25,10 @@ import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 
 /**
  * The client library's store contract, ported from
- * daintreehq/decisions packages/client/tests/store.test.ts at v0.1.0 (the
- * pinned release): its `LocalStore contract` and `atomic intent settlement`
- * blocks, run against Daintree's store over the app database. The package
+ * daintreehq/decisions packages/client/tests/store.test.ts at v0.1.0, with
+ * the history case v0.9.0 added (`processedEventsOfType`, `uncertainIntents`):
+ * its `LocalStore contract` and `atomic intent settlement` blocks, run against
+ * Daintree's store over the app database. The package
  * doesn't export them, so a library upgrade re-ports them from its tag.
  */
 
@@ -179,6 +181,48 @@ describe("LocalStore contract: daintree", () => {
     expect(await s.getCursor()).toBe(9);
     await s.markEventProcessed(1, 5);
     expect((await s.unprocessedEvents(10)).map((e) => e.seq)).toEqual([2, 3]);
+  });
+
+  it("history: processed events of one type in ledger order; a question's uncertain answer intents", async () => {
+    const s = make();
+    const ev = (seq: number, type: string) => ({
+      seq,
+      event_id: `h${seq}`,
+      event_type: type,
+      json: `{"seq":${seq}}`,
+      received_at: 1,
+      processed_at: null,
+    });
+    await s.insertEvent(ev(3, "decision.reopened"));
+    await s.insertEvent(ev(1, "decision.reopened"));
+    await s.insertEvent(ev(2, "decision.cancelled"));
+    await s.insertEvent(ev(4, "decision.reopened"));
+    for (const seq of [1, 2, 3]) await s.markEventProcessed(seq, 9);
+    const reopened = await s.processedEventsOfType!("decision.reopened");
+    expect(reopened.map((e) => e.seq)).toEqual([1, 3]);
+    expect(reopened[0]).toEqual({ ...ev(1, "decision.reopened"), processed_at: 9 });
+    expect(await s.processedEventsOfType!("decision.expired")).toEqual([]);
+
+    const intent = (id: string, over: Partial<InjectionIntent>): InjectionIntent => ({
+      injection_id: id,
+      question_id: "q1",
+      answer_revision: 0,
+      message_id: null,
+      host_id: "host-local",
+      pane_id: "pane-1",
+      terminal_generation: 1,
+      ownership_principal: "principal-1",
+      agent_incarnation: "inc-1",
+      state: "uncertain",
+      created_at: 1,
+      updated_at: 1,
+      ...over,
+    });
+    await s.putIntent(intent("i1", {}));
+    await s.putIntent(intent("i2", { state: "typed" }));
+    await s.putIntent(intent("i3", { message_id: "m1" }));
+    await s.putIntent(intent("i4", { question_id: "q2" }));
+    expect((await s.uncertainIntents!("q1")).map((i) => i.injection_id)).toEqual(["i1"]);
   });
 
   it("intents, pane counts, audit", async () => {

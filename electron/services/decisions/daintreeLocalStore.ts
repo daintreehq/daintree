@@ -863,6 +863,17 @@ export class DaintreeLocalStore implements LocalStore {
     );
   }
 
+  processedEventsOfType(eventType: string): Promise<InboundEvent[]> {
+    return this.enqueue("read", () =>
+      (
+        this.st(
+          `SELECT * FROM decisions_inbound_events
+           WHERE event_type = ? AND processed_at IS NOT NULL ORDER BY seq ASC`
+        ).all(eventType) as InboundEvent[]
+      ).map(eventFrom)
+    );
+  }
+
   advanceCursor(): Promise<number> {
     return this.enqueue("write", () => {
       const has = this.st("SELECT 1 FROM decisions_inbound_events WHERE seq = ?");
@@ -910,6 +921,18 @@ export class DaintreeLocalStore implements LocalStore {
           `SELECT * FROM decisions_injection_intents WHERE state IN ('intent', 'typed')
            ORDER BY created_at ASC, injection_id ASC`
         ).all() as InjectionIntent[]
+      ).map(intentFrom)
+    );
+  }
+
+  uncertainIntents(questionId: string): Promise<InjectionIntent[]> {
+    return this.enqueue("read", () =>
+      (
+        this.st(
+          `SELECT * FROM decisions_injection_intents
+           WHERE question_id = ? AND message_id IS NULL AND state = 'uncertain'
+           ORDER BY created_at ASC, injection_id ASC`
+        ).all(questionId) as InjectionIntent[]
       ).map(intentFrom)
     );
   }
