@@ -278,6 +278,26 @@ describe("the decision model's runtime (#16026)", () => {
     expect(onProxyChanged).toHaveBeenCalledOnce();
   });
 
+  it("keeps the person's withdrawal over a setting that still says yes, until they choose again", async () => {
+    const { runtime, onProxyChanged, onChanged } = await armedRuntime();
+    const changed = onChanged.mock.calls.length;
+
+    runtime.withdrawConsent();
+    expect(runtime.proxy()).toBeNull();
+    // Settings in every window hears of it, though nothing was saved.
+    expect(onChanged.mock.calls.length).toBeGreaterThan(changed);
+    // A setting whose withdrawal wasn't saved still says yes.
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+    expect(runtime.proxy()).toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBeNull();
+
+    const proxied = onProxyChanged.mock.calls.length;
+    await runtime.grantConsent();
+    expect(runtime.proxy()).not.toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBe(0.8);
+    expect(onProxyChanged).toHaveBeenCalledTimes(proxied + 1);
+  });
+
   it("takes a withdrawal at once, ahead of a change queued before it, which can't arm it again", async () => {
     const { runtime, onProxyChanged } = await armedRuntime();
     const changed = onProxyChanged.mock.calls.length;

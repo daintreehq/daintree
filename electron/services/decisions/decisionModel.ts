@@ -438,6 +438,12 @@ export class DecisionModelRuntime {
   };
   /** Whether the person lets it answer, as last asked; never from preferences queued before. */
   private consented = false;
+  /**
+   * Set by the person's own withdrawal, which stands over any setting read
+   * that still says yes (one whose save failed) until they choose a
+   * confidence again.
+   */
+  private withdrawn = false;
   /** The evaluation Settings started, while it runs. */
   private run: { info: DecisionsModelRun; controller: AbortController } | null = null;
   private lastRun: DecisionsModelRunEnd | null = null;
@@ -470,19 +476,43 @@ export class DecisionModelRuntime {
    * from before can arm it again.
    */
   update(preferences: DecisionModelPreferences): Promise<void> {
-    if (preferences.proxyAllowlisted) this.consented = true;
-    else this.withdrawConsent();
+    if (!preferences.proxyAllowlisted) {
+      this.consented = false;
+      this.disarm(true);
+    } else if (!this.withdrawn) {
+      this.consented = true;
+    }
     return this.enqueue(() => this.apply(preferences));
   }
 
   /**
-   * Stops answering at once, ahead of anything queued (#18062), until the
-   * setting next says the person lets it answer. Main calls it before saving
-   * a withdrawal, so a save that fails still leaves the model unarmed.
+   * The person chose not to let it answer (#18062): it stops at once, ahead
+   * of anything queued, and stays stopped until `grantConsent`, whatever the
+   * setting says meanwhile. Main calls it before saving the withdrawal, so a
+   * save that fails still leaves the model unarmed.
    */
   withdrawConsent(): void {
+    this.withdrawn = true;
     this.consented = false;
-    this.disarm(true);
+    if (this.armed !== null) {
+      this.disarm(true);
+      this.notify();
+    }
+  }
+
+  /**
+   * The person just chose a confidence, after it was saved: that choice is
+   * their consent, over an earlier withdrawal the setting may never have
+   * recorded. Resolves once the model has armed, or found it can't.
+   */
+  grantConsent(): Promise<void> {
+    this.withdrawn = false;
+    this.consented = true;
+    return this.enqueue(() => {
+      if (this.closed) return;
+      this.rearm();
+      this.notify();
+    });
   }
 
   /** Resolves once every change asked for so far has been taken, whether it worked or not. */

@@ -1478,7 +1478,7 @@ describe("Decisions entry", () => {
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
     });
 
-    it("stops answering at once on Don't answer automatically, though the setting can't be written", async () => {
+    it("stops answering at once on Don't answer automatically though nothing can be written, and stays stopped until chosen again", async () => {
       const evaluatedAt = await seedChosenThreshold(0.8);
       saved.value = {
         enabled: true,
@@ -1496,31 +1496,39 @@ describe("Decisions entry", () => {
       const running = service.getPolicy()!;
       expect(model.proxy()).not.toBeNull();
 
-      // The setting's write fails, and the file's write waits its turn.
+      // The setting's write fails, and the file's write waits its turn and then fails too.
       vi.mocked(store.set).mockImplementationOnce(() => {
         throw new Error("disk full");
       });
       let release!: () => void;
       const held = new Promise<void>((resolve) => (release = resolve));
-      const original = model.setAutoAnswerThreshold.bind(model);
-      const write = vi
-        .spyOn(model, "setAutoAnswerThreshold")
-        .mockImplementation(async (...args) => {
-          await held;
-          return original(...args);
-        });
+      const write = vi.spyOn(model, "setAutoAnswerThreshold").mockImplementationOnce(async () => {
+        await held;
+        throw new Error("disk full");
+      });
       try {
         const off = setDecisionsModelThreshold({ threshold: null, evaluatedAt });
         await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
         expect(model.proxy()).toBeNull();
         expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
         release();
-        await expect(off).resolves.toMatchObject({ answeringFrom: null });
+        await expect(off).rejects.toMatchObject({ code: "INTERNAL" });
       } finally {
         write.mockRestore();
       }
+      // Both still say yes on disk, and an unrelated save hands the model that setting again.
       expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(model.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+      await setDecisionsDefaultQuestionExpiry(60 * 60_000);
+      await model.settled();
       expect(model.proxy()).toBeNull();
+      expect(getDecisionsModel().answeringFrom).toBeNull();
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      // Choosing a confidence again is the person's consent, though the setting already said yes.
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
     it("arms only at the confidence just chosen, never a saved one while the new one writes", async () => {

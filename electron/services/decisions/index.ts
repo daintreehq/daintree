@@ -2763,23 +2763,26 @@ export function setDecisionsModelThreshold(
         message: "The choice couldn't be saved. Try again.",
       });
     }
-    // With consent already given, the threshold just saved is the whole choice.
-    if (payload.threshold !== null && !readDecisionsSettings(store).proxyAllowlisted) {
-      // After the threshold, so the model arms only at the confidence just chosen.
-      if (shutDown || !readDecisionsSettings(store).enabled) throw setupRefused();
-      try {
-        saveAnswerConsent(true);
-      } catch (error) {
-        console.warn(
-          "[Decisions] Automatic answers weren't allowed in the setting:",
-          error instanceof Error ? error.name : typeof error
-        );
-        throw new AppError({
-          code: "INTERNAL",
-          message: "The choice couldn't be saved. Try again.",
-        });
+    if (payload.threshold !== null) {
+      // After the threshold, so the model arms only at the confidence just
+      // chosen. With consent already saved, the threshold was the whole save.
+      const current = readDecisionsSettings(store);
+      if (!current.proxyAllowlisted) {
+        if (shutDown || !current.enabled) throw setupRefused();
+        try {
+          saveAnswerConsent(true);
+        } catch (error) {
+          console.warn(
+            "[Decisions] Automatic answers weren't allowed in the setting:",
+            error instanceof Error ? error.name : typeof error
+          );
+          throw new AppError({
+            code: "INTERNAL",
+            message: "The choice couldn't be saved. Try again.",
+          });
+        }
       }
-      await model.settled();
+      await model.grantConsent();
     }
     return getDecisionsModel();
   });
