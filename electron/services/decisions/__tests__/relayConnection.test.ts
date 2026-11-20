@@ -1311,7 +1311,7 @@ describe("RelayConnection", () => {
       await store.commitNewQuestion(
         {
           question_id: "q_reopened_0001",
-          alias: 1,
+          alias: await store.nextAlias(),
           origin: QUESTION_ORIGIN,
           requirement: "human-required",
           question_revision: 1,
