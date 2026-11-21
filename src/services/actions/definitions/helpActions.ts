@@ -6,6 +6,7 @@ import type { TourStartResult } from "@/components/Tour/tourRequests";
 import type { TourStatus } from "@/components/Tour/tourStatus";
 import { TOUR_OUTCOMES } from "@shared/utils/tourIds";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { AssistantHandoffPromptSchema } from "@shared/utils/assistantHandoff";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -187,12 +188,37 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     argsSchema: z.object({
       agentId: z.string().min(1),
       // A hand-off to continue from (#18140), as `agent.launch` takes one.
-      prompt: z
-        .string()
-        .optional()
-        .describe("First turn, submitted once the agent starts. Omit to leave it waiting."),
+      prompt: AssistantHandoffPromptSchema.optional().describe(
+        "First turn, submitted once the agent starts. Omit to leave it waiting."
+      ),
     }),
     run: (args, ctx) => runHelpAction("help.newSessionWithAgent", args, ctx, callbacks),
+  }));
+
+  actions.set("help.replaceGlobalAssistant", () => ({
+    id: "help.replaceGlobalAssistant",
+    title: "Replace global assistant",
+    description:
+      "Ask the person to replace the global Daintree Assistant's run with a new conversation on a chosen agent that starts from a hand-off",
+    category: "help",
+    kind: "command",
+    // Safe because it only asks: the replacement runs from the dialog, once the
+    // person approves it there (#18140). A plugin can't pass a confirm tier.
+    danger: "safe",
+    scope: "renderer",
+    // A plugin's hand-off for one run; there is nothing here to repeat.
+    nonRepeatable: true,
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    keywords: ["assistant", "global", "agent", "continue", "hand-off"],
+    argsSchema: z.object({
+      agentId: z.string().min(1),
+      prompt: AssistantHandoffPromptSchema.refine((text) => text.trim().length > 0, {
+        message: "A hand-off can't be blank",
+      }).describe("First turn of the new conversation."),
+    }),
+    resultSchema: z.object({ outcome: z.enum(["awaiting-confirmation", "unavailable"]) }),
+    run: (args, ctx) => runHelpAction("help.replaceGlobalAssistant", args, ctx, callbacks),
   }));
 
   actions.set("help.resumePastSession", () => ({

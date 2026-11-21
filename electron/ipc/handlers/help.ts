@@ -801,6 +801,11 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleRestartGlobalAssistant,
       { withContext: true }
     ),
+    replaceGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.replaceGlobalAssistant,
+      globalAssistant.handleReplaceGlobalAssistant,
+      { withContext: true }
+    ),
     discardGlobalAssistant: op(
       HELP_METHOD_CHANNELS.discardGlobalAssistant,
       globalAssistant.handleDiscardGlobalAssistant,

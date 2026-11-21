@@ -25,6 +25,13 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
       const newEnough = (id: string) => deps.meetsVersionFloor?.(id) ?? Promise.resolve(true);
       return (await firstUsableDefault(await deps.launchableAgents(), newEnough)) ?? null;
     },
+    // As a start with no view takes an agent named for it.
+    canRun: async (agentId) => {
+      const { liveAssistantLaunchDeps } = await launch();
+      const deps = await liveAssistantLaunchDeps();
+      if (!(await deps.launchableAgents()).some(({ id }) => id === agentId)) return false;
+      return (await deps.meetsVersionFloor?.(agentId)) ?? true;
+    },
     provision: async (agentId) => {
       const service = await help();
       return service.provisionSession({
@@ -72,7 +79,7 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
             agentId: spec.agentId,
             cwd: spec.cwd,
             env: spec.env,
-            prompt: "",
+            prompt: spec.prompt ?? "",
             agentLaunchFlags: flags,
             ...(spec.resumeAgentSessionId
               ? { resumeAgentSessionId: spec.resumeAgentSessionId }

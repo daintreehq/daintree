@@ -1,5 +1,9 @@
 import type { ActionDanger, ActionSource } from "../types/actions.js";
-import { AGENT_LAUNCH_ACTION_ID, dispatchConfiguresAgentLaunch } from "./dispatchAgentLaunch.js";
+import {
+  AGENT_LAUNCH_ACTION_ID,
+  dispatchCarriesOptionLikeValue,
+  dispatchConfiguresAgentLaunch,
+} from "./dispatchAgentLaunch.js";
 import { dispatchCarriesRecipeId } from "./dispatchRecipeId.js";
 import {
   dispatchCarriesTerminalCommand,
@@ -87,6 +91,16 @@ export function resolveEffectiveActionDanger(
   ) {
     return "confirm";
   }
+  // An assistant started from a plugin's hand-off (#18140). Its launch is
+  // Daintree's own, so `agent.launch`'s rule above never sees the prompt, which
+  // the CLI takes the same way: as a first turn, or as the option it spells.
+  if (
+    ASSISTANT_HANDOFF_ACTION_IDS.has(actionId) &&
+    source === "plugin" &&
+    dispatchCarriesOptionLikeValue(args)
+  ) {
+    return "confirm";
+  }
   // `terminal.closeAll` from an agent (#12881). Declared safe because a person
   // clearing their own worktree has the undo toast and no need for a dialog;
   // an agent sweeping every panel — the user's shells and other agents' work
@@ -95,6 +109,12 @@ export function resolveEffectiveActionDanger(
   if (actionId === CLOSE_ALL_ACTION_ID && source === "agent") return "confirm";
   return declaredDanger;
 }
+
+/** The actions that start an assistant from a caller's hand-off `prompt`. */
+export const ASSISTANT_HANDOFF_ACTION_IDS: ReadonlySet<string> = new Set([
+  "help.newSessionWithAgent",
+  "help.replaceGlobalAssistant",
+]);
 
 /** The one close that sweeps panels the caller never named. */
 export const CLOSE_ALL_ACTION_ID = "terminal.closeAll";

@@ -2600,6 +2600,10 @@ export interface GeneratedIpcInvokeMap {
     args: [attachmentId: string];
     result: import("./help.js").GlobalAssistantView;
   };
+  "help:global-assistant-replace": {
+    args: [replacement: import("./help.js").GlobalAssistantReplacement];
+    result: import("./help.js").GlobalAssistantView;
+  };
   "help:global-assistant-restart": {
     args: [expectedGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;

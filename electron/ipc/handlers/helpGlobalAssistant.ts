@@ -3,9 +3,11 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { IpcContext } from "../types.js";
 import type {
   GlobalAssistantAttachment,
+  GlobalAssistantReplacement,
   GlobalAssistantView,
   WindowGlobalAssistantPanel,
 } from "../../../shared/types/ipc/help.js";
+import { AssistantHandoffPromptSchema, isUsableHandoff } from "../../../shared/utils/assistantHandoff.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
 import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
@@ -257,6 +259,46 @@ export async function handleRestartGlobalAssistant(
   const instance = service();
   requireGeneration(instance, expectedGeneration);
   await instance.restart();
+  return globalAssistantView(instance);
+}
+
+const GlobalAssistantReplacementSchema = z.object({
+  agentId: z.string().min(1).max(64),
+  prompt: AssistantHandoffPromptSchema.refine(isUsableHandoff),
+  expected: z.object({
+    generation: z.number().int().nonnegative(),
+    phase: z.enum(["absent", "launching", "running"]),
+  }),
+});
+
+/**
+ * Replace the run with one on another agent that starts from a hand-off
+ * (#18140), once the person approved it in this window. The run they were
+ * shown is named, so an answer given after it changed replaces nothing.
+ */
+export async function handleReplaceGlobalAssistant(
+  ctx: IpcContext,
+  replacement: GlobalAssistantReplacement
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  const parsed = GlobalAssistantReplacementSchema.safeParse(replacement);
+  if (!parsed.success) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant replacement." });
+  }
+  const { agentId, prompt, expected } = parsed.data;
+  const instance = service();
+  try {
+    await instance.replace({ agentId, prompt }, expected);
+  } catch (err) {
+    if (err instanceof AppError && err.code === "STALE_GENERATION") {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: err.message,
+        userMessage: "The global assistant changed since you were asked. Nothing was replaced.",
+      });
+    }
+    throw err;
+  }
   return globalAssistantView(instance);
 }
 

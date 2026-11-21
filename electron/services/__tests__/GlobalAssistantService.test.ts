@@ -20,6 +20,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}) {
   const calls: string[] = [];
   const deps: MockedDeps = {
     agentId: vi.fn(async () => "claude"),
+    canRun: vi.fn(async () => true),
     provision: vi.fn(async () => {
       n += 1;
       calls.push(`provision-${n}`);
@@ -510,6 +511,185 @@ describe("GlobalAssistantService", () => {
       spawn.resolve(true);
       await expect(first).rejects.toMatchObject({ code: "CANCELLED" });
       expect(await queued).toMatchObject({ phase: "running", agentId: "codex" });
+    });
+  });
+
+  describe("replacing the run from a hand-off (#18140)", () => {
+    const choice = { agentId: "codex", prompt: "Continue from the hand-off" };
+
+    it("stops the run and starts the chosen agent fresh, given the hand-off as its first turn", async () => {
+      const { deps, calls } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      deps.takeResume.mockClear();
+
+      const after = await service.replace(choice, { generation: before.generation, phase: "running" });
+
+      expect(after).toMatchObject({ phase: "running", agentId: "codex" });
+      expect(after.terminalId).not.toBe(before.terminalId);
+      expect(deps.takeResume).not.toHaveBeenCalled();
+      expect(deps.spawn).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentId: "codex", prompt: "Continue from the hand-off" })
+      );
+      expect(deps.spawn.mock.lastCall?.[0]).not.toHaveProperty("resumeAgentSessionId");
+      // The old run's credentials go before its PTY, and its conversation is forgotten.
+      expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.indexOf("kill-" + before.terminalId));
+      expect(calls).toContain("discard-resume");
+    });
+
+    it("starts one when none runs, clearing a kept conversation", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+
+      const state = await service.replace(choice, { generation: 0, phase: "absent" });
+
+      expect(state).toMatchObject({ phase: "running", agentId: "codex" });
+      expect(deps.discardResume).toHaveBeenCalledTimes(1);
+      expect(deps.takeResume).not.toHaveBeenCalled();
+    });
+
+    it("leaves the run untouched for an agent that can't run here", async () => {
+      const { deps } = makeDeps();
+      deps.canRun.mockResolvedValue(false);
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+
+      await expect(
+        service.replace(choice, { generation: before.generation, phase: "running" })
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+
+      expect(service.getState()).toMatchObject({
+        phase: "running",
+        terminalId: before.terminalId,
+        generation: before.generation,
+      });
+      expect(deps.revoke).not.toHaveBeenCalled();
+      expect(deps.discardResume).not.toHaveBeenCalled();
+    });
+
+    it("replaces nothing once the run has changed since the person was asked", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      // Asked while nothing ran; a Start since made one run at the same generation.
+      const asked = service.getState();
+      await service.ensureSession();
+
+      await expect(
+        service.replace(choice, { generation: asked.generation, phase: asked.phase })
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState()).toMatchObject({ phase: "running", agentId: "claude" });
+      expect(deps.revoke).not.toHaveBeenCalled();
+
+      // A Clear since the question moved the generation on.
+      const shown = service.getState();
+      await service.restart();
+      await expect(
+        service.replace(choice, { generation: shown.generation, phase: "running" })
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().agentId).toBe("claude");
+    });
+
+    it("checks the run is still the one shown after it has checked the agent", async () => {
+      const usable = deferred<boolean>();
+      const { deps } = makeDeps();
+      deps.canRun.mockReturnValue(usable.promise);
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+
+      const replaced = service.replace(choice, { generation: before.generation, phase: "running" });
+      await service.discard();
+      usable.resolve(true);
+
+      await expect(replaced).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("absent");
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+    });
+
+    it("is joined, not displaced, by a Start pressed while the old run is still stopping", async () => {
+      const revoke = deferred<void>();
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      deps.revoke.mockReturnValueOnce(revoke.promise);
+
+      const replaced = service.replace(choice, { generation: before.generation, phase: "running" });
+      await vi.waitFor(() => expect(deps.revoke).toHaveBeenCalled());
+      // Shown starting at once, so another window's Start joins it.
+      expect(service.getState().phase).toBe("launching");
+      const started = service.ensureSession();
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+      revoke.resolve();
+
+      const [a, b] = await Promise.all([replaced, started]);
+      expect(a).toMatchObject({ agentId: "codex" });
+      expect(b.terminalId).toBe(a.terminalId);
+      expect(deps.provision).toHaveBeenCalledTimes(2);
+      expect(deps.agentId).toHaveBeenCalledTimes(1);
+    });
+
+    it("can be cancelled while the old run is still stopping, starting nothing", async () => {
+      const revoke = deferred<void>();
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      deps.revoke.mockReturnValueOnce(revoke.promise);
+
+      const replaced = service.replace(choice, { generation: before.generation, phase: "running" });
+      await vi.waitFor(() => expect(deps.revoke).toHaveBeenCalled());
+      const cancelled = service.cancelLaunch();
+      revoke.resolve();
+      await cancelled;
+
+      await expect(replaced).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+      expect(service.getState().phase).toBe("absent");
+    });
+
+    it("keeps a run on the chosen agent through a change of default, from the moment it is asked for", async () => {
+      const provision = deferred<{
+        sessionId: string;
+        sessionPath: string;
+        token: string;
+        mcpUrl: null;
+      }>();
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      deps.provision.mockReturnValueOnce(provision.promise as never);
+
+      const replaced = service.replace(choice, { generation: before.generation, phase: "running" });
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalledTimes(2));
+      await service.onAgentChanged("gemini");
+      provision.resolve({ sessionId: "s9", sessionPath: "/g", token: "t", mcpUrl: null });
+
+      expect(await replaced).toMatchObject({ phase: "running", agentId: "codex" });
+      await service.onAgentChanged("claude");
+      expect(service.getState()).toMatchObject({ phase: "running", agentId: "codex" });
+    });
+
+    it("goes back to the default once the chosen run's conversation is cleared", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      await service.replace(choice, { generation: before.generation, phase: "running" });
+
+      const cleared = await service.restart();
+
+      expect(cleared).toMatchObject({ phase: "running", agentId: "claude" });
+      expect(deps.spawn.mock.lastCall?.[0]).not.toHaveProperty("prompt");
+      // A run on the default follows the default again.
+      await service.onAgentChanged("codex");
+      expect(service.getState().phase).toBe("absent");
+    });
+
+    it("refuses once quitting has begun", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      service.closeAdmission();
+      await expect(
+        service.replace(choice, { generation: 0, phase: "absent" })
+      ).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.discardResume).not.toHaveBeenCalled();
     });
   });
 

@@ -26,6 +26,10 @@ import {
   declineFailedLayoutApplyConfirmation,
   useLayoutApplyConfirmStore,
 } from "@/store/layoutApplyConfirmStore";
+import {
+  declineGlobalAssistantReplacement,
+  useGlobalAssistantReplaceConfirmStore,
+} from "@/store/globalAssistantReplaceConfirmStore";
 import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { declineFailedMcpConfirmation } from "@/store/mcpConfirmStore";
 import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
@@ -64,6 +68,7 @@ import {
   LazyLayoutApplyConfirmDialog,
   LazyRecipeRunConfirmDialog,
   LazyScheduleRunConfirmDialog,
+  LazyGlobalAssistantReplaceConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -299,6 +304,8 @@ export function ModalHostLayer({
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
   const resourceTeardownConfirmKey = useWorktreeResourceTeardownConfirmStore((s) => s.requestSeq);
   const layoutApplyConfirmKey = useLayoutApplyConfirmStore((s) => s.current?.requestId ?? "");
+  // Mounted only once a plugin has asked, so a view no plugin asks loads nothing.
+  const globalReplaceRequestSeq = useGlobalAssistantReplaceConfirmStore((s) => s.requestSeq);
 
   return (
     <>
@@ -530,6 +537,19 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyScheduleRunConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && globalReplaceRequestSeq > 0 && (
+        <ErrorBoundary
+          variant="component"
+          componentName="GlobalAssistantReplaceConfirmDialog"
+          resetKeys={[globalReplaceRequestSeq]}
+          // A hand-off nobody can be asked about replaces nothing.
+          onError={() => declineGlobalAssistantReplacement()}
+        >
+          <Suspense fallback={null}>
+            <LazyGlobalAssistantReplaceConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}
