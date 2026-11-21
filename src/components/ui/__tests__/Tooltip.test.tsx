@@ -7,6 +7,7 @@ import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../tooltip";
 import { TOOLTIP_MOTION_CLASS, TOOLTIP_PRESS_DISMISSED_MOTION_CLASS } from "../overlayMotion";
 import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
+import { ESCAPE_TOOLTIP_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import {
   _resetTooltipFocusSuppressionForTests,
   armTooltipFocusSuppression,
@@ -650,6 +651,36 @@ describe("TooltipContent — collisionPadding default and override (issue #8008)
 
     const lastCall = contentSpy.mock.calls.at(-1)?.[0];
     expect(lastCall?.collisionPadding).toBe(24);
+  });
+});
+
+describe("TooltipContent — counts as an Escape layer only when Escape can close it", () => {
+  beforeEach(() => {
+    contentSpy.mockClear();
+  });
+
+  function renderContent(rootProps: React.ComponentProps<typeof Tooltip>) {
+    render(
+      <Tooltip {...rootProps}>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>content</TooltipContent>
+      </Tooltip>
+    );
+    return contentSpy.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  }
+
+  it("marks an uncontrolled tooltip", () => {
+    expect(renderContent({ defaultOpen: true })?.[ESCAPE_TOOLTIP_LAYER_ATTR]).toBe("");
+  });
+
+  it("marks a controlled tooltip whose owner handles the close", () => {
+    expect(renderContent({ open: true, onOpenChange: () => {} })?.[ESCAPE_TOOLTIP_LAYER_ATTR]).toBe(
+      ""
+    );
+  });
+
+  it("leaves a pinned tooltip (open with no onOpenChange) unmarked", () => {
+    expect(renderContent({ open: true })).not.toHaveProperty(ESCAPE_TOOLTIP_LAYER_ATTR);
   });
 });
 

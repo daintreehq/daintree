@@ -9,6 +9,7 @@ import {
   markEscapeYieldedToDialog,
   escapeWasYieldedToDialog,
   ESCAPE_RADIX_LAYER_ATTR,
+  ESCAPE_TOOLTIP_LAYER_ATTR,
   _resetForTests,
 } from "../dialogEscapeBackstop";
 
@@ -54,21 +55,46 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
   });
 
+  /** A tooltip as TooltipContent renders it when Escape can close it. */
+  function addTooltip(dataState: string, closable = true): HTMLElement {
+    const el = addRadixLayer("tooltip", dataState);
+    if (closable) el.setAttribute(ESCAPE_TOOLTIP_LAYER_ATTR, "");
+    return el;
+  }
+
   // Radix Tooltip never writes `open`: its content carries `delayed-open` or
   // `instant-open` while showing and `closed` while Presence plays the exit.
   it.each(["delayed-open", "instant-open"])(
     "records radixLayerOpenAtCapture=true for a tooltip in data-state=%s",
     (dataState) => {
-      addRadixLayer("tooltip", dataState);
+      addTooltip(dataState);
       fireEscape();
       expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
     }
   );
 
   it("treats a closing tooltip (data-state=closed) as not open", () => {
-    addRadixLayer("tooltip", "closed");
+    addTooltip("closed");
     fireEscape();
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
+  it("does not count a showing tooltip that Escape cannot close (a pinned hint)", () => {
+    addTooltip("instant-open", false);
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
+  // With an aria-label, Radix puts the role on a hidden child and leaves
+  // data-state on the content.
+  it("counts a showing tooltip whose role sits on a hidden child", () => {
+    const el = addTooltip("delayed-open");
+    el.removeAttribute("role");
+    const label = document.createElement("span");
+    label.setAttribute("role", "tooltip");
+    el.appendChild(label);
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
   });
 
   it("ignores modal dialogs (aria-modal=true) — those are AppDialog territory", () => {

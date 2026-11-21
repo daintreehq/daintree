@@ -927,7 +927,7 @@ test.describe("Core: Accessibility and focus", () => {
         await window.keyboard.press(`${mod}+K`);
         await window.keyboard.press(`${mod}+T`);
         await expect(window.locator(SEL.themePalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
-        await expect(window.locator('[role="tooltip"][data-state="open"]')).toHaveCount(0, {
+        await expect(window.locator('[role="tooltip"][data-state$="-open"]')).toHaveCount(0, {
           timeout: T_MEDIUM,
         });
         const themeInput = window.locator(SEL.themePalette.searchInput);

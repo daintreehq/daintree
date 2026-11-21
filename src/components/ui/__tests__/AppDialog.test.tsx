@@ -1639,6 +1639,35 @@ describe("AppDialog Escape over an open tooltip", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // The terminal find bar's invalid-regex hint pins `open` with no handler and
+  // survives the dialog transition. Radix's dismiss reaches nobody, so counting
+  // it as the layer taking Escape would leave the dialog unclosable.
+  it("closes over a pinned tooltip that Escape cannot dismiss", async () => {
+    const onClose = vi.fn();
+    render(
+      <>
+        <Tooltip open>
+          <TooltipTrigger asChild>
+            <span>Find in terminal</span>
+          </TooltipTrigger>
+          <TooltipContent>Invalid regular expression</TooltipContent>
+        </Tooltip>
+        <AppDialog isOpen onClose={onClose}>
+          <button type="button">Confirm</button>
+        </AppDialog>
+      </>
+    );
+    await screen.findByRole("tooltip", { hidden: true });
+    screen.getByText("Confirm").focus();
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip", { hidden: true }).getAttribute("data-state")).toMatch(
+      /-open$/
+    );
+  });
 });
 
 /**

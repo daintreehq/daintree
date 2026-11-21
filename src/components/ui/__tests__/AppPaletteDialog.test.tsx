@@ -14,6 +14,7 @@ import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBack
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../tooltip";
 
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
@@ -189,6 +190,51 @@ describe("AppPaletteDialog focus trap", () => {
 
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
+  });
+});
+
+describe("AppPaletteDialog Escape over an open tooltip", () => {
+  beforeEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  function pressEscape() {
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+  }
+
+  it("dismisses only the tooltip, then closes on the next Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Tooltip palette" tier="command">
+        <Tooltip defaultOpen autoDismiss={false} dismissOnDialogTransition={false}>
+          <TooltipTrigger asChild>
+            <button type="button">Row</button>
+          </TooltipTrigger>
+          <TooltipContent>Full row text</TooltipContent>
+        </Tooltip>
+      </AppPaletteDialog>
+    );
+    await screen.findByRole("tooltip", { hidden: true });
+    screen.getByText("Row").focus();
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tooltip", { hidden: true })).toBeNull();
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

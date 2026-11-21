@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { VirtuosoMockContext } from "react-virtuoso";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { OPEN_ESCAPE_LAYER_SELECTOR } from "@/lib/dialogEscapeBackstop";
 
 const dispatch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -340,6 +341,35 @@ describe("HoverCard", () => {
       fireEvent.focus(trigger);
     });
     expect(screen.queryAllByText("Linus Pauling")).toHaveLength(0);
+  });
+
+  // The dialog backstop and the plugin manager read whether a layer is taking
+  // Escape off this selector. A labelled card's role sits on a hidden child.
+  it("counts as a layer taking Escape while it can close", async () => {
+    mount(
+      createElement(kit.HoverCard, {
+        content: createElement("p", null, "Ada Lovelace"),
+        "aria-label": "Ada Lovelace",
+        children: createElement("button", { type: "button" }, "@ada"),
+      })
+    );
+    await act(async () => {
+      fireEvent.focus(screen.getByRole("button", { name: "@ada" }));
+    });
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).not.toBeNull();
+  });
+
+  it("does not count as taking Escape when the plugin pins it open", async () => {
+    mount(
+      createElement(kit.HoverCard, {
+        open: true,
+        content: createElement("p", null, "Pinned"),
+        children: createElement("button", { type: "button" }, "Trigger"),
+      })
+    );
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).toBeNull();
   });
 
   it("stays open when controlled, on the host's hover-card width", () => {

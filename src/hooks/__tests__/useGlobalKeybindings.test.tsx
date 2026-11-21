@@ -4,7 +4,7 @@ import { useState } from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
-import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR, ESCAPE_TOOLTIP_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
@@ -2483,6 +2483,39 @@ describe("useGlobalKeybindings — layers open inside the plugin manager (#16942
 
     expect(closeManager).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  /** A control in the manager whose keyboard-opened tooltip is showing. */
+  function controlWithTooltip(escapeClosable: boolean): HTMLButtonElement {
+    const tooltip = document.createElement("div");
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.setAttribute("data-state", "instant-open");
+    if (escapeClosable) tooltip.setAttribute(ESCAPE_TOOLTIP_LAYER_ATTR, "");
+    document.body.appendChild(tooltip);
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    return control;
+  }
+
+  it("lets an open tooltip close itself before the manager", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    const { reachedDocument } = pressEscapeOn(controlWithTooltip(true));
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+  });
+
+  it("closes the manager over a pinned tooltip that Escape cannot dismiss", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    pressEscapeOn(controlWithTooltip(false));
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a layer left open behind the manager in the inert workspace", () => {
