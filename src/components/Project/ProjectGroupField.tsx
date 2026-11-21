@@ -47,8 +47,6 @@ export function ProjectGroupField({
   disabled?: boolean;
 }) {
   const [isNaming, setIsNaming] = useState(false);
-  // Each opening starts the name dialog over with an empty box.
-  const [naming, setNaming] = useState(0);
   // Whether this opening made a group, read when its dialog closes: the picker
   // then shows the new group and takes focus, where a cancel goes back to the
   // button that opened it.
@@ -88,7 +86,6 @@ export function ProjectGroupField({
           data-testid="project-group-new"
           onClick={() => {
             createdRef.current = false;
-            setNaming((count) => count + 1);
             setIsNaming(true);
           }}
         >
@@ -97,7 +94,6 @@ export function ProjectGroupField({
         </Button>
       </div>
       <ProjectGroupNameDialog
-        key={naming}
         isOpen={isNaming}
         create={async (name) => {
           await onCreate(name);

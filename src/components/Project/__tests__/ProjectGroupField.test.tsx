@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/hooks/useOverlayState", () => ({ useOverlayState: () => {} }));
@@ -146,8 +147,87 @@ describe("ProjectGroupField", () => {
     expect(screen.getByLabelText("Project name")).toBeTruthy();
 
     fireEvent.change(input, { target: { value: "Daintree 2" } });
+    // The refusal was about the old name, so it goes as soon as the name changes.
+    expect(within(nameDialog()).queryByRole("alert")).toBeNull();
+    expect(input.getAttribute("aria-invalid")).toBe("false");
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(chosen()).toBe("new-Daintree 2"));
+  });
+
+  it("keeps the earlier choice until Create group's save comes back", async () => {
+    let land!: () => Promise<void>;
+    useProjectGroupsStore.setState({
+      groups: [makeProjectGroup("g1", "Daintree")],
+      createGroup: (name: string) =>
+        new Promise((resolve) => {
+          land = () => createGroupLikeHost(name).then(resolve);
+        }),
+    });
+    renderHarness();
+    fireEvent.change(picker()!, { target: { value: "g1" } });
+    fireEvent.click(newGroupButton());
+    fireEvent.change(within(nameDialog()).getByTestId("project-group-name-input"), {
+      target: { value: "Clients" },
+    });
+    fireEvent.click(within(nameDialog()).getByRole("button", { name: "Create group" }));
+
+    expect(nameDialog()).toBeTruthy();
+    expect(chosen()).toBe("g1");
+    await act(() => land());
+
+    await waitFor(() => expect(chosen()).toBe("new-Clients"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New group" })).toBeNull());
+  });
+
+  it("returns to the button when a later New group… is cancelled", async () => {
+    renderHarness();
+    fireEvent.click(newGroupButton());
+    const first = within(nameDialog()).getByTestId("project-group-name-input");
+    fireEvent.change(first, { target: { value: "Clients" } });
+    fireEvent.keyDown(first, { key: "Enter" });
+    await waitFor(() => expect(document.activeElement).toBe(picker()));
+
+    // A real click focuses the button it lands on; fireEvent.click doesn't.
+    newGroupButton().focus();
+    fireEvent.click(newGroupButton());
+    await waitFor(() => expect(nameDialog().contains(document.activeElement)).toBe(true));
+    fireEvent.click(within(nameDialog()).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(newGroupButton()));
+    expect(chosen()).toBe("new-Clients");
+  });
+
+  it("makes no group from an Enter pressed while the cancelled prompt animates out", async () => {
+    renderHarness();
+    fireEvent.click(newGroupButton());
+    const input = within(nameDialog()).getByTestId("project-group-name-input");
+    fireEvent.change(input, { target: { value: "Changed my mind" } });
+    fireEvent.click(within(nameDialog()).getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New group" })).toBeNull());
+    expect(useProjectGroupsStore.getState().groups).toEqual([]);
+    expect(chosen()).toBe("none");
+  });
+
+  it("returns focus the same way under StrictMode", async () => {
+    render(<Harness />, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <StrictMode>
+          <TooltipProvider>{children}</TooltipProvider>
+        </StrictMode>
+      ),
+    });
+    newGroupButton().focus();
+    fireEvent.click(newGroupButton());
+    fireEvent.click(within(nameDialog()).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement).toBe(newGroupButton()));
+
+    fireEvent.click(newGroupButton());
+    const input = within(nameDialog()).getByTestId("project-group-name-input");
+    fireEvent.change(input, { target: { value: "Clients" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(document.activeElement).toBe(picker()));
   });
 
   it("doesn't choose a group whose save lands after the dialog started over", async () => {

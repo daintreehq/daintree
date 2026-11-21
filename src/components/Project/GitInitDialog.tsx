@@ -677,6 +677,9 @@ export function GitInitDialog({
               </FormRow>
 
               <ProjectGroupField
+                // A new folder starts the field over, closing a half-typed new
+                // group meant for the last one.
+                key={directoryPath}
                 id="git-init-group"
                 groups={groups}
                 value={groupId}

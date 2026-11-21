@@ -171,7 +171,7 @@ vi.mock("@/store/projectGroupsStore", () => import("@/store/__tests__/projectGro
 
 import { CreateProjectFolderDialog } from "../CreateProjectFolderDialog";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
-import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
+import { createGroupLikeHost, makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 function emojiTrigger() {
   return screen.getByRole("button", { name: /choose project emoji/i });
@@ -410,7 +410,7 @@ describe("CreateProjectFolderDialog project group", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
     });
-    expect(createProjectFolderMock).toHaveBeenCalledWith(
+    expect(createProjectFolderMock).toHaveBeenCalledExactlyOnceWith(
       "/Users/test",
       "my-api",
       suggestProjectEmoji("my-api"),
@@ -424,13 +424,16 @@ describe("CreateProjectFolderDialog project group", () => {
     fireEvent.change(groupSelect()!, { target: { value: "g1" } });
 
     fireEvent.click(screen.getByTestId("project-group-new"));
-    await screen.findByTestId("project-group-name-input");
+    fireEvent.change(await screen.findByTestId("project-group-name-input"), {
+      target: { value: "Never made" },
+    });
     // The second dialog on screen is the name prompt, stacked over this one.
     const [, namePrompt] = screen.getAllByTestId("app-dialog");
     fireEvent.click(within(namePrompt!).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
 
     expect(groupSelect()?.value).toBe("g1");
+    expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["g1"]);
     await create();
     expect(createProjectFolderMock).toHaveBeenCalledWith(
       "/Users/test",
@@ -440,13 +443,46 @@ describe("CreateProjectFolderDialog project group", () => {
     );
   });
 
+  it("shows a refused name in the prompt and keeps the folder dialog as it was", async () => {
+    useProjectGroupsStore.setState({
+      groups: [makeProjectGroup("g1", "Daintree")],
+      createGroup: (name: string) =>
+        name === "Daintree"
+          ? Promise.reject(new Error('A group called "Daintree" already exists'))
+          : createGroupLikeHost(name),
+    });
+    try {
+      const { onClose } = await renderDialog();
+      fireEvent.change(folderInput(), { target: { value: "my-api" } });
+      fireEvent.change(groupSelect()!, { target: { value: "g1" } });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: "Daintree" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect((await screen.findByRole("alert")).textContent).toContain("already exists");
+      expect(groupSelect()?.value).toBe("g1");
+      expect(folderInput().value).toBe("my-api");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(createProjectFolderMock).not.toHaveBeenCalled();
+
+      fireEvent.change(input, { target: { value: "Daintree 2" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(groupSelect()?.value).toBe("new-Daintree 2"));
+    } finally {
+      useProjectGroupsStore.setState({ createGroup: createGroupLikeHost });
+    }
+  });
+
   it("leaves a group made here in place when the whole dialog is cancelled", async () => {
     const { onClose } = await renderDialog();
     await makeGroup("Clients");
+    expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
     expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["new-Clients"]);
     expect(createProjectFolderMock).not.toHaveBeenCalled();
   });

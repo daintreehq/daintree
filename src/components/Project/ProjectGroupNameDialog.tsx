@@ -45,6 +45,19 @@ export function ProjectGroupNameDialog({
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // A caller that keeps this mounted across openings gets an untouched box on
+  // each one. Reset while rendering the opening rather than by remounting: a
+  // dialog that mounts already open loses its opener to StrictMode's replayed
+  // cleanup, and focus has nowhere to go back to when it closes.
+  const [openedAs, setOpenedAs] = useState(isOpen);
+  if (openedAs !== isOpen) {
+    setOpenedAs(isOpen);
+    if (isOpen) {
+      setName(group?.name ?? "");
+      setError(null);
+    }
+  }
+
   // A new attempt clears the last refusal: the message was about a name that
   // is no longer in the box.
   useEffect(() => setError(null), [name]);
@@ -53,7 +66,9 @@ export function ProjectGroupNameDialog({
   const unchanged = group !== undefined && trimmed === group.name;
 
   const submit = async () => {
-    if (!trimmed || isSaving) return;
+    // The box keeps focus while the dialog animates out, so an Enter just after
+    // Cancel or Escape still reaches here.
+    if (!isOpen || !trimmed || isSaving) return;
     if (unchanged) {
       onClose();
       return;
