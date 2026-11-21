@@ -161,7 +161,6 @@ describe("DecisionsInvolvementSettingsSection", () => {
     await settle();
     expect(setInvolvement).not.toHaveBeenCalled();
 
-    fireEvent.click(option("Usually", "Ask while exploring"));
     fireEvent.change(byId("decisions-involvement-consult-count"), { target: { value: "4" } });
     expect(save().disabled).toBe(false);
     act(() => save().focus());
@@ -170,7 +169,7 @@ describe("DecisionsInvolvementSettingsSection", () => {
 
     expect(setInvolvement).toHaveBeenCalledExactlyOnceWith({
       expectedRevision: 3,
-      normalMode: "involve-early",
+      normalMode: "recommend",
       consultCount: 4,
       override: null,
     });
@@ -202,8 +201,8 @@ describe("DecisionsInvolvementSettingsSection", () => {
     fireEvent.click(option("Usually", "Ask while exploring"));
     fireEvent.click(screen.getByRole("checkbox", { name: /For a while/ }));
     expect(field("decisions-involvement-until").disabled).toBe(false);
-    // Neither the usual mode nor the one it starts out as, so the pick is what's sent.
-    fireEvent.click(option("Mode for a while", "Bring a recommendation"));
+    // For a while is always the other mode, so a recommendation, and its count is offered with it.
+    expect(byId("decisions-involvement-consult-count")).not.toBeNull();
     const end = localDateTime(NOW + 3 * HOUR);
     fireEvent.change(byId("decisions-involvement-until"), { target: { value: end } });
     fireEvent.click(save());

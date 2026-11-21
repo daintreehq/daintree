@@ -163,14 +163,13 @@ describe("decisionsInvolvementModel", () => {
 
     it("starts from the preference reviewed, keeping an active temporary mode and its exact end", () => {
       const until = "2026-11-18T12:34:56.789Z";
-      // The same mode as the normal one, which no default would pick.
-      const draft = draftFrom(available({ override: { mode: "recommend", until } }), NOW);
+      const draft = draftFrom(available({ override: { mode: "involve-early", until } }), NOW);
 
       expect(draft).toMatchObject({
         normalMode: "recommend",
         consultCount: 2,
         temporary: true,
-        temporaryMode: "recommend",
+        temporaryMode: "involve-early",
         keptUntil: until,
       });
       expect(draftIssue(draft, NOW)).toBeNull();
@@ -178,7 +177,25 @@ describe("decisionsInvolvementModel", () => {
         expectedRevision: 3,
         normalMode: "recommend",
         consultCount: 2,
-        override: { mode: "recommend", until },
+        override: { mode: "involve-early", until },
+      });
+    });
+
+    it("starts without a temporary mode the same as the usual one, so saving keeps what agents are told", () => {
+      const until = "2026-11-18T12:34:56.789Z";
+      // A phone can set one; keeping it would flip it to the other mode in a draft.
+      const draft = draftFrom(available({ override: { mode: "recommend", until } }), NOW);
+
+      expect(draft).toMatchObject({
+        temporary: false,
+        temporaryMode: "involve-early",
+        keptUntil: null,
+      });
+      expect(draftPayload(draft, 3)).toEqual({
+        expectedRevision: 3,
+        normalMode: "recommend",
+        consultCount: 2,
+        override: null,
       });
     });
 
