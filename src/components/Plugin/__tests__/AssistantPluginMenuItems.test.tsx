@@ -87,9 +87,10 @@ async function rows() {
 
 const separators = () => within(screen.getByRole("menu")).queryAllByRole("separator").length;
 
-function dispatchedArgs(): Record<string, unknown> {
+function dispatchedArgs(actionId: string): Record<string, unknown> {
   expect(dispatchMock).toHaveBeenCalledTimes(1);
   const call = dispatchMock.mock.calls[0] as unknown as [string, Record<string, unknown>, unknown];
+  expect(call[0]).toBe(actionId);
   expect(call[2]).toEqual({ source: "menu" });
   return call[1];
 }
@@ -129,6 +130,18 @@ describe("AssistantPluginMenuItems", () => {
     ]);
   });
 
+  it("hides an agent's items from a lane whose agent nothing names", async () => {
+    seed();
+    render(<Menu subject={project({ agentId: undefined })} />);
+    expect(await rows()).toEqual([
+      "Open docs",
+      "Any assistant",
+      "Project lane",
+      "Live lane",
+      "Project one",
+    ]);
+  });
+
   it("matches the lane's own project and agent", async () => {
     seed();
     render(<Menu subject={project({ projectId: "proj-2", agentId: "codex" })} />);
@@ -145,7 +158,7 @@ describe("AssistantPluginMenuItems", () => {
     seed();
     render(<Menu subject={project()} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Project lane" }));
-    expect(dispatchedArgs()).toStrictEqual({
+    expect(dispatchedArgs("acme.project-lane")).toStrictEqual({
       assistantScope: "project",
       projectId: "proj-1",
       slot: 2,
@@ -158,7 +171,7 @@ describe("AssistantPluginMenuItems", () => {
     seed();
     render(<Menu subject={project({ slot: 0, terminalId: undefined, agentId: undefined })} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Any assistant" }));
-    expect(dispatchedArgs()).toStrictEqual({
+    expect(dispatchedArgs("acme.any-assistant")).toStrictEqual({
       assistantScope: "project",
       projectId: "proj-1",
       slot: 0,
@@ -169,7 +182,7 @@ describe("AssistantPluginMenuItems", () => {
     seed();
     render(<Menu subject={globalRun({ incarnation: 7 })} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Global run" }));
-    expect(dispatchedArgs()).toStrictEqual({
+    expect(dispatchedArgs("acme.global-run")).toStrictEqual({
       assistantScope: "global",
       terminalId: "global-term",
       incarnation: 7,
@@ -179,12 +192,12 @@ describe("AssistantPluginMenuItems", () => {
 
   it("leaves out the global run's agent while nothing says", async () => {
     seed();
-    render(<Menu subject={globalRun({ agentId: undefined })} />);
+    render(<Menu subject={globalRun({ incarnation: 9, agentId: undefined })} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Global run" }));
-    expect(dispatchedArgs()).toStrictEqual({
+    expect(dispatchedArgs("acme.global-run")).toStrictEqual({
       assistantScope: "global",
       terminalId: "global-term",
-      incarnation: 4,
+      incarnation: 9,
     });
   });
 
@@ -194,6 +207,11 @@ describe("AssistantPluginMenuItems", () => {
     ["another lane", project({ slot: 1 }), project({ slot: 3 })],
     ["a relaunch in the same lane", project(), project({ terminalId: "help-term-9" })],
     ["the lane's terminal going away", project(), project({ terminalId: undefined })],
+    [
+      "a terminal binding into a lane that had none",
+      project({ terminalId: undefined }),
+      project({ terminalId: "help-term-2" }),
+    ],
     ["another workspace's lane", project(), project({ projectId: "proj-2" })],
     ["the other assistant", project(), globalRun()],
   ])("drops its rows when the menu's session is replaced by %s", async (_, opened, next) => {
@@ -205,17 +223,6 @@ describe("AssistantPluginMenuItems", () => {
     rerender(<Menu subject={next} />);
     expect(await rows()).toEqual(["Open docs"]);
     expect(separators()).toBe(before - 1);
-  });
-
-  it("keeps its rows when the lane's terminal comes up while the menu is open", async () => {
-    seed();
-    const { rerender } = render(<Menu subject={project({ terminalId: undefined })} />);
-    expect(await rows()).not.toContain("Live lane");
-
-    rerender(<Menu subject={project({ terminalId: "help-term-2" })} />);
-    expect(await rows()).toContain("Live lane");
-    fireEvent.click(screen.getByRole("menuitem", { name: "Live lane" }));
-    expect(dispatchedArgs().terminalId).toBe("help-term-2");
   });
 
   it("offers nothing for the rest of an opening that started with no session", async () => {

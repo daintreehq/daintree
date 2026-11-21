@@ -1595,6 +1595,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
   it("names the picker's plugin rows by the selected lane's workspace, slot and terminal (#18138)", () => {
     setupTwoLanes();
+    helpPanelState.sessions[1] = { ...helpPanelState.sessions[1]!, agentId: "codex" };
     assistantMenuSubjects.length = 0;
     renderPanel();
     expect(assistantMenuSubjects.at(-1)).toStrictEqual({
@@ -1606,16 +1607,27 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     });
 
     selectLane(1);
-    expect(assistantMenuSubjects.at(-1)).toMatchObject({
+    expect(assistantMenuSubjects.at(-1)).toStrictEqual({
+      assistantScope: "project",
       projectId: "proj-1",
       slot: 1,
       terminalId: "term-2",
+      agentId: "codex",
     });
   });
 
-  it("holds back a lane's reserved terminal id until the terminal exists (#18138)", () => {
+  it.each([
+    ["reserved with no panel yet", undefined],
+    ["a spawning placeholder", "spawning"],
+    ["a failed spawn", "failed"],
+  ] as const)("holds back a lane's terminal id while it is %s (#18138)", (_, spawnStatus) => {
     setupTwoLanes();
-    delete panelStoreState.panelsById["term-2"];
+    if (spawnStatus === undefined) delete panelStoreState.panelsById["term-2"];
+    else
+      panelStoreState.panelsById["term-2"] = {
+        ...(panelStoreState.panelsById["term-2"] as Record<string, unknown>),
+        spawnStatus,
+      };
     assistantMenuSubjects.length = 0;
     renderPanel();
     selectLane(1);

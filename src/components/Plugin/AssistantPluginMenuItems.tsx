@@ -31,9 +31,10 @@ export type AssistantPluginMenuSubject =
 const SECTION_COMPONENTS = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator };
 
 /**
- * Whether `current` is still the session the menu opened on. A lane whose
- * terminal comes up while the menu is open is the same lane; a different lane, a
- * relaunch in the same lane, or a new launch of the global run is not.
+ * Whether `current` is still the session the menu opened on: the same lane with
+ * the same terminal, or the same launch of the global run. A terminal binding
+ * into a lane that had none counts as a change, since a paused conversation and a
+ * fresh launch into its slot look alike until then.
  */
 function isSameSession(
   opened: AssistantPluginMenuSubject | null,
@@ -51,7 +52,7 @@ function isSameSession(
   return (
     opened.projectId === current.projectId &&
     opened.slot === current.slot &&
-    (opened.terminalId === undefined || opened.terminalId === current.terminalId)
+    opened.terminalId === current.terminalId
   );
 }
 

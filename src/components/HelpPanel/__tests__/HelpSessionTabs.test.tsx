@@ -25,7 +25,9 @@ import {
   type HelpSessionTab,
 } from "../HelpSessionTabs";
 
-const dispatchAction = vi.hoisted(() => vi.fn(() => Promise.resolve({ ok: true })));
+const dispatchAction = vi.hoisted(() =>
+  vi.fn((_actionId: string, _args?: unknown, _options?: unknown) => Promise.resolve({ ok: true }))
+);
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchAction } }));
 
 const CLOSE_SETTLE_MS = 250;
