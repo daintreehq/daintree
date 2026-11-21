@@ -420,6 +420,7 @@ export function HostAttentionStatus({ attention, fallbackFocus }: HostAttentionS
   const stillWorking = useHeldFor(resuming, STILL_WORKING_MS);
   const toPane = useCallback(() => fallbackFocus.current, [fallbackFocus]);
   const handBack = useHandBack(toPane);
+  const note = shown.kind === "unavailable" ? hostUnavailableText(shown.reason, host) : null;
   return (
     <>
       {/* From the same read as the controls' token, so what is acted on is what is shown,
@@ -432,12 +433,13 @@ export function HostAttentionStatus({ attention, fallbackFocus }: HostAttentionS
           {hostWaitingText(shown.item, host)}
         </p>
       )}
-      {shown.kind === "unavailable" && (
+      {/* An action the Host refused for the same reason the reread then found already says it. */}
+      {note !== null && note !== outcome?.message && (
         <p
           className="text-xs text-text-secondary [text-wrap:pretty]"
           data-testid="decisions-host-attention-note"
         >
-          {hostUnavailableText(shown.reason, host)}
+          {note}
         </p>
       )}
       {shown.kind === "failed" && (

@@ -2008,10 +2008,19 @@ describe("DecisionsInboxDialog", () => {
           { ...stalled, remoteHost: { hostId: "atlas", name: "Atlas", connected: true } },
         ],
       });
+      // What it can come to is the Host's to say, once read: this computer's choice isn't offered.
       await waitFor(() =>
-        expect(callout()).toMatch(/Atlas keeps it, so it can't be resolved from this computer\./)
+        expect(screen.getByTestId("decisions-host-attention-note").textContent).toBe(
+          "Atlas no longer lists this question, so it can't be resolved from here."
+        )
       );
-      expect(callout()).not.toMatch(/Choose/);
+      expect(hostAttention).toHaveBeenCalledWith({
+        action: "read",
+        reference: stalled.reference,
+      });
+      expect(callout()).toBe(
+        "Delivery stoppedThe timeout notice wasn't typed in. The terminal that asked was closed."
+      );
       expect(screen.queryByTestId("decisions-inbox-attention-actions")).toBeNull();
     } finally {
       CONTENT["question-3"] = shown;
@@ -2157,6 +2166,46 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decisions-host-attention-outcome")).not.toBeNull();
     });
 
+    it("never says beside the Host's actions that it can't be resolved here, and says what resolving it needs once (#18118)", async () => {
+      let answerRead: (result: DecisionsHostAttentionResult) => void = () => {};
+      hostAttention.mockImplementation(
+        (request) =>
+          new Promise((resolve) => {
+            if (request.action === "read") answerRead = resolve;
+          })
+      );
+      const callout = () => screen.getByTestId("decisions-inbox-attention").textContent ?? "";
+      // Every line in the stall's region that speaks of resolving it here, or offers a choice.
+      const resolveLines = () =>
+        [
+          callout(),
+          ...["note", "waiting"].map(
+            (part) => screen.queryByTestId(`decisions-host-attention-${part}`)?.textContent ?? ""
+          ),
+        ]
+          .flatMap((text) => text.split(/(?<=\.)\s+/))
+          .filter((sentence) => /resolve|choose/i.test(sentence));
+      await showStall();
+      await waitFor(() => expect(hostAttention).toHaveBeenCalled());
+      // Nothing is known of the Host's offer yet, so neither way is claimed.
+      expect(callout()).toBe(
+        "Delivery stoppedThe answer or timeout notice wasn't typed in. The terminal that asked was closed."
+      );
+      expect(resolveLines()).toEqual([]);
+
+      act(() => answerRead({ result: "read", item: hostItem() }));
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+      expect(screen.getByTestId("decisions-host-attention-waiting")).not.toBeNull();
+      expect(resolveLines()).toEqual([]);
+
+      push({ revision: 3, questions: [stalledOnHost(false)] });
+      await waitFor(() =>
+        expect(screen.queryByTestId("decisions-host-attention-note")).not.toBeNull()
+      );
+      expect(hostButton("handled")).toBeNull();
+      expect(resolveLines()).toEqual(["Reconnect to Studio to resolve this from here."]);
+    });
+
     it("says what resolving it here needs on a Host from before, offering no action", async () => {
       hostAttention.mockResolvedValue({ result: "unreachable", failure: "needs-update" });
       await showStall();
@@ -2169,6 +2218,10 @@ describe("DecisionsInboxDialog", () => {
       expect(
         within(screen.getByTestId("decisions-inbox-attention")).queryAllByRole("button")
       ).toEqual([]);
+      // The note says it once: the warning above it doesn't say so again, nor offer a choice.
+      expect(screen.getByTestId("decisions-inbox-attention").textContent).toBe(
+        "Delivery stoppedThe answer or timeout notice wasn't typed in. The terminal that asked was closed."
+      );
       expect(screen.queryByTestId("decisions-host-attention-failed")).toBeNull();
     });
 
@@ -2251,6 +2304,43 @@ describe("DecisionsInboxDialog", () => {
         expect(hostAttention.mock.calls.filter(([r]) => r.action === "read")).toHaveLength(2)
       );
       expect(hostAttention.mock.calls.filter(([r]) => r.action === "handled")).toHaveLength(1);
+    });
+
+    it("says once why it can't be resolved here when an action and the read after it find the same (#18118)", async () => {
+      const reads: DecisionsHostAttentionResult[] = [
+        { result: "read", item: hostItem({ canResume: false }) },
+        { result: "no-host" },
+        { result: "unreachable", failure: "needs-update" },
+      ];
+      hostAttention.mockImplementation(async (request) =>
+        request.action === "read" ? reads.shift()! : { result: "no-host" }
+      );
+      await showStall();
+      await waitFor(() => expect(hostButton("handled")).not.toBeNull());
+
+      fireEvent.click(hostButton("handled")!);
+      const unlisted = "Studio no longer lists this question, so it can't be resolved from here.";
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-outcome").textContent).toBe(unlisted)
+      );
+      // The controls stay on the last read until the read after the action lands.
+      await waitFor(() => expect(hostButton("handled")).toBeNull());
+      expect(hostAttention.mock.calls.map(([request]) => request)).toEqual([
+        { action: "read", reference: HOST_REFERENCE },
+        { action: "handled", reference: HOST_REFERENCE, expected: TOKEN },
+        { action: "read", reference: HOST_REFERENCE },
+      ]);
+      expect(screen.queryByTestId("decisions-host-attention-note")).toBeNull();
+      expect(screen.getAllByText(unlisted)).toHaveLength(1);
+
+      // A read that finds something else says it beside what the action came to.
+      push({ revision: 3, questions: [stalledOnHost(true, "resume_timeout")] });
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-host-attention-note").textContent).toBe(
+          "Update Daintree on Studio to resolve this from here."
+        )
+      );
+      expect(screen.getByTestId("decisions-host-attention-outcome").textContent).toBe(unlisted);
     });
 
     it("says to reconnect while its Host is away, and asks it nothing", async () => {
