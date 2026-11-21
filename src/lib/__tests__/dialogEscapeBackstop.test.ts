@@ -54,10 +54,21 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
   });
 
-  it("records radixLayerOpenAtCapture=true for an open tooltip", () => {
-    addRadixLayer("tooltip");
+  // Radix Tooltip never writes `open`: its content carries `delayed-open` or
+  // `instant-open` while showing and `closed` while Presence plays the exit.
+  it.each(["delayed-open", "instant-open"])(
+    "records radixLayerOpenAtCapture=true for a tooltip in data-state=%s",
+    (dataState) => {
+      addRadixLayer("tooltip", dataState);
+      fireEscape();
+      expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
+    }
+  );
+
+  it("treats a closing tooltip (data-state=closed) as not open", () => {
+    addRadixLayer("tooltip", "closed");
     fireEscape();
-    expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
   });
 
   it("ignores modal dialogs (aria-modal=true) — those are AppDialog territory", () => {

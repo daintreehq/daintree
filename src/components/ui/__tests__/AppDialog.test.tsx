@@ -12,6 +12,7 @@ import {
 } from "../dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../select";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../tooltip";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
@@ -1587,6 +1588,56 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     pressEscape();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppDialog Escape over an open tooltip", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    _resetBackstopForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  function pressEscape() {
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+  }
+
+  // A keyboard-opened row caption (TruncatedTooltip in a Settings tab): Radix
+  // dismisses it on Escape, and the dialog must not close on the same keypress.
+  it("dismisses only the tooltip, then closes on the next Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <Tooltip defaultOpen autoDismiss={false} dismissOnDialogTransition={false}>
+          <TooltipTrigger asChild>
+            <button type="button">Row</button>
+          </TooltipTrigger>
+          <TooltipContent>Full row text</TooltipContent>
+        </Tooltip>
+      </AppDialog>
+    );
+    const tooltip = await screen.findByRole("tooltip", { hidden: true });
+    expect(tooltip.getAttribute("data-state")).toMatch(/-open$/);
+    screen.getByText("Row").focus();
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("tooltip", { hidden: true })).toBeNull());
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

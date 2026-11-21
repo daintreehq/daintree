@@ -112,7 +112,8 @@ if (typeof window !== "undefined") {
 export const OPEN_ESCAPE_LAYER_SELECTOR =
   '[role="listbox"][data-state="open"], ' +
   '[role="menu"][data-state="open"], ' +
-  '[role="tooltip"][data-state="open"], ' +
+  '[role="tooltip"][data-state="delayed-open"], ' +
+  '[role="tooltip"][data-state="instant-open"], ' +
   '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
   `[${ESCAPE_RADIX_LAYER_ATTR}][role="dialog"][data-state="open"]`;
 
