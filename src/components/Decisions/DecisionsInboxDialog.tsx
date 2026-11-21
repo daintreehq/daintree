@@ -1760,8 +1760,10 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
   const [acted, setActed] = useState<InboxActed | null>(null);
   const actedCount = useRef(0);
   const liveActed = useRef<number | null>(null);
+  const liveShown = useRef<string | null>(null);
   useLayoutEffect(() => {
     liveActed.current = acted?.id ?? null;
+    liveShown.current = selectedKey;
   });
   // Only from Needs you: what moves a question out of it moves the inbox on.
   const actOn = selected !== null && selectedGroup === "needs-you" ? selected : null;
@@ -1804,6 +1806,14 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
       ...over,
     });
     return id;
+  };
+  // A confirmation's reply can come back once another question is shown: not one to move on from.
+  const actOnDecline = (
+    action: "dismiss" | "withdraw",
+    over: Partial<Pick<InboxActed, "fate" | "held">>
+  ) => {
+    if (declineOn === null || liveShown.current !== referenceKey(declineOn.reference)) return;
+    act(declineOn, action, over);
   };
   const stay = () =>
     setActed((current) =>
@@ -2969,10 +2979,10 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
         {...cancel.dialog}
         onDismissing={() => {
           cancel.dialog.onDismissing();
-          if (declineOn !== null) act(declineOn, "dismiss", { held: true });
+          actOnDecline("dismiss", { held: true });
         }}
         onWithdrawn={() => {
-          if (declineOn !== null) act(declineOn, "withdraw", { fate: "taken", held: true });
+          actOnDecline("withdraw", { fate: "taken", held: true });
         }}
         // The button goes once the question stops waiting; the detail then takes focus.
         restoreFocusTo={() =>

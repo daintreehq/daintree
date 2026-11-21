@@ -5116,10 +5116,16 @@ describe("DecisionsInboxDialog", () => {
     describe("from Cleared (#18130)", () => {
       const cleared = { ask: null, seen: true, cleared: true };
       const setAside = { ...asked, inbox: cleared };
-      const declinedAside = {
-        ...setAside,
-        standing: { kind: "settled", outcome: "declined" } as const,
-      };
+      /** As main lists one closed: in History, with no marks of this computer's. */
+      function closed(
+        question: DecisionQuestionListItem,
+        outcome: "declined" | "withdrawn" | "expired"
+      ): DecisionQuestionListItem {
+        const { inbox, ...rest } = question;
+        void inbox;
+        return { ...rest, standing: { kind: "settled", outcome } };
+      }
+      const declinedAside = closed(setAside, "declined");
       const third = item("question-5", 5, OPEN, {
         askedAt: "2026-11-02T10:00:00.000Z",
         inbox: cleared,
@@ -5194,25 +5200,25 @@ describe("DecisionsInboxDialog", () => {
         unfold("cleared");
         const order = clearedOrder();
         expect(order).toHaveLength(3);
-        // From the middle, so the one after it is the one closing up over its place.
-        const [, middle, last] = order as [string, string, string];
-        fireEvent.click(rowNamed(middle));
-        await waitFor(() => expect(selectedAlias()).toBe(middle));
+        // From the top, so the one after it, not the last, closes up over its place.
+        const first = order[0]!;
+        const next = order[1]!;
+        fireEvent.click(rowNamed(first));
+        await waitFor(() => expect(selectedAlias()).toBe(first));
         await decline();
 
         const rest = Object.entries(byAlias)
-          .filter(([alias]) => alias !== middle)
+          .filter(([alias]) => alias !== first)
           .map(([, question]) => question);
-        const gone = {
-          ...byAlias[middle]!,
-          standing: { kind: "settled", outcome: "declined" } as const,
-        };
-        push({ revision: 2, questions: [gone, ...rest, delivering] });
-        await waitFor(() => expect(selectedAlias()).toBe(last));
-        await waitFor(() => expect(document.activeElement).toBe(rowNamed(last)));
-        expect(rowNamed(last).getAttribute("aria-current")).toBe("true");
+        push({
+          revision: 2,
+          questions: [closed(byAlias[first]!, "declined"), ...rest, delivering],
+        });
+        await waitFor(() => expect(selectedAlias()).toBe(next));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed(next)));
+        expect(rowNamed(next).getAttribute("aria-current")).toBe("true");
         await waitFor(() =>
-          expect(shownBody()).toContain(`Body of question ${last.slice("q-".length)}`)
+          expect(shownBody()).toContain(`Body of question ${next.slice("q-".length)}`)
         );
         // Shown with what it offers, still in Cleared.
         expect(screen.getByTestId("decisions-inbox-clear").textContent).toBe(
@@ -5220,9 +5226,9 @@ describe("DecisionsInboxDialog", () => {
         );
         expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
         expect(bar("cleared").getAttribute("aria-expanded")).toBe("true");
-        expect(clearedOrder()).toEqual(order.filter((alias) => alias !== middle));
+        expect(clearedOrder()).toEqual(order.filter((alias) => alias !== first));
         expect(moved()).toEqual([
-          `Question ${middle} declined. It's in History now. Showing ${last}.`,
+          `Question ${first} declined. It's in History now. Showing ${next}.`,
         ]);
       });
 
@@ -5266,7 +5272,7 @@ describe("DecisionsInboxDialog", () => {
         await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
         expect(selectedAlias()).toBe("q-2");
 
-        push(listed({ ...setAside, standing: { kind: "settled", outcome: "withdrawn" } }, 2));
+        push(listed(closed(setAside, "withdrawn"), 2));
         await waitFor(() => expect(selectedAlias()).toBe("q-4"));
         await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
         expect(moved()).toEqual(["Question q-2 withdrawn. It's in History now. Showing q-4."]);
@@ -5278,9 +5284,16 @@ describe("DecisionsInboxDialog", () => {
         await pick("q-2");
         await decline();
         push(listed(declinedAside, 2, []));
-        await waitFor(() => expect(moved()).toHaveLength(1));
-        expect(moved()[0]).toMatch(/^Question q-2 declined\. It's in History now\./);
-        expect(moved()[0]).not.toMatch(/Showing/);
+        await waitFor(() =>
+          expect(moved()).toEqual([
+            "Question q-2 declined. It's in History now. No questions waiting on you.",
+          ])
+        );
+        expect(selectedAlias()).toBe("q-2");
+        // Done once: a question asked later is no reason to move.
+        push(listed(declinedAside, 3, [waiting]));
+        await waitFor(() => expect(rowNamed("q-4")).toBeTruthy());
+        await act(async () => {});
         expect(selectedAlias()).toBe("q-2");
       });
 
@@ -5289,7 +5302,7 @@ describe("DecisionsInboxDialog", () => {
         open();
         await pick("q-2");
         await decline();
-        push(listed({ ...setAside, standing: { kind: "settled", outcome: "expired" } }, 2));
+        push(listed(closed(setAside, "expired"), 2));
         await waitFor(() => expect(heldIn("history")).toContain("1 question"));
         await act(async () => {});
         expect(selectedAlias()).toBe("q-2");
@@ -5300,19 +5313,22 @@ describe("DecisionsInboxDialog", () => {
         listQuestions.mockResolvedValue(listed(setAside));
         open();
         await pick("q-2");
-        fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+        const button = screen.getByTestId("decisions-inbox-clear");
+        act(() => button.focus());
+        fireEvent.click(button);
         await waitFor(() =>
           expect(markQuestions).toHaveBeenLastCalledWith({
             action: "restore",
             questions: [{ reference: reference("question-2"), ask: null }],
           })
         );
-        push(listed({ ...setAside, inbox: unmarked }, 2));
+        push(listed({ ...setAside, inbox: { ...cleared, cleared: false } }, 2));
         await waitFor(() =>
           expect(screen.getByTestId("decisions-inbox-group-needs-you").textContent).toContain("q-2")
         );
         await act(async () => {});
         expect(selectedAlias()).toBe("q-2");
+        expect(document.activeElement).toBe(button);
         expect(moved()).toEqual([]);
       });
     });
