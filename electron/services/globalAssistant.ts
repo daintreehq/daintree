@@ -379,8 +379,7 @@ function settleCoordinator(): void {
   for (const service of peekGlobalAssistantServices()) service.refresh();
 }
 
-const sessionName = (slot: GlobalAssistantSlot) =>
-  `Session ${globalAssistantSessionNumber(slot)}`;
+const sessionName = (slot: GlobalAssistantSlot) => `Session ${globalAssistantSessionNumber(slot)}`;
 
 type McpServer = Pick<
   import("./McpServerService.js").McpServerService,

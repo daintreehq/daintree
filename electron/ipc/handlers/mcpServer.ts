@@ -462,10 +462,7 @@ export const mcpServerNamespace = defineIpcNamespace({
         if ("recipient" in payload) {
           if (payload.recipient !== "global-assistant") throw new Error("Invalid recipient");
           const [svc, { peekGlobalAssistantService, globalAssistantCoordinatorSlot }] =
-            await Promise.all([
-              getMcpServerService(),
-              import("../../services/globalAssistant.js"),
-            ]);
+            await Promise.all([getMcpServerService(), import("../../services/globalAssistant.js")]);
           // The live run is read here, never from the renderer, with no await
           // before it is recorded (#14161). A hand-over goes to the session
           // that coordinates (#18143).

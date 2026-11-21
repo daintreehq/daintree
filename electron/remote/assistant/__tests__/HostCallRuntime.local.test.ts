@@ -666,7 +666,12 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           { ...SEND, tool: "terminal.readLastMessageOwned", args: { terminalId: "worker-1" } },
           // A resend is refused as the first send would be.
           { ...SEND, callId: "00000000-0000-4000-8000-0000000000aa" },
-          { hostId: "studio", throwaway: true, tool: "throwaway.launch", args: { agentId: "codex" } },
+          {
+            hostId: "studio",
+            throwaway: true,
+            tool: "throwaway.launch",
+            args: { agentId: "codex" },
+          },
         ];
         for (const call of calls) {
           const settled = await runtime.call("standby", call as typeof SEND, { tier: "full" });
