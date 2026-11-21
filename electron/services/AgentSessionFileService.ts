@@ -3,7 +3,9 @@
  * carries a conversation into another agent's CLI.
  *
  * Everything about the pane comes from the terminal host's own record; the
- * caller names a terminal id and nothing else. Codex is answered by what the
+ * caller names a terminal id and nothing else. A caller reaches its own
+ * workspace's terminals, its assistants included, and the global assistant's
+ * run (#18139). Codex is answered by what the
  * pane's processes hold open, Claude Code by the id Daintree recorded and the
  * store the pane launched against, and anything short of that is `unknown`.
  * Daintree's own `~/.codex` or `~/.claude` is never a fallback.
@@ -13,13 +15,15 @@
  */
 
 import path from "node:path";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import { isHostThrowawayWorkspaceId } from "../../shared/config/hostThrowaway.js";
 import {
   unknownSessionFile,
   type AgentSessionFileResult,
 } from "../../shared/types/agentSessionFile.js";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import { getPtyClient } from "../window/serviceRefs.js";
-import { isAssistantTerminalRecord } from "./assistantTerminal.js";
+import { forksClaudeConversation } from "./claude/claudeForkSession.js";
 import { locateClaudeTranscript } from "./claude/ClaudeSessionReader.js";
 import { getClaudePaneProjectsRoot } from "./claude/ClaudeSessionStore.js";
 import { probeCodexSessionFile } from "./codex/CodexSessionFileProbe.js";
@@ -49,6 +53,8 @@ let inFlight = 0;
 function sameRun(before: TerminalRecord, after: TerminalRecord | null, agentId: string): boolean {
   return (
     after !== null &&
+    after.projectId === before.projectId &&
+    after.isAssistantTerminal === before.isAssistantTerminal &&
     after.spawnedAt === before.spawnedAt &&
     after.launchGeneration === before.launchGeneration &&
     after.agentIncarnation === before.agentIncarnation &&
@@ -91,8 +97,13 @@ async function locateClaude(
 ): Promise<AgentSessionFileResult> {
   const sessionId = record.agentSessionId;
   // The id was recorded for the run Daintree launched. A later run in the same
-  // pane (the user quit Claude Code and started it again) isn't that session.
-  if (!sessionId || record.agentIncarnation !== 0) {
+  // pane (the user quit Claude Code and started it again) isn't that session,
+  // and neither is a launch that forked the one it resumed.
+  if (
+    !sessionId ||
+    record.agentIncarnation !== 0 ||
+    forksClaudeConversation(record.agentLaunchFlags, record.launchAgentId)
+  ) {
     return unknownSessionFile("session-id-unknown");
   }
   const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(
@@ -129,6 +140,27 @@ async function locateClaude(
   };
 }
 
+/**
+ * Whether a caller in `senderWorkspaceId` may look up `record`. A workspace
+ * reaches its own terminals, its assistants among them. The global assistant's
+ * run belongs to no workspace and every local one can show it, so any project
+ * or scratch here reaches it, and nothing else in its workspace: the sealed
+ * stamp says which run it is, never the renderer's late mark. A remote view
+ * never gets this far.
+ */
+function inCallerScope(record: TerminalRecord, senderWorkspaceId: string | null): boolean {
+  const workspaceId = record.projectId ?? null;
+  if (senderWorkspaceId === null || workspaceId === null) return false;
+  if (isHostThrowawayWorkspaceId(workspaceId)) return false;
+  if (isGlobalAssistantId(workspaceId)) {
+    return (
+      record.isAssistantTerminal === true &&
+      (isProjectWorkspaceId(senderWorkspaceId) || isScratchWorkspaceId(senderWorkspaceId))
+    );
+  }
+  return workspaceId === senderWorkspaceId;
+}
+
 async function lookUp(
   terminalId: string,
   senderWorkspaceId: string | null,
@@ -137,14 +169,8 @@ async function lookUp(
   const queries = deps.ptyClient === undefined ? getPtyClient() : deps.ptyClient;
   if (!queries) return unknownSessionFile("terminal-unavailable");
   const record = await queries.getTerminalAsync(terminalId);
-  // Another project's terminal, an assistant's own and a host's throwaway run
-  // all answer as if there were no such terminal.
-  if (
-    !record ||
-    (record.projectId ?? null) !== senderWorkspaceId ||
-    isHostThrowawayWorkspaceId(record.projectId) ||
-    isAssistantTerminalRecord(record)
-  ) {
+  // Out of scope answers as if there were no such terminal.
+  if (!record || !inCallerScope(record, senderWorkspaceId)) {
     return unknownSessionFile("terminal-unavailable");
   }
   const agentId = subagentTerminalAgentId(record);
