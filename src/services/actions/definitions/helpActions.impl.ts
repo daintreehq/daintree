@@ -19,6 +19,7 @@ import { stageGlobalAssistantReplacement } from "@/store/globalAssistantReplaceC
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached } from "@/lib/viewCacheState";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import { isUsableHandoff } from "@shared/utils/assistantHandoff";
 import {
   notifyLaunchFailed,
   LAUNCH_BLOCKED_LOADING,
@@ -463,12 +464,12 @@ export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
 
 /**
  * Start one session on `agentId` (#13442) without touching the assistant's
- * default, which later sessions keep starting on, its first turn `prompt` when
- * given one (#18140). It lands where a help launch
- * would — the active tab when it is empty, else another free one, else a new
- * tab — so it never displaces a conversation, including one main still keeps
- * for a slot this view has no tab for. Only when every free slot holds one does
- * it start afresh over a conversation past sessions keeps (#16495).
+ * default, which later sessions keep starting on, given `prompt` as its first
+ * turn when there is one (#18140). It lands where a help launch would — the
+ * active tab when it is empty, else another free one, else a new tab — so it
+ * never displaces a conversation, including one main still keeps for a slot
+ * this view has no tab for. Only when every free slot holds one does it start
+ * afresh over a conversation past sessions keeps (#16495).
  */
 async function startHelpSessionWithAgent(
   agentId: string,
@@ -611,7 +612,8 @@ async function requestGlobalAssistantReplacement(
 ): Promise<{ outcome: GlobalAssistantReplaceOutcome }> {
   const unavailable = { outcome: "unavailable" as const };
   const unseen = () => isProjectViewCached() || getViewHostId() !== null;
-  if (unseen()) return unavailable;
+  // Never ask about a hand-off main would refuse once it was approved.
+  if (unseen() || !isUsableHandoff(args.prompt)) return unavailable;
   const { availability, isInitialized } = useCliAvailabilityStore.getState();
   if (
     !getAssistantWiredAgentIds().includes(args.agentId) ||

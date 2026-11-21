@@ -2096,6 +2096,13 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
   });
 
+  it("isn't asked about a hand-off the agent would read as an option", async () => {
+    expect(await action.run({ ...handoff, prompt: "--yolo" }, {})).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
   it("isn't asked when the global assistant can't be read", async () => {
     getGlobalAssistantState.mockRejectedValueOnce(new Error("ipc down"));
 
