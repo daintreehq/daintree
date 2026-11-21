@@ -1,5 +1,6 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getAgentConfig } from "@/config/agents";
+import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { notify } from "@/lib/notify";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
@@ -34,7 +35,9 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
   // A panel tucked away by the focus gesture stays parked while that flag stands.
   useFocusStore.getState().clearAssistantGesture();
   const panel = useHelpPanelStore.getState();
-  panel.selectGlobal(null);
+  // A hand-off replaces the first session's run until choosing the one that
+  // coordinates lands (#18137), so that is the session shown.
+  panel.selectGlobal(null, GLOBAL_ASSISTANT_SLOT);
   panel.setOpen(true);
   // Nothing here asked for focus, so a pane mounting now has none to serve.
   useHelpPanelStore.setState((s) => ({ globalFocusHandledThrough: s.focusRequest }));

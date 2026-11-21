@@ -10,10 +10,8 @@ function deferred<T>() {
 }
 
 type MockedDeps = {
-  [K in Exclude<keyof GlobalAssistantDeps, "agentUsable">]-?: Mock<
-    NonNullable<GlobalAssistantDeps[K]>
-  >;
-} & { agentUsable?: Mock<NonNullable<GlobalAssistantDeps["agentUsable"]>> };
+  [K in keyof GlobalAssistantDeps]-?: Mock<NonNullable<GlobalAssistantDeps[K]>>;
+};
 
 /** One session's deps, its calls tagged with the session's name. */
 function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
@@ -21,6 +19,7 @@ function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
   const calls: string[] = [];
   const deps: MockedDeps = {
     agentId: vi.fn(async () => "claude"),
+    canRun: vi.fn(async () => true),
     provision: vi.fn(async (agentId: string) => {
       n += 1;
       calls.push(`provision-${agentId}`);
@@ -266,7 +265,7 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
 
   it("lets a conversation kept on another agent win over the choice", async () => {
     const usable = vi.fn(async () => true);
-    const { deps } = makeDeps("first", { agentUsable: usable });
+    const { deps } = makeDeps("first", { canRun: usable });
     deps.takeResume.mockResolvedValue({ agentId: "claude", agentSessionId: "conv", claimId: "c1" });
     const service = new GlobalAssistantService(deps, { slot: 0, pinnedAgentId: "codex" });
     await service.ensureSession();
@@ -280,7 +279,7 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
   });
 
   it("refuses a chosen agent that can no longer run, keeping its conversation", async () => {
-    const { deps } = makeDeps("second", { agentUsable: vi.fn(async () => false) });
+    const { deps } = makeDeps("second", { canRun: vi.fn(async () => false) });
     deps.takeResume.mockResolvedValue({
       agentId: "antigravity",
       agentSessionId: "conv",
@@ -291,16 +290,16 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
       code: "UNSUPPORTED",
       userMessage: expect.stringContaining("conversation is kept"),
     });
-    expect(deps.agentUsable).toHaveBeenCalledWith("antigravity");
+    expect(deps.canRun).toHaveBeenCalledWith("antigravity");
     // Its claim is handed back, so the conversation stays to resume.
     expect(deps.releaseResume).toHaveBeenCalledWith("c1");
     expect(deps.provision).not.toHaveBeenCalled();
     expect(service.getState()).toMatchObject({ pinnedAgentId: "antigravity", occupied: true });
 
     // The default's own pick is never second-guessed here.
-    const first = makeDeps("first", { agentUsable: vi.fn(async () => false) });
+    const first = makeDeps("first", { canRun: vi.fn(async () => false) });
     await new GlobalAssistantService(first.deps, { slot: 0 }).ensureSession();
-    expect(first.deps.agentUsable).not.toHaveBeenCalled();
+    expect(first.deps.canRun).not.toHaveBeenCalled();
   });
 
   it("frees a stopped session even when quitting begins while it winds down", async () => {

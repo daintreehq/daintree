@@ -569,7 +569,7 @@ describe("global assistant IPC handlers", () => {
 
     it("answers a new session as soon as it is claimed, and joins only its launch", async () => {
       registry.startNew.mockImplementation(async (agentId: string) => {
-        void secondService.startOn(agentId);
+        secondService.startOn(agentId).catch(() => {});
         return secondService;
       });
       const claimed = await handlers.handleStartNewGlobalAssistant(ctx(10, 1), "codex");
