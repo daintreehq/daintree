@@ -392,9 +392,12 @@ describe("global assistant sessions (#18142)", () => {
     });
 
     it("leaves the coordinator be when the other session stops", async () => {
-      await twoRunning();
+      const [first] = await twoRunning();
+      const run = first.getRunningSession();
 
       await registry.stopGlobalAssistantSession(1);
+
+      expect(first.getRunningSession()).toEqual(run);
 
       expect(help.pointer.some((entry) => entry.startsWith("handover"))).toBe(false);
       expect(help.pointer).toContain("discard-1");
@@ -409,6 +412,7 @@ describe("global assistant sessions (#18142)", () => {
 
       await registry.stopGlobalAssistantSession(1);
 
+      expect(help.pointer).toContain("handover-1-0");
       expect(help.pointer.indexOf("handover-1-0")).toBeLessThan(help.pointer.indexOf("discard-1"));
       expect(work.moved.at(-1)).toEqual({ from: outgoing, to: first.getRunningSession() });
       expect(coordinating()).toEqual([true, false]);
@@ -417,6 +421,8 @@ describe("global assistant sessions (#18142)", () => {
     it("stops nothing when the session staying has no conversation to take the work into", async () => {
       const [first] = await twoRunning();
       help.refuseHandOver = "unheld";
+      const stoodDown: string[] = [];
+      registry.onGlobalAssistantStandDown((sessionId) => stoodDown.push(sessionId));
 
       await expect(registry.stopGlobalAssistantSession(0)).rejects.toMatchObject({
         code: "VALIDATION",
@@ -429,7 +435,20 @@ describe("global assistant sessions (#18142)", () => {
       expect(first.getState().phase).toBe("running");
       expect(help.pointer).not.toContain("discard-0");
       expect(work.moved).toEqual([]);
+      expect(stoodDown).toEqual([]);
       expect(coordinating()).toEqual([true, false]);
+    });
+
+    it("stops nothing while the kept conversations still can't be read", async () => {
+      const first = registry.getGlobalAssistantService(0);
+      await first.ensureSession();
+      help.wired = false;
+
+      await expect(registry.stopGlobalAssistantSession(0)).rejects.toMatchObject({
+        userMessage: expect.stringContaining("still starting"),
+      });
+      expect(first.getState().phase).toBe("running");
+      expect(help.pointer).not.toContain("discard-0");
     });
 
     it("stops nothing when the check refuses, or while the session staying is still starting", async () => {

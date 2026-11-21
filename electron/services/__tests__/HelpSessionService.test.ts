@@ -4201,7 +4201,7 @@ describe("HelpSessionService", () => {
 
           it("hands the work back to the lane that first held it", async () => {
             const a = await launchSlot(0, "term-a", "conv-a");
-            await launchSlot(1, "term-b", "conv-b");
+            const b = await launchSlot(1, "term-b", "conv-b");
             const held = ownershipOfLane(0);
 
             const theirs = ownershipOfLane(1);
@@ -4211,6 +4211,7 @@ describe("HelpSessionService", () => {
             await handOver(1, 0);
 
             expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(theirs);
             expect(ownershipOfLane(1)).toBe(theirs);
             expect(ownershipOfLane(0)).toBe(held);
             expect(service.getLaneCoordinator("proj-1")).toBe(0);

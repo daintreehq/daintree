@@ -509,7 +509,7 @@ export async function stopGlobalAssistantSession(
   const other = getGlobalAssistantService(slot === 0 ? 1 : 0);
   // Asked before the pointers were in, a kept session beside it would read
   // free, and the stop would forget work it should hand over.
-  await whenGlobalAssistantSessionsReadable();
+  if (!(await whenGlobalAssistantSessionsReadable())) throw stillStarting();
   const mcp = other.isOccupied() ? await loadMcpServer() : null;
   check(service);
   const help = loadedHelp;

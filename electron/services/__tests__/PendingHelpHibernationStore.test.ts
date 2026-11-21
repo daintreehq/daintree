@@ -359,6 +359,7 @@ describe("PendingHelpHibernationStore", () => {
       await store.load();
       await store.set(slotKey("global", 0), entry("conv-a", "held"));
       await store.set(slotKey("global", 1), entry("conv-b", "theirs"));
+      await store.commit({ coordinator: { projectId: "elsewhere", slot: 0 } });
       const before = writes.count;
 
       await store.commit({
@@ -373,10 +374,11 @@ describe("PendingHelpHibernationStore", () => {
       const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
         coordinators?: Record<string, number>;
       };
-      expect(onDisk.coordinators).toEqual({ global: 1 });
+      expect(onDisk.coordinators).toEqual({ elsewhere: 0, global: 1 });
       const fresh = new PendingHelpHibernationStore(filePath);
       await fresh.load();
       expect(fresh.getCoordinator("global")).toBe(1);
+      expect(fresh.getCoordinator("elsewhere")).toBe(0);
       expect(fresh.get(slotKey("global", 1))).toMatchObject({
         agentSessionId: "conv-b",
         conversationOwnershipId: "held",

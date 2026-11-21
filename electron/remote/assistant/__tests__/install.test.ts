@@ -481,7 +481,9 @@ describe("installHostControl (#13493)", () => {
     expect(opened().at(-1)).toEqual(["global-b", "work"]);
 
     // A stand-down reaches the runtime until the install is torn down.
-    expect(globalAssistant.standDown.size).toBe(1);
+    const standDown = vi.spyOn(runtime, "standDown");
+    for (const listener of globalAssistant.standDown) listener("global-a");
+    expect(standDown).toHaveBeenCalledWith("global-a");
     off();
     expect(globalAssistant.standDown.size).toBe(0);
   });
