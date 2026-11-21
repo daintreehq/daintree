@@ -265,6 +265,19 @@ export async function handleRestartGlobalAssistant(
   return globalAssistantView(instance);
 }
 
+/**
+ * Whether a hand-off to `agentId` could replace the run (#18140), asked before
+ * the person is, so they're never asked about one main would refuse.
+ */
+export async function handleCanRunGlobalAssistant(
+  ctx: IpcContext,
+  agentId: string
+): Promise<boolean> {
+  requireWindow(ctx);
+  if (typeof agentId !== "string" || !agentId || agentId.length > 64) return false;
+  return service().canRun(agentId);
+}
+
 const GlobalAssistantReplacementSchema = z.object({
   agentId: z.string().min(1).max(64),
   prompt: AssistantHandoffPromptSchema.refine(isUsableHandoff),

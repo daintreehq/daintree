@@ -186,7 +186,20 @@ describe("global assistant IPC handlers", () => {
       expected: { generation, phase },
     });
 
-    it("replaces the run the person approved with one on the chosen agent", async () => {
+    it("replaces the run the person approved with one on the chosen agent, from its hand-off", async () => {
+      const spawn = vi.fn(async () => true);
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
       const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
       const replaced = await handlers.handleReplaceGlobalAssistant(
         ctx(10, 1),
@@ -194,6 +207,17 @@ describe("global assistant IPC handlers", () => {
       );
       expect(replaced).toMatchObject({ phase: "running", agentId: "codex" });
       expect(replaced.terminalId).not.toBe(first.terminalId);
+      expect(spawn).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentId: "codex", prompt: "Continue from the hand-off" })
+      );
+    });
+
+    it("answers whether an agent could replace the run, for a window only", async () => {
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "codex")).toBe(true);
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "")).toBe(false);
+      await expect(
+        handlers.handleCanRunGlobalAssistant(ctx(10, null), "codex")
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     });
 
     it("says nothing was replaced when the run changed since the person was asked", async () => {
@@ -210,7 +234,9 @@ describe("global assistant IPC handlers", () => {
 
     it.each([
       ["a blank hand-off", { prompt: "   " }],
+      ["a hand-off of tabs and line breaks", { prompt: "\t\n" }],
       ["a hand-off the CLI would read as an option", { prompt: " --dangerously-skip-permissions" }],
+      ["a hand-off that reads as a short option", { prompt: "-p go" }],
       ["a hand-off with a control character", { prompt: "go\u001b[2J" }],
       ["a missing run to compare", { expected: undefined }],
       ["an unknown phase", { expected: { generation: 0, phase: "stopped" } }],

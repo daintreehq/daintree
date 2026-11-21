@@ -536,7 +536,9 @@ describe("GlobalAssistantService", () => {
       );
       expect(deps.spawn.mock.lastCall?.[0]).not.toHaveProperty("resumeAgentSessionId");
       // The old run's credentials go before its PTY, and its conversation is forgotten.
-      expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.indexOf("kill-" + before.terminalId));
+      expect(calls).toContain("revoke-s1");
+      expect(calls).toContain(`kill-${before.terminalId}`);
+      expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.indexOf(`kill-${before.terminalId}`));
       expect(calls).toContain("discard-resume");
     });
 
@@ -549,6 +551,9 @@ describe("GlobalAssistantService", () => {
       expect(state).toMatchObject({ phase: "running", agentId: "codex" });
       expect(deps.discardResume).toHaveBeenCalledTimes(1);
       expect(deps.takeResume).not.toHaveBeenCalled();
+      expect(deps.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: "Continue from the hand-off" })
+      );
     });
 
     it("leaves the run untouched for an agent that can't run here", async () => {
@@ -560,6 +565,7 @@ describe("GlobalAssistantService", () => {
       await expect(
         service.replace(choice, { generation: before.generation, phase: "running" })
       ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect(deps.canRun).toHaveBeenCalledWith("codex");
 
       expect(service.getState()).toMatchObject({
         phase: "running",
@@ -628,6 +634,11 @@ describe("GlobalAssistantService", () => {
       expect(b.terminalId).toBe(a.terminalId);
       expect(deps.provision).toHaveBeenCalledTimes(2);
       expect(deps.agentId).toHaveBeenCalledTimes(1);
+      expect(deps.spawn).toHaveBeenCalledTimes(2);
+      expect(deps.spawn.mock.lastCall?.[0]).toMatchObject({
+        agentId: "codex",
+        prompt: "Continue from the hand-off",
+      });
     });
 
     it("can be cancelled while the old run is still stopping, starting nothing", async () => {
@@ -668,6 +679,38 @@ describe("GlobalAssistantService", () => {
       expect(await replaced).toMatchObject({ phase: "running", agentId: "codex" });
       await service.onAgentChanged("claude");
       expect(service.getState()).toMatchObject({ phase: "running", agentId: "codex" });
+    });
+
+    it("keeps the chosen agent through a change of default while its PTY is still being confirmed", async () => {
+      const spawned = deferred<boolean>();
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const before = await service.ensureSession();
+      deps.spawn.mockReturnValueOnce(spawned.promise);
+
+      const replaced = service.replace(choice, { generation: before.generation, phase: "running" });
+      await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(2));
+      await service.onAgentChanged("claude");
+      spawned.resolve(true);
+
+      expect(await replaced).toMatchObject({ phase: "running", agentId: "codex" });
+    });
+
+    it("treats an agent check that fails as a no, and quitting meanwhile as a cancel", async () => {
+      const { deps } = makeDeps();
+      deps.canRun.mockRejectedValueOnce(new Error("probe failed"));
+      const service = new GlobalAssistantService(deps);
+      await expect(
+        service.replace(choice, { generation: 0, phase: "absent" })
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+
+      const usable = deferred<boolean>();
+      deps.canRun.mockReturnValueOnce(usable.promise);
+      const replaced = service.replace(choice, { generation: 0, phase: "absent" });
+      service.closeAdmission();
+      usable.resolve(false);
+      await expect(replaced).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(deps.discardResume).not.toHaveBeenCalled();
     });
 
     it("goes back to the default once the chosen run's conversation is cleared", async () => {

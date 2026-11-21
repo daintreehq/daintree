@@ -1076,6 +1076,34 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(relaunch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
   });
 
+  it("never lets a vacant-only Retry end a session another launch bound into the tab since", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const execute = vi.fn().mockResolvedValue(undefined);
+    ctrl["_executeLaunch"] = execute;
+    const teardown = vi.fn();
+    ctrl["_teardownBoundSession"] = teardown;
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl["_patch"]({ launchError: { kind: "spawn-failed", agentId: "codex" } as never });
+    // `help.launchAgent` bound a live session here after the failed hand-off.
+    helpPanelState.terminalId = "terminal-live";
+
+    ctrl.retryLaunch("codex");
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(teardown).not.toHaveBeenCalled();
+    expect(helpPanelState.terminalId).toBe("terminal-live");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+
+    // With the tab empty again, the same Retry goes ahead with its hand-off.
+    helpPanelState.terminalId = null;
+    ctrl.retryLaunch("codex");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.lastCall?.[1]).toMatchObject({ vacantOnly: true, seedPrompt: "hand-off" });
+  });
+
   it("launches immediately when the lane is already ready", () => {
     const ctrl = new HelpSessionController();
     const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});

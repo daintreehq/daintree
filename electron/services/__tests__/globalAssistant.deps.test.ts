@@ -57,6 +57,7 @@ describe("liveGlobalAssistantDeps (#18140)", () => {
   it("runs only an agent a start with no view could, and only one new enough", async () => {
     const deps = liveGlobalAssistantDeps();
     expect(await deps.canRun("codex")).toBe(true);
+    expect(mocks.meetsVersionFloor).toHaveBeenCalledWith("codex");
     expect(await deps.canRun("gemini")).toBe(false);
     mocks.meetsVersionFloor.mockResolvedValue(false);
     expect(await deps.canRun("codex")).toBe(false);

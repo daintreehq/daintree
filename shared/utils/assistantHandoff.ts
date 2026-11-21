@@ -1,8 +1,12 @@
 import { z } from "zod";
-import { dispatchCarriesOptionLikeValue } from "./dispatchAgentLaunch.js";
+import { dispatchCarriesOptionLikePrompt } from "./dispatchAgentLaunch.js";
 
-/** Longest hand-off, in characters, as a plugin terminal's `initialPrompt` takes. */
-export const ASSISTANT_HANDOFF_MAX_LENGTH = 8192;
+/**
+ * Longest hand-off, in characters. Continue Session's runs to about 11,500
+ * (five requests and the last reply, quoted), so this leaves room; the launch
+ * command's own limits still apply, as they do to `agent.launch`'s prompt.
+ */
+export const ASSISTANT_HANDOFF_MAX_LENGTH = 16_384;
 
 // The launch command carries line breaks and tabs by having the shell build
 // them (`quoteLaunchPrompt`). Any other control character makes the spawn
@@ -34,6 +38,6 @@ export function isUsableHandoff(text: string): boolean {
     text.trim().length > 0 &&
     isSendableHandoff(text) &&
     text.length <= ASSISTANT_HANDOFF_MAX_LENGTH &&
-    !dispatchCarriesOptionLikeValue({ prompt: text })
+    !dispatchCarriesOptionLikePrompt({ prompt: text })
   );
 }

@@ -236,12 +236,23 @@ describe("an assistant's hand-off from a plugin (#18140)", () => {
 
   it("refuses a hand-off the CLI would read as an option", () => {
     for (const id of ids) {
+      for (const prompt of ["  --dangerously-skip-permissions", "-p go"]) {
+        expect(
+          resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex", prompt })
+        ).toBe("confirm");
+      }
+    }
+  });
+
+  it("reads only the prompt, since neither action takes a model", () => {
+    for (const id of ids) {
       expect(
         resolveEffectiveActionDanger(id, "safe", "plugin", {
           agentId: "codex",
-          prompt: "  --dangerously-skip-permissions",
+          prompt: "Continue",
+          model: "-x",
         })
-      ).toBe("confirm");
+      ).toBe("safe");
     }
   });
 
@@ -254,9 +265,11 @@ describe("an assistant's hand-off from a plugin (#18140)", () => {
         })
       ).toBe("safe");
       expect(resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex" })).toBe("safe");
-      expect(
-        resolveEffectiveActionDanger(id, "safe", "user", { agentId: "codex", prompt: "-x" })
-      ).toBe("safe");
+      for (const source of ["user", "agent"] as const) {
+        expect(
+          resolveEffectiveActionDanger(id, "safe", source, { agentId: "codex", prompt: "-x" })
+        ).toBe("safe");
+      }
     }
     expect(
       resolveEffectiveActionDanger("help.launchAgent", "safe", "plugin", { prompt: "-x" })

@@ -1992,6 +1992,7 @@ describe("help.newSessionWithAgent (#13442)", () => {
 describe("help.replaceGlobalAssistant (#18140)", () => {
   let action: AnyActionDefinition;
   let getGlobalAssistantState: ReturnType<typeof vi.fn>;
+  let canRunGlobalAssistant: ReturnType<typeof vi.fn>;
   let replaceGlobalAssistant: ReturnType<typeof vi.fn>;
   const handoff = { agentId: "codex", prompt: "Continue from the hand-off" };
   const fromPlugin: ActionContext = { dispatchSource: "plugin", callerPluginId: "acme.handoff" };
@@ -2009,9 +2010,14 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
       agentId: "claude",
       terminalId: "term-global",
     }));
+    canRunGlobalAssistant = vi.fn(async () => true);
     replaceGlobalAssistant = vi.fn();
     Object.defineProperty(globalThis, "window", {
-      value: { electron: { help: { getGlobalAssistantState, replaceGlobalAssistant } } },
+      value: {
+        electron: {
+          help: { getGlobalAssistantState, canRunGlobalAssistant, replaceGlobalAssistant },
+        },
+      },
       writable: true,
       configurable: true,
     });
@@ -2034,6 +2040,9 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
 
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "awaiting-confirmation" });
 
+    expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
+    // Counted, so the host mounts the dialog that asks.
+    expect(useGlobalAssistantReplaceConfirmStore.getState().requestSeq).toBe(1);
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toMatchObject({
       agentId: "codex",
       prompt: "Continue from the hand-off",
@@ -2058,6 +2067,7 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
   it("turns a second request away while one waits, keeping the first", async () => {
     await action.run(handoff, fromPlugin);
     const first = useGlobalAssistantReplaceConfirmStore.getState().current;
+    expect(first).not.toBeNull();
 
     expect(await action.run({ agentId: "claude", prompt: "Another" }, fromPlugin)).toEqual({
       outcome: "unavailable",
@@ -2110,6 +2120,17 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     getGlobalAssistantState.mockRejectedValueOnce(new Error("ipc down"));
 
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(getGlobalAssistantState).toHaveBeenCalledTimes(1);
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
+  it("isn't asked for an agent main won't run the global assistant on", async () => {
+    // Installed and wired, but main won't run it: say a CLI older than its wiring needs.
+    canRunGlobalAssistant.mockResolvedValueOnce(false);
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
+    expect(getGlobalAssistantState).not.toHaveBeenCalled();
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
   });
 });

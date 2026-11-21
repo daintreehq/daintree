@@ -625,6 +625,9 @@ async function requestGlobalAssistantReplacement(
   }
   let state: Awaited<ReturnType<typeof window.electron.help.getGlobalAssistantState>>;
   try {
+    // Main's own word on the agent: it runs the global assistant on fewer
+    // agents than a project's, and only on a CLI new enough.
+    if (!(await window.electron.help.canRunGlobalAssistant(args.agentId))) return unavailable;
     state = await window.electron.help.getGlobalAssistantState();
   } catch (err) {
     logError("Couldn't read the global assistant to ask about replacing it", err);

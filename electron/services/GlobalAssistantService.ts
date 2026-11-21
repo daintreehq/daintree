@@ -400,10 +400,12 @@ export class GlobalAssistantService {
     expected: { generation: number; phase: GlobalAssistantPhase }
   ): Promise<GlobalAssistantState> {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
-    if (!(await this.deps.canRun(choice.agentId))) {
+    const usable = await this.canRun(choice.agentId);
+    // Quitting while the agent was checked wins over whatever the check found.
+    if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
+    if (!usable) {
       throw refuse("UNSUPPORTED", `${choice.agentId} can't run the global assistant here.`);
     }
-    if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
     const state = this.getState();
     if (state.generation !== expected.generation || state.phase !== expected.phase) {
       throw refuse("STALE_GENERATION", "The global assistant changed since this was asked.");
@@ -411,6 +413,11 @@ export class GlobalAssistantService {
     // Not awaited: the successor waits on the teardown itself before it provisions.
     this.teardown("restart").catch(() => {});
     return this.admit(true, choice);
+  }
+
+  /** Whether `agentId`, named for a run, could run it here now; a failed check says no. */
+  canRun(agentId: string): Promise<boolean> {
+    return this.deps.canRun(agentId).catch(() => false);
   }
 
   /** End the run and forget its conversation; nothing starts it again until asked. */

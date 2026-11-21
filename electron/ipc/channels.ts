@@ -700,6 +700,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
   HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
+  HELP_GLOBAL_ASSISTANT_CAN_RUN: "help:global-assistant-can-run",
   HELP_GLOBAL_ASSISTANT_REPLACE: "help:global-assistant-replace",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",

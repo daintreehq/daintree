@@ -2572,6 +2572,10 @@ export interface GeneratedIpcInvokeMap {
     args: [eligible?: boolean | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
+  "help:global-assistant-can-run": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "help:global-assistant-cancel-launch": {
     args: [expectedGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;

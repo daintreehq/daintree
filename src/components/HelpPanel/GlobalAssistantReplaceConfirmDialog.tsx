@@ -1,9 +1,12 @@
+import { useEffect } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getAgentConfig } from "@/config/agents";
+import { getViewHostId } from "@/hooks/useHostConnection";
 import { notify } from "@/lib/notify";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
-import { useFocusStore } from "@/store/focusStore";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import {
+  declineGlobalAssistantReplacement,
   takeGlobalAssistantReplacement,
   useGlobalAssistantReplaceConfirmStore,
 } from "@/store/globalAssistantReplaceConfirmStore";
@@ -21,18 +24,17 @@ function agentName(agentId: string): string {
 /**
  * Replace the global assistant as the person just approved (#18140), and show
  * it where they approved it, as Clear conversation does. Only the request
- * still waiting is acted on, and main refuses it if the run they were shown
- * has changed since.
+ * still waiting is acted on, only from a view still on screen, and main
+ * refuses it if the run they were shown has changed since. The keyboard stays
+ * where the closing dialog returns it.
  */
 export async function approveGlobalAssistantReplacement(requestId: string): Promise<void> {
   const request = takeGlobalAssistantReplacement(requestId);
-  if (!request) return;
+  if (!request || isProjectViewCached() || getViewHostId() !== null) return;
   suppressSidebarResizes();
-  useFocusStore.getState().clearAssistantGesture();
   const panel = useHelpPanelStore.getState();
   panel.selectGlobal(null);
   panel.setOpen(true);
-  panel.requestFocus();
   try {
     await window.electron.help.replaceGlobalAssistant({
       agentId: request.agentId,
@@ -47,7 +49,10 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
     notify({
       type: "error",
       title: "Couldn't replace global assistant",
-      message: clientErrorText(err, "The global assistant didn't start on the agent asked for."),
+      message: clientErrorText(
+        err,
+        "Its new agent didn't start. Start the global assistant again from the Assistant panel."
+      ),
     });
   }
 }
@@ -58,6 +63,16 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
  */
 export function GlobalAssistantReplaceConfirmDialog() {
   const current = useGlobalAssistantReplaceConfirmStore((state) => state.current);
+
+  // Put away with the question still open, it isn't asked: one answered on
+  // coming back would have sat unread past its cooldown.
+  useEffect(
+    () =>
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase === "cached") declineGlobalAssistantReplacement();
+      }),
+    []
+  );
 
   if (current === null) {
     return (
@@ -86,7 +101,7 @@ export function GlobalAssistantReplaceConfirmDialog() {
       }
       description={
         replacing
-          ? `${pluginName} asks to continue the global assistant in ${incoming}. ${outgoing} stops in every window and ${incoming} starts a new conversation from the message below.`
+          ? `${pluginName} asks to move the global assistant to ${incoming}. ${outgoing} stops in every window and ${incoming} starts a new conversation from the message below.`
           : `${pluginName} asks to start the global assistant in ${incoming}, from the message below. Any conversation it kept for its next start is cleared.`
       }
       confirmLabel={replacing ? "Replace global assistant" : "Start global assistant"}

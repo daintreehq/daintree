@@ -1,11 +1,23 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { GlobalAssistantPhase } from "@shared/types/ipc/help";
 
 const notify = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify }));
+const view = vi.hoisted(() => ({
+  cached: false,
+  listeners: new Set<(phase: string) => void>(),
+}));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => view.cached,
+  subscribeProjectViewLifecycle: (listener: (phase: string) => void) => {
+    view.listeners.add(listener);
+    return () => view.listeners.delete(listener);
+  },
+}));
 vi.mock("@/config/agents", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/config/agents")>()),
   getAgentConfig: (id: string) => ({ name: id === "codex" ? "Codex" : "Claude Code" }),
@@ -44,6 +56,8 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
 
   beforeEach(() => {
     notify.mockReset();
+    view.cached = false;
+    view.listeners.clear();
     replaceGlobalAssistant = vi.fn(async () => ({}));
     Object.defineProperty(window, "electron", {
       configurable: true,
@@ -62,7 +76,7 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     expect(await screen.findByText("Replace the global assistant?")).toBeTruthy();
     expect(
       screen.getByText(
-        "Hand-off asks to continue the global assistant in Codex. Claude Code stops in every window and Codex starts a new conversation from the message below."
+        "Hand-off asks to move the global assistant to Codex. Claude Code stops in every window and Codex starts a new conversation from the message below."
       )
     ).toBeTruthy();
     expect(screen.getByTestId("global-assistant-replace-prompt").textContent).toBe(
@@ -82,7 +96,29 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     render(<GlobalAssistantReplaceConfirmDialog />);
 
     expect(await screen.findByText("Start a new global assistant conversation?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Hand-off asks to start the global assistant in Codex, from the message below. Any conversation it kept for its next start is cleared."
+      )
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start global assistant" })).toBeTruthy();
+  });
+
+  it("stops asking once its view is put away, and an answer from one put away does nothing", async () => {
+    stage();
+    render(<GlobalAssistantReplaceConfirmDialog />);
+    await screen.findByText("Replace the global assistant?");
+
+    act(() => {
+      for (const listener of view.listeners) listener("cached");
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+
+    const requestId = stage();
+    view.cached = true;
+    await approveGlobalAssistantReplacement(requestId);
+    expect(replaceGlobalAssistant).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(false);
   });
 
   it("replaces the run once, as it was shown, and shows the global assistant", async () => {

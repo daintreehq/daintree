@@ -976,6 +976,9 @@ export interface GeneratedElectronAPI {
     cancelGlobalAssistantLaunch(
       ...args: IpcInvokeMap["help:global-assistant-cancel-launch"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-cancel-launch"]["result"]>;
+    canRunGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-can-run"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-can-run"]["result"]>;
     claimGlobalAssistantInput(
       ...args: IpcInvokeMap["help:global-assistant-claim-input"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-claim-input"]["result"]>;

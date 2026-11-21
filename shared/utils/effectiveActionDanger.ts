@@ -1,7 +1,7 @@
 import type { ActionDanger, ActionSource } from "../types/actions.js";
 import {
   AGENT_LAUNCH_ACTION_ID,
-  dispatchCarriesOptionLikeValue,
+  dispatchCarriesOptionLikePrompt,
   dispatchConfiguresAgentLaunch,
 } from "./dispatchAgentLaunch.js";
 import { dispatchCarriesRecipeId } from "./dispatchRecipeId.js";
@@ -97,7 +97,7 @@ export function resolveEffectiveActionDanger(
   if (
     ASSISTANT_HANDOFF_ACTION_IDS.has(actionId) &&
     source === "plugin" &&
-    dispatchCarriesOptionLikeValue(args)
+    dispatchCarriesOptionLikePrompt(args)
   ) {
     return "confirm";
   }

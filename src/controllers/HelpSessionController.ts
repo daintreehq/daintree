@@ -998,6 +998,17 @@ export class HelpSessionController {
     // the re-entrancy guard from outliving the flow that set it.
     if (this._isLaunching && this._isLaunchingGen === this._launchGen) return;
 
+    // A vacant-only start never displaces a session (#16495, #18140). One bound
+    // here since it was asked for — a Retry pressed after another launch took
+    // the tab — is left running, and the banner that offered it goes.
+    if (options.vacantOnly && options.replaceExisting) {
+      const bound = this._slotState().terminalId;
+      if (bound && bound !== this._pendingNewTerminalId) {
+        this._patch({ launchError: null });
+        return;
+      }
+    }
+
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;

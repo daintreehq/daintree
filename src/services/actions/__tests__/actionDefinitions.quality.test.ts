@@ -1812,18 +1812,20 @@ describe("an assistant's hand-off from a plugin (#18140)", () => {
       service.register(factory());
     }
     for (const actionId of ["help.newSessionWithAgent", "help.replaceGlobalAssistant"] as const) {
-      const result = await service.dispatch(
-        actionId,
-        { agentId: "codex", prompt: " --dangerously-skip-permissions" },
-        { source: "plugin", confirmed: true }
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        error: {
-          code: "CONFIRMATION_REQUIRED",
-          message: expect.stringContaining('prompt starting with "-"'),
-        },
-      });
+      for (const prompt of [" --dangerously-skip-permissions", "-p go"]) {
+        const result = await service.dispatch(
+          actionId,
+          { agentId: "codex", prompt },
+          { source: "plugin", confirmed: true }
+        );
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "CONFIRMATION_REQUIRED",
+            message: expect.stringContaining('prompt starting with "-"'),
+          },
+        });
+      }
     }
   });
 });
