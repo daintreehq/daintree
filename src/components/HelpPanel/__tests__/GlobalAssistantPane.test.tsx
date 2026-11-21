@@ -113,6 +113,7 @@ function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
     slot: 0,
     phase: "absent",
     pinnedAgentId: null,
+    coordinating: false,
     occupied: false,
     generation: 0,
     agentId: null,
@@ -160,6 +161,7 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
     startNewGlobalAssistant: vi.fn(async (): Promise<GlobalAssistantView> => {
       throw new Error("no new session in this test");
     }),
+    setGlobalAssistantCoordinator: vi.fn(async (): Promise<GlobalAssistantView[]> => []),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
@@ -1427,6 +1429,68 @@ describe("GlobalAssistantPane (#14454)", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Stop session 2" }));
       await flush();
       expect(help.discardGlobalAssistant).toHaveBeenCalledWith(3, 1, true);
+    });
+
+    it("marks the session that coordinates and hands coordination over from either menu (#18143)", async () => {
+      installHelp(running({ coordinating: true }));
+      help.listGlobalAssistantSessions.mockResolvedValue([
+        running({ coordinating: true }),
+        second({ coordinating: false }),
+      ]);
+      help.setGlobalAssistantCoordinator.mockResolvedValue([
+        running({ coordinating: false }),
+        second({ coordinating: true }),
+      ]);
+      renderPane();
+      await flush();
+
+      expect(screen.getByTestId("help-global-coordinating-0").textContent).toContain(
+        "Coordinating"
+      );
+      expect(screen.queryByTestId("help-global-coordinating-1")).toBeNull();
+
+      openMenu();
+      fireEvent.click(await screen.findByText("Hand coordination to session 2"));
+      await flush();
+      expect(help.setGlobalAssistantCoordinator).toHaveBeenCalledWith(1);
+
+      push(running({ coordinating: false }));
+      push(second({ coordinating: true }));
+      await flush();
+      expect(screen.queryByTestId("help-global-coordinating-0")).toBeNull();
+      expect(screen.getByTestId("help-global-coordinating-1")).not.toBeNull();
+      // The session that handed it over can take it back from its own menu.
+      openMenu();
+      expect(await screen.findByText("Hand coordination to session 1")).not.toBeNull();
+    });
+
+    it("offers no handover with one session, and says who takes over when the coordinator stops", async () => {
+      installHelp(running({ coordinating: true }));
+      renderPane();
+      await flush();
+      openMenu();
+      await screen.findByTestId("help-global-stop");
+      expect(screen.queryByTestId("help-global-hand-coordination")).toBeNull();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      cleanup();
+
+      installHelp(running({ coordinating: true }));
+      help.listGlobalAssistantSessions.mockResolvedValue([
+        running({ coordinating: true }),
+        second({ coordinating: false }),
+      ]);
+      renderPane();
+      await flush();
+      openMenu();
+      fireEvent.click(await screen.findByText("Stop session 1"));
+      expect((await screen.findByRole("alertdialog")).textContent).toContain(
+        "Session 2 takes over coordination and the workers this one launched"
+      );
+      help.discardGlobalAssistant.mockResolvedValue(running({ phase: "absent", occupied: false }));
+      fireEvent.click(await screen.findByRole("button", { name: "Stop session 1" }));
+      await flush();
+      // Main is told which session the person was promised takes over.
+      expect(help.discardGlobalAssistant).toHaveBeenCalledWith(1, 0, true, 1);
     });
 
     it("goes back to the first session once the second is stopped anywhere", async () => {

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { GlobalAssistantPhase } from "@shared/types/ipc/help";
+import type { GlobalAssistantSlot } from "@shared/config/globalAssistantSessions";
 import { subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 /**
@@ -19,9 +20,11 @@ export interface PendingGlobalAssistantReplacement {
   pluginName: string;
   /**
    * A second global session exists beside the first (#18142), so the session a
-   * hand-off replaces is named: it is always the first.
+   * hand-off replaces is named.
    */
   namesSession?: boolean;
+  /** The session it replaces: the one that coordinated when it was asked (#18143). */
+  slot?: GlobalAssistantSlot;
 }
 
 interface GlobalAssistantReplaceConfirmState {

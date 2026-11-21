@@ -2593,6 +2593,7 @@ export interface GeneratedIpcInvokeMap {
       expectedGeneration?: number | undefined,
       slot?: number | undefined,
       expectedRunning?: boolean | undefined,
+      expectedHandsTo?: number | undefined,
     ];
     result: import("./help.js").GlobalAssistantView;
   };
@@ -2619,6 +2620,10 @@ export interface GeneratedIpcInvokeMap {
   "help:global-assistant-restart": {
     args: [expectedGeneration?: number | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-set-coordinator": {
+    args: [slot: number];
+    result: import("./help.js").GlobalAssistantView[];
   };
   "help:global-assistant-start-new": {
     args: [agentId: string];

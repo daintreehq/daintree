@@ -9,7 +9,6 @@ import { MCP_SERVER_METHOD_CHANNELS } from "./mcpServer.preload.js";
 import { broadcastToRenderer, checkRateLimit } from "../utils.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
-import { GLOBAL_ASSISTANT_SLOT } from "../../../shared/config/globalAssistant.js";
 import type {
   ActiveBearerRecord,
   AssistantTurnRecord,
@@ -462,16 +461,16 @@ export const mcpServerNamespace = defineIpcNamespace({
         const callerWorkspace = ctx.projectId !== null ? { callerWorkspaceId: ctx.projectId } : {};
         if ("recipient" in payload) {
           if (payload.recipient !== "global-assistant") throw new Error("Invalid recipient");
-          const [svc, { peekGlobalAssistantService }] = await Promise.all([
-            getMcpServerService(),
-            import("../../services/globalAssistant.js"),
-          ]);
+          const [svc, { peekGlobalAssistantService, globalAssistantCoordinatorSlot }] =
+            await Promise.all([getMcpServerService(), import("../../services/globalAssistant.js")]);
           // The live run is read here, never from the renderer, with no await
-          // before it is recorded (#14161). A hand-over goes to the first
-          // session until choosing the one that coordinates lands (#18137).
+          // before it is recorded (#14161). A hand-over goes to the session
+          // that coordinates (#18143).
           return svc.adoptTerminalForGlobalAssistant({
             terminalId,
-            global: peekGlobalAssistantService(GLOBAL_ASSISTANT_SLOT)?.getRunningSession() ?? null,
+            global:
+              peekGlobalAssistantService(globalAssistantCoordinatorSlot())?.getRunningSession() ??
+              null,
             ...callerWorkspace,
           });
         }

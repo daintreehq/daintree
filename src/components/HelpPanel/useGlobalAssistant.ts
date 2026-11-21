@@ -23,9 +23,14 @@ export interface GlobalAssistantHandle {
   restart: (generation: number) => Promise<boolean>;
   /**
    * End the session the person confirmed and forget its conversation.
-   * `running` is whether it ran when they were asked.
+   * `running` is whether it ran when they were asked; `handsTo`, the session
+   * they were told takes over coordination (#18143).
    */
-  discard: (generation: number, running?: boolean) => Promise<boolean>;
+  discard: (
+    generation: number,
+    running?: boolean,
+    handsTo?: GlobalAssistantSlot | null
+  ) => Promise<boolean>;
   /** Stop the launch the person watched start; the conversation it was picking up is kept. */
   cancelLaunch: (generation: number) => Promise<boolean>;
   /**
@@ -33,6 +38,8 @@ export interface GlobalAssistantHandle {
    * the machine has free. `onClaimed` hears which, before its launch is joined.
    */
   startNew: (agentId: string, onClaimed: (slot: GlobalAssistantSlot) => void) => Promise<boolean>;
+  /** Hand coordination to the session at `to`, as the person asked (#18143). */
+  handCoordination: (to: GlobalAssistantSlot) => Promise<boolean>;
 }
 
 /**
@@ -250,9 +257,12 @@ export function useGlobalAssistant(
   );
 
   const discard = useCallback(
-    (generation: number, running?: boolean) =>
+    (generation: number, running?: boolean, handsTo?: GlobalAssistantSlot | null) =>
       run(
-        () => window.electron.help.discardGlobalAssistant(generation, slot, running),
+        () =>
+          handsTo === undefined || handsTo === null
+            ? window.electron.help.discardGlobalAssistant(generation, slot, running)
+            : window.electron.help.discardGlobalAssistant(generation, slot, running, handsTo),
         "Daintree couldn't end the global assistant."
       ),
     [run, slot]
@@ -291,6 +301,17 @@ export function useGlobalAssistant(
     [setError, setView, slot]
   );
 
+  const handCoordination = useCallback(
+    (to: GlobalAssistantSlot) =>
+      run(async () => {
+        const views = await window.electron.help.setGlobalAssistantCoordinator(to);
+        const shown = views.find((candidate) => candidate.slot === slot);
+        if (!shown) throw new Error("The global assistant session wasn't listed.");
+        return shown;
+      }, "Daintree couldn't hand coordination over."),
+    [run, slot]
+  );
+
   // Held by another surface of this view, it is this window's already: taken
   // without asking, as typing here is all the person can do in it now.
   const inputOwner = view?.inputOwner ?? null;
@@ -319,5 +340,6 @@ export function useGlobalAssistant(
     discard,
     cancelLaunch,
     startNew,
+    handCoordination,
   };
 }

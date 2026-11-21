@@ -4120,6 +4120,166 @@ describe("HelpSessionService", () => {
           expect(taken).not.toHaveProperty("conversationOwnershipId");
           expect(service.listKeptLanes("proj-1")[0]).not.toHaveProperty("conversationOwnershipId");
         });
+
+        describe("handing coordination between lanes (#18143)", () => {
+          let coordinators: Map<string, number>;
+          let commit: ReturnType<typeof vi.fn>;
+
+          beforeEach(() => {
+            coordinators = new Map();
+            commit = vi.fn(
+              (change: {
+                entries?: Record<string, Entry>;
+                coordinator?: { projectId: string; slot: number };
+              }) => {
+                for (const [key, entry] of Object.entries(change.entries ?? {})) {
+                  backing.set(key, entry);
+                }
+                if (change.coordinator) {
+                  coordinators.set(change.coordinator.projectId, change.coordinator.slot);
+                }
+                return Promise.resolve();
+              }
+            );
+            Object.assign(hibernationStore, {
+              getCoordinator: vi.fn((projectId: string) => coordinators.get(projectId) ?? null),
+              commit,
+            });
+          });
+
+          async function launchSlot(slot: number, terminalId: string, agentSessionId: string) {
+            const result = await service.provisionSession({ ...provisionInput(), slot });
+            if (!result) throw new Error("expected provision");
+            expect(service.markTerminalForToken(result.token, terminalId)).toBe(true);
+            await service.recordLaneLaunchForToken(result.token, agentSessionId);
+            return result;
+          }
+
+          function handOver(from: number, to: number): Promise<void> {
+            const handover = service.handOverLaneCoordination("proj-1", from, to);
+            if (!("written" in handover)) throw new Error(`refused: ${handover.refused}`);
+            return handover.written;
+          }
+
+          it("moves the work's id to the lane taking over and gives the other its id, in one write", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+            const theirs = ownershipOfLane(1);
+            expect(held).not.toBe(theirs);
+
+            const written = handOver(0, 1);
+
+            // Every call either run makes from here on already names the moved id.
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(theirs);
+            expect(service.getLaneCoordinator("proj-1")).toBe(1);
+            await written;
+            expect(commit).toHaveBeenCalledTimes(1);
+            expect(ownershipOfLane(1)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            // Each lane still points at its own conversation.
+            expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-a");
+            expect(backing.get(slotKey("proj-1", 1))?.agentSessionId).toBe("conv-b");
+            expect(listener.forget).not.toHaveBeenCalled();
+          });
+
+          it("keeps the handed work through a stop of the lane that handed it and a resume of the other", async () => {
+            await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+
+            await handOver(0, 1);
+            await service.discardConversation("proj-1", 0);
+
+            expect(listener.forget).not.toHaveBeenCalledWith(held);
+            await service.revokeSession(b.sessionId);
+            const resumed = await launchSlot(1, "term-b2", "conv-b");
+            expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(held);
+            expect(listener.bind).toHaveBeenLastCalledWith(resumed.sessionId, held);
+          });
+
+          it("hands the work back to the lane that first held it", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+
+            const theirs = ownershipOfLane(1);
+            await handOver(0, 1);
+            expect(ownershipOfLane(1)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            await handOver(1, 0);
+
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(theirs);
+            expect(ownershipOfLane(1)).toBe(theirs);
+            expect(ownershipOfLane(0)).toBe(held);
+            expect(service.getLaneCoordinator("proj-1")).toBe(0);
+          });
+
+          it("gives the lane handing over a new id when the other held none", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+            // Provisioned and running, but its spawn hasn't settled a conversation yet.
+            const b = await service.provisionSession({ ...provisionInput(), slot: 1 });
+            if (!b) throw new Error("expected provision");
+            expect(service.markTerminalForToken(b.token, "term-b")).toBe(true);
+
+            await handOver(0, 1);
+
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            const given = service.getConversationOwnershipId(a.sessionId);
+            expect(given).toEqual(expect.any(String));
+            expect(given).not.toBe(held);
+            expect(ownershipOfLane(0)).toBe(given);
+          });
+
+          it("refuses, changing nothing, while a launch holds the receiving lane's pointer", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+            await service.revokeSession(b.sessionId);
+            await service.takePendingHibernation("proj-1", 1, 11);
+
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({
+              refused: "starting",
+            });
+
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(held);
+            expect(service.getLaneCoordinator("proj-1")).toBeNull();
+            expect(commit).not.toHaveBeenCalled();
+          });
+
+          it("refuses a lane with nothing to take the work into while the other holds some", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({ refused: "unheld" });
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(commit).not.toHaveBeenCalled();
+
+            // With no work to hand, coordination alone moves.
+            const handover = service.handOverLaneCoordination("proj-1", 1, 0);
+            expect(handover).toHaveProperty("written");
+            expect(service.getLaneCoordinator("proj-1")).toBe(0);
+          });
+
+          it("moves a kept lane's id through its pointer, which its next resume picks up", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+            await service.revokeSession(a.sessionId);
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const theirs = ownershipOfLane(1);
+
+            await handOver(0, 1);
+
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            const resumed = await launchSlot(0, "term-a2", "conv-a");
+            expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(theirs);
+          });
+        });
       });
 
       it("never downgrades a known id to the empty sentinel when an eviction capture finds nothing", async () => {

@@ -35,6 +35,7 @@ function state(): GlobalAssistantView {
     slot: 0,
     phase: "running",
     pinnedAgentId: null,
+    coordinating: false,
     occupied: true,
     generation: main.generation,
     agentId: "claude",

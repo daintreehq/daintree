@@ -10,6 +10,7 @@ function viewOf(patch: Partial<GlobalAssistantView>): GlobalAssistantView {
     phase: "absent",
     occupied: false,
     pinnedAgentId: null,
+    coordinating: false,
     generation: 0,
     agentId: null,
     terminalId: null,

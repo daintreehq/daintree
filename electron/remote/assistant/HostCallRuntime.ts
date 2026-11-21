@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  GLOBAL_STANDBY_TOOLS,
   globalAssistantMayRelay,
+  globalAssistantSessionNumber,
+  globalStandbyMayRelay,
   isGlobalAssistantId,
+  isGlobalAssistantSlot,
 } from "../../../shared/config/globalAssistant.js";
 import {
   ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
@@ -212,6 +216,12 @@ export interface OpenRun {
    * what the run makes there under it, so the conversation resumed keeps it.
    */
   conversationOwnershipId?: string;
+  /**
+   * A global assistant session that isn't coordinating (#18143): its calls
+   * are held to the standby reads and carry no conversation, so no host binds
+   * it to one while it can't act.
+   */
+  standby?: true;
 }
 
 export interface HostCallRuntimeDeps {
@@ -694,6 +704,13 @@ const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
   "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, applies an update Claude Code offers with `terminal.applyClaudeUpdateOwned`, and restarts or deletes only what it launched there. Ask the user to do it.";
+/** Why a global assistant session that isn't coordinating was refused (#18143). */
+function notCoordinatingDetail(slot: number): string {
+  const name = isGlobalAssistantSlot(slot)
+    ? `Global assistant session ${globalAssistantSessionNumber(slot)}`
+    : "This global assistant session";
+  return `${name} isn't coordinating, so it acts on no worker: the other session leads the work, and holds what this one launched before. Nothing was sent. It can still read with ${[...GLOBAL_STANDBY_TOOLS].join(", ")}. The person can hand coordination to it from the Assistant panel.`;
+}
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -1057,6 +1074,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * its end reaches them: a held message is never typed after it.
    */
   private readonly heldSendHosts = new Map<string, Set<HostId>>();
+  /**
+   * Each global session's acting calls in flight, stopped together when
+   * coordination leaves it (#18143). Made at its first such call and dropped
+   * once used, so a session given coordination back starts with a new one.
+   */
+  private readonly standDowns = new Map<string, AbortController>();
   private disposed = false;
   /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
   private readonly sampleWaits = new Set<() => void>();
@@ -1825,6 +1848,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   endHelpSession(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
+    this.standDowns.delete(helpSessionId);
     const session = this.throwawaySessions.get(helpSessionId);
     this.throwawaySessions.delete(helpSessionId);
     const held = this.heldSendHosts.get(helpSessionId);
@@ -1837,6 +1861,27 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
     }
+  }
+
+  /**
+   * Coordination left this global session (#18143): its acting calls still in
+   * flight are cancelled, as its own cancel would, so none that hasn't gone
+   * out is sent, and a host stops what it can of one that has. What one
+   * already did stays done, and a launch that lands late is the work's.
+   */
+  standDown(helpSessionId: string): void {
+    const controller = this.standDowns.get(helpSessionId);
+    this.standDowns.delete(helpSessionId);
+    controller?.abort();
+  }
+
+  private withStandDown(helpSessionId: string, signal: AbortSignal | undefined): AbortSignal {
+    let controller = this.standDowns.get(helpSessionId);
+    if (controller === undefined) {
+      controller = new AbortController();
+      this.standDowns.set(helpSessionId, controller);
+    }
+    return signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
   }
 
   /**
@@ -1857,6 +1902,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const read of this.launchedAgentReads.values()) read.end?.();
     this.launchedAgentReads.clear();
     this.heldSendHosts.clear();
+    this.standDowns.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1892,6 +1938,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
+      // Before anything is noted, pinned or sent, resends and throwaways included.
+      if (caller.standby === true && !globalStandbyMayRelay(args.tool)) {
+        return {
+          ...this.outcomeWith("policy_rejected", notCoordinatingDetail(caller.slot)),
+          callId: args.callId ?? null,
+          result: null,
+        };
+      }
       const projectId = args.projectId;
       if (args.throwaway === true || projectId === undefined) {
         return this.callThrowaway(helpSessionId, caller, args, context);
@@ -1933,13 +1987,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (isGlobalAssistantId(caller.projectId) && !globalAssistantMayRelay(args.tool)) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
+      // A global session's acting call also stops when coordination leaves it (#18143).
+      const signal =
+        isGlobalAssistantId(caller.projectId) && !globalStandbyMayRelay(args.tool)
+          ? this.withStandDown(helpSessionId, context.signal)
+          : context.signal;
       const toolArgs = args.args ?? {};
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {
         return { ...this.outcomeWith("too_large", CALL_TOO_LARGE_DETAIL), ...unsent };
       }
       // Cancelled before it went out (#17985): nothing is sent or kept. A first
       // send never ran; a resend learns nothing of the call it resends.
-      if (context.signal?.aborted) {
+      if (signal?.aborted) {
         return resend
           ? { ...this.outcomeWith("ambiguous", CALL_RESEND_CANCELLED_DETAIL), ...sent }
           : { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
@@ -1999,9 +2058,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // and nothing of it a host dispatches here later runs.
       const inFlight = this.callsInFlight.get(callId);
       const cancel: RelayCallCancel | undefined =
-        context.signal !== undefined
+        signal !== undefined
           ? {
-              signal: context.signal,
+              signal,
               onCancel: () => {
                 if (inFlight !== undefined) inFlight.cancelled = true;
                 remember(this.cancelledCalls, callKey, true, MAX_CANCELLED_CALLS);

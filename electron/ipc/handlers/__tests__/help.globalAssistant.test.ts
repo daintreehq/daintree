@@ -6,12 +6,24 @@ let secondService: GlobalAssistantService;
 const registry = vi.hoisted(() => ({
   startNew: vi.fn(),
   join: vi.fn(),
+  hand: vi.fn(async (_slot: number) => {}),
+  coordinator: 0 as 0 | 1,
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
   getGlobalAssistantService: (slot = 0) => (slot === 1 ? secondService : service),
   whenGlobalAssistantSessionsReadable: async () => {},
   startNewGlobalAssistantSession: registry.startNew,
   joinNewGlobalAssistantLaunch: registry.join,
+  globalAssistantCoordinatorSlot: () => registry.coordinator,
+  handGlobalAssistantCoordination: registry.hand,
+  stopGlobalAssistantSession: async (
+    slot: number,
+    check: (instance: GlobalAssistantService) => void
+  ) => {
+    const instance = slot === 1 ? secondService : service;
+    check(instance);
+    await instance.discard();
+  },
 }));
 
 const pty = vi.hoisted(() => ({
@@ -93,6 +105,8 @@ describe("global assistant IPC handlers", () => {
     secondService = makeService(1);
     registry.startNew.mockReset();
     registry.join.mockReset();
+    registry.hand.mockClear();
+    registry.coordinator = 0;
     pty.generation = 3;
     pty.spawnResult.clear();
     pty.read.mockReset();
@@ -193,6 +207,58 @@ describe("global assistant IPC handlers", () => {
     expect(discarded.phase).toBe("absent");
   });
 
+  describe("which session coordinates (#18143)", () => {
+    it("hands coordination over from a window, answering with both sessions", async () => {
+      const views = await handlers.handleSetGlobalAssistantCoordinator(ctx(10, 1), 1);
+
+      expect(registry.hand).toHaveBeenCalledWith(1);
+      expect(views.map((view) => view.slot)).toEqual([0, 1]);
+    });
+
+    it("stops nothing once the session it was told takes over no longer would", async () => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+
+      // Told session 2 takes over, but it isn't open (another window stopped it).
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      secondService = makeService(1, "codex");
+      // Open, but coordination already moved to it.
+      registry.coordinator = 1;
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      registry.coordinator = 0;
+      const stopped = await handlers.handleDiscardGlobalAssistant(
+        ctx(10, 1),
+        first.generation,
+        0,
+        true,
+        1
+      );
+      expect(stopped.phase).toBe("absent");
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), undefined, 0, undefined, 0)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    });
+
+    it("refuses a call from no window, or naming no session", async () => {
+      await expect(
+        handlers.handleSetGlobalAssistantCoordinator(ctx(10, null), 1)
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      await expect(
+        handlers.handleSetGlobalAssistantCoordinator(ctx(10, 1), 2)
+      ).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(registry.hand).not.toHaveBeenCalled();
+    });
+  });
+
   describe("replacing the run from a hand-off (#18140)", () => {
     const replacement = (generation: number, phase: "absent" | "launching" | "running") => ({
       agentId: "codex",
@@ -224,6 +290,28 @@ describe("global assistant IPC handlers", () => {
       expect(spawn).toHaveBeenLastCalledWith(
         expect.objectContaining({ agentId: "codex", prompt: "Continue from the hand-off" })
       );
+    });
+
+    it("replaces the session that coordinated when asked, and nothing once it handed over (#18143)", async () => {
+      registry.coordinator = 1;
+      secondService = makeService(1, "codex");
+      const second = await handlers.handleEnsureGlobalAssistant(ctx(10, 1), 1);
+      const replaced = await handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+        ...replacement(second.generation, "running"),
+        slot: 1,
+      });
+      expect(replaced).toMatchObject({ slot: 1, phase: "running" });
+      expect(service.getState().phase).toBe("absent");
+
+      registry.coordinator = 0;
+      const shown = secondService.getState();
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+          ...replacement(shown.generation, "running"),
+          slot: 1,
+        })
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(secondService.getState().generation).toBe(shown.generation);
     });
 
     it("tells the person how to recover when the new agent doesn't start", async () => {

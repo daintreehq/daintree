@@ -48,7 +48,10 @@ import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
 import { setScheduledRunOfSession } from "./scheduledRuns/assistantWorkerLaunches.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
-import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import type {
+  PendingHelpHibernation,
+  PendingHelpHibernationStore,
+} from "./PendingHelpHibernationStore.js";
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
 import { publishHelpSessionService } from "./helpSessionRuntime.js";
@@ -307,6 +310,9 @@ export interface ConversationOwnershipListener {
   bind(helpSessionId: string, conversationOwnershipId: string): void;
   forget(conversationOwnershipId: string): void;
 }
+
+/** How a handover of coordination between lanes went (#18143): written, or refused with why. */
+export type LaneHandover = { written: Promise<void> } | { refused: "starting" | "unheld" };
 
 /** A conversation a lane ran, by what its resume would name and the ownership id it was given. */
 interface LaneConversation {
@@ -2394,6 +2400,87 @@ export class HelpSessionService {
 
   private bumpLaneRevision(slotKey: string): void {
     this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
+  }
+
+  /**
+   * The lane chosen to coordinate `projectId`'s lanes (#18143), or null when
+   * none was or the pointers aren't wired yet.
+   */
+  getLaneCoordinator(projectId: string): number | null {
+    return this.pendingHibernationStore?.getCoordinator(projectId) ?? null;
+  }
+
+  /** Keep `slot` as the lane that coordinates, with nothing handed between lanes. */
+  setLaneCoordinator(projectId: string, slot: number): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store || store.getCoordinator(projectId) === slot) return Promise.resolve();
+    return store.commit({ coordinator: { projectId, slot } });
+  }
+
+  /**
+   * Hand coordination of `projectId`'s lanes from lane `from` to lane `to`
+   * (#18143). What `from` launched is held under its conversation's ownership
+   * id on every host, so the id moves rather than the records: `to` takes it
+   * and `from` takes the one `to` held, or a new one holding nothing. Each
+   * conversation stays what it was; only whose work it holds changes. Both
+   * lanes' pointers, every session record of each, and the choice are written
+   * in one snapshot, so a crash keeps all of it or none.
+   *
+   * Everything but the write happens before this returns. Refused, with
+   * nothing changed, when the pointers aren't wired or a launch holds `to`'s
+   * pointer (`starting`): that launch could start `to` afresh and park the
+   * work as a conversation it left. One holding `from`'s picks up whatever
+   * `from` then points at. Refused too while `from` holds work and `to` has
+   * neither a run nor a kept conversation to take it into (`unheld`), so the
+   * work is never left with a lane that no longer coordinates.
+   */
+  handOverLaneCoordination(projectId: string, from: number, to: number): LaneHandover {
+    const store = this.pendingHibernationStore;
+    if (!store || from === to) return { refused: "starting" };
+    const fromKey = assistantSlotKey(projectId, from);
+    const toKey = assistantSlotKey(projectId, to);
+    if (this.claimsBySlotKey.has(toKey)) return { refused: "starting" };
+    const held = this.laneOwnershipId(projectId, from);
+    const theirs = this.laneOwnershipId(projectId, to);
+    const toRuns = this.liveLaneRecord(projectId, to);
+    const coordinator = { projectId, slot: to };
+    if (held === undefined) return { written: store.commit({ coordinator }) };
+    if (theirs === undefined && toRuns === null && !store.get(toKey)) {
+      return { refused: "unheld" };
+    }
+    const given = theirs ?? randomUUID();
+    for (const record of this.sessionsById.values()) {
+      if (record.projectId !== projectId) continue;
+      if (record.slot === from && record.conversationOwnershipId === held) {
+        record.conversationOwnershipId = given;
+      } else if (
+        record.slot === to &&
+        (theirs !== undefined ? record.conversationOwnershipId === theirs : record === toRuns)
+      ) {
+        record.conversationOwnershipId = held;
+      }
+    }
+    const entries: Record<string, PendingHelpHibernation> = {};
+    const fromEntry = store.get(fromKey);
+    if (fromEntry?.conversationOwnershipId === held) {
+      entries[fromKey] = { ...fromEntry, conversationOwnershipId: given };
+    }
+    const toEntry = store.get(toKey);
+    if (toEntry) entries[toKey] = { ...toEntry, conversationOwnershipId: held };
+    return { written: store.commit({ entries, coordinator }) };
+  }
+
+  /** The ownership id a lane's work is held under now: its live run's, else its pointer's. */
+  private laneOwnershipId(projectId: string, slot: number): string | undefined {
+    return (
+      this.liveLaneRecord(projectId, slot)?.conversationOwnershipId ??
+      this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot))?.conversationOwnershipId
+    );
+  }
+
+  private liveLaneRecord(projectId: string, slot: number): HelpSessionRecord | null {
+    const running = this.getRunningLaneSession(projectId, slot);
+    return running ? (this.sessionsById.get(running.sessionId) ?? null) : null;
   }
 
   /**

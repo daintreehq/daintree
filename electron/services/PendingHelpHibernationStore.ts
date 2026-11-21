@@ -65,6 +65,12 @@ interface FileShape {
   entries: Record<string, PersistedHelpHibernation>;
   // Optional, so a build that predates it reads the file and drops it on its next write.
   resumeAtLaunch?: LaunchResume;
+  /**
+   * The lane chosen to coordinate, by project id (#18143): only the global
+   * assistant's sessions choose one. In the same file as the lanes' pointers,
+   * so a handover's pointers and its choice land in one write.
+   */
+  coordinators?: Record<string, number>;
 }
 
 /**
@@ -88,6 +94,8 @@ export class PendingHelpHibernationStore {
   // The conversations the entries read back could resume (#16845), as read: a
   // lane that moves on later in this run doesn't take one out.
   private readonly loadedConversationIds = new Set<string>();
+  /** The lane chosen to coordinate each project's lanes (#18143). */
+  private readonly coordinators = new Map<string, number>();
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
@@ -143,6 +151,7 @@ export class PendingHelpHibernationStore {
           this.loadedConversationIds.add(ownershipId);
         }
       }
+      if (!legacyUnslotted) this.readCoordinators(parsed.coordinators);
       if (parsed.resumeAtLaunch !== undefined) {
         // Off disk before anything can resume from it: a crash during this
         // launch must bring back nothing on the next one (#10815). A launch that
@@ -163,6 +172,28 @@ export class PendingHelpHibernationStore {
    */
   loadedConversationOwnershipIds(): ReadonlySet<string> {
     return this.loadedConversationIds;
+  }
+
+  /** The lane chosen to coordinate `projectId`'s lanes (#18143), or null when none was. */
+  getCoordinator(projectId: string): number | null {
+    return this.coordinators.get(projectId) ?? null;
+  }
+
+  /**
+   * Change several lanes' entries and the lane that coordinates in one write
+   * (#18143), so a crash keeps either all of a handover or none of it.
+   */
+  commit(change: {
+    entries?: Record<string, PendingHelpHibernation>;
+    coordinator?: { projectId: string; slot: number };
+  }): Promise<void> {
+    for (const [slotKey, entry] of Object.entries(change.entries ?? {})) {
+      this.entries.set(slotKey, entry);
+    }
+    if (change.coordinator !== undefined) {
+      this.coordinators.set(change.coordinator.projectId, change.coordinator.slot);
+    }
+    return this.persist();
   }
 
   /** `slotKey` is `assistantSlotKey(projectId, slot)` — see #12108. */
@@ -264,6 +295,15 @@ export class PendingHelpHibernationStore {
     return Object.keys(valid).length > 0 ? { recordedAt, lanes: valid } : null;
   }
 
+  private readCoordinators(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return;
+    for (const [projectId, slot] of Object.entries(raw as Record<string, unknown>)) {
+      if (projectId && typeof slot === "number" && Number.isSafeInteger(slot) && slot >= 0) {
+        this.coordinators.set(projectId, slot);
+      }
+    }
+  }
+
   private persist(): Promise<void> {
     return this.write().then(() => undefined);
   }
@@ -281,6 +321,9 @@ export class PendingHelpHibernationStore {
       version: FILE_VERSION,
       entries: persistedEntries,
       ...(this.resumeAtLaunch ? { resumeAtLaunch: this.resumeAtLaunch } : {}),
+      ...(this.coordinators.size > 0
+        ? { coordinators: Object.fromEntries(this.coordinators) }
+        : {}),
     };
     const work = this.writeChain
       .catch(() => undefined)

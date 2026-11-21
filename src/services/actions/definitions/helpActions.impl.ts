@@ -623,28 +623,27 @@ async function requestGlobalAssistantReplacement(
   ) {
     return unavailable;
   }
-  let state: Awaited<ReturnType<typeof window.electron.help.getGlobalAssistantState>>;
+  let sessions: Awaited<ReturnType<typeof window.electron.help.listGlobalAssistantSessions>>;
   try {
     // Main's own word on the agent: it runs the global assistant on fewer
     // agents than a project's, and only on a CLI new enough.
     if (!(await window.electron.help.canRunGlobalAssistant(args.agentId))) return unavailable;
-    state = await window.electron.help.getGlobalAssistantState();
+    sessions = await window.electron.help.listGlobalAssistantSessions();
   } catch (err) {
     logError("Couldn't read the global assistant to ask about replacing it", err);
     return unavailable;
   }
+  // A hand-off replaces the session that coordinates (#18143).
+  const state = sessions.find((session) => session.coordinating) ?? sessions[0];
+  if (state === undefined) return unavailable;
   if (unseen()) return unavailable;
   const caller = ctx.callerPluginId;
   const pluginName = caller
     ? (usePluginRuntimeStore.getState().pluginMetaById.get(caller)?.displayName ??
       pluginManifestIdFromInstanceKey(caller))
     : "A plugin";
-  // A hand-off replaces the first session (#18142): named as such once a second exists.
-  const namesSession = await Promise.resolve()
-    .then(() => window.electron.help.listGlobalAssistantSessions())
-    .then((sessions) => sessions.some((session) => session.slot !== 0 && session.occupied))
-    .catch(() => false);
-  if (unseen()) return unavailable;
+  // Named once the other session exists too.
+  const namesSession = sessions.some((session) => session.slot !== state.slot && session.occupied);
   const staged = stageGlobalAssistantReplacement({
     agentId: args.agentId,
     prompt: args.prompt,
@@ -652,6 +651,7 @@ async function requestGlobalAssistantReplacement(
     currentAgentId: state.agentId,
     pluginName,
     namesSession,
+    slot: state.slot,
   });
   return staged ? { outcome: "awaiting-confirmation" } : unavailable;
 }

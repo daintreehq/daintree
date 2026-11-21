@@ -1,6 +1,9 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getAgentConfig } from "@/config/agents";
-import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
+import {
+  GLOBAL_ASSISTANT_SLOT,
+  globalAssistantSessionNumber,
+} from "@shared/config/globalAssistantSessions";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { notify } from "@/lib/notify";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
@@ -35,9 +38,9 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
   // A panel tucked away by the focus gesture stays parked while that flag stands.
   useFocusStore.getState().clearAssistantGesture();
   const panel = useHelpPanelStore.getState();
-  // A hand-off replaces the first session's run until choosing the one that
-  // coordinates lands (#18137), so that is the session shown.
-  panel.selectGlobal(null, GLOBAL_ASSISTANT_SLOT);
+  // A hand-off replaces the session that coordinated when it was asked (#18143).
+  const slot = request.slot ?? GLOBAL_ASSISTANT_SLOT;
+  panel.selectGlobal(null, slot);
   panel.setOpen(true);
   // Nothing here asked for focus, so a pane mounting now has none to serve.
   useHelpPanelStore.setState((s) => ({ globalFocusHandledThrough: s.focusRequest }));
@@ -46,6 +49,7 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
       agentId: request.agentId,
       prompt: request.prompt,
       expected: request.expected,
+      slot,
     });
   } catch (err) {
     // Stopped while starting, here or in another window: nothing went wrong.
@@ -86,8 +90,9 @@ export function GlobalAssistantReplaceConfirmDialog() {
   const incoming = agentName(current.agentId);
   const replacing = expected.phase !== "absent";
   const outgoing = currentAgentId ? agentName(currentAgentId) : "Its agent";
-  // Beside a second session, the one replaced is named: always the first.
-  const target = current.namesSession ? "global assistant session 1" : "the global assistant";
+  // Beside a second session, the one replaced is named: the one that coordinates.
+  const session = `global assistant session ${globalAssistantSessionNumber(current.slot ?? GLOBAL_ASSISTANT_SLOT)}`;
+  const target = current.namesSession ? session : "the global assistant";
 
   return (
     <ConfirmDialog
@@ -97,8 +102,8 @@ export function GlobalAssistantReplaceConfirmDialog() {
       title={
         current.namesSession
           ? replacing
-            ? "Replace global assistant session 1?"
-            : "Start a new conversation in global assistant session 1?"
+            ? `Replace ${session}?`
+            : `Start a new conversation in ${session}?`
           : replacing
             ? "Replace the global assistant?"
             : "Start a new global assistant conversation?"

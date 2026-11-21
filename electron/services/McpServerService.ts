@@ -1056,6 +1056,32 @@ export class McpServerService {
   }
 
   /**
+   * Coordination moved from one global assistant session to the other
+   * (#18143). What the outgoing session's conversation launched follows the
+   * conversation's ownership id, which the handover moved, so only what is
+   * held by its run itself is handled here: the prompts it left waiting on
+   * busy agents on this machine are dropped, without the fence of a session
+   * that ended, since it may coordinate again; and the terminals the person
+   * handed it go to the incoming session's run, or back to the person while
+   * that session isn't running.
+   */
+  handOverGlobalAssistantWork(
+    fromSessionId: string,
+    to: { sessionId: string; terminalId: string } | null
+  ): void {
+    const from = relayOwnershipPrincipal(LOCAL_HOST_ID, fromSessionId);
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(from));
+    const adoption = this.sessionStore.terminalAdoption;
+    if (to === null) {
+      adoption.revokePrincipal(from);
+      return;
+    }
+    adoption.reassignPrincipal(from, relayOwnershipPrincipal(LOCAL_HOST_ID, to.sessionId), {
+      orchestratorPaneId: to.terminalId,
+    });
+  }
+
+  /**
    * The panes the hand-over menu may offer: those whose bearer can submit
    * input and whose PTY the host is still tracking.
    */
