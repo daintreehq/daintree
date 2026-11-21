@@ -101,6 +101,7 @@ const globalAssistant = vi.hoisted(() => ({
   views: null as number[] | null,
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
+  globalAssistantCoordinatorSlot: () => 0,
   peekGlobalAssistantService: () =>
     globalAssistant.views && {
       presenterWebContentsId: (canAsk: (id: number) => boolean = () => true) =>

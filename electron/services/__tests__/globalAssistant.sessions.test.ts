@@ -20,6 +20,22 @@ const help = vi.hoisted(() => ({
   spawnOk: true,
   provisioned: [] as Array<{ slot: number; agentId: string }>,
   revoked: [] as Array<{ sessionId: string; capture: boolean }>,
+  /** The session chosen to coordinate, as the pointer file keeps it (#18143). */
+  coordinator: null as number | null,
+  /** Holds every spawn until released, so a launch can be caught in flight. */
+  spawnGate: null as Promise<void> | null,
+}));
+/** What each handover gave the MCP server to move, outgoing run first. */
+const work = vi.hoisted(() => ({
+  moved: [] as Array<{ from: string; to: { sessionId: string; terminalId: string } | null }>,
+}));
+vi.mock("../McpServerService.js", () => ({
+  mcpServerService: {
+    handOverGlobalAssistantWork: (
+      from: string,
+      to: { sessionId: string; terminalId: string } | null
+    ) => work.moved.push({ from, to }),
+  },
 }));
 vi.mock("../HelpSessionService.js", () => ({
   helpSessionService: {
@@ -55,6 +71,15 @@ vi.mock("../HelpSessionService.js", () => ({
     revokeSession: async (sessionId: string, options?: { captureHibernation?: boolean }) => {
       help.revoked.push({ sessionId, capture: options?.captureHibernation === true });
     },
+    getLaneCoordinator: () => (help.wired ? help.coordinator : null),
+    setLaneCoordinator: async (_projectId: string, slot: number) => {
+      if (help.wired) help.coordinator = slot;
+    },
+    handOverLaneCoordination: (_projectId: string, from: number, to: number) => {
+      help.pointer.push(`handover-${from}-${to}`);
+      help.coordinator = to;
+      return Promise.resolve();
+    },
   },
 }));
 vi.mock("../assistants/assistantLaunch.js", () => ({
@@ -68,7 +93,10 @@ vi.mock("../assistants/assistantLaunch.js", () => ({
     launchFlags: async () => [],
   }),
   firstUsableDefault: async () => "claude",
-  spawnAndConfirm: async () => help.spawnOk,
+  spawnAndConfirm: async () => {
+    await help.spawnGate;
+    return help.spawnOk;
+  },
 }));
 vi.mock("../viewless/index.js", () => ({ spawnHostAssistantLive: async () => ({}) }));
 vi.mock("../../window/serviceRefs.js", () => ({
@@ -88,6 +116,9 @@ beforeEach(async () => {
   help.spawnOk = true;
   help.provisioned = [];
   help.revoked = [];
+  help.coordinator = null;
+  help.spawnGate = null;
+  work.moved = [];
   vi.resetModules();
   registry = await import("../globalAssistant.js");
 });
@@ -247,5 +278,146 @@ describe("global assistant sessions (#18142)", () => {
       userMessage: expect.stringContaining("still starting"),
     });
     expect(registry.getGlobalAssistantServices().some((s) => s.isOccupied())).toBe(false);
+  });
+
+  describe("which session coordinates (#18143)", () => {
+    const coordinating = () =>
+      registry.getGlobalAssistantServices().map((service) => service.getState().coordinating);
+
+    async function twoRunning() {
+      const first = registry.getGlobalAssistantService(0);
+      await first.ensureSession();
+      const second = await registry.startNewGlobalAssistantSession("codex", usable);
+      await registry.joinNewGlobalAssistantLaunch(1, second.getState().generation);
+      return [first, second] as const;
+    }
+
+    function holdSpawns(): () => void {
+      let release = () => {};
+      help.spawnGate = new Promise<void>((resolve) => (release = resolve));
+      return release;
+    }
+
+    it("keeps a lone session coordinating, and one started beside it never takes over", async () => {
+      await registry.getGlobalAssistantService(0).ensureSession();
+      expect(coordinating()).toEqual([true, false]);
+      expect(help.coordinator).toBe(0);
+
+      await twoRunning();
+
+      expect(coordinating()).toEqual([true, false]);
+      expect(help.coordinator).toBe(0);
+    });
+
+    it("hands coordination over as asked, with the work its run held, and leaves both runs be", async () => {
+      const [first, second] = await twoRunning();
+      const told: boolean[] = [];
+      first.onChange((state) => told.push(state.coordinating));
+      const outgoing = first.getRunningSession()!.sessionId;
+
+      await registry.handGlobalAssistantCoordination(1);
+
+      expect(coordinating()).toEqual([false, true]);
+      expect(told.at(-1)).toBe(false);
+      expect(help.pointer).toContain("handover-0-1");
+      expect(work.moved).toEqual([{ from: outgoing, to: second.getRunningSession() }]);
+      expect(first.getState().phase).toBe("running");
+      expect(help.revoked).toEqual([]);
+
+      // Already there: nothing moves again.
+      await registry.handGlobalAssistantCoordination(1);
+      expect(help.pointer.filter((entry) => entry.startsWith("handover"))).toHaveLength(1);
+
+      await registry.handGlobalAssistantCoordination(0);
+      expect(coordinating()).toEqual([true, false]);
+      expect(work.moved.at(-1)).toEqual({
+        from: second.getRunningSession()!.sessionId,
+        to: first.getRunningSession(),
+      });
+    });
+
+    it("refuses a session that isn't open, or one still starting, moving nothing", async () => {
+      await registry.getGlobalAssistantService(0).ensureSession();
+      await expect(registry.handGlobalAssistantCoordination(1)).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.stringContaining("Session 2 isn't open"),
+      });
+
+      const release = holdSpawns();
+      const second = await registry.startNewGlobalAssistantSession("codex", usable);
+      await expect(registry.handGlobalAssistantCoordination(1)).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.stringContaining("starting or stopping"),
+      });
+      release();
+      await registry.joinNewGlobalAssistantLaunch(1, second.getState().generation);
+
+      expect(coordinating()).toEqual([true, false]);
+      expect(help.pointer.some((entry) => entry.startsWith("handover"))).toBe(false);
+      expect(work.moved).toEqual([]);
+    });
+
+    it("hands the coordinator's work to the session that stays before stopping it", async () => {
+      const [first, second] = await twoRunning();
+      const outgoing = first.getRunningSession()!.sessionId;
+
+      await registry.stopGlobalAssistantSession(0);
+
+      expect(help.pointer.indexOf("handover-0-1")).toBeGreaterThanOrEqual(0);
+      expect(help.pointer.indexOf("handover-0-1")).toBeLessThan(help.pointer.indexOf("discard-0"));
+      expect(work.moved).toEqual([{ from: outgoing, to: second.getRunningSession() }]);
+      expect(first.isOccupied()).toBe(false);
+      expect(coordinating()).toEqual([false, true]);
+
+      // A first session started again later never takes coordination back.
+      const reused = await registry.startNewGlobalAssistantSession("claude", usable);
+      await registry.joinNewGlobalAssistantLaunch(0, reused.getState().generation);
+      expect(coordinating()).toEqual([false, true]);
+    });
+
+    it("leaves the coordinator be when the other session stops", async () => {
+      await twoRunning();
+
+      await registry.stopGlobalAssistantSession(1);
+
+      expect(help.pointer.some((entry) => entry.startsWith("handover"))).toBe(false);
+      expect(help.pointer).toContain("discard-1");
+      expect(coordinating()).toEqual([true, false]);
+    });
+
+    it("stops nothing when the check refuses, or while the session staying is still starting", async () => {
+      const first = registry.getGlobalAssistantService(0);
+      await first.ensureSession();
+
+      await expect(
+        registry.stopGlobalAssistantSession(0, () => {
+          throw new Error("changed since asked");
+        })
+      ).rejects.toThrow("changed since asked");
+      expect(first.getState().phase).toBe("running");
+
+      const release = holdSpawns();
+      const second = await registry.startNewGlobalAssistantSession("codex", usable);
+      await expect(registry.stopGlobalAssistantSession(0)).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.stringContaining("Session 2 is starting"),
+      });
+      release();
+      await registry.joinNewGlobalAssistantLaunch(1, second.getState().generation);
+
+      expect(first.getState().phase).toBe("running");
+      expect(help.pointer.some((entry) => entry.startsWith("handover"))).toBe(false);
+      expect(help.pointer).not.toContain("discard-0");
+    });
+
+    it("comes back after a restart with the session chosen before it", async () => {
+      help.kept.set(0, "claude");
+      help.kept.set(1, "codex");
+      help.coordinator = 1;
+      await registry.whenGlobalAssistantSessionsReadable();
+
+      expect(coordinating()).toEqual([false, true]);
+      expect(registry.globalAssistantCoordinatorSlot()).toBe(1);
+    });
   });
 });

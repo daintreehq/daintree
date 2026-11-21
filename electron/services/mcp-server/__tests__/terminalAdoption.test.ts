@@ -27,6 +27,42 @@ describe("TerminalAdoptionLedger (#12490)", () => {
     expect(adoption.get("principal-a", "terminal-1")).toBeUndefined();
   });
 
+  it("moves only what one principal holds to another, each keeping what it was handed with (#18143)", () => {
+    const adoption = new TerminalAdoptionLedger();
+    const changes = vi.fn();
+    adoption.adopt({
+      terminalId: "terminal-1",
+      orchestratorPaneId: "pane-a",
+      principalId: "a",
+      workspaceId: "ws-a",
+      launchGeneration: 2,
+      recipient: "global-assistant",
+      now: 1_000,
+    });
+    adoption.adopt({ terminalId: "terminal-2", orchestratorPaneId: "pane-c", principalId: "c" });
+    adoption.onChange(changes);
+
+    adoption.reassignPrincipal("a", "b", { orchestratorPaneId: "pane-b" });
+
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(adoption.get(principalOwnerKey("a"), "terminal-1")).toBeUndefined();
+    expect(adoption.get(principalOwnerKey("b"), "terminal-1")).toEqual({
+      terminalId: "terminal-1",
+      orchestratorPaneId: "pane-b",
+      workspaceId: "ws-a",
+      launchGeneration: 2,
+      recipient: "global-assistant",
+      adoptedAt: 1_000,
+    });
+    expect(adoption.get(principalOwnerKey("c"), "terminal-2")?.orchestratorPaneId).toBe("pane-c");
+    // The old principal's revocation no longer reaches what moved.
+    adoption.revokePrincipal("a");
+    expect(adoption.getForTerminal("terminal-1")?.orchestratorPaneId).toBe("pane-b");
+
+    adoption.reassignPrincipal("nobody", "b", { orchestratorPaneId: "pane-x" });
+    expect(changes).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a second pane rather than moving the terminal to it", () => {
     const adoption = new TerminalAdoptionLedger();
     adoption.adopt({ terminalId: "terminal-1", orchestratorPaneId: "pane-a", principalId: "a" });

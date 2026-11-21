@@ -38,6 +38,7 @@ function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
     focusedWindows: vi.fn(() => []),
     keepsConversation: vi.fn(() => false),
     savePinnedAgent: vi.fn(() => {}),
+    coordinates: vi.fn(() => true),
     ...overrides,
   };
   return { deps, calls };
@@ -352,5 +353,28 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     await b.replace({ agentId: "antigravity", prompt: "Carry on" }, { generation, phase });
     expect(b.getState()).toMatchObject({ phase: "running", agentId: "antigravity" });
     expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith("antigravity");
+  });
+
+  it("says whether it coordinates, and is settled only with nothing starting or stopping (#18143)", async () => {
+    let leads = true;
+    const { deps } = makeDeps("first", { coordinates: vi.fn(() => leads) });
+    const service = new GlobalAssistantService(deps, { slot: 0 });
+    expect(service.getState().coordinating).toBe(true);
+    leads = false;
+    expect(service.getState().coordinating).toBe(false);
+
+    const spawned = deferred<boolean>();
+    deps.spawn.mockImplementationOnce(() => spawned.promise);
+    expect(service.isSettled()).toBe(true);
+    const launch = service.ensureSession();
+    expect(service.isSettled()).toBe(false);
+    spawned.resolve(true);
+    await launch;
+    expect(service.isSettled()).toBe(true);
+
+    const stopping = service.discard();
+    expect(service.isSettled()).toBe(false);
+    await stopping;
+    expect(service.isSettled()).toBe(true);
   });
 });
