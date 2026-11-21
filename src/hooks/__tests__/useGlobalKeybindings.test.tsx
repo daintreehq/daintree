@@ -2962,3 +2962,102 @@ describe("useGlobalKeybindings — bare scoped keys", () => {
     }
   });
 });
+
+// Held down, xterm would send each repeat of Ctrl+Shift+Alt+C as Alt+Ctrl+C: an
+// interrupt the user never typed (#18132).
+describe("useGlobalKeybindings — Copy clean text held in a terminal", () => {
+  function pressInTerminal(helper: HTMLElement, repeat: boolean): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  function mountTerminal(): { xterm: HTMLElement; helper: HTMLTextAreaElement } {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    return { xterm, helper };
+  }
+
+  it("copies once and keeps the key's repeats from the terminal", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    const reachedTerminal = vi.fn();
+    helper.addEventListener("keydown", reachedTerminal);
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(reachedTerminal).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("terminal.copyClean", undefined, {
+      source: "keybinding",
+    });
+    xterm.remove();
+  });
+
+  it("keeps swallowing the repeats through a modifier pressed again and a trip out of the window", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Shift",
+          code: "ShiftLeft",
+          ctrlKey: true,
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      window.dispatchEvent(new Event("blur"));
+    });
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    xterm.remove();
+  });
+
+  it("leaves the repeats of other bindings alone", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.new" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    xterm.remove();
+  });
+});

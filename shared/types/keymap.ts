@@ -127,6 +127,7 @@ export type BuiltInKeyAction =
   | "terminal.popStash"
   | "terminal.scrollToLastActivity"
   | "terminal.sendToAgent"
+  | "terminal.copyClean"
   | "terminal.bulkCommand"
   | "terminal.armDefault"
   | "terminal.disarmAll"
@@ -355,6 +356,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.popStash",
   "terminal.scrollToLastActivity",
   "terminal.sendToAgent",
+  "terminal.copyClean",
   "terminal.bulkCommand",
   "terminal.armDefault",
   "terminal.disarmAll",

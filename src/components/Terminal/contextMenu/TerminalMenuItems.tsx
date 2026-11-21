@@ -84,6 +84,7 @@ export function TerminalSelectionMenuItems({
   onViewSelectedFile,
   separatorAfter = true,
   onSendToAgent,
+  copyCleanKeybinding,
   onOpenInFileBrowser,
   onAction,
 }: {
@@ -102,6 +103,8 @@ export function TerminalSelectionMenuItems({
   separatorAfter?: boolean;
   /** Absent where there is no agent picker to send to. */
   onSendToAgent?: () => void;
+  /** Absent where the shortcut can't reach the terminal (Canopy keeps app keys out). */
+  copyCleanKeybinding?: string;
   onOpenInFileBrowser: (
     scope: WorktreeScope,
     path: string,
@@ -123,7 +126,11 @@ export function TerminalSelectionMenuItems({
         Copy
         <ContextMenuShortcut shortcut={clipboardCombos.copy} />
       </ContextMenuItem>
-      <ContextMenuItem disabled={!hasSelection} onSelect={() => onAction("copy-clean")}>
+      <ContextMenuItem
+        disabled={!hasSelection}
+        onSelect={() => onAction("copy-clean")}
+        keybinding={copyCleanKeybinding}
+      >
         <Copy className={ICON_CLASS} aria-hidden="true" />
         Copy clean text
       </ContextMenuItem>

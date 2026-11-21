@@ -22,12 +22,18 @@ vi.mock("@/components/ui/context-menu", () => {
     children,
     onSelect,
     disabled,
+    keybinding,
   }: {
     children?: React.ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
+    keybinding?: string;
   }) => (
-    <button aria-disabled={disabled || undefined} onClick={() => onSelect?.()}>
+    <button
+      aria-disabled={disabled || undefined}
+      data-keybinding={keybinding}
+      onClick={() => onSelect?.()}
+    >
       {children}
     </button>
   );
@@ -270,6 +276,11 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 
+// The clean-copy action reads the store by its own path.
+vi.mock("@/store/panelStore", async () => ({
+  usePanelStore: (await import("@/store")).usePanelStore,
+}));
+
 // The real choices come from the agent's saved presets; these tests only ask
 // where the submenu lands when there are some.
 vi.mock("@/components/Terminal/restartOnPresetChoices", async (importOriginal) => ({
@@ -297,6 +308,12 @@ import {
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { registerTerminalInputActions } from "@/services/actions/definitions/terminalInputActions";
+import type {
+  ActionCallbacks,
+  ActionRegistry,
+  AnyActionDefinition,
+} from "@/services/actions/actionTypes";
 
 const agentPanel = {
   id: "panel-1",
@@ -787,9 +804,20 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
 describe("TerminalContextMenu — clean copy (#15525)", () => {
   const writeText = vi.fn<(text: string) => Promise<void>>();
 
+  // The row dispatches `terminal.copyClean`, the action its shortcut runs too
+  // (#18132), so the copy these tests read is the real action's.
+  const copyClean = (() => {
+    const actions: ActionRegistry = new Map();
+    registerTerminalInputActions(actions, {} as ActionCallbacks);
+    return actions.get("terminal.copyClean")!() as AnyActionDefinition;
+  })();
+
   beforeEach(() => {
     writeText.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    dispatch.mockImplementation(async (id, args) =>
+      id === "terminal.copyClean" ? copyClean.run(args, {} as never) : undefined
+    );
   });
 
   afterEach(() => {
@@ -855,6 +883,13 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
     expect(writeText).toHaveBeenCalledWith(
       "Release notes:\n- Added a clean copy\n  - next to Copy"
     );
+    // The menu's own panel, never whichever one has focus, under the menu's own
+    // source (no provider here, so its default): never an agent's or a plugin's.
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.copyClean",
+      { terminalId: "panel-1" },
+      { source: "user" }
+    );
     expect(dispatch).not.toHaveBeenCalledWith(
       "terminal.copy",
       expect.anything(),
@@ -872,6 +907,11 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
       expect.anything()
     );
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("shows the shortcut its action is bound to (#18132)", () => {
+    openMenu({ hovered: null });
+    expect(cleanRow().getAttribute("data-keybinding")).toBe("terminal.copyClean");
   });
 
   it("is disabled with Copy when nothing is selected", () => {
