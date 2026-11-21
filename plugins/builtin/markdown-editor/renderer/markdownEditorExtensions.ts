@@ -26,13 +26,12 @@ import {
   foldGutter,
   foldKeymap,
   indentOnInput,
-  syntaxTree,
   type LanguageSupport,
 } from "@codemirror/language";
 import { markdownKeymap } from "@codemirror/lang-markdown";
-import type { SyntaxNode } from "@lezer/common";
 import { utf8ByteLength } from "@shared/utils/folderUpload";
 import type { MarkdownTargets } from "@/components/Markdown/markdownHeadingTargets";
+import { linkTargetAt } from "@/components/Markdown/markdownLinkTarget";
 import {
   editorSearchHighlightTheme,
   editorSearchPanelTheme,
@@ -154,33 +153,6 @@ export async function followHeadingLink(view: EditorView, href: string): Promise
     effects: EditorView.scrollIntoView(position, { y: "start" }),
     userEvent: "select",
   });
-}
-
-/** A link destination without the `<…>` CommonMark allows around it, which the URL node keeps. */
-function destination(view: EditorView, url: SyntaxNode): string {
-  return view.state.sliceDoc(url.from, url.to).replace(/^<([\s\S]*)>$/, "$1");
-}
-
-/** Walk up from the click position to the nearest link node and read its target. */
-export function linkTargetAt(view: EditorView, pos: number): string | null {
-  const tree = syntaxTree(view.state);
-  let node: SyntaxNode | null = tree.resolveInner(pos, 1);
-  while (node) {
-    if (node.name === "URL") {
-      return destination(view, node);
-    }
-    if (node.name === "Link" || node.name === "Image") {
-      const url = node.getChild("URL");
-      return url ? destination(view, url) : null;
-    }
-    if (node.name === "Autolink") {
-      // `<https://example.com>` — the angle brackets are marks, the text between is the URL.
-      const text = view.state.sliceDoc(node.from, node.to);
-      return text.replace(/^<|>$/g, "");
-    }
-    node = node.parent;
-  }
-  return null;
 }
 
 export function buildMarkdownEditorExtensions(options: {

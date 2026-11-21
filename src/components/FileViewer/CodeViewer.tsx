@@ -33,6 +33,8 @@ export interface CodeViewerProps {
   initialLine?: number;
   wrapLines?: boolean;
   className?: string;
+  /** Extensions a host adds for its file type, such as Markdown's clickable links. */
+  extraExtensions?: Extension;
 }
 
 const setHighlightedLine = StateEffect.define<number | null>();
@@ -164,7 +166,7 @@ const SCOPE_NODE_TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
 };
 
 export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function CodeViewer(
-  { content, filePath, initialLine, wrapLines = false, className },
+  { content, filePath, initialLine, wrapLines = false, className, extraExtensions },
   ref
 ) {
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
@@ -240,8 +242,9 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     const list = langExtension ? [...BASE_EXTENSIONS, langExtension] : [...BASE_EXTENSIONS];
     list.push(panels({ topContainer: panelHost }));
     if (wrapLines) list.push(EditorView.lineWrapping);
+    if (extraExtensions) list.push(extraExtensions);
     return list;
-  }, [langExtension, wrapLines, panelHost]);
+  }, [langExtension, wrapLines, panelHost, extraExtensions]);
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
