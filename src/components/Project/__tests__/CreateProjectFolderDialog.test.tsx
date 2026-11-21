@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
@@ -385,9 +385,70 @@ describe("CreateProjectFolderDialog project group", () => {
     });
   }
 
-  it("offers no group row while no groups exist", async () => {
+  it("offers only New group… while no groups exist", async () => {
     await renderDialog();
     expect(groupSelect()).toBeNull();
+    expect(screen.getByTestId("project-group-new")).toBeTruthy();
+  });
+
+  async function makeGroup(name: string): Promise<void> {
+    fireEvent.click(screen.getByTestId("project-group-new"));
+    const input = await screen.findByTestId("project-group-name-input");
+    fireEvent.change(input, { target: { value: name } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+  }
+
+  it("makes the first group here and files the new folder under it", async () => {
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-api" } });
+
+    await makeGroup("Clients");
+
+    expect(groupSelect()?.value).toBe("new-Clients");
+    expect(folderInput().value).toBe("my-api");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "current", groupId: "new-Clients" }
+    );
+  });
+
+  it("keeps the earlier choice when New group… is cancelled", async () => {
+    useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+    await renderDialog();
+    fireEvent.change(groupSelect()!, { target: { value: "g1" } });
+
+    fireEvent.click(screen.getByTestId("project-group-new"));
+    await screen.findByTestId("project-group-name-input");
+    // The second dialog on screen is the name prompt, stacked over this one.
+    const [, namePrompt] = screen.getAllByTestId("app-dialog");
+    fireEvent.click(within(namePrompt!).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+
+    expect(groupSelect()?.value).toBe("g1");
+    await create();
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "current", groupId: "g1" }
+    );
+  });
+
+  it("leaves a group made here in place when the whole dialog is cancelled", async () => {
+    const { onClose } = await renderDialog();
+    await makeGroup("Clients");
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(onClose).toHaveBeenCalled();
+    expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["new-Clients"]);
+    expect(createProjectFolderMock).not.toHaveBeenCalled();
   });
 
   it("files the new folder under the chosen group", async () => {

@@ -22,11 +22,9 @@ import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdow
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { InlineError } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { pluralize } from "@/lib/pluralize";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { PROJECT_GROUP_NAME_MAX_LENGTH, type ProjectGroup } from "@shared/types/project";
+import type { ProjectGroup } from "@shared/types/project";
+import { ProjectGroupNameDialog } from "./ProjectGroupNameDialog";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import { useProjectStore } from "@/store/projectStore";
 
@@ -274,106 +272,22 @@ export function ProjectGroupDialogs() {
   if (dialog.kind === "rename") {
     const group = groups.find((g) => g.id === dialog.groupId);
     if (!group) return null;
-    return <GroupNameDialog key={`rename-${group.id}`} group={group} onClose={closeDialog} />;
+    return (
+      <ProjectGroupNameDialog
+        key={`rename-${group.id}`}
+        group={group}
+        onClose={closeDialog}
+        restoreFocusTo={switcherSearchInput}
+      />
+    );
   }
   return (
-    <GroupNameDialog
+    <ProjectGroupNameDialog
       key={`create-${dialog.projectId ?? ""}`}
       projectId={dialog.projectId}
       onClose={closeDialog}
-    />
-  );
-}
-
-function GroupNameDialog({
-  group,
-  projectId,
-  onClose,
-}: {
-  /** Set to rename this group; absent to create one. */
-  group?: ProjectGroup;
-  /** On create, the project to file under the new group. */
-  projectId?: string;
-  onClose: () => void;
-}) {
-  const createGroup = useProjectGroupsStore((state) => state.createGroup);
-  const renameGroup = useProjectGroupsStore((state) => state.renameGroup);
-  const projectName = useProjectStore((state) =>
-    projectId ? state.projects.find((p) => p.id === projectId)?.name : undefined
-  );
-  const [name, setName] = useState(group?.name ?? "");
-  const [error, setError] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // A new attempt clears the last refusal: the message was about a name that
-  // is no longer in the box.
-  useEffect(() => setError(null), [name]);
-
-  const trimmed = name.trim();
-  const unchanged = group !== undefined && trimmed === group.name;
-
-  const submit = async () => {
-    if (!trimmed || isSaving) return;
-    if (unchanged) {
-      onClose();
-      return;
-    }
-    setIsSaving(true);
-    try {
-      if (group) await renameGroup(group.id, trimmed);
-      else await createGroup(trimmed, projectId);
-      onClose();
-    } catch (cause) {
-      setError(
-        formatErrorMessage(cause, group ? "Couldn't rename group" : "Couldn't create group")
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const isCreate = group === undefined;
-  return (
-    <ConfirmDialog
-      isOpen={true}
-      onClose={onClose}
-      title={isCreate ? "New group" : "Rename group"}
-      description={isCreate && projectName ? `${projectName} moves into the new group.` : undefined}
-      zIndex="nested"
-      confirmLabel={isCreate ? "Create group" : "Rename group"}
-      cancelLabel="Cancel"
-      onConfirm={submit}
-      isConfirmLoading={isSaving}
-      confirmDisabled={trimmed.length === 0}
       restoreFocusTo={switcherSearchInput}
-      preferRestoreFocusTo
-      variant="default"
-    >
-      <div className="space-y-2">
-        <Input
-          autoFocus
-          aria-label="Group name"
-          placeholder="Group name"
-          value={name}
-          maxLength={PROJECT_GROUP_NAME_MAX_LENGTH}
-          aria-invalid={error !== null}
-          data-testid="project-group-name-input"
-          onChange={(event) => setName(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          onKeyDown={(event) => {
-            // Enter that commits an IME candidate belongs to the composition,
-            // not to the dialog — submitting on it would create the group with
-            // half a name.
-            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        {error && <InlineError role="alert">{error}</InlineError>}
-      </div>
-    </ConfirmDialog>
+    />
   );
 }
 

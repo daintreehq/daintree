@@ -462,9 +462,32 @@ describe("CloneRepoDialog", () => {
       });
     }
 
-    it("offers no group row while no groups exist", () => {
+    it("offers only New group… while no groups exist", () => {
       render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
       expect(groupField()).toBeNull();
+      expect(screen.getByTestId("project-group-new")).toBeTruthy();
+    });
+
+    it("makes the first group here and clones the project into it", async () => {
+      const onSuccess = vi.fn();
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+      const url = screen.getByLabelText<HTMLInputElement>(/^url$/i);
+      fireEvent.change(url, { target: { value: "https://github.com/user/my-repo.git" } });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: "Clients" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(groupField()?.value).toBe("new-Clients"));
+      expect(url.value).toBe("https://github.com/user/my-repo.git");
+
+      await fillAndClone();
+      fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/my-repo",
+        { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
+        { disposition: "current", groupId: "new-Clients" }
+      );
     });
 
     it("hands the chosen group on with the cloned project", async () => {

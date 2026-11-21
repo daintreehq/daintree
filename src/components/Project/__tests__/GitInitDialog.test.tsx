@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 import {
@@ -690,9 +690,64 @@ describe("GitInitDialog", () => {
       fireEvent.click(await screen.findByTestId("git-init-open"));
     }
 
-    it("offers no group row while no groups exist", () => {
+    async function makeGroup(name: string): Promise<void> {
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: name } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+    }
+
+    it("offers only New group… while no groups exist", () => {
       renderDialog();
       expect(groupField()).toBeNull();
+      expect(screen.getByTestId("project-group-new")).toBeTruthy();
+    });
+
+    it("makes the first group here, keeps what was typed, and reports the new group", async () => {
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+      fireEvent.change(document.getElementById("git-init-project-name")!, {
+        target: { value: "Helios" },
+      });
+      fireEvent.change(screen.getByLabelText(/^gitignore$/i), { target: { value: "python" } });
+      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: "feat: start" } });
+
+      await makeGroup("Clients");
+
+      expect(groupField()?.value).toBe("new-Clients");
+      expect((document.getElementById("git-init-project-name") as HTMLInputElement).value).toBe(
+        "Helios"
+      );
+      expect((screen.getByLabelText(/^gitignore$/i) as HTMLSelectElement).value).toBe("python");
+      expect((screen.getByLabelText(/^message$/i) as HTMLInputElement).value).toBe("feat: start");
+
+      await finish();
+      expect(onSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Helios" }),
+        "new-Clients"
+      );
+    });
+
+    it("keeps the group chosen before a cancelled New group…", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      fireEvent.change(await screen.findByTestId("project-group-name-input"), {
+        target: { value: "Never made" },
+      });
+      // The second dialog on screen is the name prompt, stacked over this one.
+      const [, namePrompt] = screen.getAllByTestId("app-dialog");
+      fireEvent.click(within(namePrompt!).getByText("dialog-close"));
+
+      await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+      expect(groupField()?.value).toBe("g1");
+      expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["g1"]);
+      await finish();
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), "g1");
     });
 
     it("defaults to no group and reports none", async () => {

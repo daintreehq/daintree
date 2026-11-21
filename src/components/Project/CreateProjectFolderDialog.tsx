@@ -34,9 +34,9 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
-  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { ProjectGroupField } from "./ProjectGroupField";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 
@@ -86,7 +86,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const templateHintId = useId();
 
   const createProjectFolder = useProjectStore((state) => state.createProjectFolder);
-  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
+  const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(isOpen);
 
   useEffect(() => {
     if (!isOpen) {
@@ -355,6 +355,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             groups={groups}
             value={groupId}
             onChange={setGroupId}
+            onCreate={createGroup}
             disabled={isCreating}
           />
           {templates.length > 0 && (
