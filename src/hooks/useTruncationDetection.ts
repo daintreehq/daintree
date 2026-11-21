@@ -42,7 +42,12 @@ export function isElementTruncated(el: HTMLElement, tolerance = TOLERANCE): bool
   return el.scrollWidth > el.clientWidth + tolerance;
 }
 
-export function useTruncationDetection() {
+/**
+ * `text`, when given, is what the element shows: a change re-measures it. Text
+ * that changes in place at a fixed width (a block that fills its row) moves no
+ * box edge, so the resize observer alone would never report the new overflow.
+ */
+export function useTruncationDetection(text?: string | number) {
   const [isTruncated, setIsTruncated] = useState(false);
   const elementRef = useRef<HTMLElement | null>(null);
   const stableSetter = useRef(setIsTruncated);
@@ -81,6 +86,15 @@ export function useTruncationDetection() {
     // observer's first delivery.
     stableSetter.current(el.scrollWidth > el.clientWidth + TOLERANCE);
   }, []);
+
+  // The ref callback measured the first text; only a later one needs a read.
+  const measuredText = useRef(text);
+  useLayoutEffect(() => {
+    if (Object.is(measuredText.current, text)) return;
+    measuredText.current = text;
+    const el = elementRef.current;
+    if (el) setIsTruncated(isElementTruncated(el));
+  }, [text]);
 
   // Measure on mount if ResizeObserver isn't available (jsdom / SSR)
   useLayoutEffect(() => {

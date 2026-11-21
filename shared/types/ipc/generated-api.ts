@@ -587,6 +587,9 @@ export interface GeneratedElectronAPI {
     getQuestionImageByReference(
       ...args: IpcInvokeMap["decisions:get-question-image-by-reference"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-image-by-reference"]["result"]>;
+    getQuestionPaneByReference(
+      ...args: IpcInvokeMap["decisions:get-question-pane-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-pane-by-reference"]["result"]>;
     getQuestionSummaries(
       ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;
@@ -599,6 +602,9 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    hostAttention(
+      ...args: IpcInvokeMap["decisions:host-attention"]["args"]
+    ): Promise<IpcInvokeMap["decisions:host-attention"]["result"]>;
     listAnswerDestinations(
       ...args: IpcInvokeMap["decisions:list-answer-destinations"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-answer-destinations"]["result"]>;
@@ -626,6 +632,9 @@ export interface GeneratedElectronAPI {
     reassignAnswer(
       ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;
+    removeSettledQuestions(
+      ...args: IpcInvokeMap["decisions:remove-settled-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:remove-settled-questions"]["result"]>;
     reportComposerDrafts(
       ...args: IpcInvokeMap["decisions:report-composer-drafts"]["args"]
     ): Promise<IpcInvokeMap["decisions:report-composer-drafts"]["result"]>;
@@ -671,9 +680,6 @@ export interface GeneratedElectronAPI {
     setModelThreshold(
       ...args: IpcInvokeMap["decisions:set-model-threshold"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-model-threshold"]["result"]>;
-    setProxyAllowlisted(
-      ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
-    ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
     setTerminalSnapshots(
       ...args: IpcInvokeMap["decisions:set-terminal-snapshots"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-terminal-snapshots"]["result"]>;

@@ -5,12 +5,19 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { DecisionsInboxHost } from "../DecisionsInboxHost";
 
 const loaded = vi.fn();
+const dialogProps = vi.hoisted(() => [] as Array<{ navigateToTerminal?: unknown }>);
 vi.mock("../DecisionsInboxDialog", () => {
   loaded();
-  return { DecisionsInboxDialog: () => <div data-testid="inbox-dialog" /> };
+  return {
+    DecisionsInboxDialog: (props: { navigateToTerminal?: unknown }) => {
+      dialogProps.push(props);
+      return <div data-testid="inbox-dialog" />;
+    },
+  };
 });
 
 beforeEach(() => {
+  dialogProps.length = 0;
   useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
 });
 
@@ -31,5 +38,13 @@ describe("DecisionsInboxHost (#17231)", () => {
     act(() => useDecisionsInboxStore.getState().open());
     expect(await screen.findByTestId("inbox-dialog")).toBeTruthy();
     expect(loaded).toHaveBeenCalledOnce();
+  });
+
+  it("hands the inbox the window's own way to a terminal (#18048)", async () => {
+    const navigateToTerminal = vi.fn();
+    render(<DecisionsInboxHost navigateToTerminal={navigateToTerminal} />);
+    act(() => useDecisionsInboxStore.getState().open());
+    await screen.findByTestId("inbox-dialog");
+    expect(dialogProps.at(-1)?.navigateToTerminal).toBe(navigateToTerminal);
   });
 });

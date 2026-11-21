@@ -118,7 +118,8 @@ import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService, type NotificationState } from "../NotificationService.js";
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
-import { isWaitingOnPerson } from "../../../shared/utils/decisionWaiting.js";
+import { needsPerson } from "../../../shared/utils/decisionWaiting.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
@@ -1143,6 +1144,10 @@ describe("NotificationService", () => {
 
   describe("waiting Decisions questions (#17233)", () => {
     const open: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
+    const stopped: DecisionQuestionStanding = {
+      kind: "needs-attention",
+      deliveryStatus: "needs-attention",
+    };
 
     function question(
       projectId: string,
@@ -1195,7 +1200,7 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
-    it("counts the questions the toolbar counts, by the same rule, queued included (#18046)", async () => {
+    it("counts the questions the toolbar marks, by the same rules, queued and stopped deliveries included (#18046, #18045)", async () => {
       const win = windowWithViews(11);
       notificationService.initialize(createRegistryMock([win]) as never);
       await questionsLoaded();
@@ -1223,10 +1228,10 @@ describe("NotificationService", () => {
         },
       ];
 
-      // Each standing on a pane of its own: it counts there exactly when the toolbar's rule says so.
+      // Each standing on a pane of its own: it counts there exactly when the toolbar's rules say so.
       for (const [i, standing] of standings.entries()) {
         setDecisionQuestions([question("project-11", "terminal-solo", standing)]);
-        const solo = isWaitingOnPerson({ standing }, Date.now()) ? 1 : 0;
+        const solo = needsPerson({ standing }, Date.now()) ? 1 : 0;
         expect(win.setTitle, `${i}:${standing.kind}`).toHaveBeenLastCalledWith(
           solo === 0 ? "Daintree" : `(${solo}) Daintree`
         );
@@ -1235,8 +1240,8 @@ describe("NotificationService", () => {
       setDecisionQuestions(list);
 
       // One pane each, so the pane count is the question count here.
-      const expected = list.filter((item) => isWaitingOnPerson(item, Date.now())).length;
-      expect(expected).toBe(3);
+      const expected = list.filter((item) => needsPerson(item, Date.now())).length;
+      expect(expected).toBe(4);
       expect(win.setTitle).toHaveBeenLastCalledWith(`(${expected}) Daintree`);
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(expected);
     });
@@ -1251,7 +1256,7 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
-    it("counts open, queued and replied-to questions, and nothing else", async () => {
+    it("counts open, queued and replied-to questions and stopped deliveries, and nothing else", async () => {
       const win = windowWithViews(11);
       notificationService.initialize(createRegistryMock([win]) as never);
       await questionsLoaded();
@@ -1263,6 +1268,7 @@ describe("NotificationService", () => {
         question("project-11", "terminal-c", { kind: "queued" }),
         question("project-11", "terminal-d", { kind: "send-failed" }),
         question("project-11", "terminal-e", { kind: "to-type" }),
+        // Its answer stopped on its way: the person has to decide what happens to it (#18045).
         question("project-11", "terminal-f", {
           kind: "needs-attention",
           deliveryStatus: "needs-attention",
@@ -1276,8 +1282,8 @@ describe("NotificationService", () => {
         question("project-11", "terminal-i", { kind: "settled", outcome: "expired" }),
         question("project-11", "terminal-j", { kind: "settled", outcome: "declined" }),
       ]);
-      expect(win.setTitle).toHaveBeenLastCalledWith("(3) Daintree");
-      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(4) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
 
       // Answered, then the reply's request withdrawn by a later expiry.
       setDecisionQuestions([
@@ -1370,6 +1376,112 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
     });
 
+    it("counts a pane once when its agent waits, a question waits and a delivery stopped there (#18045)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      // terminal-b's one question holds an answer and two follow-ups delivery stopped on: one pane.
+      const held = {
+        ...question("project-11", "terminal-b", stopped, "q-3"),
+        stall: { answerRevision: 1, followUpIds: ["f-1", "f-2"], reason: "pane_gone" },
+      };
+      setDecisionQuestions([
+        question("project-11", "terminal-a", open, "q-1"),
+        question("project-11", "terminal-a", stopped, "q-2"),
+        held,
+      ]);
+      notificationService.updateNotifications(11, waitingIn("terminal-a"));
+      vi.advanceTimersByTime(301);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+
+      // The person settled the stopped deliveries, the same questions now settled.
+      const handled: DecisionQuestionStanding = {
+        kind: "settled",
+        outcome: "answered",
+        handled: true,
+      };
+      setDecisionQuestions([
+        question("project-11", "terminal-a", open, "q-1"),
+        question("project-11", "terminal-a", handled, "q-2"),
+        { ...held, standing: handled, stall: null },
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("counts a delivery that may or may not have been typed in as stopped (#18045)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      setDecisionQuestions([
+        question("project-11", "terminal-a", {
+          kind: "needs-attention",
+          deliveryStatus: "delivery-uncertain",
+        }),
+      ]);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("moves a stopped delivery's title count with the views of its project, keeping it in the Dock (#18045)", async () => {
+      electronMock.webContentsById.set(12, { id: 12, isDestroyed: () => false, send: vi.fn() });
+      const win = windowWithViews(11, 12);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      setDecisionQuestions([question("project-12", "terminal-a", stopped)]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+
+      // The project's cached view is evicted; the question list doesn't move.
+      win.ownerIds.splice(win.ownerIds.indexOf(12), 1);
+      notifyProjectPresenceChanged();
+      await Promise.resolve();
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("keys an enrolled Host's question by its host, apart from a local project at the same path (#18045)", async () => {
+      const local = windowWithViews(11);
+      const remote = windowWithViews(21);
+      local.viewProjects[11] = "same-path";
+      remote.viewProjects[21] = toHostScopedKey("studio", "same-path");
+      notificationService.initialize(createRegistryMock([local, remote]) as never);
+      await questionsLoaded();
+
+      const remoteHost = { hostId: "studio", name: "Studio", connected: true };
+      setDecisionQuestions([
+        { ...question("same-path", "terminal-a", stopped), remoteHost },
+        question("same-path", "terminal-a", open),
+      ]);
+
+      // The same project and terminal ids on two machines are two panes, each in its own window.
+      expect(local.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(remote.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+
+      setDecisionQuestions([{ ...question("same-path", "terminal-a", stopped), remoteHost }]);
+      expect(local.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(remote.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("keeps a stopped delivery in the Dock once its terminal and project are gone (#18045)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      setDecisionQuestions([question("project-closed", "terminal-gone", stopped)]);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
     it("counts a pane once however many of its questions wait", async () => {
       const win = windowWithViews(11);
       notificationService.initialize(createRegistryMock([win]) as never);
@@ -1436,6 +1548,25 @@ describe("NotificationService", () => {
 
       expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("keeps a stopped delivery counted as its question's deadline passes, where the ask beside it goes (#18045)", async () => {
+      const start = Date.parse("2026-11-20T14:00:00.000Z");
+      vi.setSystemTime(start);
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      const soon = new Date(start + 60_000).toISOString();
+      setDecisionQuestions([
+        { ...question("project-11", "terminal-a"), expiresAt: soon },
+        { ...question("project-11", "terminal-b", stopped), expiresAt: soon },
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+
+      vi.advanceTimersByTime(60_000);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 
@@ -1977,7 +2108,6 @@ describe("NotificationService", () => {
       windowsWith([]);
 
       expect(notificationService.openDecisionQuestion(referenceIn(11))).toBe(false);
-      expect(notificationService.openDecisionAttention(referenceIn(11))).toBe(false);
     });
 
     it("opens it at a follow-up in its thread when one is named (#17235)", () => {
@@ -1993,30 +2123,6 @@ describe("NotificationService", () => {
           { name: "decisions:open-question", payload: { reference, messageId: "ask-1" } },
         ],
       ]);
-    });
-
-    it("opens the answers needing attention at the pane that asked, in the window a question would open in (#17235)", () => {
-      const other = createWindowMock(false, [11]);
-      const recent = createWindowMock(false, [21]);
-      windowsWith([other, recent], [recent, other]);
-      const reference = { ...referenceIn(11), terminalId: "term-asked" };
-
-      expect(notificationService.openDecisionAttention(reference)).toBe(true);
-
-      const attention = (ownerId: number) =>
-        ownerSend(ownerId).mock.calls.filter(
-          ([, event]) => (event as { name: string }).name === "decisions:open-attention"
-        );
-      // The window showing its project, though another was focused more recently.
-      expect(attention(11)).toEqual([
-        [
-          "events:push",
-          { name: "decisions:open-attention", payload: { terminalId: "term-asked" } },
-        ],
-      ]);
-      expect(attention(21)).toHaveLength(0);
-      expect(opened(11)).toHaveLength(0);
-      expect(other.focus).toHaveBeenCalled();
     });
   });
 

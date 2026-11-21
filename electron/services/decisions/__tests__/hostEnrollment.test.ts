@@ -171,6 +171,10 @@ class FakePort implements DecisionsHostsPort {
     return null;
   }
 
+  hostAttention() {
+    return null;
+  }
+
   lastHostRead() {
     return null;
   }

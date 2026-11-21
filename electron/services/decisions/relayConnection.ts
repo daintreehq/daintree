@@ -36,6 +36,7 @@ import {
   RetiredAttemptError,
   chromiumWebSocket,
   inertAttemptDelivery,
+  drainWithoutAnnouncing,
   holdingTerminalSink,
   isRelaySocketUrl,
   newBridgeLock,
@@ -684,6 +685,7 @@ export class RelayConnection {
         (questionId) => this.delivery?.closureWrite(questionId) ?? null,
         () => (attempt.retired ? null : this.delivery)
       );
+      drainWithoutAnnouncing(bridge);
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;

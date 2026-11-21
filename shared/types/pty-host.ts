@@ -1707,6 +1707,11 @@ export interface ExactPromptGuard {
   /** The agent session main read, when known. One learned since is still that run. */
   agentSessionId?: string;
   /**
+   * The agent main read as detected in the PTY (#18116): another one detected
+   * there since, or none, is another run, though nothing respawned it.
+   */
+  agentId?: string;
+  /**
    * Mid-turn too, when the host's own record says the agent's CLI queues
    * input (`capabilities.queuesInputWhileWorking`), never on input typed
    * since the turn began.

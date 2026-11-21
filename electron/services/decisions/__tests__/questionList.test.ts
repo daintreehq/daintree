@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
-import { projectDecisionQuestions, questionAsks, standingOf } from "../questionList.js";
+import {
+  projectDecisionQuestions,
+  questionAsks,
+  removableFromHistory,
+  standingOf,
+  type QuestionListMemo,
+} from "../questionList.js";
 import { NO_ADVISORY_HOST } from "../questionRound.js";
+import type { DecisionAskerPresence } from "../../../../shared/types/decisionsQuestion.js";
 import { threadNeedsAttention } from "../attentionList.js";
 import { DECLINE, SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
 
@@ -258,7 +265,15 @@ describe("standingOf", () => {
         })
       );
     // Taken off the wait at once; typed in, it is settled.
-    expect(reply("received")).toEqual({ kind: "to-type" });
+    expect(reply("received")).toMatchObject({
+      kind: "to-type",
+      delivery: {
+        answer: false,
+        followUps: 1,
+        first: "follow-up",
+        recordedAt: "2026-11-01T10:06:00.000Z",
+      },
+    });
     expect(reply("terminal-delivered")).toMatchObject({ kind: "settled", outcome: "answered" });
   });
 
@@ -294,7 +309,10 @@ describe("standingOf", () => {
           answers_json: answers({}),
         })
       )
-    ).toEqual({ kind: "to-type" });
+    ).toMatchObject({
+      kind: "to-type",
+      delivery: { answer: true, followUps: 0, first: "answer" },
+    });
     expect(
       standing(
         row(1, {
@@ -302,7 +320,197 @@ describe("standingOf", () => {
           messages_json: messages({ delivery: { status: "received" } }),
         })
       )
-    ).toEqual({ kind: "to-type" });
+    ).toMatchObject({
+      kind: "to-type",
+      delivery: { answer: false, followUps: 1, first: "follow-up" },
+    });
+  });
+
+  describe("what waits to be typed in (#18032)", () => {
+    const toType = (overrides: Parameters<typeof row>[1], handled = new Map<string, number>()) => {
+      const result = standing(row(1, { local_status: "human-answered", ...overrides }), handled);
+      if (result.kind !== "to-type") throw new Error(`expected to-type, got ${result.kind}`);
+      return result.delivery;
+    };
+
+    it("names an answer waiting alone, when it was recorded, and that it doesn't wait for a host", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: "2026-11-01T10:05:00.000Z" }),
+        })
+      ).toEqual({
+        answer: true,
+        followUps: 0,
+        first: "answer",
+        recordedAt: "2026-11-01T10:05:00.000Z",
+        hostAway: false,
+      });
+    });
+
+    it("times the one waiting longest, whichever kind it is", () => {
+      const both = (answerAt: string) =>
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: answerAt, event_seq: 5 }),
+          // Stored out of time order: the earliest of them is what counts.
+          messages_json: messages(
+            { message_id: "m-2", event_seq: 7, created_at: "2026-11-01T10:09:00.000Z" },
+            { message_id: "m-1", event_seq: 6, created_at: "2026-11-01T10:06:00.000Z" }
+          ),
+        });
+      expect(both("2026-11-01T10:05:00.000Z")).toMatchObject({
+        answer: true,
+        followUps: 2,
+        first: "answer",
+        recordedAt: "2026-11-01T10:05:00.000Z",
+      });
+      // A follow-up sent before the answer came back to life waits longer than the answer.
+      expect(both("2026-11-01T10:07:00.000Z")).toMatchObject({
+        first: "follow-up",
+        recordedAt: "2026-11-01T10:06:00.000Z",
+      });
+    });
+
+    it("compares the instants recorded, not how they were written", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: "2026-11-01T10:05:00.000Z", event_seq: 5 }),
+          // 10:04 UTC, written an hour ahead.
+          messages_json: messages({ event_seq: 6, created_at: "2026-11-01T11:04:00.000+01:00" }),
+        })
+      ).toMatchObject({ first: "follow-up", recordedAt: "2026-11-01T11:04:00.000+01:00" });
+    });
+
+    it("breaks a tie in time by the thread's order, an answer from before threads first", () => {
+      const at = "2026-11-01T10:05:00.000Z";
+      const tied = (seq: number | undefined) =>
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers({ created_at: at, event_seq: seq }),
+          messages_json: messages({ event_seq: 6, created_at: at }),
+        });
+      expect(tied(undefined)?.first).toBe("answer");
+      expect(tied(5)?.first).toBe("answer");
+      expect(tied(9)?.first).toBe("follow-up");
+    });
+
+    it("says only the correction still waits once the answer it replaces was typed in", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            { entry_id: "a-1", revision: 1, delivered: true },
+            {
+              entry_id: "a-2",
+              revision: 2,
+              correction: true,
+              created_at: "2026-11-01T11:00:00.000Z",
+            }
+          ),
+        })
+      ).toMatchObject({ answer: true, first: "answer", recordedAt: "2026-11-01T11:00:00.000Z" });
+    });
+
+    it("counts the decision model's answer as the answer", () => {
+      expect(
+        toType({
+          local_status: "proxy-answered",
+          delivery_status: "desktop-received",
+          answers_json: answers({
+            source: "proxy",
+            action: "proxy-answer",
+            created_at: "2026-11-01T10:30:00.000Z",
+          }),
+        })
+      ).toMatchObject({ answer: true, followUps: 0, recordedAt: "2026-11-01T10:30:00.000Z" });
+    });
+
+    it("says the answer waits for its terminal's host only while the store records that", () => {
+      expect(toType({ delivery_status: "pending-host", answers_json: answers({}) })?.hostAway).toBe(
+        true
+      );
+      // The library records a host wait only for an answer: a follow-up alone never says it.
+      expect(
+        toType({
+          ...delivered,
+          delivery_status: "pending-host",
+          messages_json: messages({}),
+        })?.hostAway
+      ).toBe(false);
+    });
+
+    it("leaves out a stopped answer the person handled, while their follow-up waits", () => {
+      for (const status of ["needs-attention", "delivery-uncertain"] as const) {
+        expect(
+          toType(
+            {
+              delivery_status: status,
+              answers_json: answers({}),
+              messages_json: messages({}),
+            },
+            new Map([[qid(1), 1]])
+          )
+        ).toMatchObject({ answer: false, followUps: 1, first: "follow-up" });
+      }
+    });
+
+    it("never names a notice as the answer: with only one waiting, it doesn't say what waits", () => {
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            { entry_id: "a-1", delivered: true },
+            { entry_id: "e-1", kind: "expired", action: "expire", source: "system", sealed: null }
+          ),
+        })
+      ).toBeUndefined();
+      // Beside a correction still waiting, the notice is neither counted nor timed.
+      expect(
+        toType({
+          delivery_status: "desktop-received",
+          answers_json: answers(
+            {
+              entry_id: "e-1",
+              kind: "expired",
+              action: "expire",
+              source: "system",
+              sealed: null,
+              created_at: "2026-11-01T10:01:00.000Z",
+            },
+            {
+              entry_id: "a-2",
+              revision: 2,
+              correction: true,
+              created_at: "2026-11-01T10:20:00.000Z",
+            }
+          ),
+        })
+      ).toMatchObject({ answer: true, first: "answer", recordedAt: "2026-11-01T10:20:00.000Z" });
+    });
+
+    it("carries counts and times only through the list", () => {
+      const [item] = projectDecisionQuestions(
+        [
+          row(1, {
+            local_status: "human-answered",
+            delivery_status: "desktop-received",
+            answers_json: answers({}),
+            messages_json: messages({}),
+          }),
+        ],
+        new Map(),
+        HOST,
+        NO_ADVISORY_HOST
+      );
+      const { standing: listed } = item!;
+      if (listed.kind !== "to-type") throw new Error(`expected to-type, got ${listed.kind}`);
+      expect(Object.keys(listed.delivery!).sort()).toEqual(
+        ["answer", "first", "followUps", "hostAway", "recordedAt"].sort()
+      );
+      expect(JSON.stringify(listed)).not.toContain(SECRET);
+    });
   });
 
   it("needs attention exactly when the list of answers needing attention would show it", () => {
@@ -877,5 +1085,181 @@ describe("questionAsks", () => {
 
   it("reads only the questions named", () => {
     expect(questionAsks([row(1), row(2)], new Set([qid(2)]))).toEqual(new Map([[qid(2), null]]));
+  });
+});
+
+describe("projectDecisionQuestions asker presence (#18029)", () => {
+  const seen = { target: "closed", directory: "present", resume: "resumable" } as const;
+
+  it("carries what was observed of the run that asked an open or queued question", () => {
+    const asked: QuestionRow["origin"][] = [];
+    const list = projectDecisionQuestions(
+      [row(1), row(2, { local_status: "queued" })],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      (origin) => {
+        asked.push(origin);
+        return seen;
+      }
+    );
+    expect(list.map((item) => item.asker)).toEqual([seen, seen]);
+    expect(asked.map((origin) => origin.pane_id)).toEqual(["pane-a", "pane-a"]);
+    // Enums only: no run identity reaches the list.
+    expect(JSON.stringify(list[0]!.asker)).not.toContain(SECRET);
+  });
+
+  it("observes nothing once a question is answered, settled, or waits for a reply", () => {
+    const lookup = vi.fn(() => seen);
+    const list = projectDecisionQuestions(
+      [
+        row(1, delivered),
+        row(2, { local_status: "cancelled" }),
+        row(3, { local_status: "expired" }),
+        row(4, {
+          local_status: "human-answered",
+          delivery_status: "terminal-delivered",
+          answers_json: answers({ delivered: true, event_seq: 1 }),
+          messages_json: messages({
+            message_id: "m-1",
+            side: "agent",
+            expects_reply: true,
+            event_seq: 2,
+          }),
+        }),
+      ],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      lookup
+    );
+    expect(list.map((item) => "asker" in item)).toEqual([false, false, false, false]);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("leaves the field out until there is an observation, and without a lookup", () => {
+    const [unread] = projectDecisionQuestions(
+      [row(1)],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      () => undefined
+    );
+    const [none] = projectDecisionQuestions([row(1)], new Map(), HOST, NO_ADVISORY_HOST);
+    expect("asker" in unread!).toBe(false);
+    expect("asker" in none!).toBe(false);
+  });
+});
+
+describe("removableFromHistory (#18033)", () => {
+  const delivered = answers({ revision: 1, delivered: true });
+
+  it("takes what History shows as settled or never sent, once nothing is left to type", () => {
+    const removable = [
+      row(1, { local_status: "human-answered", answers_json: delivered }),
+      row(2, { local_status: "expired" }),
+      row(3, { local_status: "cancelled" }),
+      row(4, { local_status: "cancelled", answers_json: answers({ ...DECLINE, delivered: true }) }),
+      row(5, { local_status: "publish-failed" }),
+    ];
+    const kept = [
+      row(10, { local_status: "open" }),
+      row(11, { local_status: "queued" }),
+      row(12, { local_status: "human-answered", answers_json: answers({ revision: 1 }) }),
+      row(13, {
+        local_status: "human-answered",
+        delivery_status: "needs-attention",
+        answers_json: answers({ revision: 1 }),
+      }),
+      // A decline's notice still to be typed: History shows it, but it isn't finished.
+      row(14, { local_status: "cancelled", answers_json: answers({ ...DECLINE }) }),
+      row(15, { local_status: "expired", origin: { host_id: "host_other" } }),
+      row(16, { local_status: "expired", history_only: true }),
+      row(17, { local_status: "expired", origin: { project_id: "" } }),
+    ];
+    for (const q of removable) expect(removableFromHistory(q, new Map(), HOST)).toBe(true);
+    for (const q of kept) expect(removableFromHistory(q, new Map(), HOST)).toBe(false);
+  });
+
+  it("takes an answer a person marked handled, and not once a correction needs them again", () => {
+    const handled = row(1, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1, deliver: false }),
+    });
+    expect(removableFromHistory(handled, new Map(), HOST)).toBe(false);
+    expect(removableFromHistory(handled, new Map([[handled.question_id, 1]]), HOST)).toBe(true);
+    const corrected = {
+      ...handled,
+      answers_json: answers({ revision: 1, deliver: false }, { revision: 2, entry_id: "entry-2" }),
+    };
+    expect(removableFromHistory(corrected, new Map([[handled.question_id, 1]]), HOST)).toBe(false);
+  });
+});
+
+describe("projectDecisionQuestions with a memo (#18033)", () => {
+  it("projects each row object once, again only when what it is read with changes", () => {
+    const memo: QuestionListMemo = new WeakMap();
+    const attention = row(2, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const rows = [row(1, { local_status: "expired" }), attention];
+
+    const first = projectDecisionQuestions(
+      rows,
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      undefined,
+      memo
+    );
+    const again = projectDecisionQuestions(
+      rows,
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST,
+      undefined,
+      memo
+    );
+    expect(again[0]).toBe(first[0]);
+    expect(again[1]).toBe(first[1]);
+
+    // Marked handled: that row is projected again; the other is the item it was.
+    const handled = new Map([[attention.question_id, 1]]);
+    const marked = projectDecisionQuestions(rows, handled, HOST, NO_ADVISORY_HOST, undefined, memo);
+    expect(marked[0]).toBe(first[0]);
+    expect(marked[1]!.standing).toEqual({ kind: "settled", outcome: "answered", handled: true });
+    // The same as projecting without a memo, field for field.
+    expect(marked).toEqual(projectDecisionQuestions(rows, handled, HOST));
+    // A changed row is a new object, projected afresh.
+    const replaced = [rows[0]!, { ...attention, local_status: "cancelled" as const }];
+    expect(
+      projectDecisionQuestions(replaced, new Map(), HOST, NO_ADVISORY_HOST, undefined, memo)[1]!
+        .standing
+    ).toEqual(standingOf(replaced[1]!, new Map()));
+  });
+
+  it("projects an open question again when what is observed of its asker changes", () => {
+    const memo: QuestionListMemo = new WeakMap();
+    const rows = [row(1, { local_status: "expired" }), row(2)];
+    let seen: DecisionAskerPresence | undefined;
+    const lookup = vi.fn((_origin: QuestionRow["origin"]) => seen);
+    const list = () =>
+      projectDecisionQuestions(rows, new Map(), HOST, NO_ADVISORY_HOST, lookup, memo);
+
+    const first = list();
+    expect("asker" in first[1]!).toBe(false);
+    expect(list()[1]).toBe(first[1]);
+    seen = { target: "closed", directory: "present", resume: "resumable" };
+    const observed = list();
+    expect(observed[0]).toBe(first[0]);
+    expect(observed[1]!.asker).toEqual(seen);
+    // The same observation in a new object is no change.
+    seen = { ...seen };
+    expect(list()[1]).toBe(observed[1]);
+    // A settled question's asker is never looked up.
+    expect(lookup.mock.calls.every(([origin]) => origin === rows[1]!.origin)).toBe(true);
   });
 });

@@ -416,10 +416,7 @@ test("Decisions settings page review — every state, per theme", async () => {
         },
       });
       // A verified kit, so these show the connection rather than the unfinished setup.
-      const verified = {
-        recoveryKitVerifiedAt: CONSENTED,
-        recoveryKitCoverage: "current" as const,
-      };
+      const verified = { recoveryKitVerifiedAt: CONSENTED };
       const relayStates: [string, DecisionsStatus, string][] = [
         [
           "05-connecting",

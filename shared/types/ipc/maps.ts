@@ -1659,8 +1659,6 @@ export interface IpcEventMap {
   "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
   // Open one question in the question view (#17232): a click on its desktop notification. One window only.
   "decisions:open-question": import("../decisionsQuestion.js").DecisionsOpenQuestionRequest;
-  // Open the list of answers needing attention (#17235): a click on a stalled answer's notification. One window only.
-  "decisions:open-attention": import("../decisionsQuestion.js").DecisionsOpenAttentionRequest;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -2871,7 +2869,6 @@ export type IpcEventBusMap = Pick<
   | "decisions:status-changed"
   | "decisions:questions-changed"
   | "decisions:open-question"
-  | "decisions:open-attention"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

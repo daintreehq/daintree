@@ -315,6 +315,39 @@ export type DecisionQuestionContentResult =
   | DecisionQuestionHostAway;
 
 /**
+ * The asking pane as the machine that owns it observed it (#18037): its agent
+ * state, the title its header shows and its screen's newest lines, redacted
+ * and bounded as a phone's terminal snapshot is. `observedAt` is when that
+ * machine read it, as an ISO time.
+ */
+export interface DecisionQuestionPane {
+  agentState: string;
+  waitingReason: string | null;
+  paneTitle: string;
+  lines: string[];
+  observedAt: string;
+}
+
+/**
+ * Reading a question's asking pane (#18037), never shared off the machine
+ * that owns it but to this computer. `closed`: the pane no longer holds the
+ * run that asked. `moved`: the answer was moved to another terminal, by a
+ * person or a resume, so the run that asked isn't known any more. `unreadable`: nothing could say
+ * what the pane holds now. `needs-update`: the Remote Host that asked is too
+ * old to read it. The rest as a content read's.
+ */
+export type DecisionQuestionPaneResult =
+  | { result: "read"; reference: DecisionQuestionReference; pane: DecisionQuestionPane }
+  | { result: "closed" }
+  | { result: "moved" }
+  | { result: "unreadable" }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "needs-update" }
+  | DecisionQuestionHostNotConnected;
+
+/**
  * One question's opening line, or why there is none: `host-not-connected`
  * for a Remote Host's question while this computer has no link to the Host.
  */
@@ -414,7 +447,8 @@ export interface DecisionQuestionReference {
  * - `waiting`: for the person, because it is `open`, or because it was
  *   answered and the agent's latest follow-up expects a `reply`;
  * - `queued`: not yet sent to the relay; `send-failed`: it never could be;
- * - `to-type`: answered, or followed up by the person, and waiting to be typed in;
+ * - `to-type`: answered, or followed up by the person, and waiting to be typed
+ *   in, with what waits when its machine says (`delivery`, #18032);
  * - `needs-attention`: an answer or a person's follow-up that delivery stopped
  *   on, as the list of answers needing attention shows it;
  * - `settled`: answered and typed in or marked handled, withdrawn, expired,
@@ -424,10 +458,27 @@ export type DecisionQuestionStanding =
   | { kind: "waiting"; reason: "open" | "reply" }
   | { kind: "queued" }
   | { kind: "send-failed" }
-  | { kind: "to-type" }
+  | { kind: "to-type"; delivery?: DecisionPendingDelivery }
   | { kind: "needs-attention"; deliveryStatus: "needs-attention" | "delivery-uncertain" }
   | { kind: "settled"; outcome: "answered"; handled: boolean }
   | { kind: "settled"; outcome: "withdrawn" | "expired" | "declined" };
+
+/**
+ * What waits to be typed into the asking terminal while a question is
+ * `to-type` (#18032), as its store records it: an answer (or its correction),
+ * how many of the person's follow-ups, which of those was recorded first and
+ * when, and whether the answer waits for the terminal's host to be back
+ * (`pending-host`). Counts and times only. Absent from a Remote Host's
+ * question, whose link doesn't carry it.
+ */
+export interface DecisionPendingDelivery {
+  answer: boolean;
+  followUps: number;
+  /** The one waiting longest, and when it was recorded, ISO 8601 as stored. */
+  first: "answer" | "follow-up";
+  recordedAt: string;
+  hostAway: boolean;
+}
 
 /**
  * A question as the list names it: who asked, where, when, and where it
@@ -475,6 +526,13 @@ export interface DecisionQuestionListItem {
   /** What delivery stopped on while it needs a person (#17235); null otherwise. */
   stall: DecisionQuestionStall | null;
   /**
+   * A withdrawal (`withdrawing`) or the person's decline (`declining`) this
+   * computer has queued for the relay and the question hasn't closed for yet
+   * (#18052), whichever window started it. Only this computer's list carries
+   * it, never a Host's own: a decline of a Host's question is signed here.
+   */
+  closing?: "withdrawing" | "declining";
+  /**
    * The enrolled Remote Host that asked (#17230), by the id and name this
    * computer's host list gives it, and whether this computer has a link to it
    * now; absent for this computer's own questions. A Host that isn't
@@ -482,12 +540,56 @@ export interface DecisionQuestionListItem {
    */
   remoteHost?: DecisionQuestionRemoteHost;
   /**
+   * What this computer last observed of the run that asked (#18029), for its
+   * own open or queued questions only, once observed: never a Remote Host's,
+   * whose panes this computer can't see.
+   */
+  asker?: DecisionAskerPresence;
+  /**
    * What a waiting or queued question asks of the person now, and what they
    * did with that on this computer (#17895). Only this computer's list
    * carries it, never a Host's own, and only while the question is in Needs you.
    */
   inbox?: DecisionQuestionInbox;
 }
+
+/**
+ * The run that asked an open question, as this computer last observed it
+ * (#18029). Observations only: nothing here closes, declines or withdraws the
+ * question, and none of it says what the agent is doing.
+ * - `target`, the terminal that asked: `running`, the same run with its agent
+ *   detected; `agent-undetected`, the same run with its agent no longer
+ *   detected; `closed`, it stopped running or closed; `trashed`, in the Trash;
+ *   `moved`, the same run now filed under another worktree; `replaced`, it
+ *   now runs another session; `unknown`, it couldn't be read.
+ * - `directory`, the folder it asked from: `none` for a terminal in no worktree.
+ * - `resume`, whether an answer could reopen its session in a new terminal,
+ *   by the checks delivery makes before it tries: `resumable` when they all
+ *   pass (the launch itself can still fail), else the first that doesn't.
+ */
+export interface DecisionAskerPresence {
+  target: "running" | "agent-undetected" | "closed" | "trashed" | "moved" | "replaced" | "unknown";
+  directory: "present" | "missing" | "none" | "unknown";
+  resume: DecisionAskerResume;
+}
+
+/**
+ * `unsupported-agent`, its agent's resume isn't proven; `no-session`, no
+ * session id was recorded when it asked; `no-worktree`, it asked from no
+ * worktree; `worktree-missing`, its folder is gone; `ended`, a resume already
+ * reopened it once this run and that terminal went too; `other-worktree`,
+ * the session itself runs in another worktree now, which a resume won't take
+ * over; `unknown`, a check couldn't be made.
+ */
+export type DecisionAskerResume =
+  | "resumable"
+  | "unsupported-agent"
+  | "no-session"
+  | "no-worktree"
+  | "worktree-missing"
+  | "ended"
+  | "other-worktree"
+  | "unknown";
 
 /**
  * The person's own reading of what a question asks of them, kept on this
@@ -578,14 +680,6 @@ export interface DecisionsOpenQuestionRequest {
   reference: DecisionQuestionReference;
   /** The follow-up in its thread to open at (#17235); absent to open at the top. */
   messageId?: string;
-}
-
-/**
- * Open the list of answers needing attention: a click on a stalled answer's
- * desktop notification (#17235), starting at the pane that asked.
- */
-export interface DecisionsOpenAttentionRequest {
-  terminalId: string;
 }
 
 /** One question read by its reference, from any window (#17229). */

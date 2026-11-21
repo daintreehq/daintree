@@ -63,7 +63,6 @@ const REFRESH = useCliAvailabilityStore.getState().refresh;
 function policy(overrides: Partial<DecisionsPolicy> = {}): DecisionsPolicy {
   return {
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
     askHumanAgents: [],
@@ -296,7 +295,7 @@ describe("DecisionsAgentsSection (#16012)", () => {
     expect(notice()).toMatch(/No relay.*without ask_human/);
     expect(notice()).toMatch(/Connection/);
     expect(container.textContent).toMatch(
-      /switch on can ask you with ask_human once a relay is connected/
+      /switch on can ask you with ask_human from their next launch, once a relay is connected/
     );
     expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
     expect(namesUnder("Not supported yet")).toEqual(namesOf(["cursor", "grok"]));
@@ -329,6 +328,10 @@ describe("DecisionsAgentsSection (#16012)", () => {
       expect(notice()).toBeNull();
       expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
       expect(container.textContent).not.toMatch(/once a relay is connected/);
+      expect(container.textContent).toContain(
+        "Agents you switch on can ask you with ask_human from their next launch"
+      );
+      expect(container.textContent).not.toMatch(/off until/);
     }
   });
 

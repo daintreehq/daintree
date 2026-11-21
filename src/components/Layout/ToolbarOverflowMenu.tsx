@@ -60,6 +60,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { formatCountExact } from "@/lib/formatCount";
+import { decisionsObservations } from "./decisionsToolbarSignal";
 
 export type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -99,6 +100,8 @@ export interface OverflowMenuProps {
   canopyUrgentCount: number;
   /** Questions waiting on the person, said when the Decisions inbox button is folded in here. */
   decisionsWaitingCount?: number;
+  /** Deliveries stopped on the person's answers, marked when the inbox button is folded in here. */
+  decisionsStoppedCount?: number;
   /** Extra classes for the trigger button: the left one's clearance in its row. */
   triggerClassName?: string;
   /** Problems' watcher observation ("File watching degraded"), or null. */
@@ -166,6 +169,7 @@ export function OverflowMenu({
   notificationUnreadCount,
   canopyUrgentCount,
   decisionsWaitingCount = 0,
+  decisionsStoppedCount = 0,
   watcherStatus = null,
   triggerClassName,
   agentObservations,
@@ -258,9 +262,15 @@ export function OverflowMenu({
   const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
   const decisionsInboxOpen = useDecisionsInboxStore((s) => s.isOpen);
+  // `alsoWarning`: a second observation the button marks in its glyph's bottom
+  // corner, under the waiting count (the inbox's stopped deliveries).
   const signalMark = (
     id: AnyToolbarButtonId
-  ): { pip: "error" | "warning" | "waiting" | "unread"; spoken: string } | null => {
+  ): {
+    pip: "error" | "warning" | "waiting" | "unread";
+    spoken: string;
+    alsoWarning?: boolean;
+  } | null => {
     if (id === "problems" && !diagnosticsOpen) {
       if (errorCount > 0) {
         const errors = pluralize(errorCount, "error");
@@ -274,17 +284,26 @@ export function OverflowMenu({
     if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) {
       return { pip: "waiting", spoken: `${canopyUrgentCount} urgent` };
     }
-    if (id === "decisions-inbox" && decisionsWaitingCount > 0 && !decisionsInboxOpen) {
-      return {
-        pip: "waiting",
-        spoken: `${pluralize(decisionsWaitingCount, "question")} waiting`,
-      };
+    if (id === "decisions-inbox" && !decisionsInboxOpen) {
+      const spoken = decisionsObservations(decisionsWaitingCount, decisionsStoppedCount).join(", ");
+      if (decisionsWaitingCount > 0) {
+        return { pip: "waiting", spoken, alsoWarning: decisionsStoppedCount > 0 };
+      }
+      if (decisionsStoppedCount > 0) return { pip: "warning", spoken };
     }
     if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen) {
       return { pip: "unread", spoken: `${notificationUnreadCount} unread` };
     }
     return null;
   };
+  // A stopped delivery is a persistent warning (#18045): when a louder folded
+  // mark takes the trigger's one corner, it keeps the bottom one, as it does on
+  // the button itself.
+  const decisionsWarningMasked =
+    overflowIds.includes("decisions-inbox") &&
+    decisionsStoppedCount > 0 &&
+    !decisionsInboxOpen &&
+    (severity === "critical" || severity === "waiting");
   // The trigger's own words: counts only. The watcher's wording already
   // arrives with the side's observations, so it is never said twice.
   const observations: string[] = [];
@@ -585,6 +604,8 @@ export function OverflowMenu({
               <Icon className="h-3.5 w-3.5" />
             </BrandMark>
             {renderPip(mark, "absolute -top-0.5 -right-0.5")}
+            {mark.alsoWarning &&
+              renderPip({ pip: "warning", spoken: "" }, "absolute -bottom-0.5 -right-0.5")}
           </span>
         ) : (
           <BrandMark brandColor={brandColor}>
@@ -684,6 +705,14 @@ export function OverflowMenu({
                       data-severity={severity}
                       data-visible={severity !== null && !open}
                       className="toolbar-pip toolbar-overflow-badge toolbar-badge pointer-events-none"
+                    />
+                    <span
+                      aria-hidden="true"
+                      data-testid="toolbar-overflow-decisions-warning"
+                      data-visible={decisionsWarningMasked && !open}
+                      data-badge-color="warning"
+                      data-pip-corner="bottom"
+                      className="toolbar-pip toolbar-badge bg-status-warning pointer-events-none"
                     />
                   </span>
                 </Button>

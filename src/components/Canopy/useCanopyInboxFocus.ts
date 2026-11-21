@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import type { HostId } from "@shared/types/remoteHosts";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
-import { itemArchived, type CanopyItem } from "./canopyModel";
+import { itemInArchive, type CanopyItem } from "./canopyModel";
 import {
   entryShelved,
   nextAfterEntry,
@@ -497,7 +497,7 @@ export function useCanopyInboxFocus({
   // the user hasn't put it aside or archived it since. Never a stand-in.
   const moveOnTarget = useCallback((runId: string): CanopyItem | undefined => {
     const entry = workerNavigationRef.current.find((candidate) => candidate.item.runId === runId);
-    if (entry === undefined || entryShelved(entry) || itemArchived(entry.item)) return undefined;
+    if (entry === undefined || entryShelved(entry) || itemInArchive(entry.item)) return undefined;
     return entry.item;
   }, []);
   // Escape from the pane lands on the run's row; a run folded away in

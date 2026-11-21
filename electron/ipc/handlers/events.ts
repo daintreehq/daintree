@@ -90,8 +90,6 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "decisions:questions-changed": "external",
   // A click on a question's desktop notification (#17232); sent to one of its own windows by main.
   "decisions:open-question": "external",
-  // A click on a stalled answer's desktop notification (#17235); the same.
-  "decisions:open-attention": "external",
   // The same, when the relay's paired devices or its key changed (#16010).
   "decisions:devices-changed": "external",
   // The setup check's progress (#16024), to this machine's own windows.

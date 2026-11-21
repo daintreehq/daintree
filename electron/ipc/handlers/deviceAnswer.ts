@@ -33,6 +33,7 @@ import type {
   DecisionsExportResult,
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
@@ -47,6 +48,7 @@ import type {
   DecisionsSetupCheckRun,
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
+  DecisionsKeyErasurePayload,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
   ExportDecisionsRecoveryKitPayload,
@@ -72,6 +74,8 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
@@ -97,6 +101,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
   GetDecisionQuestionImageByReferencePayload,
@@ -253,6 +258,15 @@ const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).s
 
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
 
+// How the person confirmed erasing the keys (#18064); main rechecks a one-click confirm.
+const keyErasureSchema = z
+  .object({
+    oneClick: z.boolean(),
+    relayOrigin: z.string().max(2048).nullable(),
+    keys: z.string().max(256).nullable(),
+  })
+  .strict();
+
 const startRelayRemovalSchema = z
   .object({
     terminalId: z.string().refine(isRelayRemovalTerminalId, "Not a relay removal terminal id"),
@@ -304,10 +318,14 @@ const questionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 /** An attention item's token, as main minted it: a SHA-256 digest of ids and states. */
 const attentionTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
+/** A destination's run as main listed it: a SHA-256 digest of the pane's run identity. */
+const destinationRunSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 const reassignAnswerSchema = z
   .object({
     questionId: questionIdSchema,
     terminalId: z.string().min(1).max(256),
+    run: destinationRunSchema,
     expected: attentionTokenSchema.optional(),
   })
   .strict();
@@ -355,6 +373,26 @@ const questionReferenceSchema = z
   .strict();
 
 const questionByReferenceSchema = z.object({ reference: questionReferenceSchema }).strict();
+
+// One of a Remote Host's stopped deliveries (#18031): a resume or Mark handled names the item it confirmed.
+const hostAttentionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("read"), reference: questionReferenceSchema }).strict(),
+  z.object({ action: z.literal("copy"), reference: questionReferenceSchema }).strict(),
+  z
+    .object({
+      action: z.literal("resume"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("handled"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+]);
 
 const getQuestionImageByReferenceSchema = z
   .object({
@@ -623,6 +661,23 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionQuestionContentByReference(payload);
+      }
+    ),
+    // The pane that asked a question, as it shows now (#18037): `shell`, read on the machine that
+    // owns it, this computer or the Remote Host that asked, for this computer's person only. Never
+    // the relay: it doesn't wait on terminal snapshots being on. Never starts Decisions.
+    getQuestionPaneByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionPaneResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        const read = await decisions.getDecisionQuestionPaneByReference(payload);
+        // Turned off while it was out, here or on a Host: none of the terminal reaches the window.
+        return decisionsOn() ? read : { result: "off" };
       }
     ),
     getQuestionImageByReference: opValidated(
@@ -907,12 +962,16 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.restoreIdentity(payload);
       }
     ),
-    disconnectRelay: op(CHANNELS.DECISIONS_DISCONNECT_RELAY, async (): Promise<DecisionsStatus> => {
-      refuseWhileOff("disconnect a relay");
-      const decisions = await loadDecisions();
-      if (!decisions) throw setupCancelled();
-      return decisions.disconnectRelay();
-    }),
+    disconnectRelay: opValidated(
+      CHANNELS.DECISIONS_DISCONNECT_RELAY,
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsStatus> => {
+        refuseWhileOff("disconnect a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.disconnectRelay(payload);
+      }
+    ),
     // A guided removal from Cloudflare (#16202), watched from before its pane
     // opens. Only while on: what it forgets is the running lifetime's identity.
     startRelayRemoval: opValidated(
@@ -1009,35 +1068,36 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.deleteRelayData(payload);
       }
     ),
-    deleteLocalData: op(
+    deleteLocalData: opValidated(
       CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
-      async (): Promise<DecisionsLocalDeleteResult> => {
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsLocalDeleteResult> => {
         refuseWhileOff("delete its data");
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
-        return decisions.deleteLocalData();
+        return decisions.deleteLocalData(payload);
       }
     ),
-    // The trusted gates, the proxy allowlist (#16013) and the default question
-    // expiry (#16122). Read and changed only while on: Settings shows them
-    // behind the switch, and reading them loads Decisions. No op registers or
-    // edits a gate.
+    removeSettledQuestions: op(
+      CHANNELS.DECISIONS_REMOVE_SETTLED_QUESTIONS,
+      async (): Promise<DecisionsHistoryRemoveResult> => {
+        refuseWhileOff("remove its settled questions");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.removeSettledQuestions();
+      }
+    ),
+    // The trusted gates (#16013) and the default question expiry (#16122).
+    // Read and changed only while on: Settings shows them behind the switch,
+    // and reading them loads Decisions. No op registers or edits a gate, and
+    // whether a question without one may take a proxy answer follows the
+    // decision model's own choice (#18062).
     getPolicy: op(CHANNELS.DECISIONS_GET_POLICY, async (): Promise<DecisionsPolicy> => {
       refuseWhileOff("read its policy");
       const decisions = await loadDecisions();
       if (!decisions) throw setupCancelled();
       return decisions.getDecisionsPolicy();
     }),
-    setProxyAllowlisted: opValidated(
-      CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
-      z.boolean(),
-      async (allowed: boolean): Promise<DecisionsPolicy> => {
-        refuseWhileOff("change who may answer");
-        const decisions = await loadDecisions();
-        if (!decisions) throw setupCancelled();
-        return decisions.setDecisionsProxyAllowlisted(allowed);
-      }
-    ),
     // Only the shape here; main refuses any value Settings doesn't offer.
     setDefaultQuestionExpiry: opValidated(
       CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
@@ -1271,6 +1331,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.markDecisionsAnswerHandled(payload);
+      }
+    ),
+    // A Remote Host's stopped delivery (#18031), read and acted on on that
+    // Host alone; one no Host lists never reaches this computer's delivery.
+    hostAttention: opValidated(
+      CHANNELS.DECISIONS_HOST_ATTENTION,
+      hostAttentionSchema,
+      async (request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> => {
+        refuseWhileOff("resolve a Remote Host's delivery");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.actOnHostAttention(request);
       }
     ),
     // The decision model (#16027): its preferences, evaluation and history.

@@ -1,8 +1,13 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "@/components/Settings/SettingsGroup";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { SeverityMark } from "@/lib/statusSeverity";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   DecisionsRelayDeploy as RelayDeployState,
@@ -11,6 +16,7 @@ import type {
 import { openRelayDeployTerminal } from "./relayDeploy";
 import { describeRelayDeploy, type RelayDeployNext } from "./relayDeployCopy";
 import { landOnPairPhone } from "./pairPhoneLanding";
+import { landOnAgents } from "./agentsLanding";
 import { useGuidedTerminalPlacement } from "./useGuidedTerminalPlacement";
 
 interface DecisionsRelayDeployProps {
@@ -61,7 +67,9 @@ export function DecisionsRelayDeployOutcome({
    * read brings a new copy of the same claim.
    */
   const [error, setError] = useState<{ claim: string; message: string } | null>(null);
-  const outcome = describeRelayDeploy(deploy);
+  // Agents shows only in a local window, so only there does the claim point to it (#18057).
+  const agentsHere = !isRemoteWindow();
+  const outcome = describeRelayDeploy(deploy, { agentsHere });
   const claim = JSON.stringify([deploy.id, deploy.claim ?? null]);
 
   const finishClaim = (acceptWeakStorage: boolean) => {
@@ -110,6 +118,8 @@ export function DecisionsRelayDeployOutcome({
     }
   };
   const next = outcome.next;
+  // A claimed relay's next steps are pairing a phone and choosing the agents that can ask.
+  const withAgents = next === "pair" && agentsHere;
 
   return (
     <SettingsRow
@@ -132,20 +142,38 @@ export function DecisionsRelayDeployOutcome({
           : undefined
       }
       disabled={disabled}
+      layout={withAgents ? "stacked" : undefined}
       control={
         next !== undefined
-          ? ({ descriptionId, disabled: rowDisabled }) => (
-              <Button
-                variant="outline"
-                size="sm"
-                loading={finishing}
-                disabled={rowDisabled || finishing}
-                aria-describedby={descriptionId}
-                onClick={act}
-              >
-                {NEXT_LABEL[next]}
-              </Button>
-            )
+          ? ({ descriptionId, disabled: rowDisabled }) => {
+              const nextButton = (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={finishing}
+                  disabled={rowDisabled || finishing}
+                  aria-describedby={descriptionId}
+                  onClick={act}
+                >
+                  {NEXT_LABEL[next]}
+                </Button>
+              );
+              if (!withAgents) return nextButton;
+              return (
+                <SettingsRowActions>
+                  {nextButton}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={rowDisabled}
+                    aria-describedby={descriptionId}
+                    onClick={landOnAgents}
+                  >
+                    Choose agents
+                  </Button>
+                </SettingsRowActions>
+              );
+            }
           : undefined
       }
     />

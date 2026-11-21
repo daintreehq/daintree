@@ -186,7 +186,7 @@ test.afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-test("learning is turned on with Codex as the model, and proxy answers are allowed", async () => {
+test("learning is turned on with Codex as the model", async () => {
   test.setTimeout(120_000);
   await openDecisionsSettings(page);
   const panel = page.locator(DIALOG);
@@ -196,8 +196,6 @@ test("learning is turned on with Codex as the model, and proxy answers are allow
   const cli = panel.getByRole("radiogroup", { name: "Agent CLI" });
   await cli.getByRole("radio", { name: /Codex/ }).click();
   await expect(cli.getByRole("radio", { name: /Codex/ })).toHaveAttribute("aria-checked", "true");
-  await panel.getByRole("switch", { name: /Allow proxy answers/ }).click();
-  await expect(panel.getByRole("switch", { name: /Allow proxy answers/ })).toBeChecked();
   await closeSettings(page);
 });
 
@@ -272,7 +270,7 @@ test("the model is evaluated against those answers and may answer from a confide
 test("a question in the pattern gets a labelled proxy answer; a design review is left to the person", async () => {
   test.setTimeout(600_000);
   const from = readFakeAgentStdin(binDir, paneId).length;
-  // Allow proxy answers lets a gateless question take one only when its agent allows it.
+  // Answering automatically lets a gateless question take one only when its agent allows it.
   const id = await askMidTurn({
     question: question(MODULES[HISTORY]),
     kind: "choice",

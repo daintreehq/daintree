@@ -33,6 +33,8 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
+import { DecisionAnswerComposer } from "../DecisionAnswerComposer";
+import { paneQuestion } from "../decisionQuestionTarget";
 
 type Payload = { terminalId: string; questionId: string };
 const getQuestionContent = vi.fn<(payload: Payload) => Promise<DecisionQuestionContentResult>>();
@@ -345,7 +347,7 @@ describe("answering a question from the view (#17102)", () => {
 
   it.each([
     ["human-answered", /answered elsewhere/],
-    ["cancelled", /cancelled/],
+    ["cancelled", /^This question closed, so your answer wasn't sent/],
     ["expired", /expired/],
   ] as const)(
     "says a question %s while composing has nothing sent",
@@ -366,7 +368,7 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since the last read, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
@@ -718,7 +720,7 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
-    await waitFor(() => expect(status()).toMatch(/was cancelled, so your answer wasn't sent/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledTimes(2);
   });
 
@@ -754,7 +756,7 @@ describe("answering a question from the view (#17102)", () => {
       return { result: "not-found" };
     });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledOnce();
   });
 
@@ -816,7 +818,9 @@ describe("a timed question in the view (#17943)", () => {
     // The consequence is said before anything is signed.
     fireEvent.click(screen.getByTestId("decision-question-dismiss"));
     const confirm = await screen.findByRole("alertdialog");
-    expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with any plan it stated/);
+    expect(confirm.textContent).toMatch(
+      /declining doesn't let the agent go ahead with any plan it stated/
+    );
   });
 
   it("lists the options, with no form, for a question opened untouched after its deadline", async () => {
@@ -946,5 +950,48 @@ describe("a timed question in the view (#17943)", () => {
       /Answer from your phone/
     );
     expect(answerQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionAnswerComposer delivery notice (#18029)", () => {
+  it("says nothing can take an answer before one is written, with Send's own hint still showing", () => {
+    const shown = question("q-gone");
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={shown}
+          target={paneQuestion("t1", "q-gone")}
+          unshown={{}}
+          onMoved={() => {}}
+          deliveryNotice="Nothing can take this answer now."
+        />
+      </TooltipProvider>
+    );
+    const notice = screen.getByTestId("decision-answer-delivery");
+    expect(notice.textContent).toBe("Nothing can take this answer now.");
+    // Ahead of the choices, so it is met before anything is chosen.
+    expect(
+      notice.compareDocumentPosition(option("Ship it")) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Advice only: the answer can still be given, and Send keeps its own hint.
+    expect(option("Ship it").disabled).toBe(false);
+    const described = send().getAttribute("aria-describedby");
+    const hint = described === null ? null : document.getElementById(described);
+    expect(hint?.textContent).toBeTruthy();
+    expect(hint?.textContent).not.toContain("Nothing can take this answer now.");
+  });
+
+  it("says nothing when there is no notice", () => {
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={question("q-live")}
+          target={paneQuestion("t1", "q-live")}
+          unshown={{}}
+          onMoved={() => {}}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("decision-answer-delivery")).toBeNull();
   });
 });

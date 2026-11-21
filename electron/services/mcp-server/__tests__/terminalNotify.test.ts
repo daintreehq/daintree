@@ -3093,6 +3093,7 @@ describe("decision wakes (#16015)", () => {
           kind: "settled-prompt-exact",
           agentIncarnation: 2,
           agentSessionId: "session-1",
+          agentId: "claude",
           acceptWorking: true,
         },
       }),
@@ -3106,6 +3107,27 @@ describe("decision wakes (#16015)", () => {
     // Rechecked once on admission, then against the record the attempt read.
     expect(decision.records[0]).toBeUndefined();
     expect(decision.records.at(-1)).toMatchObject({ agentState: "waiting", hasPty: true });
+  });
+
+  it("holds the host to the agent the record it was checked against detected (#18116)", async () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      detectedAgentId: "codex",
+      agentIncarnation: 4,
+    });
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toHaveLength(1);
+    expect(h.client.submitted[0].guard).toMatchObject({
+      kind: "settled-prompt-exact",
+      agentIncarnation: 4,
+      agentId: "codex",
+    });
+    expect(decision.records.at(-1)).toMatchObject({ detectedAgentId: "codex" });
   });
 
   it("leaves the rest of the line on the ordinary guard while a decision holds", async () => {
@@ -3146,7 +3168,12 @@ describe("decision wakes (#16015)", () => {
       expect(h.client.submitted).toEqual([
         expect.objectContaining({
           text: "Daintree Decisions: section",
-          guard: { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+          guard: {
+            kind: "settled-prompt-exact",
+            agentId: "claude",
+            acceptWorking: true,
+            acceptQuestion: true,
+          },
         }),
       ]);
       expect(decision.outcomes[0]?.outcome).toEqual({ kind: "delivered" });

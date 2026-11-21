@@ -550,8 +550,8 @@ export class TerminalInputController {
 
   /**
    * The strict check, for the run main checked the line against: an agent
-   * that restarted in this PTY since is another run, whatever its prompt
-   * shows. A session learned since main read the pane is still that run; a
+   * that restarted in this PTY since, or another kind of agent now in it, is
+   * another run, whatever its prompt shows. A session learned since main read the pane is still that run; a
    * known one that changed is not. Main may widen it for a Decisions answer
    * (#16282): mid-turn, for an agent this record says queues input, and at a
    * question asked in prose.
@@ -565,6 +565,7 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
+      if (run.agentId !== undefined && terminal.detectedAgentId !== run.agentId) return false;
       if (run.updateObservedAt !== undefined && !this.stillOffersUpdate(run.updateObservedAt)) {
         return false;
       }

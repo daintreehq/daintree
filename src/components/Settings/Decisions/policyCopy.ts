@@ -1,6 +1,5 @@
 import { pluralize } from "@/lib/pluralize";
 import type { DecisionsPolicy, DecisionsWorkflowGate } from "@shared/types/decisions";
-import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -20,7 +19,8 @@ function either(labels: string[]): string {
 
 /** What a gate asks of whoever answers, as observed from how Daintree registered it. */
 export function gateDescription(gate: DecisionsWorkflowGate): string {
-  const who = gate.requirement === "human-required" ? "Only you can answer" : "A proxy may answer";
+  const who =
+    gate.requirement === "human-required" ? "Only you can answer" : "The decision model may answer";
   const labels = gate.choices.map((choice) => choice.label);
   const what =
     labels.length === 0
@@ -39,31 +39,22 @@ export function questionExpiryLabel(ms: number | null): string {
 }
 
 /**
- * How long a question waits, and how long its agent can make it wait, as the
- * library applies the saved default, and where that default doesn't reach.
+ * Where the default expiry applies and the longest an agent may ask for, as
+ * the library applies the saved default. The select itself shows the default,
+ * and a Remote Host's own default is said once, in a remote window's note.
  */
 export function questionExpiryText(
-  policy: Pick<DecisionsPolicy, "defaultQuestionExpiryMs" | "maxQuestionExpiryMs">
+  policy: Pick<DecisionsPolicy, "maxQuestionExpiryMs"> | null
 ): string {
-  const { defaultQuestionExpiryMs: wait, maxQuestionExpiryMs: max } = policy;
-  const first =
-    wait === null
-      ? "A question waits for your answer until it's answered or cancelled, unless the agent that asked sets an expiry"
-      : `A question waits ${questionWaitText(wait)} for your answer, unless the agent that asked sets another time`;
-  const limit = max === null ? "" : `, at most ${questionWaitText(max)}`;
-  // A Host asks under its own default (#17942); the owner's choice isn't sent to it.
-  const host = `Questions asked on a Remote Host still wait ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} by default.`;
-  return `${first}${limit}. ${host} An expired question authorises nothing, and the agent is told so.`;
+  const max = policy?.maxQuestionExpiryMs ?? null;
+  const limit = max === null ? "" : ` An agent's own time is capped at ${questionWaitText(max)}.`;
+  return `Applies when an agent on this computer sets no time.${limit} An expired question authorises nothing.`;
 }
 
-/** What the proxy switch allows, given which registered gates still need the person. */
-export function proxyAllowlistText(gates: readonly DecisionsWorkflowGate[]): string {
-  const human = gates.filter((gate) => gate.requirement === "human-required").map((g) => g.id);
-  const gated =
-    human.length === 0
-      ? "A question under a registered gate follows that gate's rule."
-      : human.length === gates.length
-        ? `A question under a registered gate (${human.join(", ")}) still needs your own answer.`
-        : `A question under ${human.join(", ")} still needs your own answer.`;
-  return `Lets a question without a registered workflow gate accept an answer from the decision model on this computer, when the agent that asked allows one. ${gated} The model answers only once it has been evaluated against your own past answers, and its answers are labelled as a proxy's. Off by default.`;
-}
+/**
+ * Who answers a question without a registered gate (#18062): the person,
+ * unless they chose to let the decision model answer automatically, which
+ * Decision model holds as its one choice.
+ */
+export const UNGATED_QUESTION_TEXT =
+  "Need your own answer, unless you choose to let the decision model answer automatically under Decision model and the agent that asked allows a proxy answer. A proxy's answer is labelled as one.";

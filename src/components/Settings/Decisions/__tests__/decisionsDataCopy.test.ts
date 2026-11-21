@@ -5,6 +5,7 @@ import type {
 } from "@shared/types/decisions";
 import {
   describeExportResult,
+  describeHistoryRemoveResult,
   describeLocalDeleteResult,
   describeRelayDeleteResult,
 } from "../decisionsDataCopy";
@@ -13,6 +14,30 @@ const ORIGIN = "https://decisions.example.workers.dev";
 const HOST = "decisions.example.workers.dev";
 
 describe("decisionsDataCopy", () => {
+  it("counts the settled questions removed, and calls none removed no success (#18033)", () => {
+    expect(describeHistoryRemoveResult({ result: "removed", count: 1 })).toMatchObject({
+      severity: "success",
+      label: "Removed 1 settled question",
+    });
+    const many = describeHistoryRemoveResult({ result: "removed", count: 2 });
+    expect(many.label).toBe("Removed 2 settled questions");
+    // Honest about exports: the questions go, the audit log can still name them.
+    expect(many.detail).toMatch(/from the questions in later exports/);
+    expect(many.detail).toMatch(/audit log can still name them/);
+    const none = describeHistoryRemoveResult({ result: "removed", count: 0 });
+    expect(none.severity).toBe("info");
+    expect(none.detail).toMatch(/Nothing was removed\.$/);
+  });
+
+  it("says nothing was removed whenever a removal failed, and why", () => {
+    const reasons = ["disk-pressure", "storage", "store-unavailable"] as const;
+    const details = reasons.map(
+      (reason) => describeHistoryRemoveResult({ result: "failed", reason }).detail
+    );
+    for (const detail of details) expect(detail).toMatch(/Nothing was removed\.$/);
+    expect(new Set(details).size).toBe(reasons.length);
+  });
+
   it("counts what an export holds and names where it went", () => {
     const one = describeExportResult({
       result: "saved",

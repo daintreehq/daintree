@@ -5,7 +5,7 @@ import {
   type InjectionIntent,
   type QuestionRow,
 } from "@daintreehq/decisions-client";
-import { reasonOf } from "./paneDecisionState.js";
+import { reasonOf } from "./attentionList.js";
 import { timeoutNoticeOf, type TimeoutNotice } from "./questionRound.js";
 
 /**

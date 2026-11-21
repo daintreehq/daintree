@@ -8,7 +8,9 @@ import type {
 import {
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectOf,
   deliverySubjectPlural,
+  deliveryUncertainText,
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
 
@@ -25,6 +27,12 @@ import {
  * uses too (#17235).
  */
 export const reasonText = deliveryReasonText;
+
+/**
+ * What opens the list of answers needing attention, wherever it is offered:
+ * the pane's chip, the inbox and Canopy (#18054).
+ */
+export const REVIEW_ATTENTION_LABEL = "Review answers";
 
 export function aliasLabel(alias: number): string {
   return `q-${alias}`;
@@ -57,23 +65,15 @@ function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-const UNCERTAIN_STATUS: Record<AttentionSubject, string> = {
-  answer: "This answer may or may not have been delivered",
-  "follow-up": "This follow-up may or may not have been delivered",
-  "follow-ups": "These follow-ups may or may not have been delivered",
-  "answer and follow-up": "This answer or its follow-up may or may not have been delivered",
-  "answer and follow-ups": "This answer or its follow-ups may or may not have been delivered",
-  "timeout notice": "This timeout notice may or may not have been delivered",
-  "timeout notice and follow-up":
-    "This timeout notice or its follow-up may or may not have been delivered",
-  "timeout notice and follow-ups":
-    "This timeout notice or its follow-ups may or may not have been delivered",
-};
-
+/**
+ * What stopped, ahead of why: the dialog's title already says these need
+ * attention, so the row says what wasn't typed in, or may have been.
+ */
 export function statusText(item: Pick<DecisionsAttentionItem, "status"> & SubjectFields): string {
   const subject = subjectOf(item);
-  if (item.status === "delivery-uncertain") return UNCERTAIN_STATUS[subject];
-  return `${capitalized(subject)} ${isPlural(subject) ? "need" : "needs"} attention`;
+  return item.status === "delivery-uncertain"
+    ? deliveryUncertainText(subject, true)
+    : `${capitalized(subject)} not typed in`;
 }
 
 /**
@@ -133,6 +133,53 @@ export function handledConfirmBody(subject: AttentionSubject): string {
     `The Decisions audit trail records the question as handled.`
   );
 }
+
+/**
+ * The list as an opening for a pane shows it (#18055): that terminal's items
+ * first, then the rest apart below, each in main's order. Only an item this
+ * computer asked belongs to the pane: a Host's terminal can share its id.
+ * Null for an opening that named no pane, which shows one list.
+ */
+export function groupForPane<
+  T extends { origin: Pick<DecisionsAttentionItem["origin"], "paneId" | "otherHost"> },
+>(items: readonly T[], terminalId: string | null): { forPane: T[]; elsewhere: T[] } | null {
+  if (terminalId === null) return null;
+  const forPane: T[] = [];
+  const elsewhere: T[] = [];
+  for (const item of items) {
+    const own = item.origin.otherHost === null && item.origin.paneId === terminalId;
+    (own ? forPane : elsewhere).push(item);
+  }
+  return { forPane, elsewhere };
+}
+
+/** What sets the rest apart below the opening pane's items. */
+export const ELSEWHERE_HEADING = "Elsewhere";
+/** In the opening pane's place, once none of its items is left. */
+export const NONE_FOR_PANE = "Nothing from this terminal needs attention now.";
+
+/**
+ * Whether the question view can open the question, with its notes and
+ * images: one asked on this computer, or on a Remote Host this computer
+ * knows. Another machine's question it has no route to reads only in place.
+ */
+export function canOpenQuestion(item: {
+  reference: DecisionsAttentionItem["reference"];
+  origin: Pick<DecisionsAttentionItem["origin"], "otherHost">;
+}): boolean {
+  const { otherHost } = item.origin;
+  return item.reference !== null && (otherHost === null || otherHost.name !== null);
+}
+
+/** Whether the whole question says more than the row's heading, its first line. */
+export function hasFullerQuestion(
+  item: Pick<DecisionsAttentionItem, "question" | "fullQuestion">
+): boolean {
+  return item.fullQuestion !== null && item.fullQuestion !== item.question;
+}
+
+/** The plan an advisory round states, as the question view names it once the question has closed. */
+export const PLAN_CAPTION = "The agent's plan if unanswered";
 
 /** The agent's name, falling back to its id. */
 export function agentLabel(origin: { agentId: string; agentName: string | null }): string {
@@ -385,7 +432,7 @@ export function outcomeText(
         : "follow-up"
       : asked;
   const q = aliasLabel(alias);
-  const what = `${capitalized(subject)} ${isNotice(subject) ? "for" : "to"} ${q}`;
+  const what = deliverySubjectOf(subject, q);
   const plural = isPlural(subject);
   const needs = plural ? "need" : "needs";
   switch (outcome.result) {
@@ -420,6 +467,8 @@ export function outcomeText(
           return `No answer is kept for ${q}`;
         case "destination-gone":
           return `That terminal is no longer running an agent, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
+        case "destination-changed":
+          return `That terminal is running another agent now, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
         case "asker-only":
           return `${q} asked for advice, so only the agent that asked it can take its ${subject}`;
         case "changed":

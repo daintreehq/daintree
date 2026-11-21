@@ -10,7 +10,9 @@
  * and Canopy say is pushed on the real broadcast channels with main's own
  * broadcasts on them held back, and the Decisions ops the attention list reads
  * are answered in main from a table, so the renderer under review reads
- * everything through the seams it always does.
+ * everything through the seams it always does. The inbox's question list is
+ * answered empty, so Review answers reaches the standalone list, as it does
+ * for an answer the inbox can't list (#18048).
  *
  *   DAINTREE_SHOT_CANOPY_ANSWER=1 DESIGN_CAPTURE_DIR=/abs/dir \
  *     ./node_modules/.bin/playwright test --project=screenshots canopy-answer-attention-review --workers=1
@@ -267,6 +269,8 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     }));
     handle("decisions:get-pane-state", () => null);
     handle("decisions:list-attention", () => ({ result: "listed", items: t().items }));
+    // The inbox's list holds none of them, so Review answers opens the attention list (#18048).
+    handle("decisions:list-questions", () => ({ revision: 1, questions: [] }));
     handle("decisions:list-answer-destinations", () => ({ result: "listed", destinations: [] }));
     handle(
       "decisions:copy-answer",
@@ -298,6 +302,14 @@ function webhookItem(alias: number, question: string, text: string): DecisionsAt
     status: "needs-attention",
     reason: "pane_gone",
     question,
+    fullQuestion: question,
+    plan: null,
+    reference: {
+      hostId: "host-local",
+      projectId: "helios-billing",
+      terminalId: "s-two",
+      questionId: `qid-canopy-att-${alias}-webhook`,
+    },
     askedAt: iso(3 * 3_600_000 + alias * 60_000),
     origin: {
       projectId: "helios-billing",
@@ -344,6 +356,14 @@ function attentionItems(asker: string, projectName: string): DecisionsAttentionI
       status: "needs-attention",
       reason: "relaunched",
       question: "Should token refresh retry once on a 401 before signing the user out?",
+      fullQuestion: "Should token refresh retry once on a 401 before signing the user out?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: asker,
+        questionId: "qid-canopy-att-38-token",
+      },
       askedAt: iso(2 * 3_600_000 + 12 * 60_000),
       origin: {
         projectId: "helios",

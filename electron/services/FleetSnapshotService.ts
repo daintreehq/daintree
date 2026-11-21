@@ -24,7 +24,7 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
-import { answerAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
+import { decisionAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -309,6 +309,7 @@ export class FleetSnapshotService {
         x.handbackReport !== y.handbackReport ||
         x.quietSince !== y.quietSince ||
         x.answerAttention !== y.answerAttention ||
+        x.questionAttention !== y.questionAttention ||
         !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
@@ -365,7 +366,7 @@ export class FleetSnapshotService {
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
         const wait = this.waitFor(terminal, readStartedAt);
         const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
-        const answerAttention = answerAttentionFor(terminal.id);
+        const decisions = decisionAttentionFor(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -410,7 +411,7 @@ export class FleetSnapshotService {
             ? { handbackReport: "needs-you" as const }
             : {}),
           ...(canopy !== undefined ? { canopy } : {}),
-          ...(answerAttention !== undefined ? { answerAttention } : {}),
+          ...decisions,
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -503,22 +504,7 @@ export class FleetSnapshotService {
   private onDecorationsChanged(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) {
-      const runs = previous.runs.map((run) => {
-        const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
-        const wait =
-          run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
-        const answerAttention = answerAttentionFor(run.runId);
-        const rest = { ...run };
-        delete rest.canopy;
-        delete rest.wait;
-        delete rest.answerAttention;
-        return {
-          ...rest,
-          ...(wait !== undefined ? { wait } : {}),
-          ...(canopy !== undefined ? { canopy } : {}),
-          ...(answerAttention !== undefined ? { answerAttention } : {}),
-        };
-      });
+      const runs = this.redecorate(previous.runs);
       if (!this.runsEqual(runs, previous.runs)) {
         this.publish({ ...previous, runs, changedAt: Date.now() });
       }
@@ -526,12 +512,53 @@ export class FleetSnapshotService {
     this.debouncedCompute();
   }
 
+  /**
+   * Retained rows with the decorations as they stand now. A decoration that
+   * moved while the fleet was healthy only scheduled a read, so a read that
+   * then degrades must not carry the rows it moved on.
+   */
+  private redecorate(previous: readonly FleetRunRow[]): FleetRunRow[] {
+    // The user's park and snooze as they stand too: a fresh Decisions count
+    // beside a shelf the rows predate would raise a run the user set aside.
+    const parks = this.runAttention?.getAll();
+    const snoozes = this.runAttention?.getActiveSnoozes();
+    return previous.map((run) => {
+      const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+      const wait =
+        run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
+      const park = this.runAttention ? parks?.get(run.runId) : run.park;
+      const snooze = this.runAttention ? snoozes?.get(run.runId) : run.snooze;
+      const rest = { ...run };
+      delete rest.canopy;
+      delete rest.wait;
+      delete rest.answerAttention;
+      delete rest.questionAttention;
+      delete rest.park;
+      delete rest.snooze;
+      return {
+        ...rest,
+        ...(park !== undefined ? { park } : {}),
+        ...(snooze !== undefined ? { snooze } : {}),
+        ...(wait !== undefined ? { wait } : {}),
+        ...(canopy !== undefined ? { canopy } : {}),
+        ...decisionAttentionFor(run.runId),
+      };
+    });
+  }
+
   private publishDegraded(): void {
     const previous = this.lastBroadcast;
-    if (previous?.degraded === true) return;
+    const runs = previous === null ? [] : this.redecorate(previous.runs);
+    const moved = previous !== null && !this.runsEqual(runs, previous.runs);
+    // Each failed read while degraded still carries a shelf released or lapsed
+    // since, and nothing else when nothing moved.
+    if (previous?.degraded === true) {
+      if (moved) this.publish({ ...previous, runs, changedAt: Date.now() });
+      return;
+    }
     this.publish({
-      runs: previous?.runs ?? [],
-      changedAt: previous?.changedAt ?? Date.now(),
+      runs,
+      changedAt: moved || previous === null ? Date.now() : previous.changedAt,
       degraded: true,
       lastSuccessfulAt: this.lastSuccessfulReadAt,
     });

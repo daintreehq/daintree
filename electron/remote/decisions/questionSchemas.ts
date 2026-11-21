@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { LIMITS } from "@daintreehq/decisions-protocol";
+import { LIMITS, PaneSnapshotContentV1 } from "@daintreehq/decisions-protocol";
 import type {
   DecisionClosureNotice,
   DecisionPreparation,
@@ -7,6 +7,7 @@ import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionListItem,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -130,9 +131,20 @@ export const HostQuestionItemV3Schema = HostQuestionItemSchema.extend({
 
 type HostItem = Omit<DecisionQuestionListItem, "remoteHost" | "inbox">;
 
+/**
+ * An item as every list version reads it (#18032): a question waiting to be
+ * typed in without what waits, which no strict read takes yet, so its row
+ * reads as one from a Host before it rather than being refused.
+ */
+export function linkedItem(item: HostItem): HostItem {
+  return item.standing.kind === "to-type" && item.standing.delivery !== undefined
+    ? { ...item, standing: { kind: "to-type" } }
+    : item;
+}
+
 /** An item as a Shell from before #17943 reads it: without the round its strict read refuses. */
 export function legacyItem(item: HostItem): HostItem {
-  const legacy: HostItem = { ...item };
+  const legacy: HostItem = { ...linkedItem(item) };
   for (const field of ROUND_FIELDS) delete legacy[field];
   return legacy;
 }
@@ -522,6 +534,50 @@ export const HostQuestionSummariesResultSchema = z.discriminatedUnion("result", 
   Off,
   NotRunning,
 ]) satisfies z.ZodType<DecisionQuestionSummariesResult>;
+
+/**
+ * The asking pane as a Host read it (#18037): plain text within a terminal
+ * snapshot's bounds, as the protocol checks a phone's, so nothing a Host
+ * sends can steer the renderer or outgrow what a snapshot may carry.
+ */
+const QuestionPaneSchema = z
+  .object({
+    agentState: z.string().max(40),
+    waitingReason: z.string().max(40).nullable(),
+    paneTitle: z.string().max(LIMITS.snapshotPaneTitleChars),
+    lines: z.array(z.string()).max(LIMITS.snapshotTerminalLines),
+    observedAt: Time,
+  })
+  .strict()
+  .refine(
+    (pane) =>
+      PaneSnapshotContentV1.safeParse({
+        content_version: 1,
+        observed_at: pane.observedAt,
+        agent_state: pane.agentState,
+        waiting_reason: pane.waitingReason,
+        pane_title: pane.paneTitle,
+        terminal_lines: pane.lines,
+      }).success,
+    "not a terminal snapshot's text"
+  );
+
+/** What `QUESTION_PANE` answers (#18037). */
+export const HostQuestionPaneResultSchema = z.discriminatedUnion("result", [
+  z
+    .object({
+      result: z.literal("read"),
+      reference: QuestionReferenceSchema,
+      pane: QuestionPaneSchema,
+    })
+    .strict(),
+  z.object({ result: z.literal("closed") }).strict(),
+  z.object({ result: z.literal("moved") }).strict(),
+  Off,
+  NotRunning,
+  NotFound,
+  Unreadable,
+]) satisfies z.ZodType<DecisionQuestionPaneResult>;
 
 export const HostQuestionCancelResultSchema = z.discriminatedUnion("result", [
   z.object({ result: z.literal("cancelled") }).strict(),

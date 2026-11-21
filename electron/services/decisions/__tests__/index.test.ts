@@ -7,10 +7,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LearnedDecision, StoredIdentity } from "@daintreehq/decisions-client";
+import type { LearnedDecision } from "@daintreehq/decisions-client";
+import { FakeAdapter, type ModelPrompt } from "@daintreehq/decisions-model";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
@@ -26,13 +28,15 @@ const loads = vi.hoisted(() => ({
   closing: null as Promise<void> | null,
   // While set, opening a store waits for it, holding a start partway.
   opening: null as Promise<void> | null,
+  // The questions the next removal of settled history takes (#18033).
+  removable: [] as string[],
   // Why the stores stopped writing; null while they write.
   faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
   // While set, every store opened holds these rows and meta, and a meta write commits (#17895).
   persisted: null as null | {
     rows: unknown[];
     meta: Map<string, string>;
-    commits: Set<() => void>;
+    commits: Set<(commit: { questions: Set<string>; meta: Set<string> }) => void>;
   },
 }));
 const broadcast = vi.hoisted(() => vi.fn());
@@ -60,10 +64,17 @@ vi.mock("electron", () => ({
 
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
+
+/** A key erasure confirmed through the typed gate, which main doesn't recheck (#18064). */
+const TYPED = { oneClick: false };
+
+/** The key file version `keyFileVersion` gives for this content. */
+function versionOf(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 // Claim and restore are relayIdentity's; here only how the entry runs them.
 const setupRuns = vi.hoisted(() => ({ claim: vi.fn(), restore: vi.fn() }));
-vi.mock("../relayIdentity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../relayIdentity.js")>()),
+vi.mock("../relayIdentity.js", () => ({
   claimDecisionsRelay: setupRuns.claim,
   restoreDecisionsIdentity: setupRuns.restore,
 }));
@@ -453,20 +464,31 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
           const persisted = loads.persisted;
           return {
             close: () => loads.closing ?? Promise.resolve(),
-            onCommit: (listener: () => void) => {
+            onCommit: (
+              listener: (commit: { questions: Set<string>; meta: Set<string> }) => void
+            ) => {
               persisted?.commits.add(listener);
               return () => persisted?.commits.delete(listener);
             },
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
+            removeSettledQuestions: async () => loads.removable.splice(0),
             listQuestions: async () => persisted?.rows ?? [],
+            getQuestions: async (ids: Iterable<string>) => {
+              const wanted = new Set(ids);
+              return ((persisted?.rows ?? []) as Array<{ question_id: string }>).filter((r) =>
+                wanted.has(r.question_id)
+              );
+            },
             ...(persisted
               ? {
                   getMeta: async (key: string) => persisted.meta.get(key) ?? null,
                   setMeta: async (key: string, value: string) => {
                     persisted.meta.set(key, value);
-                    for (const listener of [...persisted.commits]) listener();
+                    for (const listener of [...persisted.commits]) {
+                      listener({ questions: new Set(), meta: new Set([key]) });
+                    }
                   },
                 }
               : notificationRecord.readable
@@ -497,6 +519,11 @@ import { setDecisionsHostsPort, setRunAttentionServiceRef } from "../../../windo
 import { events } from "../../events.js";
 import { readUserPresence } from "../../userPresence.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
+import type {
+  DecisionsAttentionItem,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../../shared/types/decisionsAttention.js";
 import type {
   DecisionsHostLink,
   DecisionsHostQuestionRead,
@@ -533,6 +560,7 @@ import {
   decisionsHostRuntimeFor,
   decisionsLaunchPort,
   deleteLocalData,
+  removeSettledQuestions,
   deleteRelayData,
   disconnectRelay,
   exportData,
@@ -540,12 +568,15 @@ import {
   exportRecoveryKit,
   getDecisionQuestionContent,
   getDecisionQuestionContentByReference,
+  getDecisionQuestionPaneByReference,
   getDecisionQuestionImage,
   getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
   getDecisionQuestionSummariesByReference,
+  actOnHostAttention,
   cancelDecisionQuestionByReference,
   cancelHostServedQuestion,
+  hostServedAttention,
   readHostServedQuestion,
   getDecisionsPaneState,
   getDecisionsPolicy,
@@ -569,7 +600,6 @@ import {
   setDecisionsEnabled,
   setDecisionsModel,
   setDecisionsModelThreshold,
-  setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
@@ -584,6 +614,7 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
+import type { QuestionInboxFacts } from "../DecisionsService.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
@@ -598,8 +629,8 @@ import {
   setDecisionQuestions,
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
+import { DecisionModelRuntime, decisionModelFiles } from "../decisionModel.js";
 import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
-import { kitCoverage } from "../relayIdentity.js";
 
 /** A question in Needs you as the owner lists it before the person has marked it (#17895). */
 const UNMARKED = { ask: null, seen: false, cleared: false };
@@ -647,6 +678,7 @@ describe("Decisions entry", () => {
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
+    loads.removable = [];
     toastAudience.present = true;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
@@ -824,7 +856,12 @@ describe("Decisions entry", () => {
     ];
     const changed = new Set<() => void>();
     const withdraw = setDecisionsHostsPort({
-      hosts: () => [],
+      // Office is on the host list but has reported no questions.
+      hosts: () => [
+        { hostId: "studio", name: "Studio" },
+        { hostId: "lab", name: "Lab" },
+        { hostId: "office", name: "Office" },
+      ],
       linkFor: () => null,
       onLinkOpened: () => () => {},
       onHostsChanged: () => () => {},
@@ -837,6 +874,7 @@ describe("Decisions entry", () => {
       },
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
+      hostAttention: () => null,
       lastHostRead: () => null,
       onAgentStopChanges: () => () => {},
     });
@@ -854,6 +892,70 @@ describe("Decisions entry", () => {
         { ...own, inbox: UNMARKED },
         { ...theirsLater, remoteHost: studio, inbox: UNMARKED },
       ]);
+      // A Remote Host's window reads which Hosts' questions are listed (#18049).
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio", "lab"] });
+
+      // A withdrawal or decline queued here shows on this computer's question and a Host's,
+      // which only this computer signs a decline for, while each is still open (#18052).
+      const queuedOwn: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000003", "2026-11-02T10:07:00.000Z"),
+        standing: { kind: "queued" },
+      };
+      const answered: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000002", "2026-11-02T10:06:00.000Z"),
+        standing: { kind: "to-type" },
+      };
+      const replying: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000004", "2026-11-02T10:08:00.000Z"),
+        standing: { kind: "waiting", reason: "reply" },
+      };
+      const listWith = publish as (
+        questions: DecisionQuestionListItem[],
+        listing: boolean,
+        inbox: QuestionInboxFacts
+      ) => void;
+      const facts = (closings: QuestionInboxFacts["closings"]): QuestionInboxFacts => ({
+        asks: new Map(),
+        marks: new Map(),
+        closings,
+      });
+      const mine = [own, answered, queuedOwn, replying];
+      listWith(mine, true, facts(new Map()));
+      const revision = getDecisionQuestionList().revision;
+      statusView.send.mockClear();
+      // The same questions, only what is queued for them changing: every window hears it.
+      listWith(
+        mine,
+        true,
+        facts(
+          new Map([
+            [own.reference.questionId, "withdrawing"],
+            [answered.reference.questionId, "withdrawing"],
+            [queuedOwn.reference.questionId, "declining"],
+            [replying.reference.questionId, "declining"],
+            [theirs.reference.questionId, "declining"],
+          ])
+        )
+      );
+      expect(getDecisionQuestionList().revision).toBeGreaterThan(revision);
+      expect(listPushes()).toHaveLength(1);
+      const closingOf = (list: DecisionQuestionList) =>
+        list.questions.map((question) => [question.reference.questionId, question.closing ?? null]);
+      expect(closingOf((listPushes()[0]![1] as { payload: DecisionQuestionList }).payload)).toEqual(
+        [
+          [theirs.reference.questionId, "declining"],
+          [lab.reference.questionId, null],
+          [own.reference.questionId, "withdrawing"],
+          [answered.reference.questionId, null],
+          [queuedOwn.reference.questionId, "declining"],
+          [replying.reference.questionId, null],
+          [theirsLater.reference.questionId, null],
+        ]
+      );
+      publish([own]);
+      expect(getDecisionQuestionList().questions.some((question) => "closing" in question)).toBe(
+        false
+      );
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
       statusView.send.mockClear();
@@ -866,6 +968,7 @@ describe("Decisions entry", () => {
       });
       expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
       expect(listPushes()).toHaveLength(1);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
 
       // A Host that reported nothing goes away too (#18022): no row changes, yet the list names it.
       statusView.send.mockClear();
@@ -889,10 +992,17 @@ describe("Decisions entry", () => {
         theirs.reference,
       ]);
 
+      // A Host whose report holds no question is still one whose questions are listed.
+      hosts = [{ ...hosts[0], questions: [] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
+
       // A Host whose questions name this computer's own id lists none of them.
       hosts = [{ ...hosts[0], questionHostId: RELAY.hostId, questions: [own] }];
       for (const listener of changed) listener();
       expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
 
       // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
       hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
@@ -901,6 +1011,7 @@ describe("Decisions entry", () => {
       const followed = [...changed];
       publish([], false);
       expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
       expect(changed.size).toBe(0);
       // A Host's change already on its way when it stopped lists nothing.
       for (const listener of followed) listener();
@@ -1405,6 +1516,196 @@ describe("Decisions entry", () => {
       expect(saved.value).toMatchObject({ modelLearning: false });
       expect(cleared.consentedAt).toBeGreaterThan(0);
     });
+
+    /** Stores an evaluation of `claude` with a supported threshold chosen, as an earlier lifetime left it. */
+    async function seedChosenThreshold(threshold: number): Promise<number> {
+      const cli = new FakeAdapter({
+        responder: (prompt: ModelPrompt) =>
+          JSON.stringify({
+            action: "answer",
+            selected_option_ids: ["rebase"],
+            answer_text: null,
+            confidence_estimate: 0.95,
+            supporting_decision_ids: [/\[example id=(\S+) chosen_at=/.exec(prompt.user)?.[1]],
+            risk_flags: [],
+            rationale: null,
+            reason: null,
+          }),
+      });
+      const seeding = new DecisionModelRuntime({
+        files: decisionModelFiles(keyFile.path),
+        onProxyChanged: () => {},
+        createAdapter: () => cli,
+      });
+      try {
+        await seeding.update({
+          modelLearning: true,
+          modelAdapter: "claude",
+          proxyAllowlisted: true,
+        });
+        for (let n = 1; n <= 36; n += 1) await seeding.learner.learn(learned(n));
+        const { evaluatedAt } = await seeding.evaluate();
+        await seeding.setAutoAnswerThreshold(threshold, evaluatedAt);
+        return evaluatedAt;
+      } finally {
+        await seeding.close();
+      }
+    }
+
+    // #18062: answering automatically is one choice, and the heading reads what main does.
+    it("answers nothing from a threshold saved without consent, and choosing it arms the model and the policy together", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      // What anyone who chose a confidence while Policy's old switch was off has saved.
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      const running = service.getPolicy()!;
+      expect(getDecisionsModel()).toMatchObject({
+        evaluation: { autoAnswerThreshold: 0.8 },
+        answeringFrom: null,
+      });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(saved.value).toMatchObject({ ...RELAY, consentedAt: 5, proxyAllowlisted: true });
+      expect(service.getPolicy()).toBe(running);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      expect(
+        running.resolve({ gateId: "design-review/final", requested: "proxy-ok" }).requirement
+      ).toBe("human-required");
+
+      const off = await setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+      expect(off).toMatchObject({ answeringFrom: null, evaluation: { autoAnswerThreshold: null } });
+      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    });
+
+    it("stops answering at once on Don't answer automatically though nothing can be written, and stays stopped until chosen again", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: true,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+      const running = service.getPolicy()!;
+      expect(model.proxy()).not.toBeNull();
+
+      // The setting's write fails, and the file's write waits its turn and then fails too.
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const write = vi.spyOn(model, "setAutoAnswerThreshold").mockImplementationOnce(async () => {
+        await held;
+        throw new Error("disk full");
+      });
+      try {
+        const off = setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        expect(model.proxy()).toBeNull();
+        expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+        release();
+        await expect(off).rejects.toMatchObject({ code: "INTERNAL" });
+      } finally {
+        write.mockRestore();
+      }
+      // Both still say yes on disk, and an unrelated save hands the model that setting again.
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(model.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+      await setDecisionsDefaultQuestionExpiry(60 * 60_000);
+      await model.settled();
+      expect(model.proxy()).toBeNull();
+      expect(getDecisionsModel().answeringFrom).toBeNull();
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      // Choosing a confidence again is the person's consent, though the setting already said yes.
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
+    it("arms only at the confidence just chosen, never a saved one while the new one writes", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = model.setAutoAnswerThreshold.bind(model);
+      const write = vi
+        .spyOn(model, "setAutoAnswerThreshold")
+        .mockImplementation(async (...args) => {
+          await held;
+          return original(...args);
+        });
+      try {
+        const choosing = setDecisionsModelThreshold({ threshold: 0.9, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        // Consent waits for the new threshold, so the saved 0.8 never arms meanwhile.
+        expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+        expect(model.proxy()).toBeNull();
+        release();
+        await expect(choosing).resolves.toMatchObject({ answeringFrom: 0.9 });
+      } finally {
+        write.mockRestore();
+      }
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+    });
+
+    it("keeps answering from a confidence chosen in Settings across a restart", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      await peekDecisionsService()!.getDecisionModel()!.settled();
+      await setDecisionsModelThreshold({ threshold: 0.7, evaluatedAt });
+      await peekDecisionsService()!.stop();
+
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      expect(getDecisionsModel().answeringFrom).toBe(0.7);
+      expect(service.getPolicy()!.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
   });
 
   describe("question reads (#17097)", () => {
@@ -1658,6 +1959,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          hostAttention: () => null,
           lastHostRead: () => null,
           onAgentStopChanges: () => () => {},
           ...over,
@@ -1713,6 +2015,60 @@ describe("Decisions entry", () => {
           });
           expect(readHostQuestion).not.toHaveBeenCalled();
           expect(questionContent).toHaveBeenCalledOnce();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("reads the asking pane only on the machine that owns it, with terminal snapshots off (#18037)", async () => {
+        const own = { result: "closed" } as const;
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => own
+        );
+        const current = await running({ questionPane });
+        expect(terminalSnapshotsAllowed()).toBe(false);
+        let outcome: HostCallOutcome<unknown> = { ok: true, value: { result: "unreadable" } };
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toBe(own);
+          expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+            { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+            OWN.questionId,
+            expect.any(Function)
+          );
+          // The screen is read through main's own pty client.
+          expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
+
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "unreadable" }
+          );
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "pane", reference: ON_HOST }],
+          ]);
+          outcome = { ok: false, failure: "needs-update" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "needs-update" }
+          );
+          outcome = { ok: false, failure: "disconnected" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "host-not-connected" }
+          );
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).rejects.toThrow(
+            /outcome-unknown/
+          );
+          // A Host's read never falls back to this computer's panes.
+          expect(questionPane).toHaveBeenCalledOnce();
+
+          current.delivery = null;
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-running",
+          });
         } finally {
           withdraw();
         }
@@ -1927,10 +2283,120 @@ describe("Decisions entry", () => {
         await expect(
           readHostServedQuestion({ read: "summaries", references: [OWN] })
         ).resolves.toEqual({ result: "off" });
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
         await expect(cancelHostServedQuestion(OWN)).resolves.toEqual({ result: "off" });
         expect(questionContent).not.toHaveBeenCalled();
         expect(questionSummaries).not.toHaveBeenCalled();
         expect(cancelQuestionByReference).not.toHaveBeenCalled();
+      });
+
+      it("resolves a Host's stopped delivery on that Host alone, never on a delivery here (#18031)", async () => {
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        const current = await running({ markHandled, resumeAnswer });
+        const expected = "b".repeat(64);
+        let outcome: HostCallOutcome<DecisionsHostAttentionAnswer> = {
+          ok: true,
+          value: { result: "acted", outcome: { result: "handled" } },
+        };
+        const hostAttention = vi.fn((request: DecisionsHostAttentionRequest) =>
+          request.reference.hostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({ hostAttention });
+        const unknown = { ...ON_HOST, hostId: "qhost_unknown_0001" };
+        try {
+          await expect(
+            actOnHostAttention({ action: "handled", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "acted", outcome: { result: "handled" } });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          // With no delivery of its own running, this computer still reaches the Host.
+          current.delivery = null;
+          await expect(
+            actOnHostAttention({ action: "resume", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "unreachable", failure: "outcome-unknown" });
+          // This computer's own question, or one no Host lists, under the same id: never acted on here.
+          for (const reference of [{ ...OWN, questionId: ON_HOST.questionId }, unknown]) {
+            await expect(
+              actOnHostAttention({ action: "handled", reference, expected })
+            ).resolves.toEqual({ result: "no-host" });
+          }
+          expect(hostAttention.mock.calls).toEqual([
+            [{ action: "handled", reference: ON_HOST, expected }],
+            [{ action: "resume", reference: ON_HOST, expected }],
+            [{ action: "handled", reference: unknown, expected }],
+          ]);
+          expect(markHandled).not.toHaveBeenCalled();
+          expect(resumeAnswer).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("serves a Host's stopped delivery to its owner through this machine's delivery, only as a Host (#18031)", async () => {
+        const item = { questionId: OWN.questionId } as DecisionsAttentionItem;
+        const attentionItem = vi.fn(async () => item);
+        const copiedAnswer = vi.fn(async () => "copied");
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        await running({ attentionItem, copiedAnswer, markHandled, resumeAnswer });
+        const expected = "c".repeat(64);
+        const requests: DecisionsHostAttentionRequest[] = [
+          { action: "read", reference: OWN },
+          { action: "copy", reference: OWN },
+          { action: "resume", reference: OWN, expected },
+          { action: "handled", reference: OWN, expected },
+        ];
+
+        // Running as an owner itself, it serves no owner's Shell over the link.
+        for (const request of requests) {
+          await expect(hostServedAttention(request)).resolves.toEqual({ result: "off" });
+        }
+        expect(attentionItem).not.toHaveBeenCalled();
+        expect(markHandled).not.toHaveBeenCalled();
+
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+        await expect(hostServedAttention(requests[0]!)).resolves.toEqual({ result: "read", item });
+        await expect(hostServedAttention(requests[1]!)).resolves.toEqual({
+          result: "copied",
+          text: "copied",
+        });
+        await expect(hostServedAttention(requests[2]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "resolved" },
+        });
+        await expect(hostServedAttention(requests[3]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "handled" },
+        });
+        expect(attentionItem).toHaveBeenCalledExactlyOnceWith(OWN);
+        expect(copiedAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, OWN);
+        expect(resumeAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, {
+          reference: OWN,
+          expected,
+        });
+        expect(markHandled).toHaveBeenCalledExactlyOnceWith(OWN.questionId, expected, OWN);
+      });
+
+      it("reads its own asking pane for its owner while it runs as a Host (#18037)", async () => {
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => ({
+            result: "closed" as const,
+          })
+        );
+        await running({ questionPane });
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "closed",
+        });
+        expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+          { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+          OWN.questionId,
+          expect.any(Function)
+        );
+        expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
       });
 
       it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {
@@ -2038,6 +2504,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -2282,6 +2749,29 @@ describe("Decisions entry", () => {
       // Decisions turned off, with the app still running.
       await setDecisionsEnabled(false);
       expect(presence.allowed()).toBe(false);
+    });
+
+    it("shows Settings whether desktop notifications are on, pushing with each write (#18061)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
+      // Whatever starting pushed has landed, so each push below is a write's.
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      await settle();
+
+      let pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).toMatchObject({ desktopNotifications: false });
+      expect((await getDecisionsStatus()).desktopNotifications).toBe(false);
+
+      pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("desktopNotifications");
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
     });
 
     it("holds nothing for a lifetime whose question notifications can't follow its questions", async () => {
@@ -2571,6 +3061,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          hostAttention: () => null,
           lastHostRead: () => null,
           onAgentStopChanges: (listener) => {
             listeners.add(listener);
@@ -2664,6 +3155,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: (listener) => {
           port.tell = listener;
@@ -2697,37 +3189,12 @@ describe("Decisions entry", () => {
   });
 
   describe("policy", () => {
-    it("reads the trusted gates and the proxy allowlist as saved", () => {
+    it("reads the trusted gates and the default expiry, with no allowlist of its own (#18062)", () => {
       saved.value = { enabled: true, proxyAllowlisted: true };
       const policy = getDecisionsPolicy();
-      expect(policy.proxyAllowlisted).toBe(true);
+      expect(policy).not.toHaveProperty("proxyAllowlisted");
       expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
       expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
-    });
-
-    it("saves the proxy allowlist, keeping every other field, and the running policy follows it", async () => {
-      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
-      await startDecisionsIfEnabled();
-      const running = peekDecisionsService()!.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
-
-      const policy = await setDecisionsProxyAllowlisted(true);
-
-      expect(policy.proxyAllowlisted).toBe(true);
-      expect(saved.value).toEqual({
-        ...defaultDecisionsSettings(),
-        enabled: true,
-        ...RELAY,
-        consentedAt: 5,
-        proxyAllowlisted: true,
-      });
-      expect(peekDecisionsService()!.getPolicy()).toBe(running);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
-      expect(connections).toHaveLength(1);
-      expect(connections[0]!.stopped).toBe(0);
-
-      expect((await setDecisionsProxyAllowlisted(false)).proxyAllowlisted).toBe(false);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
     });
 
     it("moves the revision with each save, and tells every window to read it again", async () => {
@@ -2740,18 +3207,18 @@ describe("Decisions entry", () => {
         );
 
       let status = (await getDecisionsStatus()).revision ?? 0;
-      const saved1 = await setDecisionsProxyAllowlisted(true);
+      const saved1 = await setDecisionsDefaultQuestionExpiry(null);
       expect(saved1.revision).toBeGreaterThan(before);
       expect(getDecisionsPolicy()).toEqual(saved1);
       await pushedAfter(status);
 
       status = (await getDecisionsStatus()).revision ?? 0;
-      const saved2 = await setDecisionsProxyAllowlisted(false);
+      const saved2 = await setDecisionsDefaultQuestionExpiry(60 * 60_000);
       expect(saved2.revision).toBeGreaterThan(saved1.revision);
       await pushedAfter(status);
     });
 
-    it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
+    it("waits for a switch-on under way, so the starting lifetime can't keep the old expiry", async () => {
       saved.value = { enabled: true, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const service = peekDecisionsService()!;
@@ -2763,21 +3230,22 @@ describe("Decisions entry", () => {
       const enabling = setDecisionsEnabled(true);
       await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
 
-      let allowed = false;
-      const allowing = setDecisionsProxyAllowlisted(true).then((policy) => {
-        allowed = true;
+      let answered = false;
+      const saving = setDecisionsDefaultQuestionExpiry(null).then((policy) => {
+        answered = true;
         return policy;
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
       // Queued behind the switch-on: nothing saved, nothing answered yet.
-      expect(allowed).toBe(false);
-      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(answered).toBe(false);
+      expect(saved.value).toMatchObject({
+        defaultQuestionExpiryMs: defaultDecisionsSettings().defaultQuestionExpiryMs,
+      });
 
       closed();
-      await Promise.all([stopping, enabling, allowing]);
-      expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
-      const running = service.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      await Promise.all([stopping, enabling, saving]);
+      expect(saved.value).toMatchObject({ enabled: true, defaultQuestionExpiryMs: null });
+      expect(service.getPolicy()!.defaultQuestionExpiryMs).toBeNull();
     });
 
     it("saves the default expiry, never included, and the running policy asks the next question with it", async () => {
@@ -2823,37 +3291,43 @@ describe("Decisions entry", () => {
       expect(running.defaultQuestionExpiryMs).toBe(before.defaultQuestionExpiryMs);
     });
 
-    it("keeps both fields when the expiry and the allowlist are saved at once", async () => {
+    it("keeps both fields when the expiry and an agent's switch are saved at once", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const running = peekDecisionsService()!.getPolicy()!;
 
-      const [allowed, expiry] = await Promise.all([
-        setDecisionsProxyAllowlisted(true),
+      const [agents, expiry] = await Promise.all([
+        setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }),
         setDecisionsDefaultQuestionExpiry(null),
       ]);
-      expect(allowed.proxyAllowlisted).toBe(true);
+      expect(agents.askHumanAgents).toEqual(["claude"]);
       // The later save is applied over the earlier one, so its answer holds both.
-      expect(expiry).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
-      expect(saved.value).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
+      expect(expiry).toMatchObject({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: null });
+      expect(saved.value).toMatchObject({
+        askHumanAgents: ["claude"],
+        defaultQuestionExpiryMs: null,
+      });
       expect(running.defaultQuestionExpiryMs).toBeNull();
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
-    it("refuses either policy change after quit, though the switch still reads on", async () => {
+    it("refuses a policy change or an automatic-answer choice after quit, though the switch still reads on", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       await stopDecisions();
       vi.mocked(store.set).mockClear();
 
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
     });
 
-    it("refuses to change the allowlist while off, and saves nothing", async () => {
+    it("refuses to change the policy or choose automatic answers while off, and saves nothing", async () => {
       saved.value = { enabled: false };
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
       await expect(
         setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
@@ -3126,6 +3600,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -3161,6 +3636,7 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           consentedAt: 5,
           keysStored: true,
+          keysVersion: `${versionOf("sealed")}.none`,
         }),
       });
       expect(setupRuns.claim).toHaveBeenCalledExactlyOnceWith(
@@ -3183,8 +3659,8 @@ describe("Decisions entry", () => {
 
     it("records a claimed relay as unverified until a recovery kit is", async () => {
       saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
-      await disconnectRelay();
-      setupRuns.claim.mockResolvedValue({ identity: CLAIMED, verifiedKit: null });
+      await disconnectRelay(TYPED);
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
 
       const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
@@ -3197,11 +3673,7 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
-      const proven = {
-        currentEpoch: 3,
-        epochs: [1, 2, 3].map((epoch) => ({ epoch, sha256: String(epoch).repeat(64) })),
-      };
-      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, verifiedKit: proven });
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: true });
 
       const result = await restoreIdentity({
         url: "https://relay.example.com",
@@ -3217,15 +3689,62 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           installationId: CLAIMED.installationId,
           deviceId: CLAIMED.deviceId,
-          coverage: proven,
+          // The kept keys, unchanged across the restore, are what its kit holds (#18064).
+          keys: versionOf("sealed"),
         },
       });
-      expect(result).toMatchObject({ status: { recoveryKitVerifiedAt: verifiedAt } });
+      expect(result).toMatchObject({
+        status: { recoveryKitVerifiedAt: verifiedAt, recoveryKitCurrent: true },
+      });
+    });
+
+    it("records a restore's kit as current for the keys it saved to an empty file, and not for keys changed under it (#18064)", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      // The restore's own save, as the key store records it: sealing needs a keychain these tests lack.
+      const keyStore = peekDecisionsService()!.getKeyStore();
+      const ownWrite = vi.spyOn(keyStore, "lastWrittenVersion");
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "sealed from the kit");
+        ownWrite.mockReturnValue(versionOf("sealed from the kit"));
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      const restore = () =>
+        restoreIdentity({
+          url: "https://relay.example.com",
+          kit: "{}",
+          passphrase: "correct horse battery staple",
+        });
+
+      await expect(restore()).resolves.toMatchObject({ status: { recoveryKitCurrent: true } });
+      expect(saved.value).toMatchObject({
+        recoveryKit: { keys: versionOf("sealed from the kit") },
+      });
+
+      // Keys already here that changed while the restore ran aren't what its kit was checked against.
+      saved.value = { enabled: true };
+      writeFileSync(keyFile.path, "sealed before");
+      const result = await restore();
+      expect(result).toMatchObject({ result: "saved" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
+
+      // Nor are keys that appeared in an empty file by another route than its own save,
+      // such as an interrupted deletion putting newer keys back.
+      saved.value = { enabled: true };
+      rmSync(keyFile.path);
+      ownWrite.mockReturnValue(null);
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "newer keys put back");
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      await expect(restore()).resolves.not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
     });
 
     it("records a restored identity the same way", async () => {
       saved.value = { enabled: true };
-      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, verifiedKit: null });
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
 
       const result = await restoreIdentity({
         url: "https://relay.example.com",
@@ -3263,7 +3782,7 @@ describe("Decisions entry", () => {
       await expect(
         claimRelay({ url: "relay.example.com", claimSecret: SECRET })
       ).rejects.toMatchObject(CANCELLED);
-      await expect(disconnectRelay()).rejects.toMatchObject(CANCELLED);
+      await expect(disconnectRelay(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(setupRuns.claim).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
     });
@@ -3294,7 +3813,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      const status = await disconnectRelay();
+      const status = await disconnectRelay(TYPED);
 
       expect(existsSync(keyFile.path)).toBe(false);
       expect(status).toEqual(withRevision({ state: "not-connected", consentedAt: 5 }));
@@ -3307,6 +3826,99 @@ describe("Decisions entry", () => {
       expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBeNull();
     });
 
+    it("removes the keys on a one-click confirm only while a current kit covers them (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        consentedAt: 5,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      // A rotation from another window landed after the one-click confirm.
+      writeFileSync(keyFile.path, "sealed with a newer epoch");
+
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed with a newer epoch");
+      expect(saved.value).toMatchObject({ ...RELAY });
+      // Every window hears the kit no longer covers the keys, so the dialog asks for the address.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          keysStored: true,
+          recoveryKitVerifiedAt: 9,
+        })
+      );
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
+
+      // The typed gate needs no kit.
+      await disconnectRelay(TYPED);
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
+    it("removes covered keys on a one-click confirm, and a verification from before the keys' version covers none (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      await disconnectRelay({ oneClick: true });
+      expect(existsSync(keyFile.path)).toBe(false);
+
+      saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
+      writeFileSync(keyFile.path, "sealed");
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(existsSync(keyFile.path)).toBe(true);
+    });
+
+    it("removes nothing for a typed confirmation made for other keys than the file holds now (#18064)", async () => {
+      // Remove keys was confirmed for one unfinished claim; another window then claimed again.
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "another claim's staged keys");
+
+      await expect(
+        disconnectRelay({
+          oneClick: false,
+          relayOrigin: null,
+          keys: `${versionOf("the first claim's keys")}.none`,
+        })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      for (const keys of [null, `${versionOf("the first claim's keys")}.none`]) {
+        await expect(
+          deleteLocalData({ oneClick: false, relayOrigin: null, keys })
+        ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      }
+      expect(readFileSync(keyFile.path, "utf8")).toBe("another claim's staged keys");
+
+      const shown = (await getDecisionsStatus()).keysVersion ?? null;
+      await disconnectRelay({ oneClick: false, relayOrigin: null, keys: shown });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
+    it("removes nothing for a confirmation that named another relay than the one recorded now (#18064)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+
+      // A second window disconnected and set up another relay while this one's dialog was open.
+      await expect(
+        disconnectRelay({ oneClick: false, relayOrigin: "https://other.example.workers.dev" })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      await expect(deleteLocalData({ oneClick: false, relayOrigin: null })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ ...RELAY });
+
+      await disconnectRelay({ oneClick: false, relayOrigin: RELAY.relayOrigin });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
     it("reports keys stored on this computer from the file alone", async () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
@@ -3315,7 +3927,12 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
 
       expect(await getDecisionsStatus()).toEqual(
-        withRevision({ state: "not-connected", keysStored: true })
+        withRevision({
+          state: "not-connected",
+          keysStored: true,
+          // What an erasure's confirmation names back (#18064).
+          keysVersion: `${versionOf("sealed")}.none`,
+        })
       );
     });
 
@@ -3736,7 +4353,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect(connections[0]!.stopped).toBe(1);
       expect(connections[0]!.keyFileAtStop).toBe(true);
@@ -3751,7 +4368,7 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(0);
 
       writeFileSync(keyFile.path, "sealed");
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
       setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
       await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
@@ -4058,11 +4675,32 @@ describe("Decisions entry", () => {
       ).resolves.toEqual({ result: "cancelled" });
       await expect(
         exportData({ passphrase: PASSPHRASE }, async () => {
-          await deleteLocalData();
+          await deleteLocalData(TYPED);
           return exportTarget();
         })
       ).resolves.toEqual({ result: "cancelled" });
       expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("drops an archive read before settled questions were removed while the dialog was open (#18033)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      const removingThenPicking = async () => {
+        await expect(removeSettledQuestions()).resolves.toMatchObject({ result: "removed" });
+        return exportTarget();
+      };
+
+      loads.removable = ["q_settled"];
+      await expect(exportData({ passphrase: PASSPHRASE }, removingThenPicking)).resolves.toEqual({
+        result: "cancelled",
+      });
+      expect(existsSync(exportTarget())).toBe(false);
+      // A removal that took nothing changed nothing the archive holds.
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, removingThenPicking)
+      ).resolves.toMatchObject({ result: "saved" });
+      rmSync(exportTarget(), { force: true });
     });
 
     it("holds a local deletion asked for mid-write until the archive is written", async () => {
@@ -4075,7 +4713,7 @@ describe("Decisions entry", () => {
 
       const exporting = exportData({ passphrase: PASSPHRASE }, async () => exportTarget());
       await vi.waitFor(() => expect(writes.writing).toBe(true));
-      const deleting = deleteLocalData();
+      const deleting = deleteLocalData(TYPED);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(storedRows.count).toBe(3);
 
@@ -4125,7 +4763,7 @@ describe("Decisions entry", () => {
         CANCELLED
       );
       await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(CANCELLED);
-      await expect(deleteLocalData()).rejects.toMatchObject(CANCELLED);
+      await expect(deleteLocalData(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(peekDecisionsService()).toBeNull();
     });
 
@@ -4172,7 +4810,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       storedRows.count = 3;
 
-      await expect(deleteLocalData()).resolves.toEqual({
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
         result: "deleted",
         status: withRevision({ state: "not-connected", consentedAt: 5 }),
       });
@@ -4195,6 +4833,85 @@ describe("Decisions entry", () => {
       );
     });
 
+    it("deletes nothing on a one-click confirm while the key file holds keys no current kit covers (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      // Settings hadn't shown these keys, or a kit covering them, when the click came.
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+
+      expect(storedRows.count).toBe(3);
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
+      // The store reopens, so the lifetime carries on as it was.
+      expect(peekDecisionsService()?.getStore()).not.toBeNull();
+
+      saved.value = {
+        ...(saved.value as object),
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(storedRows.count).toBe(0);
+    });
+
+    it("counts set-aside keys beside covered ones, and Settings sees them as uncovered (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      // An older identity's keys an interrupted deletion couldn't put back.
+      writeFileSync(`${keyFile.path}.erasing`, "an older identity");
+      storedRows.count = 1;
+
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status.keysVersion).toBe(`${versionOf("sealed")}.${versionOf("an older identity")}`);
+      await expect(
+        deleteLocalData({
+          oneClick: true,
+          relayOrigin: RELAY.relayOrigin,
+          keys: status.keysVersion!,
+        })
+      ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("an older identity");
+    });
+
+    it("counts keys an interrupted deletion set aside, which it would put back first (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(`${keyFile.path}.erasing`, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("sealed");
+      expect(storedRows.count).toBe(3);
+    });
+
+    it("deletes on a one-click confirm when there are no keys to lose (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      storedRows.count = 2;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(storedRows.count).toBe(0);
+    });
+
     it("leaves everything as it was when the rows can't be deleted", async () => {
       saved.value = { enabled: true, consentedAt: 5, ...RELAY };
       await startDecisionsIfEnabled();
@@ -4202,7 +4919,10 @@ describe("Decisions entry", () => {
       storedRows.count = 3;
       storedRows.failErase = true;
 
-      await expect(deleteLocalData()).resolves.toEqual({ result: "failed", reason: "storage" });
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
 
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
@@ -4434,32 +5154,6 @@ describe("Decisions entry", () => {
     const KIT_TEXT = '{"v":1,"kdf":"PBKDF2-SHA256"}\n';
     let outDir = "";
 
-    /** Owner keys for the recorded relay at `currentEpoch`, holding `epochs`. */
-    function ownerKeys(currentEpoch: number, epochs: number[]): StoredIdentity {
-      return {
-        v: 1,
-        config: { ...RECORDED, label: "Daintree" },
-        keys: {
-          signing_private_pkcs8: "signing-private",
-          signing_public: "signing-public",
-          exchange_private_pkcs8: "exchange-private",
-          exchange_public: "exchange-public",
-        },
-        epochs: epochs.map((epoch) => ({ epoch, raw: `epoch-${epoch}` })),
-        currentEpoch,
-      };
-    }
-
-    const AT_ONE = kitCoverage(ownerKeys(1, [1]));
-
-    /** What the lifetime's key store tells its observer once it has read or written `stored`. */
-    function keysRead(stored: StoredIdentity | null): void {
-      const keys = peekDecisionsService()!.getKeyStore() as unknown as {
-        heard(stored: StoredIdentity | null): void;
-      };
-      keys.heard(stored);
-    }
-
     beforeAll(() => {
       outDir = mkdtempSync(join(tmpdir(), "decisions-kit-out-"));
     });
@@ -4566,8 +5260,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])(
       "is cancelled by %s while the dialog is open, and writes nothing after",
@@ -4592,8 +5286,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])("opens no dialog when %s while the kit is being made", async (_name, act) => {
       await setUp();
@@ -4660,11 +5354,7 @@ describe("Decisions entry", () => {
 
     it("records a verified kit for the identity it checked, finishing setup", async () => {
       await setUp({ consentedAt: 5 });
-      kitRuns.check.mockImplementation(async () => {
-        // The check reads the keys it compares the kit with.
-        keysRead(ownerKeys(1, [1]));
-        return { verified: RECORDED, coverage: AT_ONE };
-      });
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
 
       const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
 
@@ -4675,7 +5365,12 @@ describe("Decisions entry", () => {
         PASSPHRASE
       );
       const record = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit;
-      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED, coverage: AT_ONE });
+      // Recorded with the version of the key file the kit was checked against (#18064).
+      expect(record).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
+        keys: versionOf("sealed"),
+      });
       expect(result).toEqual({
         result: "verified",
         status: {
@@ -4684,161 +5379,75 @@ describe("Decisions entry", () => {
           consentedAt: 5,
           keysStored: true,
           recoveryKitVerifiedAt: record.verifiedAt,
-          recoveryKitCoverage: "current",
+          recoveryKitCurrent: true,
+          keysVersion: `${versionOf("sealed")}.none`,
           revision: expect.any(Number),
         },
       });
       expect(peekDecisionsService()!.getSettings()?.recoveryKit).toEqual(record);
       // Every window's Settings learns setup is finished, not just the one that asked.
       await vi.waitFor(() =>
-        expect(pushedStatuses().at(-1)).toMatchObject({
-          recoveryKitVerifiedAt: record.verifiedAt,
-          recoveryKitCoverage: "current",
-        })
+        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
       );
       expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
     });
 
-    it("marks a verified kit out of date once the keys move past it, holding nothing back (#18063)", async () => {
-      const passed = { checkedAt: 77, ...RECORDED, failedStep: null };
-      await setUp({
-        recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE },
-        setupCheck: passed,
-      });
-      const load = vi.spyOn(peekDecisionsService()!.getKeyStore(), "load");
-      // No keys read yet this run: a stale kit whose recording failed would look the same.
-      expect(await getDecisionsStatus()).toMatchObject({
-        recoveryKitVerifiedAt: 42,
-        recoveryKitCoverage: "unknown",
-      });
-      keysRead(ownerKeys(1, [1]));
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "current" });
+    it("reads a verified kit as no longer current once the key file changes, keeping when it was verified (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
 
-      // A rotation staged epoch 2, and the relay hasn't answered yet.
-      keysRead(ownerKeys(1, [1, 2]));
+      // A rotation seals a new key into the file.
+      writeFileSync(keyFile.path, "sealed with a new epoch");
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status).toHaveProperty("recoveryKitVerifiedAt");
 
-      expect(saved.value).toMatchObject({
-        recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE, outOfDate: true },
-        setupCheck: passed,
-      });
-      await vi.waitFor(() =>
-        expect(pushedStatuses().at(-1)).toMatchObject({
-          recoveryKitVerifiedAt: 42,
-          recoveryKitCoverage: "out-of-date",
-          setupCheck: { checkedAt: 77, failedStep: null },
-        })
-      );
-      // Remembered with no keys seen, as on the next start.
-      keysRead(null);
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
-      expect(load).not.toHaveBeenCalled();
+      // A setting restored from an older copy names the old version, which the file must hold to count.
+      writeFileSync(keyFile.path, "sealed");
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
+      rmSync(keyFile.path);
+      expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitCurrent");
     });
 
-    it("records a kit verified while a rotation saved new keys as out of date", async () => {
+    it("pushes the status again when a key store changes the file, so Settings stops counting the kit (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitCurrent: true })
+      );
+
+      await peekDecisionsService()!.getKeyStore().clear();
+
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("keysStored"));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("reads a verification from before the keys' version was recorded as not current (#18064)", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+
+      const status = await getDecisionsStatus();
+      expect(status).toMatchObject({ recoveryKitVerifiedAt: 42 });
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("records a verification without the keys' version when the key file changed while the kit was checked (#18064)", async () => {
       await setUp();
       kitRuns.check.mockImplementation(async () => {
-        keysRead(ownerKeys(1, [1]));
-        // A rotation stages epoch 2 after the check read the keys, before its pass is recorded.
-        keysRead(ownerKeys(1, [1, 2]));
-        return { verified: RECORDED, coverage: AT_ONE };
+        writeFileSync(keyFile.path, "rotated while checking");
+        return { verified: RECORDED };
       });
 
       const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
 
-      expect(saved.value).toMatchObject({ recoveryKit: { coverage: AT_ONE, outOfDate: true } });
-      expect(result).toMatchObject({
-        result: "verified",
-        status: { recoveryKitCoverage: "out-of-date" },
+      expect((saved.value as { recoveryKit: object }).recoveryKit).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
       });
-    });
-
-    it("takes an earlier build's verification as current for keys still on their one epoch", async () => {
-      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
-
-      keysRead(ownerKeys(1, [1]));
-      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, coverage: AT_ONE } });
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "current" });
-
-      keysRead(ownerKeys(2, [1, 2]));
-      expect(saved.value).toMatchObject({ recoveryKit: { coverage: AT_ONE, outOfDate: true } });
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
-    });
-
-    it("can't tell whether an earlier build's verification holds keys that have rotated", async () => {
-      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
-
-      keysRead(ownerKeys(2, [1, 2]));
-
-      expect(await getDecisionsStatus()).toMatchObject({
-        recoveryKitVerifiedAt: 42,
-        recoveryKitCoverage: "unknown",
-      });
-      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
-      expect(saved.value).not.toHaveProperty("recoveryKit.coverage");
-
-      // Seen to change since this run first read them: they've moved past that verification.
-      keysRead(ownerKeys(3, [1, 2, 3]));
-      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, outOfDate: true } });
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
-    });
-
-    it("records an earlier build's verification out of date on the next read when recording it failed", async () => {
-      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
-      keysRead(ownerKeys(2, [1, 2]));
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      vi.mocked(store.set).mockImplementationOnce(() => {
-        throw new Error("No space left on device");
-      });
-
-      // A rotation stages epoch 3.
-      keysRead(ownerKeys(2, [1, 2, 3]));
-      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
-
-      // Reads of the same keys try again only after a minute.
-      const now = Date.now();
-      keysRead(ownerKeys(2, [1, 2, 3]));
-      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
-      const pushed = pushedStatuses().length;
-      keysRead(ownerKeys(2, [1, 2, 3]));
-      clock.mockRestore();
-      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, outOfDate: true } });
-      await vi.waitFor(() => expect(pushedStatuses().length).toBeGreaterThan(pushed));
-      warn.mockRestore();
-    });
-
-    it("records an out-of-date kit again on the next read when recording it failed", async () => {
-      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE } });
-      keysRead(ownerKeys(1, [1]));
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      vi.mocked(store.set).mockImplementationOnce(() => {
-        throw new Error("No space left on device");
-      });
-
-      keysRead(ownerKeys(1, [1, 2]));
-      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
-      // Still said, from the keys this run saw.
-      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
-
-      // A settings write that keeps failing is tried again at most once a minute, and said once.
-      const now = Date.now();
-      vi.mocked(store.set).mockImplementationOnce(() => {
-        throw new Error("No space left on device");
-      });
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
-      keysRead(ownerKeys(1, [1, 2]));
-      vi.mocked(store.set).mockClear();
-      keysRead(ownerKeys(1, [1, 2]));
-      expect(store.set).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledOnce();
-
-      clock.mockReturnValue(now + 122_000);
-      keysRead(ownerKeys(1, [1, 2]));
-      clock.mockRestore();
-      expect(saved.value).toMatchObject({ recoveryKit: { outOfDate: true } });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("recovery kit's standing"));
-      warn.mockRestore();
+      expect(result).toMatchObject({ result: "verified" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
     });
 
     it("keeps an earlier verification when a later kit is refused", async () => {
@@ -5284,6 +5893,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       });
@@ -5332,6 +5942,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        hostAttention: () => null,
         lastHostRead: () => null,
         onAgentStopChanges: () => () => {},
       };
@@ -5618,7 +6229,7 @@ describe("Decisions entry", () => {
         return suspend();
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       try {
         expect(check.cancelled).toBe(1);
         // The run ends as passed before its cancel lands: still not recorded.
@@ -5683,7 +6294,7 @@ describe("Decisions entry", () => {
         release = resolve;
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       await settle();
       const start = startSetupCheck();
       release();
@@ -5715,7 +6326,7 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
 
-      await deleteLocalData();
+      await deleteLocalData(TYPED);
 
       expect(setupChecks.made[0]!.cancelled).toBe(1);
       expect(getSetupCheck()).toBeNull();
@@ -5736,7 +6347,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       await startDecisionsIfEnabled();
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
     });

@@ -571,9 +571,9 @@ function RunRow({
       )}
 
       {/*
-        The agent's own word that it needs the user, in the same slot: it
-        outranks a reading and a park outranks it, so none of the three share
-        a row.
+        The agent's own word that it needs the user, or what Decisions
+        recorded, in the same slot: each outranks a reading and a park outranks
+        both, so none of them share a row.
       */}
       {row.agentReport !== null && (
         <span

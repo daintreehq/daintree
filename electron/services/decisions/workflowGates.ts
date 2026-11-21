@@ -41,15 +41,21 @@ const DESIGN_REVIEW_FINAL: WorkflowGate = {
 const TRUSTED_WORKFLOW_GATES: readonly WorkflowGate[] = [DESIGN_REVIEW_FINAL];
 
 /** The saved settings the trusted policy is made from. */
-export type PolicySettings = Pick<
-  DecisionsSettings,
-  "proxyAllowlisted" | "defaultQuestionExpiryMs"
->;
+export type PolicySettings = Pick<DecisionsSettings, "defaultQuestionExpiryMs">;
+
+export interface TrustedPolicyOptions extends PolicySettings {
+  /**
+   * Whether a question with no gate may take a proxy answer when its agent
+   * allows one: only while the owner's decision model is armed to answer
+   * (#18062), so a question asked while it isn't stays the person's.
+   */
+  proxyAllowlisted: boolean;
+}
 
 /**
  * The policy every lifetime asks questions under, the owner's and a Remote
  * Host's alike: the trusted gates, the proxy allowlist and the default
- * expiry as given, and advice allowed (protocol section 21). Advice is a
+ * expiry as given (a Host has no model, so never allows a proxy), and advice allowed (protocol section 21). Advice is a
  * question with a finite deadline and a plan the agent states, which it may
  * carry out at its own discretion if nobody answers by then, for work its
  * agent could already do on its own: the library refuses it under any gate,
@@ -66,7 +72,7 @@ export type PolicySettings = Pick<
  * gate, so nothing holding the definitions above can change one after
  * registration.
  */
-export function createTrustedPolicy(settings: PolicySettings): PolicyRegistry {
+export function createTrustedPolicy(settings: TrustedPolicyOptions): PolicyRegistry {
   const policy = new PolicyRegistry({
     proxyAllowlisted: settings.proxyAllowlisted,
     defaultQuestionExpiryMs: settings.defaultQuestionExpiryMs,
@@ -101,7 +107,6 @@ export function decisionsPolicyOf(
   const expiry = questionExpiryPolicy(settings.defaultQuestionExpiryMs);
   return {
     gates: describeTrustedGates(),
-    proxyAllowlisted: settings.proxyAllowlisted,
     defaultQuestionExpiryMs: expiry.defaultMs,
     maxQuestionExpiryMs: expiry.maxMs,
     askHumanAgents: [...settings.askHumanAgents],

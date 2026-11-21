@@ -284,7 +284,10 @@ test.afterEach(async () => {
       ).electron.decisions.listAttention()
     )
     .catch((e: unknown) => String(e));
-  writeFileSync(info.outputPath("attention.json"), JSON.stringify(attention, null, 2));
+  // An uploaded artifact: the whole question and the agent's plan stay out of it.
+  const withoutBodies = (key: string, value: unknown) =>
+    key === "fullQuestion" || key === "plan" ? undefined : value;
+  writeFileSync(info.outputPath("attention.json"), JSON.stringify(attention, withoutBodies, 2));
   await page.screenshot({ path: info.outputPath("window.png") });
   const texts = await everyTerminal();
   writeFileSync(info.outputPath("panes.txt"), texts.join("\n\n"));
@@ -439,9 +442,12 @@ test("an agent Daintree can't resume, answered while its pane is closing, is lis
         }
       ).electron.decisions.listAttention()
     );
-  await expect
-    .poll(async () => JSON.stringify(await attention()), { timeout: 120_000, intervals: [2_000] })
-    .toContain(question);
+  // Polled for the row alone, so a timeout reports no question bodies.
+  const listed = async () =>
+    ((await attention()).items as { question: string }[] | undefined)?.some(
+      (i) => i.question === question
+    ) ?? false;
+  await expect.poll(listed, { timeout: 120_000, intervals: [2_000] }).toBe(true);
   const item = (
     (await attention()).items as { question: string; status: string; reason: string }[]
   ).find((i) => i.question === question)!;

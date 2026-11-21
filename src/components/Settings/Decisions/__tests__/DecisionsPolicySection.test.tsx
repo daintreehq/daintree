@@ -8,10 +8,20 @@ import { DecisionsPolicySection } from "../DecisionsPolicySection";
 import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
 import { useDecisionsPolicy } from "../useDecisionsPolicy";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import type {
+  DecisionsAttentionItem,
+  DecisionsAttentionList,
+} from "@shared/types/decisionsAttention";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+  DecisionQuestionStanding,
+} from "@shared/types/decisionsQuestion";
 import {
+  UNGATED_QUESTION_TEXT,
   gateDescription,
-  proxyAllowlistText,
   questionExpiryText,
   questionWaitText,
 } from "../policyCopy";
@@ -40,7 +50,6 @@ const RELEASE: DecisionsWorkflowGate = {
 function policy(overrides: Partial<DecisionsPolicy> = {}): DecisionsPolicy {
   return {
     gates: [REVIEW],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: 2 * DAY,
     maxQuestionExpiryMs: 20 * DAY,
     askHumanAgents: [],
@@ -60,8 +69,9 @@ function deferred<T>() {
 }
 
 const getPolicy = vi.fn<() => Promise<DecisionsPolicy>>();
-const setProxyAllowlisted = vi.fn<(allowed: boolean) => Promise<DecisionsPolicy>>();
 const setDefaultQuestionExpiry = vi.fn<(ms: number | null) => Promise<DecisionsPolicy>>();
+const setAgentAskHuman =
+  vi.fn<(payload: { agentId: string; enabled: boolean }) => Promise<DecisionsPolicy>>();
 const statusListeners = new Set<() => void>();
 
 /** Main's status push, which another window's policy change sends. */
@@ -94,12 +104,8 @@ async function renderSections(active = true) {
   return view;
 }
 
-function proxySwitch(): HTMLButtonElement {
-  return screen.getByRole("switch", { name: /Allow proxy answers/ }) as HTMLButtonElement;
-}
-
-function checked(): string | null {
-  return proxySwitch().getAttribute("aria-checked");
+function ungatedRow(): string {
+  return document.querySelector("#decisions-policy-ungated")?.textContent ?? "";
 }
 
 function expiryRow(): string {
@@ -122,12 +128,12 @@ const resetExpiry = () => screen.queryByRole("button", { name: "Reset default ex
 
 beforeEach(() => {
   getPolicy.mockReset();
-  setProxyAllowlisted.mockReset();
   setDefaultQuestionExpiry.mockReset();
+  setAgentAskHuman.mockReset();
   statusListeners.clear();
   Object.defineProperty(window, "electron", {
     value: {
-      decisions: { getPolicy, setProxyAllowlisted, setDefaultQuestionExpiry },
+      decisions: { getPolicy, setDefaultQuestionExpiry, setAgentAskHuman },
       events: {
         on: (name: string, listener: () => void) => {
           if (name !== "decisions:status-changed") return () => {};
@@ -162,96 +168,48 @@ describe("Decisions policy and questions sections", () => {
     await renderSections(false);
     expect(getPolicy).not.toHaveBeenCalled();
     expect(statusListeners.size).toBe(0);
-    expect(checked()).toBe("false");
-    expect(proxySwitch().disabled).toBe(true);
+    expect(ungatedRow()).toContain(UNGATED_QUESTION_TEXT);
   });
 
-  it("keeps the switch off and unusable, and Questions to what's always true, until main says", async () => {
+  // #18062: answering automatically is one choice, the decision model's, so
+  // Policy offers no second switch for questions without a gate.
+  it("offers no switch for questions without a gate, and says where answering automatically is chosen", async () => {
+    getPolicy.mockResolvedValue(policy());
+    await renderSections();
+
+    const section = document.getElementById("decisions-policy")!;
+    expect(
+      section.querySelectorAll("button, [role='switch'], [role='combobox'], input")
+    ).toHaveLength(0);
+    expect(ungatedRow()).toContain(UNGATED_QUESTION_TEXT);
+    expect(ungatedRow()).toContain("Decision model");
+    expect(ungatedRow()).not.toContain("Allow proxy answers");
+  });
+
+  it("keeps Questions to what's always true until main says", async () => {
     const read = deferred<DecisionsPolicy>();
     getPolicy.mockReturnValue(read.promise);
     await renderSections();
-    expect(checked()).toBe("false");
-    expect(proxySwitch().disabled).toBe(true);
     expect(expiryRow()).toContain("authorises nothing");
-    expect(expiryRow()).not.toContain("waits");
+    expect(expiryRow()).not.toContain("capped");
 
-    await act(async () => read.resolve(policy({ proxyAllowlisted: true })));
-    expect(checked()).toBe("true");
-    expect(proxySwitch().disabled).toBe(false);
-    expect(expiryRow()).toContain("waits 2 days");
-    expect(expiryRow()).toContain("at most 20 days");
-  });
-
-  it("saves the allowlist in main, shows what was asked meanwhile, then what main saved", async () => {
-    getPolicy.mockResolvedValue(policy());
-    const save = deferred<DecisionsPolicy>();
-    setProxyAllowlisted.mockReturnValue(save.promise);
-    await renderSections();
-
-    fireEvent.click(proxySwitch());
-    expect(setProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(checked()).toBe("true");
-    expect(proxySwitch().disabled).toBe(true);
-    // A second press while the first is saving asks for nothing more.
-    fireEvent.click(proxySwitch());
-    expect(setProxyAllowlisted).toHaveBeenCalledOnce();
-
-    await act(async () => save.resolve(policy({ proxyAllowlisted: true, revision: 1 })));
-    expect(checked()).toBe("true");
-    expect(proxySwitch().disabled).toBe(false);
-  });
-
-  it("puts the allowlist back to off with Reset, and shows it unmodified after", async () => {
-    getPolicy.mockResolvedValue(policy({ proxyAllowlisted: true }));
-    setProxyAllowlisted.mockResolvedValue(policy({ proxyAllowlisted: false, revision: 1 }));
-    await renderSections();
-
-    const reset = screen.getByRole("button", { name: /Reset Allow proxy answers/ });
-    await act(async () => {
-      fireEvent.click(reset);
-    });
-    expect(setProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(false);
-    expect(checked()).toBe("false");
-    expect(screen.queryByRole("button", { name: /Reset Allow proxy answers/ })).toBeNull();
-  });
-
-  it("shows what main holds after a failed change, and Retry asks again", async () => {
-    getPolicy.mockResolvedValueOnce(policy());
-    const recovered = deferred<DecisionsPolicy>();
-    getPolicy.mockReturnValueOnce(recovered.promise);
-    setProxyAllowlisted.mockRejectedValueOnce(new Error("Decisions has stopped"));
-    await renderSections();
-
-    await act(async () => {
-      fireEvent.click(proxySwitch());
-    });
-    expect(screen.getByText("Couldn't allow proxy answers")).toBeTruthy();
-    expect(proxySwitch().disabled).toBe(false);
-    // Main had it on all along (another window): the recovery read shows that.
-    await act(async () => recovered.resolve(policy({ proxyAllowlisted: true, revision: 3 })));
-    expect(checked()).toBe("true");
-
-    setProxyAllowlisted.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 4 }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    });
-    expect(setProxyAllowlisted).toHaveBeenLastCalledWith(true);
-    expect(screen.queryByText("Couldn't allow proxy answers")).toBeNull();
+    await act(async () => read.resolve(policy()));
+    expect(expiryRow()).toContain("capped at 20 days");
   });
 
   it("follows another window's change when main pushes, and never goes back to an older read", async () => {
-    getPolicy.mockResolvedValueOnce(policy({ revision: 2 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 3 * DAY, revision: 2 }));
     await renderSections();
-    expect(checked()).toBe("false");
+    expect(expirySelect().textContent).toBe("3 days");
 
-    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 3 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 3 }));
     await statusPushed();
-    expect(checked()).toBe("true");
+    expect(expirySelect().textContent).toBe("1 hour");
 
     // A push whose read answers with an older revision changes nothing.
-    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: false, revision: 1 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 3 * DAY, revision: 1 }));
     await statusPushed();
-    expect(checked()).toBe("true");
+    expect(expirySelect().textContent).toBe("1 hour");
   });
 
   it("saves a default expiry of never in main, shows it while saving, then what main saved", async () => {
@@ -269,7 +227,7 @@ describe("Decisions policy and questions sections", () => {
     expect(expirySelect().textContent).toBe("Never");
     expect(expirySelect().disabled).toBe(true);
     // The description stays on what main holds until it has saved the change.
-    expect(expiryRow()).toContain("waits 7 days");
+    expect(expiryRow()).toContain("capped at 30 days");
 
     await act(async () =>
       save.resolve(
@@ -278,8 +236,8 @@ describe("Decisions policy and questions sections", () => {
     );
     expect(expirySelect().textContent).toBe("Never");
     expect(expirySelect().disabled).toBe(false);
-    expect(expiryRow()).toContain("until it's answered or cancelled");
-    expect(expiryRow()).not.toContain("at most");
+    expect(expiryRow()).toContain("authorises nothing");
+    expect(expiryRow()).not.toContain("capped");
     expect(resetExpiry()).not.toBeNull();
   });
 
@@ -332,49 +290,6 @@ describe("Decisions policy and questions sections", () => {
     expect(expirySelect().textContent).toBe("90 days");
   });
 
-  it("saves the expiry and the allowlist side by side, and shows both once main has", async () => {
-    getPolicy.mockResolvedValue(policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS }));
-    const proxySave = deferred<DecisionsPolicy>();
-    const expirySave = deferred<DecisionsPolicy>();
-    setProxyAllowlisted.mockReturnValue(proxySave.promise);
-    setDefaultQuestionExpiry.mockReturnValue(expirySave.promise);
-    await renderSections();
-
-    fireEvent.click(proxySwitch());
-    // A save of one field never holds up the other.
-    await pickExpiry("1 hour");
-    expect(setProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(60 * 60_000);
-
-    // Main applied the proxy save first, then the expiry over it, but the
-    // answers land the other way round: the later revision holds both.
-    await act(async () =>
-      expirySave.resolve(
-        policy({ proxyAllowlisted: true, defaultQuestionExpiryMs: 60 * 60_000, revision: 2 })
-      )
-    );
-    expect(expirySelect().textContent).toBe("1 hour");
-    expect(expirySelect().disabled).toBe(false);
-    // The switch still shows what was asked, locked until its own save answers.
-    expect(checked()).toBe("true");
-    expect(proxySwitch().disabled).toBe(true);
-
-    await act(async () =>
-      proxySave.resolve(
-        policy({
-          proxyAllowlisted: true,
-          defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
-          revision: 1,
-        })
-      )
-    );
-    expect(checked()).toBe("true");
-    expect(proxySwitch().disabled).toBe(false);
-    // The older answer doesn't take the expiry back.
-    expect(expirySelect().textContent).toBe("1 hour");
-    expect(expiryRow()).toContain("waits 1 hour");
-  });
-
   it("says when the policy couldn't be read, in both sections, and one Retry recovers both", async () => {
     getPolicy.mockRejectedValueOnce(new Error("Turn on Decisions to read its policy"));
     await renderSections();
@@ -390,7 +305,7 @@ describe("Decisions policy and questions sections", () => {
     expect(screen.queryByText("Couldn't read who may answer")).toBeNull();
     expect(screen.queryByText("Couldn't read how long questions wait")).toBeNull();
     expect(screen.getByRole("group", { name: "Workflow gates" })).toBeTruthy();
-    expect(expiryRow()).toContain("waits 2 days");
+    expect(expiryRow()).toContain("capped at 20 days");
   });
 });
 
@@ -437,6 +352,212 @@ describe("Questions → Inbox (#17231)", () => {
     act(() => afterCloses[1]!(true));
     expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
   });
+
+  describe("what it observes (#18048)", () => {
+    const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
+    const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
+    const STOPPED: DecisionQuestionStanding = {
+      kind: "needs-attention",
+      deliveryStatus: "needs-attention",
+    };
+
+    function listed(
+      questionId: string,
+      standing: DecisionQuestionStanding,
+      over: Partial<DecisionQuestionListItem> = {}
+    ): DecisionQuestionListItem {
+      return {
+        reference: { hostId: "studio", projectId: "p1", terminalId: "t1", questionId },
+        alias: 1,
+        agentKind: "claude",
+        projectLabel: "Project",
+        worktreeId: "wt",
+        worktreeRoot: "/repo",
+        requirement: "human-required",
+        askedAt: "2026-11-20T13:00:00.000Z",
+        expiresAt: null,
+        settledAt: null,
+        standing,
+        replyRequest: null,
+        stall:
+          standing.kind === "needs-attention"
+            ? { answerRevision: 1, followUpIds: [], reason: "pane_gone" }
+            : null,
+        ...over,
+      };
+    }
+
+    /** An answer needing a person, as the attention list reads it: only its id matters here. */
+    function attention(questionId: string): DecisionsAttentionList {
+      return {
+        result: "listed",
+        items: [{ questionId } as DecisionsAttentionItem],
+      };
+    }
+
+    /** Main's question-list pushes, which move the shared counts. */
+    let listPushes: Array<(list: DecisionQuestionList) => void> = [];
+
+    beforeEach(() => {
+      listQuestions.mockReset();
+      listAttention.mockReset();
+      listPushes = [];
+      Reflect.set(window.electron.decisions, "listQuestions", listQuestions);
+      Reflect.set(window.electron.decisions, "listAttention", listAttention);
+      const on = window.electron.events.on as (name: string, listener: () => void) => () => void;
+      Reflect.set(window.electron.events, "on", (name: string, listener: () => void) => {
+        if (name !== "decisions:questions-changed") return on(name, listener);
+        const push = listener as unknown as (list: DecisionQuestionList) => void;
+        listPushes.push(push);
+        return () => {
+          listPushes = listPushes.filter((candidate) => candidate !== push);
+        };
+      });
+      useDecisionsAttentionStore.setState({
+        isOpen: false,
+        request: { terminalId: null, returnFocusTo: null, seq: 0 },
+      });
+    });
+
+    function row(): HTMLElement {
+      return document.getElementById("decisions-questions-inbox")!;
+    }
+
+    it("says the questions waiting and the deliveries stopped, and opens on the first stopped", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          listed("q1", { kind: "waiting", reason: "open" }),
+          listed("q2", { kind: "waiting", reason: "open" }),
+          listed("q3", STOPPED),
+        ],
+      });
+      listAttention.mockResolvedValue(attention("q3"));
+      render(<Sections />);
+      await act(async () => {});
+
+      expect(row().textContent).toContain("2 questions waiting, 1 delivery stopped.");
+      // Every stopped answer is listed, so the inbox is the one way in.
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+      fireEvent.click(screen.getByTestId("decisions-inbox-open"));
+      expect(useDecisionsInboxStore.getState().request.prefer).toBe("stopped");
+    });
+
+    it("says nothing it hasn't counted, and offers nothing it hasn't read", async () => {
+      listQuestions.mockReturnValue(new Promise(() => {}));
+      listAttention.mockReturnValue(new Promise(() => {}));
+      render(<Sections />);
+      await act(async () => {});
+
+      expect(listQuestions).toHaveBeenCalled();
+      expect(listAttention).toHaveBeenCalled();
+      expect(row().textContent).not.toMatch(/waiting|stopped/);
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+    });
+
+    it("offers the attention list, after Settings closes, for an answer the inbox can't list", async () => {
+      // q9 stalled on another machine's question; the Host's row with the same id isn't it.
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          listed("q9", STOPPED, {
+            remoteHost: { hostId: "atlas", name: "Atlas", connected: true },
+          }),
+        ],
+      });
+      listAttention.mockResolvedValue(attention("q9"));
+      const afterCloses: Array<(closed: boolean) => void> = [];
+      const onClose = vi.fn<SettingsTabClose>(async (afterClose) => {
+        if (afterClose) afterCloses.push(afterClose);
+        return true;
+      });
+      render(<Sections onClose={onClose} />);
+      await act(async () => {});
+
+      const review = screen.getByRole("button", { name: "Review other answers" });
+      const described = document.getElementById(review.getAttribute("aria-describedby") ?? "");
+      expect(described).not.toBeNull();
+      expect(row().contains(described)).toBe(true);
+      fireEvent.click(review);
+      expect(useDecisionsAttentionStore.getState().isOpen).toBe(false);
+      act(() => afterCloses[0]!(true));
+      expect(useDecisionsAttentionStore.getState()).toMatchObject({
+        isOpen: true,
+        request: { terminalId: null },
+      });
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+    });
+
+    it("keeps the attention list reachable while a read can't say, as Review did", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockResolvedValue(attention("q9"));
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+      cleanup();
+
+      // A bridge that throws rather than rejects fails the read the same way.
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      listAttention.mockImplementation(() => {
+        throw new Error("no bridge");
+      });
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+
+    it("offers the attention list as soon as one read fails, while the other is still out", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockReturnValue(new Promise(() => {}));
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+
+    it("offers nothing while Decisions isn't delivering, whatever the other read did", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockResolvedValue({ result: "not-running" });
+      render(<Sections />);
+      await act(async () => {});
+      expect(listAttention).toHaveBeenCalled();
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+    });
+
+    it("reads again each time the attention list closes, and as the stopped count moves", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      listAttention.mockResolvedValue(attention("q9"));
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+      expect(row().querySelector("[data-settings-row-actions]")).not.toBeNull();
+
+      // Dealt with in the list: it reads again once the list closes, and the row folds back.
+      listAttention.mockResolvedValue({ result: "listed", items: [] });
+      act(() => useDecisionsAttentionStore.getState().open());
+      await act(async () => {});
+      act(() => useDecisionsAttentionStore.getState().close());
+      await act(async () => {});
+      expect(screen.queryByTestId("decisions-attention-review")).toBeNull();
+      expect(row().querySelector("[data-settings-row-actions]")).toBeNull();
+
+      // A delivery stopping moves the count, and the read with it finds one the inbox can't list.
+      listQuestions.mockResolvedValue({ revision: 2, questions: [listed("q3", STOPPED)] });
+      listAttention.mockResolvedValue({
+        result: "listed",
+        items: [
+          { questionId: "q3" } as DecisionsAttentionItem,
+          { questionId: "q9" } as DecisionsAttentionItem,
+        ],
+      });
+      await act(async () => {
+        for (const push of listPushes) {
+          push({ revision: 2, questions: [listed("q3", STOPPED)] });
+        }
+      });
+      expect(row().textContent).toContain("1 delivery stopped");
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+  });
 });
 
 describe("useDecisionsPolicy", () => {
@@ -446,28 +567,28 @@ describe("useDecisionsPolicy", () => {
     await act(async () => {});
 
     const save = deferred<DecisionsPolicy>();
-    setProxyAllowlisted.mockReturnValueOnce(save.promise);
+    setDefaultQuestionExpiry.mockReturnValueOnce(save.promise);
     const stale = deferred<DecisionsPolicy>();
     getPolicy.mockReturnValueOnce(stale.promise);
     let saving!: Promise<void>;
     act(() => {
-      saving = result.current.setProxyAllowlisted(true);
+      saving = result.current.setDefaultQuestionExpiry(60 * 60_000);
     });
     let reloading!: Promise<void>;
     act(() => {
       reloading = result.current.reload();
     });
     await act(async () => {
-      save.resolve(policy({ proxyAllowlisted: true, revision: 6 }));
+      save.resolve(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 6 }));
       await saving;
     });
     await act(async () => {
-      stale.resolve(policy({ proxyAllowlisted: false, revision: 5 }));
+      stale.resolve(policy({ revision: 5 }));
       await reloading;
     });
 
-    expect(result.current.policy?.proxyAllowlisted).toBe(true);
-    expect(result.current.pending).toBeNull();
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+    expect(result.current.pendingExpiry).toBeNull();
   });
 
   it("lets go of a failed save even when the read after it fails too", async () => {
@@ -475,61 +596,111 @@ describe("useDecisionsPolicy", () => {
     const { result } = renderHook(() => useDecisionsPolicy(true));
     await act(async () => {});
 
-    setProxyAllowlisted.mockRejectedValueOnce(new Error("busy"));
+    setDefaultQuestionExpiry.mockRejectedValueOnce(new Error("busy"));
     getPolicy.mockRejectedValueOnce(new Error("gone"));
     await act(async () => {
-      await result.current.setProxyAllowlisted(true);
+      await result.current.setDefaultQuestionExpiry(60 * 60_000);
     });
-    expect(result.current.pending).toBeNull();
-    expect(result.current.saveFailure?.allowed).toBe(true);
+    expect(result.current.pendingExpiry).toBeNull();
+    expect(result.current.expirySaveFailure?.ms).toBe(60 * 60_000);
     // What it showed before stays: the read failed, nothing newer arrived.
-    expect(result.current.policy?.proxyAllowlisted).toBe(false);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(2 * DAY);
 
-    setProxyAllowlisted.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 1 }));
+    setDefaultQuestionExpiry.mockResolvedValueOnce(
+      policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 1 })
+    );
     await act(async () => {
-      await result.current.setProxyAllowlisted(true);
+      await result.current.setDefaultQuestionExpiry(60 * 60_000);
     });
-    expect(result.current.policy?.proxyAllowlisted).toBe(true);
-    expect(result.current.saveFailure).toBeNull();
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+    expect(result.current.expirySaveFailure).toBeNull();
   });
 
   it("forgets what it read on turning off, and starts again from main on turning on", async () => {
-    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 4 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 30 * DAY, revision: 4 }));
     const { result, rerender } = renderHook(({ active }) => useDecisionsPolicy(active), {
       initialProps: { active: true },
     });
     await act(async () => {});
-    expect(result.current.policy?.proxyAllowlisted).toBe(true);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(30 * DAY);
 
     // A save asked for just before turning off answers after it.
     const late = deferred<DecisionsPolicy>();
-    setProxyAllowlisted.mockReturnValueOnce(late.promise);
+    setDefaultQuestionExpiry.mockReturnValueOnce(late.promise);
     act(() => {
-      void result.current.setProxyAllowlisted(false);
+      void result.current.setDefaultQuestionExpiry(60 * 60_000);
     });
     rerender({ active: false });
     expect(result.current.policy).toBeNull();
 
     getPolicy.mockRejectedValueOnce(new Error("Decisions has stopped"));
     rerender({ active: true });
-    await act(async () => late.resolve(policy({ proxyAllowlisted: false, revision: 5 })));
+    await act(async () =>
+      late.resolve(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 5 }))
+    );
     expect(result.current.policy).toBeNull();
     expect(result.current.loadError).toContain("Decisions has stopped");
     // The late save still lets go, so the next one is asked.
-    expect(result.current.pending).toBeNull();
-    setProxyAllowlisted.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 6 }));
+    expect(result.current.pendingExpiry).toBeNull();
+    // Main counts revisions again from its own start, below the 4 and 5 seen before.
+    setDefaultQuestionExpiry.mockResolvedValueOnce(policy({ revision: 0 }));
     await act(async () => {
-      await result.current.setProxyAllowlisted(true);
+      await result.current.setDefaultQuestionExpiry(2 * DAY);
     });
-    expect(setProxyAllowlisted).toHaveBeenCalledTimes(2);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(2 * DAY);
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledTimes(2);
 
     // Main's answer after turning on is shown, though its revision is lower than anything seen before.
-    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 0 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 30 * DAY, revision: 0 }));
     await act(async () => {
       await result.current.reload();
     });
-    expect(result.current.policy?.proxyAllowlisted).toBe(true);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(30 * DAY);
     expect(result.current.loadError).toBeNull();
+  });
+
+  it("saves the expiry and an agent's switch side by side, and keeps both once main has", async () => {
+    getPolicy.mockResolvedValueOnce(
+      policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS })
+    );
+    const { result } = renderHook(() => useDecisionsPolicy(true));
+    await act(async () => {});
+
+    const agentSave = deferred<DecisionsPolicy>();
+    const expirySave = deferred<DecisionsPolicy>();
+    setAgentAskHuman.mockReturnValueOnce(agentSave.promise);
+    setDefaultQuestionExpiry.mockReturnValueOnce(expirySave.promise);
+    act(() => {
+      void result.current.setAgentAskHuman("claude", true);
+      // A save of one field never holds up the other.
+      void result.current.setDefaultQuestionExpiry(60 * 60_000);
+    });
+    expect(setAgentAskHuman).toHaveBeenCalledExactlyOnceWith({ agentId: "claude", enabled: true });
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(60 * 60_000);
+
+    // Main applied the agent first, then the expiry over it, but the answers
+    // land the other way round: the later revision holds both.
+    await act(async () =>
+      expirySave.resolve(
+        policy({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: 60 * 60_000, revision: 2 })
+      )
+    );
+    expect(result.current.pendingExpiry).toBeNull();
+    expect(result.current.pendingAgents.get("claude")).toBe(true);
+
+    await act(async () =>
+      agentSave.resolve(
+        policy({
+          askHumanAgents: ["claude"],
+          defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+          revision: 1,
+        })
+      )
+    );
+    expect(result.current.pendingAgents.size).toBe(0);
+    // The older answer doesn't take the expiry back.
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+    expect(result.current.policy?.askHumanAgents).toEqual(["claude"]);
   });
 
   it("drops an expiry save that answers after a turn off, and lets the next one go ahead", async () => {
@@ -605,18 +776,18 @@ describe("policy copy", () => {
     expect(questionWaitText(10_000)).toBe("1 minute");
   });
 
-  it("says how long a question waits and how long its agent can make it, as main reports", () => {
-    expect(
-      questionExpiryText({ defaultQuestionExpiryMs: 2 * DAY, maxQuestionExpiryMs: 20 * DAY })
-    ).toBe(
-      "A question waits 2 days for your answer, unless the agent that asked sets another time, at most 20 days. Questions asked on a Remote Host still wait 7 days by default. An expired question authorises nothing, and the agent is told so."
+  it("says where the default applies and how long an agent can ask for, never the default the select shows (#18066)", () => {
+    expect(questionExpiryText({ maxQuestionExpiryMs: 20 * DAY })).toBe(
+      "Applies when an agent on this computer sets no time. An agent's own time is capped at 20 days. An expired question authorises nothing."
     );
-    const unbounded = questionExpiryText({
-      defaultQuestionExpiryMs: null,
-      maxQuestionExpiryMs: null,
-    });
-    expect(unbounded).toContain("until it's answered or cancelled");
-    expect(unbounded).not.toContain("at most");
+    // Under Never, or before main has said, there is no limit to name.
+    for (const read of [{ maxQuestionExpiryMs: null }, null]) {
+      expect(questionExpiryText(read)).toBe(
+        "Applies when an agent on this computer sets no time. An expired question authorises nothing."
+      );
+    }
+    // A Remote Host's own default is the remote window's note, not this row.
+    expect(questionExpiryText({ maxQuestionExpiryMs: 20 * DAY })).not.toContain("Remote Host");
   });
 
   it("describes a gate from what it registers", () => {
@@ -635,22 +806,9 @@ describe("policy copy", () => {
       allowsText: true,
       bindsAttachments: false,
     };
-    expect(gateDescription(lenient)).toBe("A proxy may answer: A, B or C, with a note if you like");
-    expect(gateDescription({ ...lenient, choices: [] })).toBe("A proxy may answer");
-  });
-
-  it("names the gates that still need the person, and only those", () => {
-    const lenient = { ...RELEASE, id: "x/y", requirement: "proxy-ok" as const };
-    expect(proxyAllowlistText([REVIEW])).toContain(
-      "(design-review/final) still needs your own answer"
+    expect(gateDescription(lenient)).toBe(
+      "The decision model may answer: A, B or C, with a note if you like"
     );
-    expect(proxyAllowlistText([REVIEW, lenient])).toContain(
-      "under design-review/final still needs your own answer"
-    );
-    expect(proxyAllowlistText([REVIEW, lenient])).not.toContain("x/y");
-    expect(proxyAllowlistText([lenient])).toContain("follows that gate's rule");
-    for (const gates of [[], [REVIEW]]) {
-      expect(proxyAllowlistText(gates)).toContain("evaluated against your own past answers");
-    }
+    expect(gateDescription({ ...lenient, choices: [] })).toBe("The decision model may answer");
   });
 });

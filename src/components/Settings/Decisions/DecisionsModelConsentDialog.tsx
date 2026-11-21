@@ -65,8 +65,8 @@ export function DecisionsModelConsentDialog({
         <li>
           <span className="font-medium text-text-primary">Answers only once you allow it.</span> It
           answers in your place only after you&apos;ve seen its evaluation and chosen the confidence
-          it answers from, and only questions that allow a proxy answer. Its answers are labelled as
-          a proxy&apos;s.
+          it answers from, and only questions that allow it. Its answers are labelled as the
+          decision model&apos;s.
         </li>
         <li>Turning learning off keeps what it learned. Clear history deletes it.</li>
       </ul>

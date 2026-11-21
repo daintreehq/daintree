@@ -16,6 +16,7 @@ import {
   MemoryKeyStore,
   RelayError,
   loadIdentity,
+  openQuestionContent,
   sealAnswerContent,
   sealQuestionContent,
   serializeAnswers,
@@ -41,6 +42,7 @@ import {
 } from "@daintreehq/decisions-protocol";
 import {
   inScope,
+  questionDetail,
   readQuestionContent,
   QUESTION_IMAGE_PART_BYTES,
   readQuestionImage,
@@ -584,6 +586,30 @@ describe("readQuestionContent", () => {
     expect(await readQuestionContent(ctx(), planless, NO_ADVISORY_HOST)).toEqual({
       result: "unreadable",
     });
+  });
+
+  it("hands the attention list the whole question and the plan the view shows, and nothing it refuses (#18055)", async () => {
+    const detail = async (row: QuestionRow) =>
+      questionDetail(row, await openQuestionContent(ctx(), row));
+
+    const row = await advisory({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    expect(await detail(row)).toEqual({
+      question: CONTENT.question,
+      plan: "Use the existing fixture",
+    });
+    // A blocking question's stray plan is never shown as one; its words still are.
+    const blocking = await question({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    expect(await detail(blocking)).toEqual({ question: CONTENT.question, plan: null });
+    // What the view refuses as unreadable, the list doesn't show either.
+    const approval = await advisory({
+      ...CONTENT,
+      kind: "approval",
+      planned_fallback: "Ship it anyway",
+    });
+    expect(await detail(approval)).toBeNull();
+    expect(questionDetail(blocking, null)).toBeNull();
+    // Content that opens but isn't the protocol's shape is refused like the view refuses it.
+    expect(questionDetail(blocking, { question: ["Ship it?"], kind: "choice" })).toBeNull();
   });
 
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {

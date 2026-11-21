@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { app, safeStorage } from "electron";
@@ -110,7 +111,7 @@ const OUTCOME: Record<Operation, string> = {
 };
 
 const WEAK_REASON =
-  "No keyring is available, so Decisions keys could only be sealed with a fixed key, which doesn't protect them from anyone who can read the file";
+  "No keyring is available, so Decisions keys could only be encrypted with a fixed key, which doesn't protect them from anyone who can read the file";
 
 const LEFT_AS_IS = "so it was left as it is";
 
@@ -301,6 +302,54 @@ export class KeyFileChangedError extends Error {
 }
 
 /**
+ * What the key file holds right now, as a digest of its sealed bytes: no
+ * keychain is asked and nothing is opened, and any change to what it holds
+ * changes it. Null when there is no file. A recovery kit's verification
+ * records the version it was checked against (#18064), so a rotation, a
+ * restore or any other change since reads as a kit that no longer holds every
+ * key, even if the setting was restored from an older copy.
+ */
+export async function keyFileVersion(filePath: string): Promise<string | null> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(filePath);
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+  return versionOfBytes(bytes);
+}
+
+function versionOfBytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+const writeListeners = new Set<(filePath: string) => void>();
+
+/**
+ * Hears each write or removal of a key file by any store, once it has landed:
+ * a rotation's staged and promoted keys, the library's own saves, a disconnect
+ * (#18064). What reads the file's version is told again; nothing here depends
+ * on hearing it, since the version is read from the file each time.
+ */
+export function onKeyFileWritten(listener: (filePath: string) => void): () => void {
+  writeListeners.add(listener);
+  return () => {
+    writeListeners.delete(listener);
+  };
+}
+
+function keyFileWritten(filePath: string): void {
+  for (const listener of [...writeListeners]) {
+    try {
+      listener(filePath);
+    } catch (error) {
+      console.warn("[Decisions] A key file listener threw:", error);
+    }
+  }
+}
+
+/**
  * Every store's operations on one key file, in the order asked, shared by
  * every store on that file: two stores on the same file (a lifetime's, and a
  * Host enrollment's) never interleave one's read with the other's write.
@@ -327,20 +376,14 @@ function isMissing(error: unknown): boolean {
  * store's on the same file. `close` ends the store for
  * the lifetime that made it: what was already asked finishes, anything later
  * is refused.
- *
- * `observe`, when given, hears the keys this store read or wrote, or null
- * once it found or left none, in the operation's own turn, so what it heard
- * last is what the file holds as far as this store knows.
  */
 export class SealedKeyStore implements KeyStore {
   private weakConfirmed = false;
   private closed = false;
+  private lastWritten: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(
-    readonly filePath: string,
-    private readonly observe?: (stored: StoredIdentity | null) => void
-  ) {}
+  constructor(readonly filePath: string) {}
 
   /**
    * What `save` would seal with right now. May show the OS keychain's prompt;
@@ -370,14 +413,20 @@ export class SealedKeyStore implements KeyStore {
   load(): Promise<StoredIdentity | null> {
     return this.enqueue(async () => {
       const envelope = await this.readEnvelope();
-      const stored = envelope ? await openEnvelope(envelope) : null;
-      this.heard(stored);
-      return stored;
+      return envelope ? await openEnvelope(envelope) : null;
     });
   }
 
   save(identity: StoredIdentity): Promise<void> {
     return this.saveIf(() => null, identity);
+  }
+
+  /**
+   * {@link keyFileVersion} in its turn. Two equal answers around a `load`
+   * mean no store wrote the file between them, so the load read that version.
+   */
+  version(): Promise<string | null> {
+    return this.enqueue(() => keyFileVersion(this.filePath));
   }
 
   /**
@@ -416,15 +465,24 @@ export class SealedKeyStore implements KeyStore {
       await ensureOwnerOnlyDir(dirname(this.filePath));
       const text = JSON.stringify(envelope);
       try {
-        await resilientAtomicWriteFile(this.filePath, text, "utf-8", { mode: OWNER_RW_FILE_MODE });
-      } catch (error) {
-        // A sync that failed after the rename still left these keys in place;
-        // sealing is randomised, so only this write reads back the same.
-        if (await this.holds(text)) this.heard(next);
-        throw error;
+        await resilientAtomicWriteFile(this.filePath, text, "utf-8", {
+          mode: OWNER_RW_FILE_MODE,
+        });
+        this.lastWritten = versionOfBytes(Buffer.from(text, "utf-8"));
+      } finally {
+        // A write that failed after its rename (the directory sync) still changed the file.
+        keyFileWritten(this.filePath);
       }
-      this.heard(next);
     });
+  }
+
+  /**
+   * The version of the file this store's last write left, or null before one.
+   * A restore that saved to an empty file proves its kit holds the keys only
+   * while the file is still exactly what it wrote (#18064).
+   */
+  lastWrittenVersion(): string | null {
+    return this.lastWritten;
   }
 
   /** Removes the key file. Never asks the keychain, and never runs on its own after a failed read. */
@@ -435,8 +493,9 @@ export class SealedKeyStore implements KeyStore {
         await resilientUnlink(this.filePath);
       } catch (error) {
         if (!isMissing(error)) throw error;
+      } finally {
+        keyFileWritten(this.filePath);
       }
-      this.heard(null);
     });
   }
 
@@ -453,12 +512,15 @@ export class SealedKeyStore implements KeyStore {
       if (current === null || !removable(current)) return false;
       this.weakConfirmed = false;
       try {
-        await resilientUnlink(this.filePath);
-      } catch (error) {
-        if (!isMissing(error)) throw error;
+        try {
+          await resilientUnlink(this.filePath);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+        await syncParentDirectory(this.filePath);
+      } finally {
+        keyFileWritten(this.filePath);
       }
-      this.heard(null);
-      await syncParentDirectory(this.filePath);
       return true;
     });
   }
@@ -467,23 +529,6 @@ export class SealedKeyStore implements KeyStore {
   async close(): Promise<void> {
     this.closed = true;
     await this.queue;
-  }
-
-  private async holds(text: string): Promise<boolean> {
-    try {
-      return (await readFile(this.filePath, "utf8")) === text;
-    } catch {
-      return false;
-    }
-  }
-
-  /** What an observer does with the keys never fails the read or write that found them. */
-  private heard(stored: StoredIdentity | null): void {
-    try {
-      this.observe?.(stored);
-    } catch {
-      console.warn("[Decisions] Couldn't note the keys this computer holds");
-    }
   }
 
   private async readEnvelope(): Promise<KeyFileEnvelope | null> {

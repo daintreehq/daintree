@@ -31,6 +31,7 @@ import {
   replyModeText,
   requirementText,
   threadEntryHeading,
+  type ShownNotice,
 } from "./decisionQuestionModel";
 import {
   clockText,
@@ -371,13 +372,21 @@ function OfferedOptions({ question }: { question: DecisionQuestionContent }) {
 }
 
 /** What the line under the question says: only what isn't already plain from the view. */
-function QuestionFacts({ question, nowMs }: { question: DecisionQuestionContent; nowMs: number }) {
+function QuestionFacts({
+  question,
+  nowMs,
+  noticeShown,
+}: {
+  question: DecisionQuestionContent;
+  nowMs: number;
+  noticeShown: ShownNotice | null;
+}) {
   // An open question shows its composer, which says it waits; a person's
   // answer is what every question needs unless it says otherwise.
   const status = question.status === "open" ? null : questionStatusText(question);
   const requirement =
     question.requirement === "human-required" ? null : requirementText(question.requirement);
-  const notice = closureNoticeText(question);
+  const notice = closureNoticeText(question, noticeShown);
   const asking = question.status === "open" || question.status === "queued";
   return (
     <>
@@ -423,9 +432,12 @@ function QuestionBody({
   answerMode,
   followUps,
   stalled,
+  noticeShown,
   onMoved,
   headingId,
   sendNote,
+  deliveryNotice,
+  onSend,
   eyebrow,
 }: {
   question: DecisionQuestionContent;
@@ -434,9 +446,12 @@ function QuestionBody({
   answerMode: AnswerComposerMode;
   followUps: boolean;
   stalled: boolean;
+  noticeShown: ShownNotice | null;
   onMoved: () => void;
   headingId: string | undefined;
   sendNote: string | null;
+  deliveryNotice: string | null;
+  onSend: ((prior: string | null) => void) | undefined;
   eyebrow: React.ReactNode;
 }) {
   // Moved on only when the deadline line would read differently, or the clock jumped.
@@ -466,7 +481,7 @@ function QuestionBody({
             className="font-medium leading-snug"
           />
         </div>
-        <QuestionFacts question={question} nowMs={nowMs} />
+        <QuestionFacts question={question} nowMs={nowMs} noticeShown={noticeShown} />
       </div>
       <PlannedFallback question={question} />
       {question.preparation != null && <Preparation preparation={question.preparation} />}
@@ -489,14 +504,7 @@ function QuestionBody({
           active={active}
         />
       )}
-      {/* After the images: an approval waits until each has been opened. */}
-      <DecisionAnswerComposer
-        question={question}
-        target={target}
-        unshown={unshown}
-        onMoved={onMoved}
-        sendNote={sendNote}
-      />
+      {/* Before the answer (#18040): what the agent said since asking can change it. */}
       {question.thread.length > 0 && (
         <section
           className="flex flex-col gap-3"
@@ -515,7 +523,17 @@ function QuestionBody({
           </ul>
         </section>
       )}
-      {/* After the thread, which it adds to. */}
+      {/* After the images: an approval waits until each has been opened. */}
+      <DecisionAnswerComposer
+        question={question}
+        target={target}
+        unshown={unshown}
+        onMoved={onMoved}
+        sendNote={sendNote}
+        deliveryNotice={deliveryNotice}
+        onSend={onSend}
+      />
+      {/* After the thread, which it adds to; folded away while the answer form leads. */}
       {followUps && (
         <DecisionFollowUpComposer
           question={question}
@@ -558,8 +576,11 @@ export function DecisionQuestionReadView({
   active,
   followUps = false,
   listed = null,
+  noticeShown = null,
   headingId,
   sendNote = null,
+  deliveryNotice = null,
+  onSend,
   eyebrow = null,
 }: {
   reader: DecisionQuestionReader;
@@ -573,10 +594,19 @@ export function DecisionQuestionReadView({
    * where its delivery stands, which its content alone can't say (#18028).
    */
   listed?: Pick<DecisionQuestionListItem, "reference" | "standing"> | null;
+  /**
+   * How far the notice that closed the listed question got, when the surface
+   * already says so above it (#18026): its facts then leave that out.
+   */
+  noticeShown?: ShownNotice | null;
   /** Given to the question's own words, so a surface can send the keyboard to them. */
   headingId?: string;
   /** What happens to an answer sent now, when that isn't simply "it goes": shown beside Send. */
   sendNote?: string | null;
+  /** Why nothing can take an answer now (#18029), said before one is written. */
+  deliveryNotice?: string | null;
+  /** Send started an answer from here; `prior` is the submission its record held before. */
+  onSend?: (prior: string | null) => void;
   /** Who asked, over the question, when the surface knows it. */
   eyebrow?: React.ReactNode;
 }) {
@@ -592,9 +622,13 @@ export function DecisionQuestionReadView({
           answerMode={reader.answerMode}
           followUps={followUps}
           stalled={deliveryStalled(current.question, listed)}
+          // Only for the listed question: a read of another, mid-switch, keeps its own line.
+          noticeShown={deliveryStalled(current.question, listed) ? noticeShown : null}
           onMoved={reader.reread}
           headingId={headingId}
           sendNote={sendNote}
+          deliveryNotice={deliveryNotice}
+          onSend={onSend}
           eyebrow={eyebrow}
         />
       )}

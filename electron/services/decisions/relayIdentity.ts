@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   claimRelay,
   importIdentity,
@@ -22,7 +21,6 @@ import type {
   DecisionsClaimRefusal,
   DecisionsConnectResult,
   DecisionsKeyStorageFailure,
-  DecisionsKitCoverage,
   DecisionsKitRefusal,
   DecisionsRelayCheck,
   DecisionsRelayUnreachableReason,
@@ -48,14 +46,12 @@ export type SetupKeyStore = Pick<
 export type DecisionsConnectFailure = Exclude<DecisionsConnectResult, { result: "saved" }>;
 
 /**
- * A setup's end: the identity it sealed (or found sealed already), and the
- * epochs of the recovery kit it came from when that kit holds the identity
- * whole (null otherwise), or what stopped it. Only a restore's kit can
- * count; a claim has none yet.
+ * A setup's end: the identity it sealed (or found sealed already), and
+ * whether the recovery kit it came from holds that identity whole, or what
+ * stopped it. Only a restore's kit can count; a claim has none yet.
  */
 export type RelaySetupOutcome =
-  | { identity: RelayConfig; verifiedKit: DecisionsKitCoverage | null }
-  | { failure: DecisionsConnectFailure };
+  { identity: RelayConfig; kitVerified: boolean } | { failure: DecisionsConnectFailure };
 
 export interface RelaySetupOptions {
   keys: SetupKeyStore;
@@ -324,7 +320,7 @@ export async function claimDecisionsRelay(
   if (stored && !staged) {
     // Sealed by a setup whose setting didn't save: taken up as it is.
     const same = isOwner(stored) && normalizeRelayOrigin(stored.config.relayOrigin) === origin;
-    return same ? { identity: stored.config, verifiedKit: null } : failed(conflictWith(stored));
+    return same ? { identity: stored.config, kitVerified: false } : failed(conflictWith(stored));
   }
   if (staged && normalizeRelayOrigin(staged.config.relayOrigin) !== origin) {
     return failed(conflictWith(staged));
@@ -363,7 +359,7 @@ export async function claimDecisionsRelay(
       store,
       fetch: requests.fetch,
     });
-    return { identity: identity.config, verifiedKit: null };
+    return { identity: identity.config, kitVerified: false };
   } catch (error) {
     return failed(await claimFailure(error, origin, keys, stagedBefore, stageSaved, requests));
   }
@@ -576,46 +572,6 @@ export function kitCovers(kit: StoredIdentity, held: StoredIdentity): boolean {
   return true;
 }
 
-/** An epoch key's SHA-256, of the bytes `kitCovers` compares; of the text when it doesn't decode. */
-function epochDigest(raw: string): string {
-  let bytes: Uint8Array;
-  try {
-    bytes = base64UrlToBytes(raw);
-  } catch {
-    bytes = Buffer.from(`undecodable:${raw}`, "utf8");
-  }
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-/**
- * The epochs a stored identity holds, each by number and key digest
- * (#18063). Of keys a kit was checked against, it is what the kit was proven
- * to hold byte for byte: an epoch only the kit held may hold a key these
- * keys never will.
- */
-export function kitCoverage(stored: StoredIdentity): DecisionsKitCoverage {
-  const byEpoch = new Map<number, string>();
-  for (const { epoch, raw } of stored.epochs) byEpoch.set(epoch, epochDigest(raw));
-  const epochs = [...byEpoch]
-    .sort(([a], [b]) => a - b)
-    .map(([epoch, sha256]) => ({ epoch, sha256 }));
-  return { currentEpoch: stored.currentEpoch, epochs };
-}
-
-/**
- * A kit proven to hold `kit`'s epochs still covers keys holding `held`'s, as
- * `kitCovers` would judge them: the same current epoch, and every key held
- * one the kit holds.
- */
-export function coverageHolds(kit: DecisionsKitCoverage, held: DecisionsKitCoverage): boolean {
-  return (
-    kit.currentEpoch === held.currentEpoch &&
-    held.epochs.every(({ epoch, sha256 }) =>
-      kit.epochs.some((entry) => entry.epoch === epoch && entry.sha256 === sha256)
-    )
-  );
-}
-
 /**
  * Restores an owner identity from a recovery kit and seals it (#16006).
  * Everything is proven before anything is saved: the kit opens with the
@@ -694,16 +650,8 @@ export async function restoreDecisionsIdentity(
 
   // The kit verifies only if it holds the keys kept here: a newer sealed copy
   // can hold epochs it lacks.
-  if (held) {
-    return {
-      identity: held.config,
-      verifiedKit: kitCovers(stored, held) ? kitCoverage(held) : null,
-    };
-  }
+  if (held) return { identity: held.config, kitVerified: kitCovers(stored, held) };
   const saved = await keyCall(() => keys.save(stored));
   if ("failure" in saved) return saved;
-  return {
-    identity: stored.config,
-    verifiedKit: kitCovers(stored, stored) ? kitCoverage(stored) : null,
-  };
+  return { identity: stored.config, kitVerified: kitCovers(stored, stored) };
 }

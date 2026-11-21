@@ -123,7 +123,10 @@ import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButt
 import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
 import { DecisionsToolbarButton } from "./DecisionsToolbarButton";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
-import { useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+} from "@/hooks/useDecisionsWaitingCount";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -356,11 +359,11 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
-  // The inbox lists this computer's questions, which a Remote Host window's
-  // panes never asked. The toolbar holds the switch for the view, so the
-  // Decisions actions can read it whether or not the button is placed.
-  const localWindow = !isRemoteWindow();
-  const decisionsOn = useDecisionsSwitch(localWindow) === "on";
+  // The inbox lists this computer's questions and every enrolled Host's
+  // (#18049), so a Remote Host's window shows it too. The toolbar holds the
+  // switch for the view, so the Decisions actions can read it whether or not
+  // the button is placed.
+  const decisionsOn = useDecisionsSwitch() === "on";
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   // This machine's pins (#14702), live, so a pin from the launcher or another
@@ -1406,9 +1409,10 @@ export function Toolbar({
   // right side's trigger sits. A demoted button or the branch row keeps it up
   // whatever the width.
   // Watched only while the button has a place, on the strip or folded into a `…` menu.
-  const decisionsWaitingCount = useDecisionsWaitingCount(
-    availableLeftIds.includes("decisions-inbox") || availableRightIds.includes("decisions-inbox")
-  );
+  const decisionsPlaced =
+    availableLeftIds.includes("decisions-inbox") || availableRightIds.includes("decisions-inbox");
+  const decisionsWaitingCount = useDecisionsWaitingCount(decisionsPlaced);
+  const decisionsStoppedCount = useDecisionsStoppedCount(decisionsPlaced);
 
   const leftTriggerPinned =
     branchOverflowRow !== null || availableLeftIds.some((id) => demotedIds.has(id));
@@ -1434,7 +1438,7 @@ export function Toolbar({
       withLitSignalPriorities({
         problems: errorCount > 0 || watcherDegraded || topologyWatcherDark,
         canopy: canopyUrgentCount > 0,
-        "decisions-inbox": decisionsWaitingCount > 0,
+        "decisions-inbox": decisionsWaitingCount > 0 || decisionsStoppedCount > 0,
         ...Object.fromEntries(
           [...agentAttentionStates].map(([agentId, state]) => [agentId, state === "waiting"])
         ),
@@ -1445,6 +1449,7 @@ export function Toolbar({
       topologyWatcherDark,
       canopyUrgentCount,
       decisionsWaitingCount,
+      decisionsStoppedCount,
       agentAttentionStates,
     ]
   );
@@ -1488,6 +1493,7 @@ export function Toolbar({
     errorCount,
     canopyUrgentCount,
     decisionsWaitingCount,
+    decisionsStoppedCount,
     watcherStatus,
     forgeUnavailableObservation:
       forgeDataUnavailable && forgeStatsLevel !== "hidden"
@@ -1721,6 +1727,7 @@ export function Toolbar({
       notificationUnreadCount={notificationUnreadCount}
       canopyUrgentCount={canopyUrgentCount}
       decisionsWaitingCount={decisionsWaitingCount}
+      decisionsStoppedCount={decisionsStoppedCount}
       watcherStatus={watcherStatus}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}

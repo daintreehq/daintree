@@ -1,9 +1,11 @@
+import type { DecisionQuestionReference } from "./decisionsQuestion.js";
+
 /**
  * Answers Daintree couldn't type in on its own, as the needs-attention list
  * shows them (#16020): read on demand from the owner's store, never pushed.
- * Unlike the pane chip's state, an item carries the question's first line
- * and the answer itself, since deciding what to do with an answer means
- * seeing it; both stay on this computer.
+ * Unlike the pane chip's state, an item carries the question and the answer
+ * itself, since deciding what to do with an answer means seeing it; both
+ * stay on this computer.
  */
 
 /** Where the question was asked, in the names this computer knows. */
@@ -106,8 +108,28 @@ export interface DecisionsAttentionItem {
    * `unspecified` when none was recorded.
    */
   reason: string;
-  /** The question as asked, its first line; null when it couldn't be opened here. */
+  /**
+   * The question as asked, its first line; null when it couldn't be opened
+   * here, or the question view would refuse it as unreadable.
+   */
   question: string | null;
+  /**
+   * The whole question, controls stripped and uncut, to read in place
+   * (#18055), when it says more than its first line; null otherwise.
+   */
+  fullQuestion: string | null;
+  /**
+   * The plan the agent stated for an advisory round, verified against the
+   * round as the question view verifies it; null for a question that waited
+   * for a reply, or when none can be read. Never an action taken.
+   */
+  plan: string | null;
+  /**
+   * The question by the machine, project and terminal that asked it, for the
+   * question view to open with its notes and images (#18055); null when its
+   * origin can't name it.
+   */
+  reference: DecisionQuestionReference | null;
   /** When the pane asked, ISO 8601. */
   askedAt: string;
   origin: DecisionsAnswerOrigin;
@@ -156,6 +178,12 @@ export type DecisionsAttentionList =
 /** A pane an answer could be typed into instead: an agent running here now. */
 export interface DecisionsAnswerDestination {
   terminalId: string;
+  /**
+   * The agent's run in that pane as listed, an opaque token (#18093): sent
+   * back with Choose destination, so main refuses the move as
+   * `destination-changed` once another agent runs there.
+   */
+  run: string;
   title: string;
   agentId: string;
   agentName: string | null;
@@ -184,6 +212,8 @@ export interface ReassignDecisionsAnswerPayload {
   questionId: string;
   /** The pane the person confirmed. */
   terminalId: string;
+  /** The destination's `run` as listed; refused as `destination-changed` once another agent runs there. */
+  run: string;
   /** The item's `token` as the person saw it; refused as `changed` once it no longer holds. */
   expected?: string;
 }
@@ -239,6 +269,8 @@ export type DecisionsAnswerOutcome =
         | "no-answer"
         /** The chosen pane closed, or isn't running an agent Daintree can type into. */
         | "destination-gone"
+        /** The chosen pane runs another agent than the one listed (#18093): nothing was typed. */
+        | "destination-changed"
         /**
          * The question asked for advice and is still in that round (#17941): only
          * the agent that asked it, or a resume of its session, takes its outcome.
@@ -246,4 +278,53 @@ export type DecisionsAnswerOutcome =
         | "asker-only"
         /** It asks something else than when it was read (#17944): nothing was done. */
         | "changed";
+    };
+
+/**
+ * One of a Remote Host's stopped deliveries, read or acted on from the owner
+ * computer (#18031), on the Host that asked it and by its reference, so
+ * nothing about it is ever taken on this computer instead. A resume or Mark
+ * handled carries the `token` of the item the person saw, which the Host
+ * checks before it acts.
+ */
+export type DecisionsHostAttentionRequest =
+  | { action: "read"; reference: DecisionQuestionReference }
+  | { action: "copy"; reference: DecisionQuestionReference }
+  | { action: "resume"; reference: DecisionQuestionReference; expected: string }
+  | { action: "handled"; reference: DecisionQuestionReference; expected: string };
+
+/**
+ * What the Host answered:
+ *
+ * - `read`: the item as the Host would list it, with what it would offer;
+ *   null once nothing of the question needs a person.
+ * - `copied`: what Copy copies; null when there is nothing to copy.
+ * - `acted`: what became of it after a resume or Mark handled.
+ * - `off`: the Host doesn't serve this computer's owner its questions now.
+ * - `not-running`: the Host's Decisions isn't delivering answers.
+ * - `too-large`: the answer doesn't fit one reply.
+ */
+export type DecisionsHostAttentionAnswer =
+  | { result: "read"; item: DecisionsAttentionItem | null }
+  | { result: "copied"; text: string | null }
+  | { result: "acted"; outcome: DecisionsAnswerOutcome }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "too-large" };
+
+/**
+ * What this computer heard back: the Host's answer, or why there is none.
+ *
+ * - `no-host`: no Host this computer knows lists the question now.
+ * - `unreachable`: the Host couldn't be asked (`needs-update`: a build from
+ *   before #18031; `disconnected`), or what it answered was lost
+ *   (`outcome-unknown`: a resume or Mark handled may have been taken),
+ *   unreadable, or a failure.
+ */
+export type DecisionsHostAttentionResult =
+  | DecisionsHostAttentionAnswer
+  | { result: "no-host" }
+  | {
+      result: "unreachable";
+      failure: "needs-update" | "disconnected" | "outcome-unknown" | "unexpected-answer" | "failed";
     };

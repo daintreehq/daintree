@@ -3,7 +3,6 @@ import type {
   DecisionsKitExportResult,
   DecisionsKitIdentityProblem,
   DecisionsKitVerifyResult,
-  DecisionsStatus,
 } from "@shared/types/decisions";
 import type { RelayObservation } from "./relayCheckCopy";
 import { KEY_STORAGE } from "./relayIdentityCopy";
@@ -27,7 +26,7 @@ const NO_IDENTITY: Record<DecisionsKitIdentityProblem, RelayObservation> = {
     severity: "error",
     label: "This computer's keys don't match the relay set up here",
     detail:
-      "The keys sealed here aren't a working owner identity for this relay. Disconnect, then restore the identity from a recovery kit.",
+      "The keys stored here aren't a working owner identity for this relay. Disconnect, then restore the identity from a recovery kit.",
   },
 };
 
@@ -86,20 +85,12 @@ export function describeExportResult(result: DecisionsKitExportResult): RelayObs
 export function describeVerifyResult(result: DecisionsKitVerifyResult): RelayObservation {
   switch (result.result) {
     case "verified":
-      // A rotation that saved keys while the kit was being checked leaves it out of date at once (#18063).
-      return result.status.recoveryKitCoverage === "out-of-date"
-        ? {
-            severity: "warning",
-            label: "Kit checked, but the keys changed",
-            detail:
-              "It held this computer's keys when it was checked, but a key rotation changed them meanwhile. Once the rotation has finished, save a new kit and verify it.",
-          }
-        : {
-            severity: "success",
-            label: "Kit checked",
-            detail:
-              "It opens with its passphrase and holds this computer's identity with every key. Keep it somewhere other than this computer.",
-          };
+      return {
+        severity: "success",
+        label: "Kit checked",
+        detail:
+          "It opens with its passphrase and holds this computer's identity with every key. Keep it somewhere other than this computer.",
+      };
     case "kit-refused":
       return refusal(result.reason);
     case "no-identity":
@@ -119,38 +110,30 @@ export function formatVerifiedAt(at: number): string {
 }
 
 /**
- * The recovery kit's own row: whether one was verified, and how it stands
- * against this computer's keys (#18063). `mark` names a warning to show.
+ * What erasing this computer's keys says when no current kit holds them
+ * (#18064), and the typed gate it asks for: the relay's address, or for keys
+ * no relay is recorded for, this name.
  */
-export function describeKitStanding(
-  status: Pick<DecisionsStatus, "recoveryKitVerifiedAt" | "recoveryKitCoverage">
-): { label: string; detail: string; mark?: string } {
-  const at = status.recoveryKitVerifiedAt;
-  if (at === undefined) {
-    return {
-      label: "No recovery kit verified",
-      detail:
-        "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again.",
-      mark: "Not verified",
-    };
-  }
-  const verified = `Last verified ${formatVerifiedAt(at)}.`;
-  switch (status.recoveryKitCoverage) {
-    case "current":
-      return {
-        label: "Recovery kit verified",
-        detail: `${verified} Save and verify a new kit whenever you want another copy.`,
-      };
-    case "out-of-date":
-      return {
-        label: "Recovery kit out of date",
-        detail: `${verified} This computer's keys changed after that, so the kit can't read what the relay encrypts with the new key. Once any key rotation has finished, save a new kit below and verify it.`,
-        mark: "Out of date",
-      };
-    default:
-      return {
-        label: "Recovery kit last verified",
-        detail: `${verified} Daintree can't confirm it covers the keys this computer holds now. Verify your saved kit again to check.`,
-      };
-  }
+export const KEYS_GATE_TARGET = "Decisions keys";
+
+export const NO_CURRENT_KIT =
+  "No recovery kit verified here holds every key this computer has now.";
+
+/** What goes with keys no current kit holds, true whether a stale kit exists or none does. */
+export function keyLossConsequence(host: string | null): string {
+  const relay = host ?? "the relay";
+  return `Questions and answers sealed with a key only this computer holds can't be read again once it's gone, and unless a recovery kit or another computer holds this identity, nobody can reconnect to ${relay} as its owner.`;
 }
+
+/** Only a recorded relay can have a kit saved for it, so only then is there a first step to offer. */
+export const SAVE_KIT_FIRST = "Save and verify a recovery kit first to keep a way back.";
+
+export function onlyCopyPreamble(host: string | null): string {
+  return host
+    ? `These may be the only copy of ${host}'s owner keys.`
+    : "These may be the only copy of a relay's owner keys.";
+}
+
+/** A rotation or revocation adds a key no kit saved before it holds (#18064). */
+export const KITS_AFTER_NEW_KEY =
+  "Recovery kits saved before the new key won't hold it, so save and verify a new one once it's in place.";

@@ -35,7 +35,7 @@ export interface LocalEraseDeps {
  */
 export type LocalEraseOutcome =
   | { result: "deleted" }
-  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" | "keys-changed" }
   | { result: "incomplete"; erased: boolean | null };
 
 /**

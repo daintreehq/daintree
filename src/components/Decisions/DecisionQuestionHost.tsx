@@ -4,6 +4,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 
 const LazyDecisionQuestionDialog = lazy(() =>
@@ -13,8 +14,8 @@ const LazyDecisionQuestionDialog = lazy(() =>
 interface DecisionQuestionHostProps {
   /**
    * Opens the questions main sends this view, from a click on a question's
-   * desktop notification (#17232) or a follow-up's (#17235). Only the app's
-   * views take them.
+   * desktop notification (#17232) or a follow-up's (#17235), in the inbox
+   * (#18047). Only the app's views take them.
    */
   followsOpenRequests?: boolean;
 }
@@ -38,8 +39,16 @@ export function DecisionQuestionHost({ followsOpenRequests = false }: DecisionQu
   }, [decisionsSwitch, clearAnswers]);
   useEffect(() => {
     if (!followsOpenRequests) return;
+    // In the inbox (#18047), in any window: it reads this computer's list, as the question does.
     return decisionsClient.onOpenQuestion((reference, messageId) =>
-      useDecisionsQuestionViewStore.getState().openReference([reference], reference, messageId)
+      useDecisionsInboxStore.getState().open({
+        question: {
+          terminalId: reference.terminalId,
+          questionId: reference.questionId,
+          reference,
+          ...(messageId === undefined ? {} : { threadMessageId: messageId }),
+        },
+      })
     );
   }, [followsOpenRequests]);
   return (

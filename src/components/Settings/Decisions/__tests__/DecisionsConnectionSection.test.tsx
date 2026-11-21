@@ -9,9 +9,21 @@ import type {
 } from "@shared/types/decisions";
 import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { DecisionsDisconnectDialog } from "../DecisionsDisconnectDialog";
+import { useRelayCheck } from "../useRelayCheck";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(
+  props: Omit<ComponentProps<typeof ConnectionSection>, "relay">
+) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://decisions.example.workers.dev";
+const HOST = "decisions.example.workers.dev";
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
 const startSetupCheck = vi.fn<() => Promise<DecisionsSetupCheckStartResult>>();
 
@@ -781,6 +793,111 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(screen.getByText(/The last setup check stopped at push configuration/)).toBeTruthy();
   });
 
+  function renderWithAgentsOff(status: DecisionsStatus, agentsOff = true) {
+    // A connected relay is checked on mount; that check never answers here.
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    return render(
+      <TooltipProvider>
+        <DecisionsConnectionSection status={status} agentsOff={agentsOff} />
+      </TooltipProvider>
+    );
+  }
+
+  it("keeps setup unfinished after every step passed while no agent is switched on, and takes the person to Agents (#18057)", () => {
+    const agents = document.createElement("section");
+    agents.id = "decisions-agents";
+    const firstSwitch = document.createElement("button");
+    firstSwitch.setAttribute("role", "switch");
+    agents.append(firstSwitch);
+    document.body.append(agents);
+    try {
+      renderWithAgentsOff({
+        state: "connected",
+        relayOrigin: ORIGIN,
+        recoveryKitVerifiedAt: 1,
+        setupCheck: { checkedAt: 2, failedStep: null },
+      });
+
+      expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+      expect(screen.getByText(/No agents are switched on for new launches/)).toBeTruthy();
+      expect(statusRow()).toContain("Connected to decisions.example.workers.dev");
+
+      fireEvent.click(screen.getByRole("button", { name: "Choose agents" }));
+      expect(document.activeElement).toBe(firstSwitch);
+    } finally {
+      agents.remove();
+    }
+  });
+
+  it("offers Agents beside the kit or the check while both are left", async () => {
+    const onFinishSetup = vi.fn();
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "connected", relayOrigin: ORIGIN }}
+          onFinishSetup={onFinishSetup}
+          agentsOff
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByText(/none of it can be recovered/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save recovery kit" }));
+    expect(onFinishSetup).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    startSetupCheck.mockReset().mockReturnValue(new Promise(() => {}));
+    renderWithAgentsOff({ state: "connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.getByText(/Run the setup check/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    const fromWarning = screen
+      .getAllByRole("button", { name: "Check setup" })
+      .find((button) => !button.hasAttribute("data-decisions-setup-check-start"))!;
+    await act(async () => {
+      fireEvent.click(fromWarning);
+    });
+    expect(startSetupCheck).toHaveBeenCalledOnce();
+  });
+
+  it("asks for agents for a relay set up but not connected, which launches still reach once it is", () => {
+    const finished: DecisionsStatus = {
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    };
+    renderWithAgentsOff(finished);
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    renderWithAgentsOff(finished, false);
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+
+  it("says nothing about agents with no relay set up, or for a relay revoked or unusable", () => {
+    renderWithAgentsOff({ state: "not-connected" });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({ state: "revoked", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      problem: "storage",
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose agents" })).toBeNull();
+  });
+
   it("leaves a revoked relay, or one that can't be used, to say so on its own row", () => {
     renderSection({ state: "revoked", relayOrigin: ORIGIN });
     expect(statusRow()).toContain("Revoked by decisions.example.workers.dev");
@@ -826,12 +943,35 @@ describe("DecisionsConnectionSection disconnect focus", () => {
     cleanup();
   });
 
-  it.each<[string, DecisionsStatus, string]>([
-    ["a relay", { state: "not-connected", relayOrigin: ORIGIN }, "Disconnect relay"],
-    ["an unfinished setup's keys", { state: "not-connected", keysStored: true }, "Remove keys"],
+  it.each<[string, DecisionsStatus, string, string | null]>([
+    [
+      "a relay with a current kit",
+      {
+        state: "not-connected",
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        keysVersion: "current.none",
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCurrent: true,
+      },
+      "Disconnect relay",
+      null,
+    ],
+    [
+      "a relay with no current kit",
+      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true },
+      "Disconnect relay",
+      HOST,
+    ],
+    [
+      "an unfinished setup's keys",
+      { state: "not-connected", keysStored: true, keysVersion: "staged.none" },
+      "Remove keys",
+      "Decisions keys",
+    ],
   ])(
     "hands focus to the relay URL field once removing %s takes its button away",
-    async (_, initial, label) => {
+    async (_, initial, label, typed) => {
       disconnectRelay.mockResolvedValue({ state: "not-connected" });
       render(<Section initial={initial} />);
       await act(async () => {});
@@ -842,12 +982,22 @@ describe("DecisionsConnectionSection disconnect focus", () => {
       const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
         name: label,
       });
+      if (typed !== null) {
+        fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+          target: { value: typed },
+        });
+      }
       act(() => confirm.focus());
       await act(async () => {
         fireEvent.click(confirm);
       });
 
-      expect(disconnectRelay).toHaveBeenCalledOnce();
+      // Main rechecks a one-click confirm against the keys as they are when its turn comes (#18064).
+      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({
+        oneClick: typed === null,
+        relayOrigin: initial.relayOrigin ?? null,
+        keys: initial.keysVersion ?? null,
+      });
       await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.queryByRole("button", { name: label })).toBeNull();
       await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
@@ -868,5 +1018,163 @@ describe("DecisionsConnectionSection disconnect focus", () => {
     await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(disconnectRelay).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderDialog(props: { relayOrigin: string | null; kitCurrent: boolean }) {
+    const onConfirm = vi.fn();
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        keysStored
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+        {...props}
+      />
+    );
+    return { onConfirm, view };
+  }
+
+  function confirmButton(name = "Disconnect relay"): HTMLButtonElement {
+    return within(screen.getByRole("alertdialog")).getByRole("button", {
+      name,
+    }) as HTMLButtonElement;
+  }
+
+  function unavailable(element: HTMLElement): boolean {
+    return (
+      element.getAttribute("aria-disabled") === "true" ||
+      (element instanceof HTMLButtonElement && element.disabled)
+    );
+  }
+
+  it("asks for one click while a current kit holds the keys", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("asks for the relay's address with no current kit, naming what can't be got back", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: false });
+    const body = screen.getByRole("alertdialog").textContent ?? "";
+
+    expect(body).toContain(`only copy of ${HOST}'s owner keys`);
+    expect(body).toContain("sealed with a key only this computer holds can't be read again");
+    expect(body).toContain(`nobody can reconnect to ${HOST} as its owner`);
+    expect(body).toContain("Save and verify a recovery kit first");
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+
+    const field = within(screen.getByRole("alertdialog")).getByRole("textbox");
+    fireEvent.change(field, { target: { value: "decisions.example" } });
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.change(field, { target: { value: HOST } });
+    expect(unavailable(confirmButton())).toBe(false);
+    fireEvent.click(confirmButton());
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("takes back an address typed for other keys once the keys change while open", () => {
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="first.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: HOST },
+    });
+    expect(unavailable(confirmButton())).toBe(false);
+
+    view.rerender(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="second.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("offers no kit to save when the key file is gone, still asking for the address", () => {
+    render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored={false}
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("asks for the keys' name for an unfinished setup's keys, which no kit can cover", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: null, kitCurrent: true });
+
+    expect(unavailable(confirmButton("Remove keys"))).toBe(true);
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: "Decisions keys" },
+    });
+    fireEvent.click(confirmButton("Remove keys"));
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("puts the gate up while open when the kit stops covering the keys, and takes it down when one does", () => {
+    const { onConfirm, view } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+    const rerender = (kitCurrent: boolean) =>
+      view.rerender(
+        <DecisionsDisconnectDialog
+          isOpen
+          relayOrigin={ORIGIN}
+          keysStored
+          kitCurrent={kitCurrent}
+          disconnecting={false}
+          error={null}
+          onCancel={() => {}}
+          onConfirm={onConfirm}
+        />
+      );
+
+    rerender(false);
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    rerender(true);
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

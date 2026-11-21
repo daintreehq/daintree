@@ -1537,4 +1537,25 @@ describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", ()
     expect(setLeftButtonsMock).not.toHaveBeenCalled();
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
+
+  it("offers its row in a Remote Host's window only while Decisions is on (#18049)", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    try {
+      const row = switchName("Decisions inbox");
+      mockDecisionsSwitch = "unknown";
+      const { container, rerender } = render(<ToolbarSettingsTab />);
+      expect(switchNamesIn(container)).not.toContain(row);
+      for (const [known, shown] of [
+        ["on", true],
+        ["off", false],
+        ["on", true],
+      ] as const) {
+        mockDecisionsSwitch = known;
+        rerender(<ToolbarSettingsTab />);
+        expect(switchNamesIn(leftColumn(container)).includes(row)).toBe(shown);
+      }
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+  });
 });

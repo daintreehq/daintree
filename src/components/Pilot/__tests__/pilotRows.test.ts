@@ -9,6 +9,8 @@ import {
   filterPilotGroups,
   summarizePilotGroups,
   AGENT_REPORT_EVIDENCE,
+  DECISIONS_ANSWER_EVIDENCE,
+  DECISIONS_QUESTION_EVIDENCE,
   type PilotRowContext,
 } from "../pilotRows";
 import { formatWakeTime } from "@/lib/projectRowStatus";
@@ -1806,6 +1808,105 @@ describe("buildPilotGroups — the agent's own report", () => {
       ["error", "blocked", null],
       ["working", "running", null],
       ["parked", "parked", null],
+    ]);
+  });
+});
+
+describe("buildPilotGroups — what Decisions recorded", () => {
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All 14 tests pass.",
+    readAt: NOW - 60_000,
+    seen: true,
+  } as const;
+  const seen = { stoppedAt: NOW - 120_000, seenAt: NOW - 60_000 };
+
+  it("puts a finished run with an open question under Attention, not Finished, and says why", () => {
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "asked", agentState: "completed", handBack: seen, questionAttention: 1 }),
+        run({
+          runId: "stopped",
+          agentState: "waiting",
+          waitingReason: "question",
+          canopy: NOT_ASKING,
+          answerAttention: 1,
+          questionAttention: 1,
+        }),
+        run({ runId: "done", agentState: "completed", handBack: seen }),
+      ],
+      ctx()
+    );
+    const [group] = groups;
+    expect(group!.rows.map((r) => [r.run.runId, r.band, r.agentReport, r.canopyEvidence])).toEqual([
+      ["asked", "needs-you", DECISIONS_QUESTION_EVIDENCE, null],
+      // A stopped answer is the one named, and Canopy's reading placed nothing.
+      ["stopped", "needs-you", DECISIONS_ANSWER_EVIDENCE, null],
+      ["done", "done", null, null],
+    ]);
+    expect(group!.rows[0]).toMatchObject({ statusLabel: "Waiting", agePhrase: "waiting for 2m" });
+    expect(filterPilotBands(groups, "needs-you")[0]!.rows.map((r) => r.run?.runId)).toEqual([
+      "asked",
+      "stopped",
+    ]);
+  });
+
+  it("names an agent still at work by its work, and dates it from the stint", () => {
+    for (const [agentState, statusLabel] of [
+      ["working", "Working"],
+      ["directing", "Directing"],
+    ] as const) {
+      const [group] = buildPilotGroups(
+        [run({ agentState, since: NOW - 300_000, questionAttention: 1 })],
+        ctx()
+      );
+      expect(group!.rows[0], agentState).toMatchObject({
+        band: "needs-you",
+        statusLabel,
+        agePhrase: "working for 5m",
+        agentReport: DECISIONS_QUESTION_EVIDENCE,
+      });
+      const [answered] = buildPilotGroups(
+        [run({ agentState, since: NOW - 300_000, answerAttention: 1 })],
+        ctx()
+      );
+      expect(answered!.rows[0], agentState).toMatchObject({
+        agePhrase: "working for 5m",
+        agentReport: DECISIONS_ANSWER_EVIDENCE,
+      });
+    }
+  });
+
+  it("says nothing of a question on a run set aside, failed or gone", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          runId: "parked",
+          agentState: "completed",
+          park: { parkedAt: NOW },
+          questionAttention: 1,
+        }),
+        run({
+          runId: "snoozed",
+          agentState: "completed",
+          snooze: { snoozedAt: NOW, snoozedUntil: NOW + 900_000 },
+          answerAttention: 1,
+        }),
+        run({
+          runId: "error",
+          agentState: "waiting",
+          waitingReason: "error",
+          questionAttention: 1,
+        }),
+        run({ runId: "exited", agentState: "exited", questionAttention: 1 }),
+      ],
+      ctx()
+    );
+    expect(group!.rows.map((r) => [r.run?.runId, r.band, r.agentReport])).toEqual([
+      ["error", "blocked", null],
+      ["parked", "parked", null],
+      ["snoozed", "snoozed", null],
+      ["exited", "idle", null],
     ]);
   });
 });

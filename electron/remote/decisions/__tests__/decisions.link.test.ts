@@ -11,6 +11,11 @@ import {
   importIdentity,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
+import type {
+  DecisionsAttentionItem,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntime } from "../../../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionContent,
@@ -542,6 +547,7 @@ describe("an enrolled Host's own Decisions over its link (#16022)", () => {
       onQuestionsChanged: () => () => {},
       readQuestion: async () => ({ result: "not-running" }),
       cancelQuestion: async () => ({ result: "not-running" }),
+      attention: async () => ({ result: "not-running" }),
     };
     const load = vi.fn(async () => lifetime);
     return {
@@ -1261,6 +1267,10 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     const listeners = new Set<() => void>();
     const reads: DecisionsHostQuestionRead[] = [];
     const cancels: DecisionQuestionReference[] = [];
+    const attentions: DecisionsHostAttentionRequest[] = [];
+    let attend: (request: DecisionsHostAttentionRequest) => unknown = () => ({
+      result: "not-running",
+    });
     let answer: (read: DecisionsHostQuestionRead) => unknown = (read) =>
       read.read === "content" ? { result: "read", question: content(read.reference) } : null;
     // A Host from #17942 on says how it asks; one reached through `answerAnnouncements` is older.
@@ -1286,10 +1296,18 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
         cancels.push(reference);
         return { result: "cancelling" };
       },
+      attention: async (request) => {
+        attentions.push(request);
+        return attend(request) as DecisionsHostAttentionAnswer;
+      },
     };
     return {
       reads,
       cancels,
+      attentions,
+      attendWith(next: (request: DecisionsHostAttentionRequest) => unknown) {
+        attend = next;
+      },
       source: {
         enrolledBy: (owner: { ownerDeviceId: string }) => owner.ownerDeviceId === enrolledOwner,
         load: vi.fn(async () => lifetime),
@@ -1803,6 +1821,120 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       "summaries",
       "summaries",
     ]);
+  });
+
+  describe("the asking pane (#18037)", () => {
+    const PANE_READ = {
+      agentState: "waiting",
+      waitingReason: "question",
+      paneTitle: "Claude: Pick a database",
+      lines: ["Which database?", "1. Postgres", "2. SQLite"],
+      observedAt: "2026-11-20T10:00:00.000Z",
+    };
+
+    it("reads it on the Host with terminal snapshots off, and takes none about another pane", async () => {
+      const { host, client } = await pair();
+      const decisions = questionHost();
+      decisions.set({ hostId: QHOST, questions: [item(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      const { reference } = item(1);
+      let pane: unknown = PANE_READ;
+      let answered: (read: DecisionQuestionReference) => DecisionQuestionReference = (asked) =>
+        asked;
+      decisions.answerWith((read) =>
+        read.read === "pane" ? { result: "read", reference: answered(read.reference), pane } : null
+      );
+
+      expect(OWNER.terminalSnapshots).toBe(false);
+      expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+        ok: true,
+        value: { result: "read", reference, pane: PANE_READ },
+      });
+
+      // Another pane's, another project's, or another question's read is refused.
+      for (const other of [
+        { ...reference, hostId: "qhost_other_0001" },
+        { ...reference, terminalId: "pane-other" },
+        { ...reference, projectId: "project-other" },
+        { ...reference, questionId: "q_host_other_01" },
+      ]) {
+        answered = () => other;
+        expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+          ok: false,
+          failure: "unexpected-answer",
+        });
+      }
+      answered = (asked) => asked;
+
+      // Nothing past what a terminal snapshot may carry, nor anything that could steer a terminal.
+      for (const bad of [
+        { ...PANE_READ, lines: ["\u001b[31mred"] },
+        { ...PANE_READ, paneTitle: "two\nlines" },
+        { ...PANE_READ, lines: Array.from({ length: 201 }, (_, i) => `line ${i}`) },
+        { ...PANE_READ, lines: ["x".repeat(40 * 1024)] },
+        { ...PANE_READ, agentState: "Not A Token" },
+        { ...PANE_READ, extra: true },
+      ]) {
+        pane = bad;
+        expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+          ok: false,
+          failure: "unexpected-answer",
+        });
+      }
+
+      decisions.answerWith(() => ({ result: "closed" }));
+      expect(await shell.client.readHostQuestion(QHOST, { read: "pane", reference })).toEqual({
+        ok: true,
+        value: { result: "closed" },
+      });
+      expect(decisions.reads.every((read) => read.read === "pane")).toBe(true);
+      expect(decisions.reads).toHaveLength(12);
+    });
+
+    it("serves nothing of a pane to a Shell whose owner didn't enroll it", async () => {
+      const { host, client } = await pair();
+      const decisions = questionHost("dev_another_owner_01");
+      decisions.set({ hostId: QHOST, questions: [item(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() =>
+        expect(shell.client.runtimeOf(HOST)?.runtime.state).toBe("not-enrolled")
+      );
+
+      expect(
+        await client.call(DecisionsLinkMethod.QUESTION_PANE, { reference: item(1).reference })
+      ).toEqual({ result: "off" });
+      expect(decisions.reads).toEqual([]);
+    });
+
+    it("tells the owner a Host from before it needs updating", async () => {
+      const { host, client } = await pair();
+      host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+        runtime: RUNNING,
+      }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [roundItem(1)],
+        asks: [],
+        seq: 1,
+      }));
+      const legacy = vi.fn(() => ({ result: "off" }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTIONS, z.unknown(), legacy);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+      expect(
+        await shell.client.readHostQuestion(QHOST, { read: "pane", reference: item(1).reference })
+      ).toEqual({ ok: false, failure: "needs-update" });
+      // No older method reads a pane: none is tried in its place.
+      expect(legacy).not.toHaveBeenCalled();
+    });
   });
 
   it("reads a question with a long thread whole", async () => {
@@ -2551,6 +2683,75 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(items.map((raw) => HostQuestionItemSchema.parse(raw))).toEqual([item(1)]);
   });
 
+  /** What waits to be typed in, as this computer's own list says it (#18032); no link carries it yet. */
+  const TO_TYPE: Item["standing"] = {
+    kind: "to-type",
+    delivery: {
+      answer: true,
+      followUps: 1,
+      first: "answer",
+      recordedAt: "2026-11-01T10:05:00.000Z",
+      hostAway: false,
+    },
+  };
+
+  it("sends a question waiting to be typed in without what waits, so a v3 Shell keeps its row (#18032)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({
+      hostId: QHOST,
+      questions: [roundItem(1, { standing: TO_TYPE }), roundItem(2)],
+    });
+    serveQuestions(host, decisions);
+    const pushes = vi.spyOn(host, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([
+        roundItem(1, { standing: { kind: "to-type" } }),
+        roundItem(2),
+      ])
+    );
+
+    // Pushed the same way; one that changes only what waits pushes nothing new.
+    decisions.set({ hostId: QHOST, questions: [roundItem(1, { standing: TO_TYPE })] });
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.questions).toEqual([
+        roundItem(1, { standing: { kind: "to-type" } }),
+      ])
+    );
+    const pushed = pushes.mock.calls.filter(
+      ([method]) => method === DecisionsLinkMethod.QUESTIONS_CHANGED_V3
+    ).length;
+    decisions.set({
+      hostId: QHOST,
+      questions: [
+        roundItem(1, {
+          standing: { kind: "to-type", delivery: { ...TO_TYPE.delivery!, followUps: 2 } },
+        }),
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      pushes.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTIONS_CHANGED_V3)
+    ).toHaveLength(pushed);
+  });
+
+  it("sends a Shell from before #17943 a question waiting to be typed in as its strict read takes it (#18032)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1, { standing: TO_TYPE })] });
+    serveQuestions(host, decisions);
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+
+    const list = HostQuestionListV2Schema.parse(
+      await client.call(DecisionsLinkMethod.QUESTION_LIST_V2, {})
+    );
+    expect(list.questions.map((raw) => HostQuestionItemSchema.parse(raw))).toEqual([
+      item(1, { kind: "to-type" }),
+    ]);
+  });
+
   it("never takes a refused content read for an older Host, so later reads keep their round (#17943)", async () => {
     const { host, client } = await pair();
     host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
@@ -2895,5 +3096,393 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       reference: item(1).reference,
     });
     expect(read).toEqual({ ok: false, failure: "unexpected-answer" });
+  });
+
+  describe("a Host's stopped deliveries (#18031)", () => {
+    const STOPPED = { kind: "needs-attention", deliveryStatus: "needs-attention" } as const;
+    const TOKEN = "a".repeat(64);
+
+    function stalledItem(n: number): Item {
+      return {
+        ...item(n, STOPPED),
+        stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+      };
+    }
+
+    function attentionItem(
+      reference: DecisionQuestionReference,
+      over: Partial<DecisionsAttentionItem> = {}
+    ): DecisionsAttentionItem {
+      return {
+        questionId: reference.questionId,
+        alias: 1,
+        status: "needs-attention",
+        reason: "pane_gone",
+        question: "Ship the migration?",
+        fullQuestion: null,
+        plan: null,
+        reference,
+        askedAt: "2026-11-02T10:01:00.000Z",
+        origin: {
+          projectId: reference.projectId,
+          projectName: "Server repo",
+          worktreeId: "wt-main",
+          worktreeName: "repo",
+          agentId: "claude",
+          agentName: "Claude",
+          paneId: reference.terminalId,
+          paneTitle: null,
+          otherHost: null,
+        },
+        answer: {
+          source: "human",
+          choices: ["Yes"],
+          text: null,
+          correction: false,
+          answeredAt: "2026-11-02T10:02:00.000Z",
+        },
+        answerUnavailable: null,
+        notice: null,
+        followUps: [],
+        canResume: true,
+        canReassign: true,
+        token: TOKEN,
+        ...over,
+      };
+    }
+
+    async function connected(decisions: ReturnType<typeof questionHost>) {
+      const { host, client } = await pair();
+      decisions.set({ hostId: QHOST, questions: [stalledItem(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      return { host, client, shell };
+    }
+
+    it("is asked of the Host", () => {
+      expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.ATTENTION]).toBe("host");
+    });
+
+    it("reads, copies, resumes and handles a Host's stopped delivery on that Host, by its reference", async () => {
+      const decisions = questionHost();
+      decisions.attendWith((request) => {
+        switch (request.action) {
+          case "read":
+            return { result: "read", item: attentionItem(request.reference) };
+          case "copy":
+            return { result: "copied", text: "<decision>Yes</decision>" };
+          case "resume":
+            return { result: "acted", outcome: { result: "refused", reason: "changed" } };
+          case "handled":
+            return { result: "acted", outcome: { result: "handled" } };
+        }
+      });
+      const { shell } = await connected(decisions);
+      const { reference } = stalledItem(1);
+
+      const read = await shell.client.hostAttention({ action: "read", reference });
+      // Shown as another machine's, offering what the Host offers.
+      expect(read).toEqual({
+        ok: true,
+        value: {
+          result: "read",
+          item: attentionItem(reference, {
+            origin: {
+              ...attentionItem(reference).origin,
+              otherHost: { hostId: QHOST, name: "Studio" },
+            },
+          }),
+        },
+      });
+      expect(await shell.client.hostAttention({ action: "copy", reference })).toEqual({
+        ok: true,
+        value: { result: "copied", text: "<decision>Yes</decision>" },
+      });
+      expect(
+        await shell.client.hostAttention({ action: "resume", reference, expected: TOKEN })
+      ).toEqual({
+        ok: true,
+        value: { result: "acted", outcome: { result: "refused", reason: "changed" } },
+      });
+      expect(
+        await shell.client.hostAttention({ action: "handled", reference, expected: TOKEN })
+      ).toEqual({ ok: true, value: { result: "acted", outcome: { result: "handled" } } });
+      expect(decisions.attentions).toEqual([
+        { action: "read", reference },
+        { action: "copy", reference },
+        { action: "resume", reference, expected: TOKEN },
+        { action: "handled", reference, expected: TOKEN },
+      ]);
+    });
+
+    it("asks no Host about a question none lists", async () => {
+      const decisions = questionHost();
+      const { shell } = await connected(decisions);
+      const { reference } = stalledItem(1);
+
+      expect(
+        shell.client.hostAttention({
+          action: "read",
+          reference: { ...reference, questionId: "q_host_9999" },
+        })
+      ).toBeNull();
+      expect(
+        shell.client.hostAttention({
+          action: "handled",
+          reference: { ...reference, hostId: "qhost_unknown_001" },
+          expected: TOKEN,
+        })
+      ).toBeNull();
+      expect(
+        shell.client.hostAttention({
+          action: "copy",
+          reference: { ...reference, terminalId: "pane-other" },
+        })
+      ).toBeNull();
+      expect(
+        shell.client.hostAttention({
+          action: "read",
+          reference: { ...reference, projectId: "project-other" },
+        })
+      ).toBeNull();
+      expect(decisions.attentions).toEqual([]);
+    });
+
+    it("serves nothing of its stopped deliveries to a Shell whose owner didn't enroll it", async () => {
+      const { host, client } = await pair();
+      const decisions = questionHost("dev_another_owner_01");
+      decisions.set({ hostId: QHOST, questions: [stalledItem(1)] });
+      serveQuestions(host, decisions);
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() =>
+        expect(shell.client.runtimeOf(HOST)?.runtime.state).toBe("not-enrolled")
+      );
+      const { reference } = stalledItem(1);
+
+      for (const request of [
+        { action: "read", reference },
+        { action: "handled", reference, expected: TOKEN },
+      ]) {
+        expect(await client.call(DecisionsLinkMethod.ATTENTION, request)).toEqual({
+          result: "off",
+        });
+      }
+      expect(decisions.attentions).toEqual([]);
+    });
+
+    it("refuses a resume or Mark handled that names no token", async () => {
+      const decisions = questionHost();
+      const { client } = await connected(decisions);
+      const { reference } = stalledItem(1);
+
+      for (const action of ["handled", "resume"]) {
+        await expect(
+          client.call(DecisionsLinkMethod.ATTENTION, { action, reference })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
+      expect(decisions.attentions).toEqual([]);
+    });
+
+    it("takes no item for another question or pane, nor another action's answer, and takes none at all", async () => {
+      const decisions = questionHost();
+      const { shell } = await connected(decisions);
+      const { reference } = stalledItem(1);
+
+      for (const other of [
+        { ...reference, questionId: "q_host_0002" },
+        { ...reference, terminalId: "pane-other" },
+        { ...reference, projectId: "project-other" },
+      ]) {
+        decisions.attendWith(() => ({ result: "read", item: attentionItem(other) }));
+        expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+          ok: false,
+          failure: "unexpected-answer",
+        });
+      }
+      // Nothing of it needs a person on the Host any more.
+      decisions.attendWith(() => ({ result: "read", item: null }));
+      expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+        ok: true,
+        value: { result: "read", item: null },
+      });
+      decisions.attendWith(() => ({ result: "acted", outcome: { result: "handled" } }));
+      expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+        ok: false,
+        failure: "unexpected-answer",
+      });
+    });
+
+    it("says an item too large for one reply is too large, rather than sending part of it", async () => {
+      const decisions = questionHost();
+      const { shell } = await connected(decisions);
+      const { reference } = stalledItem(1);
+      const followUp = (i: number) => ({
+        messageId: `m-${i}`,
+        onComputer: false,
+        status: "needs-attention" as const,
+        reason: "pane_gone",
+        text: "x".repeat(60 * 1024),
+        unreadable: false,
+        sentAt: "2026-11-02T10:03:00.000Z",
+      });
+      decisions.attendWith(() => ({
+        result: "read",
+        item: attentionItem(reference, {
+          followUps: Array.from({ length: 80 }, (_, i) => followUp(i)),
+        }),
+      }));
+
+      expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+        ok: true,
+        value: { result: "too-large" },
+      });
+    });
+
+    it("asks a Host from before #18031 once per link, then says it needs updating", async () => {
+      const { host, client } = await pair();
+      host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+        runtime: RUNNING,
+      }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [stalledItem(1)],
+        asks: [],
+        seq: 1,
+      }));
+      const calls = vi.spyOn(client, "call");
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      const { reference } = stalledItem(1);
+
+      for (let i = 0; i < 2; i += 1) {
+        expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+          ok: false,
+          failure: "needs-update",
+        });
+      }
+      expect(
+        calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.ATTENTION)
+      ).toHaveLength(1);
+    });
+
+    it("keeps asking a Host that refuses one request's shape, never taking it for one from before", async () => {
+      const { host, client } = await pair();
+      host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+        runtime: RUNNING,
+      }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [stalledItem(1)],
+        asks: [],
+        seq: 1,
+      }));
+      // A Host that knows the method but refuses this payload answers VALIDATION.
+      const answer = vi.fn(() => null);
+      host.registerCallHandler(
+        DecisionsLinkMethod.ATTENTION,
+        z.object({ never: z.string() }).strict(),
+        answer
+      );
+      const calls = vi.spyOn(client, "call");
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      const { reference } = stalledItem(1);
+
+      for (let i = 0; i < 2; i += 1) {
+        expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+          ok: false,
+          failure: "needs-update",
+        });
+      }
+      expect(
+        calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.ATTENTION)
+      ).toHaveLength(2);
+    });
+
+    it("withholds what it read from an owner that turned Decisions off meanwhile, but answers an action it took", async () => {
+      const decisions = questionHost();
+      const { shell } = await connected(decisions);
+      const { reference } = stalledItem(1);
+      const releases: Array<() => void> = [];
+      decisions.attendWith(
+        (request) =>
+          new Promise((resolve) => {
+            releases.push(() =>
+              resolve(
+                request.action === "read"
+                  ? { result: "read", item: attentionItem(reference) }
+                  : request.action === "copy"
+                    ? { result: "copied", text: "<decision>Yes</decision>" }
+                    : { result: "acted", outcome: { result: "handled" } }
+              )
+            );
+          })
+      );
+
+      const read = shell.client.hostAttention({ action: "read", reference });
+      const copy = shell.client.hostAttention({ action: "copy", reference });
+      const handled = shell.client.hostAttention({ action: "handled", reference, expected: TOKEN });
+      await vi.waitFor(() => expect(decisions.attentions).toHaveLength(3));
+      shell.setOwner({ ...OWNER, enabled: false });
+      shell.client.announceOwnerState();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      for (const release of releases) release();
+
+      expect(await read).toEqual({ ok: true, value: { result: "off" } });
+      expect(await copy).toEqual({ ok: true, value: { result: "off" } });
+      expect(await handled).toEqual({
+        ok: true,
+        value: { result: "acted", outcome: { result: "handled" } },
+      });
+    });
+
+    it("asks an upgraded Host again on its new link, once that link has listed the question", async () => {
+      const old = await pair();
+      old.host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+        runtime: RUNNING,
+      }));
+      old.host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [stalledItem(1)],
+        asks: [],
+        seq: 1,
+      }));
+      const shell = shellOf([STUDIO]);
+      shell.open(HOST, old.client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+      const { reference } = stalledItem(1);
+      expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+        ok: false,
+        failure: "needs-update",
+      });
+
+      const upgraded = await pair();
+      const decisions = questionHost();
+      decisions.attendWith(() => ({ result: "read", item: attentionItem(reference) }));
+      decisions.set({ hostId: QHOST, questions: [stalledItem(1)] });
+      old.client.close("test");
+      await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.connected).toBe(false));
+      // Until a link lists it, there's nothing to ask: the Host is away as far as its list says.
+      expect(await shell.client.hostAttention({ action: "read", reference })).toEqual({
+        ok: false,
+        failure: "disconnected",
+      });
+      serveQuestions(upgraded.host, decisions);
+      shell.open(HOST, upgraded.client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.connected).toBe(true));
+
+      expect(await shell.client.hostAttention({ action: "read", reference })).toMatchObject({
+        ok: true,
+        value: { result: "read", item: { questionId: reference.questionId } },
+      });
+    });
   });
 });

@@ -20,6 +20,7 @@ import {
   clearTooltipSuppressionForElement,
   isTooltipSuppressedForElement,
 } from "@/lib/tooltipFocusSuppression";
+import { ESCAPE_TOOLTIP_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 
 /** The tooltip card's padding, shared with the shortcut hint card. */
 export const TOOLTIP_CARD_PADDING = "px-3 py-1.5";
@@ -102,6 +103,13 @@ const TooltipPressDismissContext = React.createContext<{
   markPressed: () => void;
 } | null>(null);
 
+/**
+ * Whether Escape can close this tooltip. Not when its owner holds `open` with
+ * no `onOpenChange` (a validation hint): Radix's dismiss reaches nobody, so the
+ * content must not count as a layer handling the keypress.
+ */
+const TooltipEscapeClosableContext = React.createContext(true);
+
 const Tooltip = ({
   children,
   open,
@@ -134,6 +142,7 @@ const Tooltip = ({
   const [dismissedByPress, setDismissedByPress] = React.useState(false);
   const markPressed = React.useCallback(() => setDismissedByPress(true), []);
   const isControlled = open !== undefined;
+  const escapeClosable = !isControlled || onOpenChange !== undefined;
   const resolvedOpen = isControlled ? open : managedOpen;
   const effectiveOpen = dropdownVisible ? resolvedOpen : false;
 
@@ -242,7 +251,9 @@ const Tooltip = ({
     >
       <TooltipTriggerNodeContext.Provider value={setTriggerNode}>
         <TooltipPressDismissContext.Provider value={pressDismiss}>
-          {children}
+          <TooltipEscapeClosableContext.Provider value={escapeClosable}>
+            {children}
+          </TooltipEscapeClosableContext.Provider>
         </TooltipPressDismissContext.Provider>
       </TooltipTriggerNodeContext.Provider>
     </Root>
@@ -417,6 +428,7 @@ const TooltipContent = React.forwardRef<
     const dialogOverlayZ = useDialogOverlayZClass();
     const isDockPopoverChild = useIsDockPopoverChild();
     const pressDismiss = React.useContext(TooltipPressDismissContext);
+    const escapeClosable = React.useContext(TooltipEscapeClosableContext);
     if (!radix) return null;
     const Portal = radix.TooltipPrimitive.Portal;
     const Content = radix.TooltipPrimitive.Content;
@@ -439,6 +451,7 @@ const TooltipContent = React.forwardRef<
             className
           )}
           {...props}
+          {...(escapeClosable ? { [ESCAPE_TOOLTIP_LAYER_ATTR]: "" } : {})}
           data-dock-popover-child={isDockPopoverChild ? "" : undefined}
         />
       </Portal>

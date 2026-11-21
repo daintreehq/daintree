@@ -6,20 +6,16 @@ import {
 import type {
   DecisionsConnectResult,
   DecisionsKitCheckRefusal,
-  DecisionsKitCoverage,
   DecisionsKitIdentityProblem,
-  DecisionsRecoveryKitRecord,
   DecisionsSettings,
 } from "../../../shared/types/decisions.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
 import type { SealedKeyStore } from "./keyStore.js";
 import {
   MAX_RECOVERY_KIT_BYTES,
-  coverageHolds,
   isOwner,
   keyCall,
   keysWork,
-  kitCoverage,
   kitCovers,
   openRecoveryKit,
   sameIdentity,
@@ -33,96 +29,10 @@ export interface RecordedIdentity {
   deviceId: string;
 }
 
-/** An owner identity's relay, ids and epochs, as its sealed keys were last read or written (#18063). */
-export interface ObservedOwnerKeys extends RecordedIdentity {
-  coverage: DecisionsKitCoverage;
-}
-
 /** What stops a kit being made or checked before the kit itself is looked at. */
 export type KitFailure =
   | { result: "no-identity"; reason: DecisionsKitIdentityProblem }
   | Extract<DecisionsConnectResult, { result: "key-storage" }>;
-
-/** What sealed keys say about a kit's coverage: an owner's relay, ids and epochs; null for anything else. */
-export function observedOwnerKeys(stored: StoredIdentity | null): ObservedOwnerKeys | null {
-  if (!stored || stored.claimed === false || !isOwner(stored)) return null;
-  const relayOrigin = normalizeRelayOrigin(stored.config.relayOrigin);
-  if (relayOrigin === null) return null;
-  return {
-    relayOrigin,
-    installationId: stored.config.installationId,
-    deviceId: stored.config.deviceId,
-    coverage: kitCoverage(stored),
-  };
-}
-
-/** Two observations of owner keys name the same identity holding the same keys. */
-export function sameOwnerKeys(
-  a: ObservedOwnerKeys | null | undefined,
-  b: ObservedOwnerKeys | null | undefined
-): boolean {
-  if (!a || !b) return (a ?? null) === (b ?? null);
-  return (
-    observes(a, b) &&
-    a.coverage.epochs.length === b.coverage.epochs.length &&
-    coverageHolds(a.coverage, b.coverage)
-  );
-}
-
-/**
- * A kit verification as it stands against the owner keys last seen (#18063),
- * `first` being the first owner keys the same key store saw: marked out of
- * date once they hold a key the kit lacks or another current epoch. A
- * verification recorded before kits' epochs were held every key the keys
- * held then, and keys only ever gain epochs, so keys still on their one
- * epoch are what it covered, and keys that changed since this run first
- * read them have moved past it; anything else can't be told from here.
- * Returns `record` itself when nothing changes.
- */
-export function reconciledKit(
-  record: DecisionsRecoveryKitRecord | null,
-  observed: ObservedOwnerKeys | null,
-  first: ObservedOwnerKeys | null = null
-): DecisionsRecoveryKitRecord | null {
-  if (record === null || record.outOfDate || !observes(observed, record)) return record;
-  const held = observed.coverage;
-  if (!record.coverage) {
-    // Only an earlier build records a verification without epochs, so this run's reads all came after it.
-    if (observes(first, record) && !coverageHolds(first.coverage, held)) {
-      return { ...record, outOfDate: true };
-    }
-    const firstOnly = held.epochs.length === 1 && held.epochs[0]!.epoch === held.currentEpoch;
-    return firstOnly ? { ...record, coverage: held } : record;
-  }
-  return coverageHolds(record.coverage, held) ? record : { ...record, outOfDate: true };
-}
-
-/**
- * How a verification stands against the owner keys read this run, for the
- * status: `current` only once keys read now are ones the kit holds, since a
- * mismatch whose recording failed is caught only by reading them again.
- */
-export function kitStanding(
-  record: DecisionsRecoveryKitRecord,
-  observed: ObservedOwnerKeys | null,
-  first: ObservedOwnerKeys | null = null
-): "current" | "out-of-date" | "unknown" {
-  const kit = reconciledKit(record, observed, first) ?? record;
-  if (kit.outOfDate) return "out-of-date";
-  return kit.coverage && observes(observed, kit) ? "current" : "unknown";
-}
-
-function observes(
-  observed: ObservedOwnerKeys | null,
-  record: RecordedIdentity
-): observed is ObservedOwnerKeys {
-  return (
-    observed !== null &&
-    observed.relayOrigin === record.relayOrigin &&
-    observed.installationId === record.installationId &&
-    observed.deviceId === record.deviceId
-  );
-}
 
 /** The relay and ids the setting records; null until a relay is set up. */
 export function recordedIdentity(settings: DecisionsSettings): RecordedIdentity | null {
@@ -195,7 +105,7 @@ export async function makeRecoveryKit(
  * passphrase, holds a confirmed owner identity whose keys work, that
  * identity is this computer's (relay, ids, signing and exchange keys), and
  * it holds every epoch key sealed here, byte for byte. Nothing is installed
- * or recorded; the caller records a pass with the epochs it was proven to hold.
+ * or recorded; the caller records a pass.
  */
 export async function checkRecoveryKit(
   keys: Pick<SealedKeyStore, "load">,
@@ -203,7 +113,7 @@ export async function checkRecoveryKit(
   kit: string,
   passphrase: string
 ): Promise<
-  | { verified: RecordedIdentity; coverage: DecisionsKitCoverage }
+  | { verified: RecordedIdentity }
   | { failure: KitFailure | { result: "kit-refused"; reason: DecisionsKitCheckRefusal } }
 > {
   const refuse = (reason: DecisionsKitCheckRefusal) => ({
@@ -221,5 +131,5 @@ export async function checkRecoveryKit(
   if ("failure" in sealed) return sealed;
   if (!sameIdentity(candidate, sealed.stored)) return refuse("another-identity");
   if (!kitCovers(candidate, sealed.stored)) return refuse("missing-epochs");
-  return { verified: sealed.recorded, coverage: kitCoverage(sealed.stored) };
+  return { verified: sealed.recorded };
 }

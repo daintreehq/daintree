@@ -63,6 +63,7 @@ import type { AgentPromptWaitResult } from "../../viewless/agentPromptWait.js";
 import type { AgentSessionPaneRequest } from "../../viewless/viewlessAgentResume.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
+import type { PaneSnapshotPtyClient } from "../paneSnapshots.js";
 import {
   AnswerDelivery,
   DELIVERY_CHECK_INTERVAL_MS,
@@ -88,6 +89,8 @@ const RESUMED = "terminal-resumed-1";
 const Q1 = "0190f0aa11112222333344445555aa01";
 const Q2 = "0190f0aa11112222333344445555aa02";
 const CRASHED = "0190f0aa11112222333344445555cc01";
+// The asking pane with a run no listing gave: every move of it here is refused before its run is read.
+const UNLISTED = { terminalId: PANE, run: "0".repeat(64) };
 
 const ORIGIN: QuestionOrigin = {
   host_id: HOST,
@@ -265,11 +268,19 @@ async function stopped(delivery: AnswerDelivery): Promise<void> {
   await stopping;
 }
 
-/** Moves the clock until `done` holds, failing after `maxMs`. */
-async function until(done: () => boolean | Promise<boolean>, maxMs = 30_000): Promise<void> {
-  for (let elapsed = 0; elapsed <= maxMs; elapsed += 100) {
+/**
+ * Moves the clock `step` at a time until `done` holds, failing after `maxMs`.
+ * Every step costs real turns, so a wait that crosses minutes of fake time
+ * takes coarse steps, or its real cost grows with the fake time it crosses.
+ */
+async function until(
+  done: () => boolean | Promise<boolean>,
+  maxMs = 30_000,
+  step = 100
+): Promise<void> {
+  for (let elapsed = 0; elapsed <= maxMs; elapsed += step) {
     if (await done()) return;
-    await advance(100);
+    await advance(step, step);
   }
   throw new Error("the condition never held");
 }
@@ -475,6 +486,10 @@ function setup(
                 const list = [...client.terminals].map(([id, info]) => ({ ...info, id }));
                 await options.whileListing?.();
                 return list;
+              },
+              getTerminal: async (id: string) => {
+                const info = client.terminals.get(id);
+                return info === undefined ? null : { ...info, id };
               },
             },
           }
@@ -933,6 +948,129 @@ describe("AnswerDelivery", () => {
     }
   );
 
+  describe("another agent kind in the asking run (#18116)", () => {
+    // Asked before Codex's session was learned: only the agent kind tells the runs apart.
+    const SESSIONLESS: QuestionOrigin = { ...ORIGIN, agent_kind: "codex", agent_session_id: null };
+    const asCodex = { detectedAgentId: "codex", agentSessionId: undefined };
+
+    it("never types an answer into the pane once detection names another agent there, and leaves it needing attention as a relaunch", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      // Same principal, generation and incarnation: nothing respawned it.
+      h.patch({ ...asCodex, detectedAgentId: "claude" });
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+      expect((await h.question(Q1))?.error_code).toBe("relaunched");
+      expect(h.client.submitted).toEqual([]);
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    it("never types an answer that waited on a draft into the agent that took the pane meanwhile", async () => {
+      const h = setup();
+      h.patch(asCodex);
+      h.drafts.add(PANE);
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      h.delivery.start();
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toEqual([]);
+      expect((await h.question(Q1))?.delivery_status).not.toBe("needs-attention");
+
+      h.patch({ detectedAgentId: "claude" });
+      h.drafts.delete(PANE);
+      h.signal("composer");
+      await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+      expect((await h.question(Q1))?.error_code).toBe("relaunched");
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    it("types an answer for the asker's own kind, though detection only names it after launch", async () => {
+      const h = setup();
+      h.patch({ ...asCodex, detectedAgentId: undefined, launchAgentId: "codex" });
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      h.delivery.start();
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toEqual([]);
+      expect((await h.question(Q1))?.delivery_status).not.toBe("needs-attention");
+
+      h.patch({ detectedAgentId: "codex" });
+      h.signal("settled");
+      await until(() => h.client.submitted.length === 1);
+      expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
+      await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+      await stopped(h.delivery);
+    });
+
+    it("takes no marker read while another kind of agent took the pane as proof, and leaves the crashed answer uncertain", async () => {
+      const h = setup();
+      h.patch(asCodex);
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      await h.store.putIntent(intent(CRASHED, Q1));
+      h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n❯ \r\n`);
+      // Claude takes the pane while recovery reads its screen.
+      const read = h.client.getSerializedStateAsync.bind(h.client);
+      h.client.getSerializedStateAsync = async (id: string) => {
+        h.patch({ detectedAgentId: "claude" });
+        return read(id);
+      };
+
+      h.delivery.start();
+      // The read proved nothing, so recovery tries again on the next check, and finds Claude there.
+      await until(
+        async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain",
+        3 * DELIVERY_CHECK_INTERVAL_MS
+      );
+      expect((await h.question(Q1))?.error_code).toBe("crash_unreconciled");
+      expect(h.terminalReports()).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    it("reads each crashed injection's marker against its own asker, though both share every other run field", async () => {
+      const h = setup();
+      // Codex asked Q1, then Claude took the same run and asked Q2.
+      h.patch({ ...asCodex, detectedAgentId: "claude" });
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      await answered(h.store, Q2, 2, "second", {
+        origin: { ...SESSIONLESS, agent_kind: "claude" },
+      });
+      const CRASHED_2 = "0190f0aa11112222333344445555cc02";
+      // Codex's injection is read first, so a reading shared across askers would hide Claude's marker.
+      await h.store.putIntent(intent(CRASHED, Q1, { created_at: Date.now() - 1_000 }));
+      await h.store.putIntent(intent(CRASHED_2, Q2));
+      h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n${markerFor(CRASHED_2)}\r\n❯ \r\n`);
+
+      h.delivery.start();
+      await until(async () => (await h.question(Q2))?.delivery_status === "terminal-delivered");
+      await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+      expect((await h.store.getIntent(CRASHED))?.state).toBe("uncertain");
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    });
+
+    it("types a later question from a fresh run of the replaced agent", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve", { origin: SESSIONLESS });
+      h.patch({ ...asCodex, detectedAgentId: "claude" });
+      h.delivery.start();
+      await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+
+      // Codex starts again in the pane: a respawn, so a new incarnation that asks anew.
+      h.patch({ ...asCodex, agentIncarnation: 1 });
+      await answered(h.store, Q2, 2, "second", {
+        origin: { ...SESSIONLESS, agent_incarnation: "1" },
+      });
+      h.delivery.request();
+      await until(() => h.client.submitted.length === 1);
+      expect(typedChoices(h.client.submitted[0].text)).toEqual(["second"]);
+      expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+      await stopped(h.delivery);
+    });
+  });
+
   it("types two answers for one pane that arrive five seconds apart, in order and spaced", async () => {
     const h = setup();
     h.delivery.start();
@@ -1069,9 +1207,12 @@ describe("AnswerDelivery", () => {
     expect(sessionless).toHaveBeenCalledTimes(1);
     expect(lists).not.toHaveBeenCalled();
 
-    // Found by the next minute's read, with nothing else asking.
+    // Found by the next minute's read, with nothing else asking. The idle
+    // minute passes in coarse steps; the answer's decrypt and commits after
+    // that read take real turns, so the wait for its line is fine-grained.
     await answered(h.store, Q1, 1, "approve");
-    await until(() => h.client.submitted.length === 1, DELIVERY_CHECK_INTERVAL_MS + 10_000);
+    await until(() => pending.mock.calls.length - before >= 4, DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    await until(() => h.client.submitted.length === 1, 10_000);
     await stopped(h.delivery);
   });
 
@@ -1956,7 +2097,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await advisoryExpired(h.store, Q1, 1);
 
     h.delivery.start();
-    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted[0].text).toContain("status: expired\nauthorised: no\n");
     expect(h.client.submitted[0].text).not.toMatch(/carry out the plan/);
     await stopped(h.delivery);
@@ -1985,7 +2126,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     h.delivery.start();
     await advance(60_000, 5_000);
     expect(h.client.submitted).toEqual([]);
-    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS);
+    await until(() => h.client.submitted.length === 1, 3 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
     await stopped(h.delivery);
   });
@@ -2109,14 +2250,14 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     expect((await entryOf(h)).write_refused).toBe(true);
     // The notice alone is over with its question (#18021): no one is asked about it.
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({ result: "resolved" });
 
     // With the person's follow-up that stopped too, the two go only to the run that asked.
     await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canReassign: false });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({
       result: "refused",
       reason: "asker-only",
     });
@@ -2221,7 +2362,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     });
     // It never reached the relay, so no follow-up can join it: it is no one's to move.
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({ result: "resolved" });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
     expect((await h.question(Q1))?.origin).toEqual(ORIGIN);
     await stopped(h.delivery);
@@ -2618,7 +2759,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       result: "refused",
       reason: "changed",
     });
-    await expect(h.delivery.reassignAnswer(Q1, PANE, read!.token)).resolves.toEqual({
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED, read!.token)).resolves.toEqual({
       result: "refused",
       reason: "changed",
     });
@@ -3336,7 +3477,7 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       canReassign: false,
     });
     expect(await h.delivery.resumeAnswer(Q1)).toEqual({ result: "refused", reason: "uncertain" });
-    expect(await h.delivery.reassignAnswer(Q1, PANE)).toEqual({
+    expect(await h.delivery.reassignAnswer(Q1, UNLISTED)).toEqual({
       result: "refused",
       reason: "uncertain",
     });
@@ -3518,6 +3659,85 @@ describe("AnswerDelivery question reads (#17097)", () => {
     }
   });
 
+  describe("the asking pane (#18037)", () => {
+    /** The harness's pty client as a screen read takes it, counting how often it is asked for. */
+    function paneClient(h: ReturnType<typeof setup>) {
+      let taken = 0;
+      const client = {
+        getTerminalProjectId: (id: string) => h.client.terminals.get(id)?.projectId ?? null,
+        getTerminalAsync: (id: string, token?: string, options?: { strict?: boolean }) =>
+          h.client.getTerminalAsync(id, token, options),
+        getSerializedStateAsync: (id: string) => h.client.getSerializedStateAsync(id),
+        getLiveGeneration: (id: string) => h.client.getLiveGeneration(id),
+        isLiveGeneration: (id: string, generation: number) =>
+          h.client.isLiveGeneration(id, generation),
+      } as unknown as PaneSnapshotPtyClient;
+      return {
+        get: () => {
+          taken += 1;
+          return client;
+        },
+        taken: () => taken,
+      };
+    }
+
+    it("reads the run that asked, answered or not, by a reference naming this machine", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.screens.set(
+        PANE,
+        "Plan ready.\nexport API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123"
+      );
+      const pty = paneClient(h);
+
+      const read = await h.delivery.questionPane({ hostId: HOST, ...OWN }, Q1, pty.get);
+
+      expect(read).toMatchObject({
+        result: "read",
+        reference: { hostId: HOST, ...OWN, questionId: Q1 },
+        pane: { agentState: "waiting", waitingReason: "prompt" },
+      });
+      if (read.result !== "read") return;
+      expect(read.pane.lines[0]).toBe("Plan ready.");
+      expect(read.pane.lines.join("\n")).not.toContain("sk-ant-abcdefghijklmnopqrstuvwxyz0123");
+    });
+
+    it("finds nothing outside its scope, nor an imported question, and touches no pane for them", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      await answered(h.store, Q2, 2, "deny", { history_only: true });
+      const pty = paneClient(h);
+
+      for (const [scope, id] of [
+        [{ ...OWN, terminalId: "pane-2" }, Q1],
+        [{ ...OWN, projectId: "project-2" }, Q1],
+        [{ ...OWN, projectId: null }, Q1],
+        [{ ...OWN, hostId: "host_elsewhere" }, Q1],
+        [OWN, Q2],
+        [OWN, CRASHED],
+      ] as const) {
+        await expect(h.delivery.questionPane(scope, id, pty.get)).resolves.toEqual({
+          result: "not-found",
+        });
+      }
+      expect(pty.taken()).toBe(0);
+      expect(h.client.screenReads).toBe(0);
+    });
+
+    it("says closed once the pane holds another run", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.generations.set(PANE, 8);
+      h.client.terminals.set(PANE, { ...atPrompt(), launchGeneration: 8 });
+      h.client.screens.set(PANE, "the next run's screen");
+
+      await expect(h.delivery.questionPane(OWN, Q1, paneClient(h).get)).resolves.toEqual({
+        result: "closed",
+      });
+      expect(h.client.screenReads).toBe(0);
+    });
+  });
+
   it("names each question asked for once, in order, and only the pane's own", async () => {
     const h = setup();
     await answered(h.store, Q1, 1, "approve");
@@ -3619,10 +3839,449 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
 
       h.delivery.start();
       let outcome: unknown = null;
-      void h.delivery.reassignAnswer(Q1, "pane-chosen").then((result) => (outcome = result));
+      void h.delivery.reassignAnswer(Q1, chosen!).then((result) => (outcome = result));
       await until(() => outcome !== null);
       expect(outcome).toMatchObject({ result: "waiting", terminalId: "pane-chosen", waitsFor });
       expect(h.client.submitted).toEqual([]);
     }
   );
+
+  it("never types a moved answer that waits on its new pane into another kind of agent that took it (#18116)", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen", agentSessionId: undefined });
+    h.drafts.add("pane-chosen");
+    const chosen = await listedAs(h, "pane-chosen");
+
+    h.delivery.start();
+    expect(await settled(h.delivery.reassignAnswer(Q1, chosen))).toMatchObject({
+      result: "waiting",
+      terminalId: "pane-chosen",
+    });
+    expect((await h.question(Q1))?.origin).toMatchObject({
+      pane_id: "pane-chosen",
+      agent_kind: "claude",
+      agent_session_id: null,
+    });
+
+    h.client.terminals.set("pane-chosen", {
+      ...h.client.terminals.get("pane-chosen")!,
+      detectedAgentId: "codex",
+    });
+    h.drafts.delete("pane-chosen");
+    h.signal("composer");
+    await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention");
+    expect((await h.question(Q1))?.error_code).toBe("relaunched");
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("types the answer into the listed pane whose agent is still the one listed", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    const chosen = await listedAs(h, "pane-chosen");
+
+    h.delivery.start();
+    expect(await settled(h.delivery.reassignAnswer(Q1, chosen))).toEqual({
+      result: "delivered",
+      terminalId: "pane-chosen",
+      title: "Chosen",
+    });
+    expect(h.client.submitted.map((line) => line.id)).toEqual(["pane-chosen"]);
+    expect(typedChoices(h.client.submitted[0]!.text)).toEqual(["approve"]);
+    expect((await h.question(Q1))?.origin).toMatchObject({
+      pane_id: "pane-chosen",
+      ownership_principal: "principal-pane-chosen",
+    });
+    const moved = (await h.store.listAudit(500)).find((e) => e.event === "delivery.reassigned");
+    expect(moved?.detail).toMatchObject({ from_pane: PANE, to_pane: "pane-chosen" });
+    await stopped(h.delivery);
+  });
+
+  /** The pane as `answerDestinations` listed it. */
+  async function listedAs(h: ReturnType<typeof setup>, id: string) {
+    const listed = await h.delivery.answerDestinations(Q1);
+    const found =
+      listed.result === "listed" ? listed.destinations.find((d) => d.terminalId === id) : undefined;
+    expect(found).toBeDefined();
+    // What the IPC schema takes back: a digest, never the identity it is made of.
+    expect(found!.run).toMatch(/^[0-9a-f]{64}$/);
+    return found!;
+  }
+
+  /** What `action` resolves with, moving the clock while delivery holds its lock. */
+  async function settled<T>(action: Promise<T>): Promise<T> {
+    let outcome: { value: T } | null = null;
+    void action.then((value) => (outcome = { value }));
+    await until(() => outcome !== null);
+    return outcome!.value;
+  }
+
+  it.each([
+    { how: "another agent started in the same launch", run: { agentIncarnation: 1 } },
+    // Its principal kept, so the generation alone tells the runs apart.
+    { how: "its pty relaunched", run: { launchGeneration: 8 }, generation: 8 },
+    { how: "its Decisions principal was reissued", run: {}, principal: "principal-reissued" },
+    { how: "another kind of agent is detected", run: { detectedAgentId: "codex" } },
+  ])(
+    "refuses a listed pane once $how, typing nothing and leaving the answer where it was (#18093)",
+    async ({ run, generation, principal }) => {
+      const h = setup({ listTerminals: true });
+      await stalled(h);
+      live(h, "pane-chosen", { title: "Chosen" });
+      const chosen = await listedAs(h, "pane-chosen");
+      const before = await h.question(Q1);
+
+      // The replacement is still a run an answer could be typed into: it lists, with a new run.
+      h.client.terminals.set("pane-chosen", {
+        ...h.client.terminals.get("pane-chosen")!,
+        ...run,
+      });
+      if (generation !== undefined) h.client.generations.set("pane-chosen", generation);
+      if (principal !== undefined) h.principals.set("pane-chosen", principal);
+      const relisted = await listedAs(h, "pane-chosen");
+      expect(relisted.run).not.toBe(chosen.run);
+
+      h.delivery.start();
+      expect(await settled(h.delivery.reassignAnswer(Q1, chosen))).toEqual({
+        result: "refused",
+        reason: "destination-changed",
+      });
+      await advance(DELIVERY_CHECK_INTERVAL_MS + DELIVERY_SETTLE_MS);
+      expect(h.client.submitted).toEqual([]);
+      const after = await h.question(Q1);
+      expect(after?.origin).toEqual(before?.origin);
+      expect(after?.delivery_status).toBe("needs-attention");
+      expect(after?.agent_resume_strategy).toBe(before?.agent_resume_strategy);
+      expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.reassigned")).toBe(
+        false
+      );
+
+      // Chosen again from a fresh list, the new run takes it.
+      expect(await settled(h.delivery.reassignAnswer(Q1, relisted))).toMatchObject({
+        result: "delivered",
+        terminalId: "pane-chosen",
+      });
+      await stopped(h.delivery);
+    }
+  );
+
+  it("refuses a pane replaced while the move waited for delivery's turn", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    const chosen = await listedAs(h, "pane-chosen");
+    const before = await h.question(Q1);
+
+    // Delivery's lock is busy; the pane's agent is replaced before the move takes its turn.
+    let release!: () => void;
+    const busy = h.delivery.lock.run(() => new Promise<void>((done) => (release = done)));
+    const moving = h.delivery.reassignAnswer(Q1, chosen);
+    await advance(100);
+    h.client.terminals.set("pane-chosen", {
+      ...h.client.terminals.get("pane-chosen")!,
+      agentIncarnation: 1,
+    });
+    release();
+    await busy;
+
+    expect(await settled(moving)).toEqual({ result: "refused", reason: "destination-changed" });
+    expect((await h.question(Q1))?.origin).toEqual(before?.origin);
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("refuses a run token that names a different pane than the one confirmed", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    live(h, "pane-other", { title: "Other" });
+    // Alike in every part of their runs but the pane, so the pane alone tells them apart.
+    h.principals.set("pane-other", "principal-pane-chosen");
+    const other = await listedAs(h, "pane-other");
+    expect(other.run).not.toBe((await listedAs(h, "pane-chosen")).run);
+
+    expect(
+      await settled(h.delivery.reassignAnswer(Q1, { terminalId: "pane-chosen", run: other.run }))
+    ).toEqual({ result: "refused", reason: "destination-changed" });
+    expect((await h.question(Q1))?.origin.pane_id).toBe(PANE);
+  });
+});
+
+describe("AnswerDelivery, the whole question in the needs-attention list (#18055)", () => {
+  const settledAttempt = () => ({ ledger: { attempt: true, state: null } });
+  /** Past the 240 characters a row's heading keeps, and the 4,000 an answer's typing keeps. */
+  const QUESTION = `Reuse the recorded fixture?\nIt was recorded ${"long ".repeat(900)}ago.`;
+
+  /** An advisory round's content stating a plan, sealed as the relay hands it on. */
+  async function advisoryContent(questionId: string, plan: string): Promise<string> {
+    const envelope = await encryptEnvelope({
+      epochKey: identity.epochs.get(1)!,
+      installationId: identity.config.installationId,
+      questionId,
+      recordId: questionId,
+      recordType: "question",
+      revision: 0,
+      senderDeviceId: identity.config.deviceId,
+      purpose: "question-content",
+      plaintext: {
+        content_version: 1,
+        question: QUESTION,
+        kind: "choice",
+        options: [
+          { id: "keep", label: "Keep it" },
+          { id: "record", label: "Record again" },
+        ],
+        planned_fallback: plan,
+      },
+      replyMode: "advisory",
+    });
+    return JSON.stringify(envelope);
+  }
+
+  it("carries the whole question, the plan its advisory round states, and the reference the question view opens it by", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1, {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      content_sealed: await advisoryContent(Q1, "Keep the recorded fixture."),
+    });
+    // A notice alone settles once the question is over (#18021); a follow-up stopped with it keeps it listed.
+    await followUpStoppedToo(h.store);
+
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({
+      questionId: Q1,
+      question: "Reuse the recorded fixture?",
+      fullQuestion: QUESTION,
+      plan: "Keep the recorded fixture.",
+      reference: { hostId: HOST, projectId: ORIGIN.project_id, terminalId: PANE, questionId: Q1 },
+      notice: { disposition: "fallback-due" },
+    });
+    await stopped(h.delivery);
+  });
+
+  it("names another machine's question by that machine, and shows nothing of one it can't open", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve", {
+      origin: { ...ORIGIN, host_id: "host_elsewhere" },
+      delivery_status: "needs-attention",
+      error_code: "resume_other_host",
+      content_sealed: await sealQuestionContent({ identity }, Q1, {
+        question: "Drop the index?\nIt holds last year's rows.",
+      }),
+    });
+    await answered(h.store, Q2, 2, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+
+    const [elsewhere, unopened] = await h.delivery.attentionItems();
+    expect(elsewhere).toMatchObject({
+      question: "Drop the index?",
+      fullQuestion: "Drop the index?\nIt holds last year's rows.",
+      plan: null,
+      origin: { otherHost: { hostId: "host_elsewhere" } },
+    });
+    expect(elsewhere!.reference).toEqual({
+      hostId: "host_elsewhere",
+      projectId: ORIGIN.project_id,
+      terminalId: PANE,
+      questionId: Q1,
+    });
+    expect(unopened).toMatchObject({
+      questionId: Q2,
+      question: null,
+      fullQuestion: null,
+      plan: null,
+    });
+    await stopped(h.delivery);
+  });
+});
+
+describe("AnswerDelivery, a stopped delivery acted on from the owner's Shell (#18031)", () => {
+  const REFERENCE = { hostId: HOST, projectId: "project-1", terminalId: PANE, questionId: Q1 };
+
+  /** An answer whose pane closed: Try resume, Copy and Mark handled are all on offer. */
+  async function stalled(h: ReturnType<typeof setup>) {
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    h.client.terminals.delete(PANE);
+  }
+
+  it("reads the item the list shows, only by the reference that names it", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+
+    const [listed] = await h.delivery.attentionItems();
+    expect(listed).toMatchObject({ questionId: Q1, canResume: true });
+    expect(await h.delivery.attentionItem(REFERENCE)).toEqual(listed);
+    for (const other of [
+      { ...REFERENCE, hostId: "host-other-01" },
+      { ...REFERENCE, projectId: "project-2" },
+      { ...REFERENCE, terminalId: "pane-2" },
+      { ...REFERENCE, questionId: Q2 },
+    ]) {
+      expect(await h.delivery.attentionItem(other)).toBeNull();
+    }
+    expect(await h.delivery.copiedAnswer(Q1, { ...REFERENCE, terminalId: "pane-2" })).toBeNull();
+    expect(await h.delivery.copiedAnswer(Q1, REFERENCE)).toContain("approve");
+
+    expect(await h.delivery.markHandled(Q1, listed!.token, REFERENCE)).toEqual({
+      result: "handled",
+    });
+    expect(await h.delivery.attentionItem(REFERENCE)).toBeNull();
+  });
+
+  it("handles nothing for a reference naming another pane, and handles once across two windows", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+
+    expect(
+      await h.delivery.markHandled(Q1, read.token, { ...REFERENCE, terminalId: "pane-2" })
+    ).toEqual({ result: "resolved" });
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+
+    // This Host's own window and the owner's Shell confirm the same read at once.
+    const results = await Promise.all([
+      h.delivery.markHandled(Q1, read.token),
+      h.delivery.markHandled(Q1, read.token, REFERENCE),
+    ]);
+    expect(results.map((r) => r.result).sort()).toEqual(["handled", "resolved"]);
+    const handled = (await h.store.listAudit(500)).filter((e) => e.event === "delivery.handled");
+    expect(handled).toHaveLength(1);
+  });
+
+  /** A correction the phone sent after the owner read the item: readable, resumable, new token. */
+  async function corrected(h: ReturnType<typeof setup>) {
+    const row = (await h.question(Q1))!;
+    const [first] = parseAnswers(row.answers_json);
+    await h.store.updateQuestion(Q1, {
+      answers_json: serializeAnswers([
+        { ...first!, deliver: false },
+        {
+          ...first!,
+          entry_id: `${Q1}-a2`,
+          revision: 2,
+          correction: true,
+          sealed: await sealAnswerContent({ identity }, Q1, `${Q1}-a2`, 2, {
+            choices: [{ id: "hold", label: "hold" }],
+            text: "Hold off.",
+            reviewed_attachment_digests: [],
+          }),
+        },
+      ]),
+    });
+  }
+
+  it("refuses an owner's resume or Mark handled confirmed before a correction, and acts on neither", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    await corrected(h);
+    const now = (await h.delivery.attentionItem(REFERENCE))!;
+    // The correction is one a person could resume from here: only the token tells them apart.
+    expect(now).toMatchObject({ canResume: true, answer: { choices: ["hold"], correction: true } });
+    expect(now.token).not.toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(await h.delivery.markHandled(Q1, read.token, REFERENCE)).toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    expect(h.launches).toEqual([]);
+    expect(await h.delivery.attentionItem(REFERENCE)).toEqual(now);
+    const audit = (await h.store.listAudit(500)).map((e) => e.event);
+    expect(audit).not.toContain("delivery.retry-requested");
+    expect(audit).not.toContain("delivery.handled");
+  });
+
+  it("resumes nothing for a reference naming another pane or project, though its token holds", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+
+    for (const reference of [
+      { ...REFERENCE, terminalId: "pane-2" },
+      { ...REFERENCE, projectId: "project-2" },
+    ]) {
+      expect(await h.delivery.resumeAnswer(Q1, { reference, expected: read.token })).toEqual({
+        result: "resolved",
+      });
+    }
+    expect(h.launches).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.retry-requested")).toBe(
+      false
+    );
+  });
+
+  it("refuses an owner's resume once its answer can't be opened here, though the token and session hold", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    const row = (await h.question(Q1))!;
+    const [first] = parseAnswers(row.answers_json);
+    // Sealed for another entry: it no longer opens, and nothing the token covers changed.
+    await h.store.updateQuestion(Q1, {
+      answers_json: serializeAnswers([
+        {
+          ...first!,
+          sealed: await sealAnswerContent({ identity }, Q1, `${Q1}-other`, 1, {
+            choices: [{ id: "approve", label: "approve" }],
+            text: "",
+            reviewed_attachment_digests: [],
+          }),
+        },
+      ]),
+    });
+    const now = (await h.delivery.attentionItem(REFERENCE))!;
+    expect(now).toMatchObject({ canResume: false, answerUnavailable: "unreadable" });
+    expect(now.token).toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(h.launches).toEqual([]);
+  });
+
+  it("refuses an owner's resume once this machine would no longer offer one, though the token holds", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    expect(read.canResume).toBe(true);
+    // The session it would resume is forgotten: nothing the token covers changed.
+    await h.store.updateQuestion(Q1, { origin: { ...ORIGIN, agent_session_id: null } });
+    expect((await h.delivery.attentionItem(REFERENCE))!.token).toBe(read.token);
+
+    expect(
+      await h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    ).toEqual({ result: "refused", reason: "changed" });
+    expect(h.launches).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.retry-requested")).toBe(
+      false
+    );
+  });
+
+  it("resumes for the owner as for a window here, and types the answer into the resumed run", async () => {
+    const h = setup({ resume: {}, listTerminals: true });
+    await stalled(h);
+    const read = (await h.delivery.attentionItem(REFERENCE))!;
+    h.delivery.start();
+
+    const resumed = settledValue(
+      h.delivery.resumeAnswer(Q1, { reference: REFERENCE, expected: read.token })
+    );
+    await until(() => resumed.done);
+    expect(resumed.value).toMatchObject({ result: "delivered", terminalId: RESUMED });
+    expect(h.launches).toHaveLength(1);
+    expect(typedChoices(h.client.submitted[0]!.text)).toEqual(["approve"]);
+    await stopped(h.delivery);
+  });
 });

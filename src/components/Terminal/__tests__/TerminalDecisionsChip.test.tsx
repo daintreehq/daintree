@@ -59,16 +59,18 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import type { DecisionsHostsResult } from "@shared/types/decisionsHosts";
 import type {
   DecisionDeclineResultRead,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionDeclineResult,
-  DecisionQuestionSummariesResult,
-  DeclineDecisionQuestionPayload,
   DecisionQuestionList,
   DecisionQuestionListItem,
+  DecisionQuestionSummariesResult,
+  DeclineDecisionQuestionPayload,
 } from "@shared/types/decisionsQuestion";
 
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
@@ -222,6 +224,7 @@ beforeEach(() => {
   getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
   useDecisionsAnswerStore.getState().clear();
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
+  useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
   useTerminalInputStore.setState({ draftInputs: new Map() });
   onDecisionState.mockClear();
   Reflect.set(window, "electron", {
@@ -446,7 +449,89 @@ describe("TerminalDecisionsChip", () => {
     expect(paneClick).toHaveReturnedWith(true);
   });
 
-  it("hands focus to the attention dialog before Review answers closes the popover", async () => {
+  /** A question of this pane's, as the inbox's list holds it, its delivery stopped. */
+  function stalledItem(questionId: string, alias: number): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host_studio", projectId: "project-1", terminalId: "t1", questionId },
+      alias,
+      agentKind: "claude",
+      projectLabel: "Project",
+      worktreeId: "wt",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-20T13:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      replyRequest: null,
+      stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+    };
+  }
+
+  /** Presses Review answers, answering the questions in the order the popover listed them. */
+  async function reviewAnswers(calls: string[]): Promise<string[]> {
+    render(
+      <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
+        <TerminalDecisionsChip terminalId="t1" />
+      </OverlayFocusRestoreContext.Provider>
+    );
+    fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+    expect(calls).toEqual([]);
+    const shown = screen
+      .getAllByTestId("terminal-decisions-row")
+      .map((row) => row.getAttribute("data-question-id") ?? "");
+    fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
+    expect(calls).toEqual(["handoff"]);
+    expect(screen.queryByTestId("popover-content")).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return shown;
+  }
+
+  it("hands focus over, then opens the inbox at the pane's stopped question in the chip's order (#18048)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({
+        openQuestions: [],
+        needsAttention: [
+          {
+            questionId: "q44",
+            alias: 44,
+            deliveryStatus: "delivery-uncertain",
+            reason: "inject_ambiguous",
+          },
+          { questionId: "q43", alias: 43, deliveryStatus: "needs-attention", reason: "pane_gone" },
+        ],
+      })
+    );
+    // The inbox's list holds both, in the other order from the popover's.
+    const listedQ43 = stalledItem("q43", 43);
+    const listedQ44 = stalledItem("q44", 44);
+    listQuestions.mockResolvedValue({ revision: 1, questions: [listedQ44, listedQ43] });
+    const calls: string[] = [];
+    const attentionOpen = vi.fn();
+    const original = useDecisionsAttentionStore.getState().open;
+    useDecisionsAttentionStore.setState({ open: attentionOpen });
+    let shown: string[];
+    try {
+      shown = await reviewAnswers(calls);
+    } finally {
+      useDecisionsAttentionStore.setState({ open: original });
+    }
+
+    expect(shown).toEqual(["q43", "q44"]);
+    expect(attentionOpen).not.toHaveBeenCalled();
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q43" } },
+    });
+    expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(
+      listedQ43.reference
+    );
+  });
+
+  it("opens the attention list for a stopped delivery the inbox doesn't list (#18048)", async () => {
     getStatus.mockResolvedValue({ state: "connected", revision: 1 });
     getPaneState.mockResolvedValue(
       paneState({
@@ -455,25 +540,29 @@ describe("TerminalDecisionsChip", () => {
         ],
       })
     );
+    // Only another pane's stall is listed.
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        {
+          ...stalledItem("q50", 50),
+          reference: { ...stalledItem("q50", 50).reference, terminalId: "t2" },
+        },
+      ],
+    });
     const calls: string[] = [];
-    const policy = makePolicy(() => calls.push("handoff"));
     const original = useDecisionsAttentionStore.getState().open;
-    useDecisionsAttentionStore.setState({ open: (terminalId) => calls.push(`open ${terminalId}`) });
+    useDecisionsAttentionStore.setState({
+      open: (terminalId) => calls.push(`attention ${terminalId}`),
+    });
     try {
-      render(
-        <OverlayFocusRestoreContext.Provider value={policy}>
-          <TerminalDecisionsChip terminalId="t1" />
-        </OverlayFocusRestoreContext.Provider>
-      );
-      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      expect(calls).toEqual([]);
-      fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
-
-      expect(calls).toEqual(["handoff", "open t1"]);
-      expect(screen.queryByTestId("popover-content")).toBeNull();
+      await reviewAnswers(calls);
     } finally {
       useDecisionsAttentionStore.setState({ open: original });
     }
+
+    expect(calls).toEqual(["handoff", "attention t1"]);
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
   });
 
   it("opens the inbox at this pane from the footer, handing it focus, with nothing needing attention (#17231)", async () => {
@@ -502,18 +591,112 @@ describe("TerminalDecisionsChip", () => {
     }
   });
 
-  it("offers no inbox in a Remote Host's window, whose questions this computer doesn't list", async () => {
-    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
-    getPaneState.mockResolvedValue(paneState());
-    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
-    try {
+  describe("in a Remote Host's window (#18049)", () => {
+    const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
+
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      Reflect.set(window.electron.decisions, "listHosts", listHosts);
+      useNotificationHistoryStore.setState({ entries: [] });
+    });
+
+    afterEach(() => {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      useNotificationHistoryStore.setState({ entries: [] });
+    });
+
+    async function openFromFooter(calls: string[]): Promise<void> {
+      const original = useDecisionsInboxStore.getState().open;
+      useDecisionsInboxStore.setState({
+        open: (options) => calls.push(`open ${options?.terminalId ?? "none"}`),
+      });
+      try {
+        render(
+          <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
+            <TerminalDecisionsChip terminalId="t1" />
+          </OverlayFocusRestoreContext.Provider>
+        );
+        fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+        fireEvent.click(await screen.findByTestId("terminal-decisions-inbox"));
+        expect(screen.queryByTestId("popover-content")).toBeNull();
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      } finally {
+        useDecisionsInboxStore.setState({ open: original });
+      }
+    }
+
+    it("opens the inbox at this pane once main says it lists the Host's questions", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(paneState());
+      let answer!: (read: DecisionsHostsResult) => void;
+      listHosts.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      const calls: string[] = [];
+      await openFromFooter(calls);
+      expect(listHosts).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["handoff"]);
+
+      const original = useDecisionsInboxStore.getState().open;
+      useDecisionsInboxStore.setState({
+        open: (options) => calls.push(`open ${options?.terminalId ?? "none"}`),
+      });
+      try {
+        await act(async () => {
+          answer({ result: "listed", autoEnroll: true, hosts: [], inboxHostIds: ["build-box"] });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      } finally {
+        useDecisionsInboxStore.setState({ open: original });
+      }
+      expect(calls).toEqual(["handoff", "open t1"]);
+      expect(useNotificationHistoryStore.getState().entries).toEqual([]);
+    });
+
+    it("says why, opening nothing, when the inbox doesn't list the Host's questions", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(paneState());
+      listHosts.mockResolvedValue({
+        result: "listed",
+        autoEnroll: true,
+        hosts: [
+          {
+            hostId: "build-box",
+            name: "Build box",
+            connected: true,
+            enrollment: { state: "own-setup" },
+            canEnroll: false,
+          },
+        ],
+        inboxHostIds: ["studio"],
+      });
+      const calls: string[] = [];
+      await openFromFooter(calls);
+      expect(calls).toEqual(["handoff"]);
+      const shown = useNotificationHistoryStore.getState().entries;
+      expect(shown).toHaveLength(1);
+      expect(shown[0]!.message).toMatch(/Build box has its own Decisions setup/);
+    });
+
+    it("offers no review of answers, which reads this computer's deliveries only", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(
+        paneState({
+          needsAttention: [
+            {
+              questionId: "q43",
+              alias: 43,
+              deliveryStatus: "needs-attention",
+              reason: "pane_gone",
+            },
+          ],
+        })
+      );
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      await screen.findByTestId("popover-content");
-      expect(screen.queryByTestId("terminal-decisions-inbox")).toBeNull();
-    } finally {
-      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
-    }
+      await screen.findByTestId("terminal-decisions-inbox");
+      expect(screen.queryByTestId("terminal-decisions-review")).toBeNull();
+    });
   });
 
   it("stays out of the way when the bridge is missing", () => {
@@ -560,6 +743,78 @@ describe("TerminalDecisionsChip", () => {
       for (const row of screen.getAllByTestId("terminal-decisions-row")) {
         const id = row.getAttribute("data-question-id");
         expect(row.textContent).toContain(`Opening line of ${id}`);
+      }
+    });
+
+    it("says a uniform waiting list's status once, above its rows, and keeps a lone question's on its row (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(twoQuestions);
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Waiting for an answer, here or on your phone");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Waiting for an answer");
+      }
+      // The instruction the status already gave isn't repeated in a footer.
+      expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+      // A focused row still says it: it is described by the one line.
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.getAttribute("aria-describedby")).toBe(shared.id);
+      }
+    });
+
+    it("lets a row past its deadline say so instead of inviting an answer (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: [
+          {
+            ...twoQuestions.openQuestions[0]!,
+            expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          },
+        ],
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      expect(row.textContent).toContain("Deadline passed, awaiting an update");
+      expect(row.textContent).not.toContain("Waiting for an answer");
+      expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+    });
+
+    it("keeps a lone question's status on its row, and the footer's instruction (#18054)", async () => {
+      // No shared line to describe it: the row's name carries the status.
+
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: [twoQuestions.openQuestions[0]!],
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      expect(row.textContent).toContain("Waiting for an answer, here or on your phone");
+      expect(row.getAttribute("aria-describedby")).toBeNull();
+      expect(screen.queryByTestId("terminal-decisions-shared-status")).toBeNull();
+      expect(screen.getByText("Open a question to answer it here")).toBeTruthy();
+    });
+
+    it("says a uniform queued list's status once too (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: twoQuestions.openQuestions.map((question) => ({
+          ...question,
+          status: "queued" as const,
+        })),
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Queued to send; you can answer it here");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Queued to send");
       }
     });
 
@@ -638,9 +893,10 @@ describe("TerminalDecisionsChip", () => {
       await act(async () => {});
       expect(screen.queryByTestId("terminal-decisions-row-line")).toBeNull();
       fireEvent.click(row);
-      expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
-        { scope: "pane", terminalId: "t1", questionId: "q42" },
-      ]);
+      expect(useDecisionsInboxStore.getState().request.question).toEqual({
+        terminalId: "t1",
+        questionId: "q42",
+      });
     });
 
     it("keeps rows openable when the read fails", async () => {
@@ -651,28 +907,144 @@ describe("TerminalDecisionsChip", () => {
       const row = await screen.findByTestId("terminal-decisions-row");
       await act(async () => {});
       fireEvent.click(row);
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true);
+      expect(useDecisionsInboxStore.getState()).toMatchObject({
+        isOpen: true,
+        request: { question: { terminalId: "t1", questionId: "q42" } },
+      });
     });
 
-    it("opens the chosen question with every listed question to step through", async () => {
+    it("opens the inbox at the chosen question, the pane as its opener (#18047)", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(twoQuestions);
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
       const rows = await screen.findAllByTestId("terminal-decisions-row");
+      const listReads = listQuestions.mock.calls.length;
       fireEvent.click(rows[1]!);
 
-      expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+      expect(useDecisionsInboxStore.getState()).toMatchObject({
         isOpen: true,
-        request: {
+        request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q43" } },
+      });
+      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      // This computer's own pane: opened at once, without reading the list to find it.
+      expect(listQuestions.mock.calls.length).toBe(listReads);
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+    });
+
+    describe("in a Remote Host's window", () => {
+      /** A Host's question as this computer lists it: its Decisions identity and its host-list id differ. */
+      function hostQuestion(
+        hostId: string,
+        questionId = "q43",
+        terminalId = "t1"
+      ): DecisionQuestionListItem {
+        return {
+          reference: {
+            hostId: `decisions-${hostId}`,
+            projectId: "p-host",
+            terminalId,
+            questionId,
+          },
+          alias: 43,
+          agentKind: "claude",
+          projectLabel: "Project",
+          worktreeId: "wt",
+          worktreeRoot: "/repo",
+          requirement: "human-required",
+          askedAt: "2026-11-02T10:00:00.000Z",
+          expiresAt: null,
+          settledAt: null,
+          standing: { kind: "waiting", reason: "open" },
+          replyRequest: null,
+          stall: null,
+          remoteHost: { hostId, name: "Build box", connected: true },
+        };
+      }
+
+      async function openSecondRow(): Promise<void> {
+        getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+        getPaneState.mockResolvedValue(twoQuestions);
+        render(<TerminalDecisionsChip terminalId="t1" />);
+        fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+        const rows = await screen.findAllByTestId("terminal-decisions-row");
+        await act(async () => {
+          fireEvent.click(rows[1]!);
+        });
+      }
+
+      const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
+
+      beforeEach(() => {
+        window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+        Reflect.set(window.electron.decisions, "listHosts", listHosts);
+        listHosts.mockReset().mockResolvedValue({
+          result: "listed",
+          autoEnroll: true,
+          hosts: [],
+          inboxHostIds: ["build-box"],
+        });
+      });
+      afterEach(() => {
+        delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      });
+
+      it("opens the inbox at the question once its enrolled Host has reported it", async () => {
+        const listedThere = hostQuestion("build-box");
+        listQuestions.mockResolvedValue({ revision: 1, questions: [listedThere] });
+        await openSecondRow();
+        await waitFor(() => expect(useDecisionsInboxStore.getState().isOpen).toBe(true));
+        expect(useDecisionsInboxStore.getState().request).toMatchObject({
+          terminalId: "t1",
+          question: { terminalId: "t1", questionId: "q43", reference: listedThere.reference },
+        });
+        expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      });
+
+      it.each([
+        ["this computer's list doesn't hold it", async () => ({ revision: 1, questions: [] })],
+        [
+          "only another Host's question matches",
+          async () => ({ revision: 1, questions: [hostQuestion("other-box")] }),
+        ],
+        [
+          "only the Host's other questions are listed",
+          async () => ({
+            revision: 1,
+            questions: [hostQuestion("build-box", "q42"), hostQuestion("build-box", "q43", "t2")],
+          }),
+        ],
+        [
+          "the list can't be read",
+          async (): Promise<DecisionQuestionList> => {
+            throw new Error("bridge gone");
+          },
+        ],
+        [
+          "main no longer lists the Host's questions in the inbox",
+          async () => {
+            listHosts.mockResolvedValue({
+              result: "listed",
+              autoEnroll: true,
+              hosts: [],
+              inboxHostIds: ["other-box"],
+            });
+            return { revision: 1, questions: [hostQuestion("build-box")] };
+          },
+        ],
+      ])("keeps the question view, stepping through the pane's, when %s", async (_why, list) => {
+        listQuestions.mockImplementation(list);
+        await openSecondRow();
+        await waitFor(() => expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true));
+        expect(useDecisionsQuestionViewStore.getState().request).toMatchObject({
           questions: [
             { scope: "pane", terminalId: "t1", questionId: "q42" },
             { scope: "pane", terminalId: "t1", questionId: "q43" },
           ],
           index: 1,
-        },
+        });
+        expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
       });
-      expect(screen.queryByTestId("popover-content")).toBeNull();
     });
   });
 
@@ -688,7 +1060,7 @@ describe("TerminalDecisionsChip", () => {
       await waitFor(() =>
         expect(screen.getAllByTestId("terminal-decisions-row-line").length).toBeGreaterThan(0)
       );
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss question q-42…" }));
+      fireEvent.click(screen.getByRole("button", { name: "Decline question q-42…" }));
     }
 
     function dialogButton(name: string): HTMLElement {
@@ -711,7 +1083,7 @@ describe("TerminalDecisionsChip", () => {
       }));
     }
 
-    it("offers Dismiss only on a waiting question, and says why an answered one has none", async () => {
+    it("offers Decline only on a waiting question, and says why an answered one has none", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(openAndAnswered);
       render(<TerminalDecisionsChip terminalId="t1" />);
@@ -720,10 +1092,12 @@ describe("TerminalDecisionsChip", () => {
 
       const dismisses = screen.getAllByTestId("terminal-decisions-dismiss");
       expect(dismisses.map((button) => button.getAttribute("aria-label"))).toEqual([
-        "Dismiss question q-42…",
+        "Decline question q-42…",
       ]);
+      // What it says to the eye is the same verb and noun as its name.
+      expect(dismisses.map((button) => button.textContent)).toEqual(["Decline question…"]);
       expect(screen.getByTestId("popover-content").textContent).toContain(
-        "Answered questions can't be dismissed"
+        "Answered questions can't be declined"
       );
     });
 
@@ -734,10 +1108,14 @@ describe("TerminalDecisionsChip", () => {
 
       expect(screen.queryByTestId("popover-content")).toBeNull();
       const dialog = await screen.findByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).toContain("Opening line of q42");
-      expect(dialog.textContent).toContain("it's told you chose not to answer");
-      expect(dialog.textContent).toContain("nothing is decided or approved");
+      expect(dialog.textContent).toContain("your phones show it declined");
+      expect(dialog.textContent).toContain("is told you chose not to answer");
+      // A row reads no round's mode, so the plan is never left out.
+      expect(dialog.textContent).toContain(
+        "declining doesn't let the agent go ahead with any plan it stated"
+      );
 
       fireEvent.click(dialogButton("Keep question"));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -745,13 +1123,13 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("declines it on confirm at the revision it's open at, never withdrawing it, and shows it dismissing until the pane's state drops it", async () => {
+    it("declines it on confirm at the revision it's open at, never withdrawing it, and shows it declining until the pane's state drops it", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(getQuestionContent).toHaveBeenCalledWith({ terminalId: "t1", questionId: "q42" });
       expect(declineQuestion).toHaveBeenCalledOnce();
       const payload = declineQuestion.mock.calls[0]![0];
@@ -764,12 +1142,15 @@ describe("TerminalDecisionsChip", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 
       const chip = screen.getByTestId("terminal-decisions-chip");
-      expect(chip.textContent).toContain("q-42 dismissing");
+      expect(chip.textContent).toContain("q-42 declining");
+      expect(chip.getAttribute("aria-label")).toBe(
+        "Question q-42 is being declined from this computer"
+      );
       fireEvent.click(chip);
       await screen.findAllByTestId("terminal-decisions-row");
       expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
       expect(screen.getByTestId("popover-content").textContent).toContain(
-        "Dismissed here, waiting for it to close"
+        "Declining from this computer"
       );
 
       // The asking computer records the decline, and the question goes.
@@ -777,30 +1158,33 @@ describe("TerminalDecisionsChip", () => {
       expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
     });
 
-    it("says a relay too old for it can't take a dismissal, and withdraws only after a second confirmation", async () => {
+    it("says a relay too old for it can't take a decline, and withdraws only after a second confirmation", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       declinedOnce({ status: "unsupported", by: "relay" });
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      // The person pressed Dismiss itself, so focus was on it.
+      // The person pressed Decline itself, so focus was on it.
       await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
-      act(() => dialogButton("Dismiss question").focus());
+      act(() => dialogButton("Decline question").focus());
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain(
-        "Your relay needs an update before it takes a dismissal from this computer, so q-42 wasn't dismissed."
+        "Your relay needs an update before it takes a decline from this computer, so q-42 wasn't declined."
       );
       expect(dialog.textContent).toContain("Nothing is typed into this terminal");
       // The press that got the refusal never withdraws: focus moves to Keep question, and a
-      // second press where Dismiss was does nothing yet.
+      // second press where Decline was does nothing yet.
       await waitFor(() => expect(document.activeElement).toBe(dialogButton("Keep question")));
       await confirm("Withdraw question");
       expect(cancelQuestion).not.toHaveBeenCalled();
-      // Not dismissing: the chip still shows it waiting.
-      expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("dismissing");
+      // Not declining: the chip still shows it waiting, to the eye and the ear.
+      expect(screen.getByTestId("terminal-decisions-chip").getAttribute("aria-label")).toMatch(
+        /^Question q-42 is waiting for an answer/
+      );
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("declining");
 
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
@@ -813,7 +1197,7 @@ describe("TerminalDecisionsChip", () => {
       expect(declineQuestion).toHaveBeenCalledOnce();
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
-        "q-42 cancelling"
+        "q-42 withdrawing"
       );
     });
 
@@ -824,7 +1208,7 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain(
@@ -833,7 +1217,7 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("stops offering withdrawal once a question the relay didn't hold yet has been sent, asking to dismiss it again", async () => {
+    it("stops offering withdrawal once a question the relay didn't hold yet has been sent, asking to decline it again", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       const unsent = paneState({
         openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }],
@@ -847,19 +1231,19 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain("Withdraw question q-42?");
 
-      // The Host sends it: the relay holds it now, so it can be dismissed after all.
+      // The Host sends it: the relay holds it now, so it can be declined after all.
       act(() => paneListeners[0]!(paneState({ revision: 2 })));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).not.toContain("doesn't hold");
       expect(screen.queryByRole("button", { name: "Withdraw question" })).toBeNull();
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
-    it("never shows a withdrawal's refusal under the Dismiss it gives way to", async () => {
+    it("never shows a withdrawal's refusal under the Decline it gives way to", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(
         paneState({ openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }] })
@@ -873,7 +1257,7 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
       );
@@ -882,12 +1266,12 @@ describe("TerminalDecisionsChip", () => {
         "q-42 is no longer one of this terminal's questions."
       );
 
-      // Sent meanwhile: Dismiss again, free of the withdrawal's refusal.
+      // Sent meanwhile: Decline again, free of the withdrawal's refusal.
       act(() => paneListeners[0]!(paneState({ revision: 2 })));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).toContain("Decline question q-42?");
       expect(dialog.textContent).not.toContain("no longer one of this terminal's questions");
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
     });
 
     it("offers withdrawing when this computer doesn't sign for the person, as on a Remote Host", async () => {
@@ -897,13 +1281,13 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain("Withdraw question q-42?");
       expect(dialog.textContent).toContain("This computer doesn't sign for you");
     });
 
-    it("shows a dismissal from the question view as dismissing too, and waiting again once it can't be taken", async () => {
+    it("shows a decline from the question view as declining too, and waiting again once it can't be taken", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       render(<TerminalDecisionsChip terminalId="t1" />);
       const chip = await screen.findByTestId("terminal-decisions-chip");
@@ -926,12 +1310,15 @@ describe("TerminalDecisionsChip", () => {
         );
 
       queued({ status: "queued" });
-      expect(chip.textContent).toContain("q-42 dismissing");
+      expect(chip.textContent).toContain("q-42 declining");
+      // Under way, not yet taken: never said as declined while it's only queued.
+      expect(chip.getAttribute("aria-label")).toMatch(/^Question q-42 is being declined/);
       // Another pane's chip isn't told about it.
       expect(dismissingQuestionIds(useDecisionsAnswerStore.getState().records, "t2")).toBe("");
 
       queued({ status: "unsupported", by: "relay" });
-      expect(chip.textContent).not.toContain("dismissing");
+      expect(chip.getAttribute("aria-label")).toMatch(/^Question q-42 is waiting for an answer/);
+      expect(chip.textContent).not.toContain("declining");
       fireEvent.click(chip);
       await screen.findAllByTestId("terminal-decisions-row");
       expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
@@ -944,7 +1331,7 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       await waitFor(() =>
         expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
       );
@@ -965,11 +1352,11 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
 
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't dismissed.");
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't declined.");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       fireEvent.click(dialogButton("Close"));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     });
@@ -981,7 +1368,7 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
 
       expect(getDeclineResult).toHaveBeenCalledOnce();
       expect(declineQuestion).toHaveBeenCalledTimes(2);
@@ -998,11 +1385,11 @@ describe("TerminalDecisionsChip", () => {
       await askToDismiss();
       await screen.findByRole("alertdialog");
 
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain(
-        "Couldn't confirm whether q-42 was dismissed."
+        "Couldn't confirm whether q-42 was declined."
       );
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
       const declineId = declineQuestion.mock.calls[0]![0].declineId;
 
       getDeclineResult.mockResolvedValueOnce({
@@ -1011,13 +1398,11 @@ describe("TerminalDecisionsChip", () => {
         expectedRevision: 3,
         outcome: { status: "declined" },
       });
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(getDeclineResult).toHaveBeenLastCalledWith({ declineId });
       expect(declineQuestion).toHaveBeenCalledTimes(2);
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
-        "q-42 dismissing"
-      );
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 declining");
     });
 
     it("gives a failed call's retry way to an answer that arrived meanwhile, leaving only Close", async () => {
@@ -1036,9 +1421,9 @@ describe("TerminalDecisionsChip", () => {
       render(<TerminalDecisionsChip terminalId="t1" />);
       await askToDismiss();
       await screen.findByRole("alertdialog");
-      await confirm("Dismiss question");
+      await confirm("Decline question");
       expect(screen.getByRole("alertdialog").textContent).toContain(
-        "q-42 couldn't be read again, so it wasn't dismissed."
+        "q-42 couldn't be read again, so it wasn't declined."
       );
 
       // Answered on a phone while the dialog stayed open; the other question keeps the chip.
@@ -1055,10 +1440,10 @@ describe("TerminalDecisionsChip", () => {
       );
       const dialog = screen.getByRole("alertdialog");
       expect(dialog.textContent).toContain(
-        "q-42 isn't waiting for an answer any more, so there's nothing to dismiss."
+        "q-42 isn't waiting for an answer any more, so there's nothing to decline."
       );
       expect(dialog.textContent).not.toContain("couldn't be read again");
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       expect(dialogButton("Close")).toBeTruthy();
       expect(declineQuestion).not.toHaveBeenCalled();
     });
@@ -1077,10 +1462,10 @@ describe("TerminalDecisionsChip", () => {
       await screen.findByRole("alertdialog");
 
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
       // The asking computer can record the decline before main's answer reaches the dialog.
@@ -1116,7 +1501,7 @@ describe("TerminalDecisionsChip", () => {
       await screen.findByRole("alertdialog");
 
       act(() => {
-        fireEvent.click(dialogButton("Dismiss question"));
+        fireEvent.click(dialogButton("Decline question"));
       });
       await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
       // Answered on a phone: the pane drops it before main's refusal arrives.
@@ -1130,7 +1515,7 @@ describe("TerminalDecisionsChip", () => {
       });
 
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't dismissed.");
+      expect(dialog.textContent).toContain("q-42 was answered first, so it wasn't declined.");
       expect(dialog.textContent).not.toContain("isn't waiting");
       expect(dialogButton("Close")).toBeTruthy();
     });
@@ -1147,14 +1532,14 @@ describe("TerminalDecisionsChip", () => {
       );
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      fireEvent.click(await screen.findByRole("button", { name: "Dismiss question q-42…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Decline question q-42…" }));
       await screen.findByRole("alertdialog");
 
       expect(getQuestionSummaries).toHaveBeenLastCalledWith({
         terminalId: "t1",
         questionIds: ["q42"],
       });
-      expect(dialogButton("Dismiss question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialogButton("Decline question").getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         answerRow({
           result: "read",
@@ -1162,7 +1547,7 @@ describe("TerminalDecisionsChip", () => {
         });
       });
       expect(screen.getByRole("alertdialog").textContent).toContain("Merge the release branch?");
-      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Decline question").hasAttribute("aria-disabled")).toBe(false);
     });
   });
 });
@@ -1327,9 +1712,9 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
     expect(ink(rows[1]!)).toContain("text-text-secondary");
     expect(ink(rows[0]!)).toContain("text-text-primary");
 
-    // Dismissing it says nothing of taking it out of Needs you, where it no longer is.
-    expect(screen.getAllByRole("button", { name: /^Dismiss question/ })).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss question q-42…" }));
+    // Declining it says nothing of taking it out of Needs you, where it no longer is.
+    expect(screen.getAllByRole("button", { name: /^Decline question/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Decline question q-42…" }));
     expect(screen.getByRole("alertdialog").textContent).not.toContain("Needs you");
   });
 
@@ -1344,9 +1729,10 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
       "Open a question to answer it here"
     );
     fireEvent.click(screen.getByTestId("terminal-decisions-row"));
-    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+    // In the inbox (#18047), which shows a cleared question it's asked for.
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
       isOpen: true,
-      request: { questions: [{ scope: "pane", terminalId: "t1", questionId: "q42" }], index: 0 },
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q42" } },
     });
   });
 
@@ -1400,5 +1786,223 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
     render(<TerminalDecisionsChip terminalId="t1" />);
     await settle();
     expect(chip().textContent).toBe("2 questions");
+  });
+});
+
+describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
+  function listed(
+    questionId: string,
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host_studio", projectId: "project-1", terminalId: "t1", questionId },
+      alias: 42,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+      ...over,
+    };
+  }
+
+  const REPLY_REQUEST = { questionId: "q42", alias: 42, requestedAt: "2026-11-02T10:30:00.000Z" };
+
+  it("stays on the pane while the agent waits on the person's reply, and while the reply goes in", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [], replyRequests: [REPLY_REQUEST] })
+    );
+    useTerminalInputStore.setState({ draftInputs: new Map([["project-a:t1", "a draft here"]]) });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).toContain("q-42 wants a reply");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Question q-42 is waiting for your reply, here or on your phone"
+    );
+    // Read against the list too, which says whether the person cleared the request.
+    await waitFor(() => expect(listQuestions).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(chip);
+    const row = await screen.findByTestId("terminal-decisions-row");
+    expect(row.textContent).toContain("Waiting for your reply, here or on your phone");
+    expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
+    expect(screen.getByTestId("popover-content").textContent).toContain(
+      "Follow-ups are typed in here once the draft here is sent or cleared"
+    );
+    fireEvent.click(row);
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q42" } },
+    });
+
+    act(() =>
+      paneListeners[0]!(
+        paneState({
+          openQuestions: [],
+          waitingFollowUps: [{ questionId: "q42", alias: 42 }],
+          revision: 2,
+        })
+      )
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 delivering");
+
+    act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 3 })));
+    expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+  });
+
+  it("steps a request for a reply the person cleared from Needs you down to cleared", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [], replyRequests: [REPLY_REQUEST] })
+    );
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        listed("q42", {
+          standing: { kind: "waiting", reason: "reply" },
+          replyRequest: "agent-1",
+          inbox: { ask: "agent-1", seen: true, cleared: true },
+        }),
+      ],
+    });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 cleared")
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").getAttribute("aria-label")).toBe(
+      "Question q-42 was cleared on this computer"
+    );
+
+    // Asking again, at a request nobody cleared: it waits on the person once more.
+    act(() =>
+      listListeners[0]!({
+        revision: 2,
+        questions: [
+          listed("q42", {
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-2",
+            inbox: { ask: "agent-2", seen: false, cleared: false },
+          }),
+        ],
+      })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
+      "q-42 wants a reply"
+    );
+  });
+
+  it("lists a follow-up beside its open question, and keeps the question's row as the follow-up goes in", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ waitingFollowUps: [{ questionId: "q42", alias: 42 }] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).toContain("q-42 delivering");
+    fireEvent.click(chip);
+    const rows = await screen.findAllByTestId("terminal-decisions-row");
+    expect(rows.map((row) => row.getAttribute("data-question-id"))).toEqual(["q42", "q42"]);
+    const asking = rows.find((row) => row.textContent?.includes("Waiting for an answer"));
+    expect(asking).toBeDefined();
+    expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
+
+    act(() => paneListeners[0]!(paneState({ revision: 2 })));
+    // The same row, so focus on it isn't lost to a remount.
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+
+    // Withdrawn from another view: the row says so in place, with no Decline.
+    const [question] = paneState().openQuestions;
+    act(() =>
+      paneListeners[0]!(
+        paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 3 })
+      )
+    );
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+    expect(asking!.textContent).toContain("Withdrawing");
+    expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
+  });
+
+  it("shows a withdrawal the pane's state names, with no dialog of its own", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).not.toContain("withdrawing");
+
+    const [question] = paneState().openQuestions;
+    act(() =>
+      paneListeners[0]!(
+        paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 2 })
+      )
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(cancelQuestion).not.toHaveBeenCalled();
+    // Refused by the relay: the question waits again.
+    act(() => paneListeners[0]!(paneState({ revision: 3 })));
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("withdrawing");
+  });
+
+  it("shows a decline or withdrawal this computer queued from any window, from its list of questions", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [listed("q42", { closing: "declining" })],
+    });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 declining")
+    );
+    expect(listQuestions).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      listListeners[0]!({ revision: 2, questions: [listed("q42", { closing: "withdrawing" })] })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
+
+    // Another question's decline names nothing here; this one's going lets the chip wait again.
+    act(() =>
+      listListeners[0]!({ revision: 3, questions: [listed("q43", { closing: "declining" })] })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toMatch(
+      /declining|withdrawing/
+    );
+
+    // Nothing left out for an answer: the list is no longer watched.
+    act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+    expect(listListeners).toHaveLength(0);
+  });
+
+  it("shows this computer's decline of a Remote Host's question in that Host's window only", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    const host = { hostId: "build-box", name: "Build box", connected: true };
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [listed("q42", { closing: "declining", remoteHost: host })],
+    });
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
+          "q-42 declining"
+        )
+      );
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+    cleanup();
+
+    // In this computer's own window, a local pane with the same id isn't the Host's.
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() => expect(listQuestions).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("declining");
   });
 });

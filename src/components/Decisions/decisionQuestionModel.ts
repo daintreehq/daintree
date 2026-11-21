@@ -3,6 +3,7 @@ import { pluralize } from "@/lib/pluralize";
 import type {
   DecisionClosureNotice,
   DecisionPreparation,
+  DecisionQuestionClosedReason,
   DecisionQuestionContent,
   DecisionQuestionStatus,
   DecisionReplyMode,
@@ -24,7 +25,8 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
   open: "Waiting for an answer",
   "proxy-answered": "Answered by the decision model",
   "human-answered": "Answered",
-  cancelled: "Cancelled",
+  // Declined or withdrawn, once its reason is read; this is only what's said without one.
+  cancelled: "Closed without an answer",
   expired: "Expired unanswered",
   "publish-failed": "Couldn't be sent",
 };
@@ -108,34 +110,46 @@ const NOTICE_DELIVERY: Record<DecisionClosureNotice["delivery"], string> = {
   stopped: "won't be typed into the terminal",
 };
 
+/** A closing notice and how far it got, as a surface already states it (#18026). */
+export interface ShownNotice {
+  closedReason: DecisionQuestionClosedReason;
+  delivery: DecisionClosureNotice["delivery"];
+}
+
 /**
  * How far the notice that closed it without an answer got into the asking
  * terminal (#17943), and, for an advisory round, what that notice says of the
  * agent's plan. Only what was recorded: typed in is never that the agent
- * read it or acted on it. Null with no such notice.
+ * read it or acted on it. `shown`: a notice the surface already states,
+ * which, when it is this one as far as it got, leaves only the plan. Null
+ * with nothing to say.
  */
 export function closureNoticeText(
-  question: Pick<DecisionQuestionContent, "closedReason" | "closureNotice">
+  question: Pick<DecisionQuestionContent, "closedReason" | "closureNotice">,
+  shown: ShownNotice | null = null
 ): string | null {
   const notice = question.closureNotice;
   const reason = question.closedReason;
   if (notice == null || reason === null || reason === "withdrawn") return null;
+  if (shown?.closedReason === reason && shown.delivery === notice.delivery) {
+    return noticePlan(notice, NOTICE_NAME[reason]);
+  }
   const delivery = `${NOTICE_NAME[reason]} ${NOTICE_DELIVERY[notice.delivery]}.`;
-  const plan = noticePlan(notice);
+  const plan = noticePlan(notice, "It");
   return plan === null ? delivery : `${delivery} ${plan}`;
 }
 
 /**
- * What an advisory notice says of the plan (#17944): its words, apart from
- * how far it got, which the sentence before says. Typed in is only that the
- * terminal took it, never that the agent read it or went ahead; one that will
- * never be typed says nothing of the plan.
+ * What an advisory notice says of the plan (#17944), led by `lead`: its
+ * words, apart from how far it got, which is said beside it. Typed in is only
+ * that the terminal took it, never that the agent read it or went ahead; one
+ * that will never be typed says nothing of the plan.
  */
-function noticePlan(notice: DecisionClosureNotice): string | null {
+function noticePlan(notice: DecisionClosureNotice, lead: string): string | null {
   if (notice.disposition === null || notice.delivery === "stopped") return null;
   return notice.disposition === "fallback-due"
-    ? "It says the agent may go ahead with its plan."
-    : "It says the agent isn't cleared to go ahead with its plan.";
+    ? `${lead} says the agent may go ahead with its plan.`
+    : `${lead} says the agent isn't cleared to go ahead with its plan.`;
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {

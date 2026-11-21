@@ -1,8 +1,13 @@
+import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -15,6 +20,7 @@ import type {
   OwnerStateAnnouncement,
 } from "../../types/decisionsHosts.js";
 import type { LinkSession } from "../link/session.js";
+import { HostAttentionRequestSchema, MAX_HOST_ATTENTION_BYTES } from "./attentionSchemas.js";
 import {
   DecisionsLinkMethod,
   EnrollHostPayloadSchema,
@@ -36,6 +42,7 @@ import {
   HostQuestionReadSchema,
   legacyContent,
   legacyItem,
+  linkedItem,
   MAX_HOST_QUESTION_LIST_BYTES,
   MAX_HOST_QUESTIONS,
   type HostQuestionList,
@@ -127,13 +134,18 @@ function legacyList(list: HostQuestionList): HostQuestionList {
   return { ...list, questions: list.questions.map(legacyItem) };
 }
 
+/** The list as a v3 Shell reads it: its items without what waits to be typed in (#18032). */
+function linkedList(list: HostQuestionList): HostQuestionList {
+  return { ...list, questions: list.questions.map(linkedItem) };
+}
+
 /**
  * The newest of the list's questions that fit one message as a session reads
  * them (#17943): with their rounds for one that reads v3, else without, so a
  * Shell from before them is never cut short by fields it isn't sent.
  */
 function boundedFor(list: HostQuestionList, rounds: boolean): HostQuestionList {
-  return bounded(rounds ? list : legacyList(list));
+  return bounded(rounds ? linkedList(list) : legacyList(list));
 }
 
 /**
@@ -199,9 +211,15 @@ export interface DecisionsHostLifetime {
     | DecisionQuestionContentResult
     | DecisionQuestionImagePartResult
     | DecisionQuestionSummariesResult
+    | DecisionQuestionPaneResult
   >;
   /** The person withdrawing one of this Host's own questions by reference. */
   cancelQuestion(reference: DecisionQuestionReference): Promise<DecisionQuestionCancelResult>;
+  /**
+   * One of this Host's own stopped deliveries read or acted on by reference
+   * (#18031), through the delivery this Host's own windows act through.
+   */
+  attention(request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionAnswer>;
 }
 
 /** How the link reaches this Host's own Decisions, loading nothing until it must. */
@@ -565,6 +583,29 @@ export function installDecisionsHostWith(
     return sequenced(session, sent);
   };
 
+  /**
+   * The pane that asked one of this Host's questions, as it shows now
+   * (#18037), for the owner that enrolled this Host only, and only while it
+   * still serves that owner once the read is done.
+   */
+  const readQuestionPane = async (
+    session: LinkSession,
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionPaneResult> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const answer = (await made.readQuestion({
+      read: "pane",
+      reference,
+    })) as DecisionQuestionPaneResult;
+    // What was read goes only to a session still served: its owner may have said otherwise meanwhile.
+    if (!servesQuestions(session)) return OFF;
+    return answer;
+  };
+
   const cancelQuestion = async (
     session: LinkSession,
     reference: DecisionQuestionReference
@@ -575,6 +616,29 @@ export function installDecisionsHostWith(
     if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     if (!servesQuestions(session)) return OFF;
     return made.cancelQuestion(reference);
+  };
+
+  /**
+   * One of the Host's stopped deliveries read or acted on (#18031), for the
+   * owner that enrolled it only. What was read goes only to a session still
+   * served, and only whole: one that doesn't fit a reply says so instead.
+   */
+  const attention = async (
+    session: LinkSession,
+    request: DecisionsHostAttentionRequest
+  ): Promise<DecisionsHostAttentionAnswer> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const answer = await made.attention(request);
+    // A resume or Mark handled that ran is answered whatever the owner said meanwhile: it happened.
+    const reads = request.action === "read" || request.action === "copy";
+    if (reads && !servesQuestions(session)) return OFF;
+    return Buffer.byteLength(JSON.stringify(answer)) > MAX_HOST_ATTENTION_BYTES
+      ? { result: "too-large" }
+      : answer;
   };
 
   const wire = ({ session }: DecisionsSessionContext): void => {
@@ -642,11 +706,25 @@ export function installDecisionsHostWith(
           ({ reference }) => readQuestionContentV2(session, reference, true)
         )
       : () => {};
+    const offQuestionPane = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.QUESTION_PANE,
+          HostQuestionContentV2ReadSchema,
+          ({ reference }) => readQuestionPane(session, reference)
+        )
+      : () => {};
     const offCancelQuestion = runtime
       ? session.registerCallHandler(
           DecisionsLinkMethod.CANCEL_QUESTION,
           HostCancelQuestionPayloadSchema,
           ({ reference }) => cancelQuestion(session, reference)
+        )
+      : () => {};
+    const offAttention = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.ATTENTION,
+          HostAttentionRequestSchema,
+          (request) => attention(session, request)
         )
       : () => {};
     let offClose: () => void = () => {};
@@ -660,7 +738,9 @@ export function installDecisionsHostWith(
       offQuestionListV3();
       offQuestionContentV2();
       offQuestionContentV3();
+      offQuestionPane();
       offCancelQuestion();
+      offAttention();
       offClose();
       unregisters.delete(unregister);
       owners.delete(session);

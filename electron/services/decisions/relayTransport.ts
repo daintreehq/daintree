@@ -185,6 +185,23 @@ export function inertAttemptDelivery(
   engine.closureWrite = closureWrite;
 }
 
+/**
+ * An attempt's drain is inert (`inertAttemptDelivery`), so it never reports
+ * a delivery for the bridge to announce. The rows the bridge reads before
+ * each drain to tell what it delivered, on every pump and every ask, would be
+ * read for nothing, every settled question with them (#18033): the attempt
+ * drains without that read.
+ */
+export function drainWithoutAnnouncing(bridge: { delivery: Pick<DeliveryEngine, "drain"> }): void {
+  Object.defineProperty(bridge, "deliverNow", {
+    configurable: true,
+    writable: true,
+    value: async (): Promise<void> => {
+      await bridge.delivery.drain();
+    },
+  });
+}
+
 const noop = (): void => {};
 
 /**

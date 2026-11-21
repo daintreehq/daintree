@@ -8,6 +8,8 @@ import {
   type LazySettingsTabEntry,
   type SettingsTab,
 } from "../settingsTabRegistry";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import { filterSettings } from "../settingsSearchUtils";
 
 const allEntries: readonly AnySettingsTabEntry[] = SETTINGS_REGISTRY;
 const globalEntries = allEntries.filter((e) => e.scope === "global");
@@ -19,13 +21,23 @@ describe("SETTINGS_REGISTRY", () => {
     expect(agents.needsIsActive).toBe(true);
   });
 
+  it("tells the decisions tab when it's hidden, so a tab read ahead doesn't count as seen with Connection first (#18058)", () => {
+    const decisions = SETTINGS_REGISTRY.find((e) => e.id === "decisions");
+    expect(decisions && "needsIsActive" in decisions && decisions.needsIsActive).toBe(true);
+  });
+
   it.each([
     ["recovery kit", "decisions-recovery-kit-save"],
     ["recovery", "decisions-recovery-kit-save"],
     ["rotate keys", "decisions-rotate-keys"],
     ["encryption", "decisions-rotate-keys"],
     ["export", "decisions-data-export"],
-  ])("indexes %s under Decisions for settings search (#18065)", (term, id) => {
+    ["involvement", "decisions-involvement"],
+    ["involved", "decisions-involvement"],
+    ["recommend", "decisions-involvement"],
+    ["consult", "decisions-involvement"],
+    ["temporary", "decisions-involvement"],
+  ])("indexes %s under Decisions for settings search (#18065, #18060)", (term, id) => {
     const decisions = SETTINGS_REGISTRY.find((e) => e.id === "decisions") as LazySettingsTabEntry;
     const hit = decisions.sections?.find((e) => e.id === id);
     expect(hit).toBeDefined();
@@ -34,6 +46,14 @@ describe("SETTINGS_REGISTRY", () => {
       .toLowerCase();
     expect(hay).toContain(term);
   });
+
+  it.each(["agents", "ask_human", "claude", "codex"])(
+    "finds Decisions' Agents section when searching %s (#18057)",
+    (term) => {
+      const ids = filterSettings(SETTINGS_SEARCH_INDEX, term).map((entry) => entry.id);
+      expect(ids).toContain("decisions-agents");
+    }
+  );
 
   it("has no duplicate tab IDs", () => {
     const ids = SETTINGS_REGISTRY.map((e) => e.id);

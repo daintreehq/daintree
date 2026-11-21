@@ -134,6 +134,12 @@ describe("submit guards (#16015)", () => {
     send({ kind: "settled-prompt-exact", updateObservedAt: Number.NaN });
     send({ kind: "settled-prompt-exact", updateObservedAt: Number.POSITIVE_INFINITY });
     send({ kind: "settled-prompt-exact", updateObservedAt: Number.NEGATIVE_INFINITY });
+    // The agent kind main read (#18116) crosses only as a non-empty string.
+    send({ kind: "settled-prompt-exact", agentIncarnation: 2, agentId: "claude" });
+    send({ kind: "settled-prompt-exact", agentId: "acme-agent" });
+    send({ kind: "settled-prompt-exact", agentId: "" });
+    send({ kind: "settled-prompt-exact", agentId: 7 });
+    send({ kind: "settled-prompt-exact", agentId: null });
 
     const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
     expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
@@ -149,6 +155,11 @@ describe("submit guards (#16015)", () => {
       { kind: "settled-prompt-exact", agentIncarnation: 2, updateObservedAt: 900 },
       { kind: "settled-prompt-exact", updateObservedAt: 1_763_500_000_123 },
       refusing,
+      refusing,
+      refusing,
+      refusing,
+      { kind: "settled-prompt-exact", agentIncarnation: 2, agentId: "claude" },
+      { kind: "settled-prompt-exact", agentId: "acme-agent" },
       refusing,
       refusing,
       refusing,

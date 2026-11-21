@@ -168,7 +168,11 @@ async function learnPast(runtime: DecisionModelRuntime, count = PAST): Promise<v
 /** A runtime that has learned, been evaluated through `cli` and given a threshold its evaluation supports. */
 async function armedRuntime(cli = rebasingCli()) {
   const made = makeRuntime({ claude: cli });
-  await made.runtime.update({ modelLearning: true, modelAdapter: "claude" });
+  await made.runtime.update({
+    modelLearning: true,
+    modelAdapter: "claude",
+    proxyAllowlisted: true,
+  });
   await learnPast(made.runtime);
   await made.runtime.evaluate();
   await made.runtime.setAutoAnswerThreshold(0.8);
@@ -188,7 +192,7 @@ function storedExamples() {
 describe("the decision model's runtime (#16026)", () => {
   it("opens no history, records nothing and arms nothing while learning is off", async () => {
     const { runtime, createAdapter } = makeRuntime({ claude: rebasingCli() });
-    await runtime.update({ modelLearning: false, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: false, modelAdapter: "claude", proxyAllowlisted: true });
 
     expect(await runtime.learner.learn(decision(1))).toBeUndefined();
     expect(existsSync(files.history)).toBe(false);
@@ -198,7 +202,7 @@ describe("the decision model's runtime (#16026)", () => {
 
   it("keeps a person's answers with secrets filtered once learning is on, CLI or not", async () => {
     const { runtime } = makeRuntime();
-    await runtime.update({ modelLearning: true, modelAdapter: null });
+    await runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true });
     await runtime.learner.learn(
       decision(1, {
         text: "Rebase it, then push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 and DB_PASSWORD=hunter2",
@@ -224,7 +228,7 @@ describe("the decision model's runtime (#16026)", () => {
   it("arms only once the chosen CLI's evaluation is stored and a threshold it supports is chosen", async () => {
     const cli = rebasingCli();
     const { runtime, onProxyChanged } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     // Nothing is asked of the CLI to find out it may not answer.
     expect(cli.calls).toHaveLength(0);
@@ -254,6 +258,70 @@ describe("the decision model's runtime (#16026)", () => {
     await runtime.setAutoAnswerThreshold(null);
     expect(runtime.proxy()).toBeNull();
     expect(onProxyChanged).toHaveBeenCalledTimes(2);
+  });
+
+  // #18062: a threshold saved before the person chose to let the model answer arms nothing.
+  it("arms nothing from a supported threshold until the setting says the person lets it answer", async () => {
+    const { runtime, onProxyChanged } = makeRuntime({ claude: rebasingCli() });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: false });
+    await learnPast(runtime);
+    await runtime.evaluate();
+    await runtime.setAutoAnswerThreshold(0.8);
+    expect(runtime.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+    expect(runtime.proxy()).toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBeNull();
+    expect(onProxyChanged).not.toHaveBeenCalled();
+
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+    expect(runtime.proxy()).not.toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBe(0.8);
+    expect(onProxyChanged).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the person's withdrawal over a setting that still says yes, until they choose again", async () => {
+    const { runtime, onProxyChanged, onChanged } = await armedRuntime();
+    const changed = onChanged.mock.calls.length;
+
+    runtime.withdrawConsent();
+    expect(runtime.proxy()).toBeNull();
+    // Settings in every window hears of it, though nothing was saved.
+    expect(onChanged.mock.calls.length).toBeGreaterThan(changed);
+    // A setting whose withdrawal wasn't saved still says yes.
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
+    expect(runtime.proxy()).toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBeNull();
+
+    const proxied = onProxyChanged.mock.calls.length;
+    await runtime.grantConsent();
+    expect(runtime.proxy()).not.toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBe(0.8);
+    expect(onProxyChanged).toHaveBeenCalledTimes(proxied + 1);
+  });
+
+  it("takes a withdrawal at once, ahead of a change queued before it, which can't arm it again", async () => {
+    const { runtime, onProxyChanged } = await armedRuntime();
+    const changed = onProxyChanged.mock.calls.length;
+
+    const earlier = runtime.update({
+      modelLearning: true,
+      modelAdapter: "claude",
+      proxyAllowlisted: true,
+    });
+    const withdrawn = runtime.update({
+      modelLearning: true,
+      modelAdapter: "claude",
+      proxyAllowlisted: false,
+    });
+    // Before either queued change has run.
+    expect(runtime.proxy()).toBeNull();
+    expect(onProxyChanged).toHaveBeenCalledTimes(changed + 1);
+
+    await Promise.all([earlier, withdrawn]);
+    expect(runtime.proxy()).toBeNull();
+    expect(runtime.snapshot().answeringFrom).toBeNull();
+    // The threshold stays saved: letting it answer again arms it at the same confidence.
+    expect(runtime.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+    expect(onProxyChanged).toHaveBeenCalledTimes(changed + 1);
   });
 
   it("starts a new evaluation with no threshold, so it disarms until one is chosen again", async () => {
@@ -320,7 +388,7 @@ describe("the decision model's runtime (#16026)", () => {
       .proxy()!
       .suggest(proxyInput({ questionId: "q-new-0002" }), new AbortController().signal);
     await vi.waitFor(() => expect(cli.calls).toHaveLength(calls + 1));
-    await runtime.update({ modelLearning: false, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: false, modelAdapter: "claude", proxyAllowlisted: true });
     release();
 
     await expect(running).resolves.toEqual({ action: "abstain", reason: "model-off" });
@@ -332,7 +400,7 @@ describe("the decision model's runtime (#16026)", () => {
     const claude = rebasingCli();
     const codex = rebasingCli();
     const { runtime, onProxyChanged, createAdapter } = makeRuntime({ claude, codex });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     await runtime.evaluate();
     await runtime.setAutoAnswerThreshold(0.8);
@@ -340,11 +408,11 @@ describe("the decision model's runtime (#16026)", () => {
     expect(armed).not.toBeNull();
 
     // The same preferences again change nothing: the attempt asking this proxy carries on.
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     expect(runtime.proxy()).toBe(armed);
     expect(onProxyChanged).toHaveBeenCalledTimes(1);
 
-    await runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    await runtime.update({ modelLearning: true, modelAdapter: "codex", proxyAllowlisted: true });
     expect(createAdapter.mock.calls.map(([adapter]) => adapter)).toEqual(["claude", "codex"]);
     expect(runtime.proxy()).toBeNull();
     expect(runtime.getEvaluation()).toBeNull();
@@ -353,12 +421,12 @@ describe("the decision model's runtime (#16026)", () => {
     expect(codex.calls).toHaveLength(0);
 
     // Back to the CLI the stored evaluation is for: armed again, without evaluating.
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     expect(runtime.proxy()).not.toBeNull();
     expect(onProxyChanged).toHaveBeenCalledTimes(3);
 
     // Evaluating codex replays through codex alone, and its report replaces claude's.
-    await runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    await runtime.update({ modelLearning: true, modelAdapter: "codex", proxyAllowlisted: true });
     const claudeCalls = claude.calls.length;
     await expect(runtime.evaluate()).resolves.toMatchObject({ adapter: "codex" });
     expect(codex.calls.length).toBeGreaterThan(0);
@@ -372,7 +440,11 @@ describe("the decision model's runtime (#16026)", () => {
 
     const cli = rebasingCli();
     const later = makeRuntime({ claude: cli });
-    await later.runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await later.runtime.update({
+      modelLearning: true,
+      modelAdapter: "claude",
+      proxyAllowlisted: true,
+    });
     expect(later.runtime.proxy()).not.toBeNull();
     expect(later.runtime.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
     expect(cli.calls).toHaveLength(0);
@@ -393,7 +465,11 @@ describe("the decision model's runtime (#16026)", () => {
     for (const value of damaged) {
       writeFileSync(files.evaluation, typeof value === "string" ? value : JSON.stringify(value));
       const later = makeRuntime({ claude: rebasingCli() });
-      await later.runtime.update({ modelLearning: true, modelAdapter: "claude" });
+      await later.runtime.update({
+        modelLearning: true,
+        modelAdapter: "claude",
+        proxyAllowlisted: true,
+      });
       expect(later.runtime.proxy(), JSON.stringify(value).slice(0, 60)).toBeNull();
       await later.runtime.close();
     }
@@ -413,7 +489,7 @@ describe("the decision model's runtime (#16026)", () => {
   it("cancels an evaluation closed between taking its turn and starting, before it sends anything", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
     // The idle queue runs the evaluation's turn in the next microtask; this close lands right after it.
@@ -431,10 +507,14 @@ describe("the decision model's runtime (#16026)", () => {
     const claude = rebasingCli();
     const codex = rebasingCli();
     const { runtime } = makeRuntime({ claude, codex });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
-    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const switched = runtime.update({
+      modelLearning: true,
+      modelAdapter: "codex",
+      proxyAllowlisted: true,
+    });
     const evaluating = runtime.evaluate();
     await switched;
     await expect(evaluating).resolves.toMatchObject({ adapter: "codex" });
@@ -464,13 +544,13 @@ describe("the decision model's runtime (#16026)", () => {
       },
     });
     runtimes.push(runtime);
-    await expect(runtime.update({ modelLearning: true, modelAdapter: null })).rejects.toThrow(
-      /readonly/
-    );
+    await expect(
+      runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true })
+    ).rejects.toThrow(/readonly/);
     expect(closed).toHaveBeenCalledTimes(1);
 
     fail = false;
-    await runtime.update({ modelLearning: true, modelAdapter: null });
+    await runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true });
     await runtime.learner.learn(decision(1));
     await runtime.close();
     expect(closed).toHaveBeenCalledTimes(2);
@@ -480,7 +560,7 @@ describe("the decision model's runtime (#16026)", () => {
   it("stops on close: an evaluation running is cancelled, and no replacement is asked for", async () => {
     const cli = rebasingCli();
     const { runtime, onProxyChanged } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     const release = cli.hold();
 
@@ -502,7 +582,7 @@ describe("the decision model's settings (#16027)", () => {
     const { runtime, onChanged } = makeRuntime();
     expect(runtime.snapshot().historyCount).toBeNull();
 
-    await runtime.update({ modelLearning: true, modelAdapter: null });
+    await runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true });
     expect(runtime.snapshot()).toMatchObject({ historyCount: 0, answeringFrom: null });
     const opened = onChanged.mock.calls.length;
     expect(opened).toBeGreaterThan(0);
@@ -513,7 +593,7 @@ describe("the decision model's settings (#16027)", () => {
     expect(runtime.snapshot().historyCount).toBe(1);
     expect(onChanged).toHaveBeenCalledTimes(opened + 1);
 
-    await runtime.update({ modelLearning: false, modelAdapter: null });
+    await runtime.update({ modelLearning: false, modelAdapter: null, proxyAllowlisted: true });
     expect(runtime.snapshot().historyCount).toBeNull();
     expect(existsSync(files.history)).toBe(true);
   });
@@ -521,7 +601,7 @@ describe("the decision model's settings (#16027)", () => {
   it("runs one evaluation at a time for Settings, and stores its report with no threshold", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     const release = cli.hold();
 
@@ -541,7 +621,7 @@ describe("the decision model's settings (#16027)", () => {
   it("refuses to start an evaluation without learning on and a CLI chosen", async () => {
     const { runtime } = makeRuntime();
     expect(() => runtime.startEvaluation()).toThrow(/learning on and a CLI/);
-    await runtime.update({ modelLearning: true, modelAdapter: null });
+    await runtime.update({ modelLearning: true, modelAdapter: null, proxyAllowlisted: true });
     expect(() => runtime.startEvaluation()).toThrow(/learning on and a CLI/);
     expect(runtime.snapshot().running).toBeNull();
   });
@@ -549,7 +629,7 @@ describe("the decision model's settings (#16027)", () => {
   it("cancels only the run it names, and keeps no report from a cancelled one", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
     // A cancel naming another run leaves this one to finish with its report.
@@ -582,10 +662,14 @@ describe("the decision model's settings (#16027)", () => {
     const claude = rebasingCli();
     const codex = rebasingCli();
     const { runtime } = makeRuntime({ claude, codex });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
 
-    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const switched = runtime.update({
+      modelLearning: true,
+      modelAdapter: "codex",
+      proxyAllowlisted: true,
+    });
     const run = runtime.startEvaluation();
     expect(run.adapter).toBe("claude");
     await switched;
@@ -601,14 +685,14 @@ describe("the decision model's settings (#16027)", () => {
   it("ends a run as cancelled when learning is turned off under it", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     const release = cli.hold();
 
     const run = runtime.startEvaluation();
     await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
     const asked = cli.calls.length;
-    await runtime.update({ modelLearning: false, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: false, modelAdapter: "claude", proxyAllowlisted: true });
     release();
 
     await vi.waitFor(() =>
@@ -629,7 +713,7 @@ describe("the decision model's settings (#16027)", () => {
       now: () => START,
     });
     runtimes.push(runtime);
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     const first = await runtime.evaluate();
     const second = await runtime.evaluate();
@@ -667,7 +751,7 @@ describe("the decision model's settings (#16027)", () => {
   it("cancels an evaluation running when the history is cleared, and stores nothing from it", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     await learnPast(runtime);
     const release = cli.hold();
 
@@ -1186,7 +1270,7 @@ describe("the decision model through the bridge (#16026)", () => {
   it("asks nothing and publishes nothing while unarmed, and learns from the person's answer", async () => {
     const cli = rebasingCli();
     const { runtime } = makeRuntime({ claude: cli });
-    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude", proxyAllowlisted: true });
     const loop = await bridgeLoop(runtime);
 
     const { questionId } = await loop.ask({

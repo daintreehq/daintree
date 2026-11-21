@@ -7,7 +7,7 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SeverityMark } from "@/lib/statusSeverity";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import type { DecisionsRelayCheck, DecisionsStatus } from "@shared/types/decisions";
-import { useRelayCheck } from "./useRelayCheck";
+import type { UseRelayCheckResult } from "./useRelayCheck";
 import { useRelayIdentity } from "./useRelayIdentity";
 import {
   describeCompatibility,
@@ -28,7 +28,8 @@ import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
 import { DecisionsSetupCheck } from "./DecisionsSetupCheck";
-import { SETUP_STEP_LABEL, unfinishedReason } from "./setupCheckCopy";
+import { describeUnfinished, unfinishedReason } from "./setupCheckCopy";
+import { landOnAgents } from "./agentsLanding";
 import { useSetupCheck } from "./useSetupCheck";
 
 function relayHost(origin: string | undefined): string | null {
@@ -128,6 +129,48 @@ function describeConnection(status: DecisionsStatus): {
   }
 }
 
+/** The warning's next steps, in the order its words give them; none while a check it would start runs. */
+function UnfinishedActions({
+  reason,
+  agentsLeft,
+  checking,
+  busy,
+  starting,
+  onFinishSetup,
+  onCheck,
+}: {
+  reason: ReturnType<typeof unfinishedReason>;
+  agentsLeft: boolean;
+  checking: boolean;
+  busy: boolean;
+  starting: boolean;
+  onFinishSetup: () => void;
+  onCheck: () => void;
+}) {
+  const setupAction =
+    reason === "kit" ? (
+      <Button variant="outline" size="sm" onClick={onFinishSetup}>
+        Save recovery kit
+      </Button>
+    ) : reason !== null && !checking ? (
+      <Button variant="outline" size="sm" disabled={busy} loading={starting} onClick={onCheck}>
+        {reason === "check" ? "Check setup" : "Check again"}
+      </Button>
+    ) : null;
+  const agentsAction = agentsLeft ? (
+    <Button variant="outline" size="sm" onClick={landOnAgents}>
+      Choose agents
+    </Button>
+  ) : null;
+  if (setupAction === null && agentsAction === null) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {setupAction}
+      {agentsAction}
+    </div>
+  );
+}
+
 /**
  * Connection: the service state (#16001), and the relay's address with its
  * unsigned check (#16005), which main makes. Without a relay set up it takes
@@ -137,18 +180,23 @@ function describeConnection(status: DecisionsStatus): {
  * relay set up it also offers to deploy one (#16023); with one, in a local
  * window, to update it (#16201), checking it again once the update ends. It
  * offers to remove the relay from Cloudflare, the one set up here or one a
- * check just found (#16202).
+ * check just found (#16202). The tab owns the relay check, since
+ * Notifications reads what it saw (#18061).
  */
 export function DecisionsConnectionSection({
   status,
+  relay,
   locked = false,
   onChanged,
   onClose,
   onFinishSetup,
   onPairPhone,
   facts,
+  agentsOff = false,
 }: {
   status: DecisionsStatus;
+  /** The relay check this section runs and shows. */
+  relay: UseRelayCheckResult;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
   /**
@@ -164,15 +212,21 @@ export function DecisionsConnectionSection({
   onPairPhone?: () => void;
   /** What was observed about the rest of Decisions, shown under the status while connected. */
   facts?: ReactNode;
+  /**
+   * Main's saved policy, as last read, switches on none of the agents Agents
+   * shows for this computer's launches (#18057). False before the first read.
+   */
+  agentsOff?: boolean;
 }) {
   const { label, detail, severity } = describeConnection(status);
-  // A revoked relay, or one that can't be used, says so on its own row: no kit or check changes that.
-  const reason =
-    status.state !== "revoked" && status.problem === undefined ? unfinishedReason(status) : null;
+  // A revoked relay, or one that can't be used, says so on its own row: no kit, check or agent changes that.
+  const usable = status.state !== "revoked" && status.problem === undefined;
+  const reason = usable ? unfinishedReason(status) : null;
+  const agentsLeft = usable && status.relayOrigin !== undefined && agentsOff;
+  const unfinished = describeUnfinished(reason, agentsLeft);
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
-  const relay = useRelayCheck();
   const identity = useRelayIdentity((next) => onChanged?.(next));
   const setup = useSetupCheck(status.relayOrigin);
   const checking = setup.run?.state === "running";
@@ -196,7 +250,7 @@ export function DecisionsConnectionSection({
   // How main's claim ended, heard as it ends: the outcome row itself isn't a live region.
   const deployOutcome =
     deploy?.claim && deploy.claim.state !== "claiming" && (deployClaimedHere || !deployClaimed)
-      ? describeRelayDeploy(deploy)
+      ? describeRelayDeploy(deploy, { agentsHere: !isRemoteWindow() })
       : null;
   const deployAnnouncement = deployOutcome ? `${deployOutcome.label}. ${deployOutcome.detail}` : "";
   const busy = locked || identity.pending !== null || deployClaiming;
@@ -361,13 +415,15 @@ export function DecisionsConnectionSection({
     relay.run(draft);
   };
 
-  const confirmDisconnect = () => {
-    identity.disconnect().then(
-      (done) => {
-        if (done) setDisconnectOpen(false);
-      },
-      () => {}
-    );
+  const confirmDisconnect = (oneClick: boolean) => {
+    identity
+      .disconnect({ oneClick, relayOrigin: savedOrigin, keys: status.keysVersion ?? null })
+      .then(
+        (done) => {
+          if (done) setDisconnectOpen(false);
+        },
+        () => {}
+      );
   };
 
   return (
@@ -386,42 +442,23 @@ export function DecisionsConnectionSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {deployAnnouncement}
       </span>
-      {reason === "kit" && (
+      {unfinished !== null && (
         <Callout
           severity="warning"
           title="Setup isn't finished"
           action={
-            <Button variant="outline" size="sm" onClick={() => onFinishSetup?.()}>
-              Save recovery kit
-            </Button>
+            <UnfinishedActions
+              reason={reason}
+              agentsLeft={agentsLeft}
+              checking={checking}
+              busy={busy}
+              starting={setup.starting}
+              onFinishSetup={() => onFinishSetup?.()}
+              onCheck={() => setup.start()}
+            />
           }
         >
-          Save a recovery kit and verify it, then run the setup check to finish. Everything on the
-          relay is encrypted with keys only this computer holds: without a kit or these keys, none
-          of it can be recovered, by anyone.
-        </Callout>
-      )}
-      {reason !== null && reason !== "kit" && (
-        <Callout
-          severity="warning"
-          title="Setup isn't finished"
-          action={
-            checking ? undefined : (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                loading={setup.starting}
-                onClick={() => setup.start()}
-              >
-                {reason === "check" ? "Check setup" : "Check again"}
-              </Button>
-            )
-          }
-        >
-          {reason === "check"
-            ? "Run the setup check to finish. It sends a test question to your paired phones and types your answer into a diagnostic terminal that runs no agent."
-            : `The last setup check stopped at ${SETUP_STEP_LABEL[reason.failedStep].toLowerCase()}. Setup finishes once every step passes.`}
+          {unfinished}
         </Callout>
       )}
       <SettingsGroup>
@@ -660,6 +697,9 @@ export function DecisionsConnectionSection({
       <DecisionsDisconnectDialog
         isOpen={disconnectOpen}
         relayOrigin={savedOrigin}
+        keysStored={keysStored}
+        keysVersion={status.keysVersion}
+        kitCurrent={status.recoveryKitCurrent === true}
         disconnecting={identity.pending === "disconnect"}
         error={identity.error?.action === "disconnect" ? identity.error.message : null}
         onCancel={() => {

@@ -483,6 +483,9 @@ function KitHoverCard({
   const controlled = typeof open === "boolean";
   const shown = controlled ? open : ownOpen;
   const notify = fn(onOpenChange);
+  // A plugin holding `open` with no callback pins the card: no handler of ours
+  // may stand in for one, or Tooltip would count it as closable on Escape.
+  const pinned = controlled && notify === undefined;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Why the card is up. Keyboard focus on the trigger keeps it until focus
   // leaves or Escape; the pointer keeps it while over the trigger, the card or
@@ -576,7 +579,7 @@ function KitHoverCard({
   return (
     <Tooltip
       open={shown}
-      onOpenChange={handleOpenChange}
+      onOpenChange={pinned ? undefined : handleOpenChange}
       delayDuration={delayOf(openDelay, DEFAULT_OPEN_DELAY)}
       // A hover card's body is the content: it stays while it is read, through
       // dialog transitions, and while the pointer crosses onto it (WCAG 1.4.13).
@@ -602,7 +605,7 @@ function KitHoverCard({
         onPointerEnter={enter}
         onPointerLeave={leaveCard}
         onEscapeKeyDown={() => {
-          escaping.current = true;
+          if (!pinned) escaping.current = true;
         }}
         {...HOVER_CARD_FENCE}
       >

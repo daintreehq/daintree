@@ -6,14 +6,24 @@ import type {
   DecisionsConnectResult,
   DecisionsDevicesResult,
   DecisionsKitVerifyResult,
+  DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsStatus,
   VerifyDecisionsRecoveryKitPayload,
 } from "@shared/types/decisions";
+import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { _resetHostPlatformForTests } from "@/hooks/useHostPlatform";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { DecisionsSettingsTab } from "../DecisionsSettingsTab";
+
+const remote = vi.hoisted(() => ({ hostName: null as string | null }));
+vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
+  useRemoteHostName: () => remote.hostName,
+}));
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const SECRET = "claim-secret-0123456789abcdef";
@@ -32,6 +42,7 @@ function pushStatus(status: DecisionsStatus): void {
 const verifyRecoveryKit =
   vi.fn<(payload: VerifyDecisionsRecoveryKitPayload) => Promise<DecisionsKitVerifyResult>>();
 const listDevices = vi.fn<() => Promise<DecisionsDevicesResult>>();
+const getInvolvement = vi.fn<() => Promise<DecisionsInvolvementRead>>();
 
 function kitPassphraseField(): HTMLInputElement | null {
   return document.querySelector<HTMLInputElement>(
@@ -50,6 +61,7 @@ async function renderTab(onClose?: SettingsTabClose) {
 
 describe("DecisionsSettingsTab", () => {
   beforeEach(() => {
+    remote.hostName = null;
     getStatus.mockReset();
     setEnabled.mockReset();
     checkRelay.mockReset();
@@ -57,6 +69,8 @@ describe("DecisionsSettingsTab", () => {
     verifyRecoveryKit.mockReset();
     listDevices.mockReset();
     listDevices.mockReturnValue(new Promise(() => {}));
+    getInvolvement.mockReset();
+    getInvolvement.mockReturnValue(new Promise(() => {}));
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {
@@ -66,6 +80,7 @@ describe("DecisionsSettingsTab", () => {
           claimRelay,
           verifyRecoveryKit,
           listDevices,
+          getInvolvement,
           // The Remote Hosts, Policy, decision model, setup check, Questions and question list reads, which these tests leave unanswered.
           listQuestions: () => new Promise(() => {}),
           listHosts: () => new Promise(() => {}),
@@ -309,8 +324,9 @@ describe("DecisionsSettingsTab", () => {
         state: "not-connected",
         consentedAt: 1,
         relayOrigin: ORIGIN,
+        keysStored: true,
         recoveryKitVerifiedAt: 7,
-        recoveryKitCoverage: "current",
+        recoveryKitCurrent: true,
       },
     });
     await renderTab();
@@ -437,6 +453,282 @@ describe("DecisionsSettingsTab", () => {
       pushStatus({ state: "off", consentedAt: 1, relayOrigin: ORIGIN, revision: 3 })
     );
     expect(listDevices).toHaveBeenCalledTimes(2);
+  });
+
+  describe("no agent switched on (#18057)", () => {
+    const FINISHED: DecisionsStatus = {
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    };
+    function policy(askHumanAgents: string[], revision: number): DecisionsPolicy {
+      return {
+        gates: [],
+        defaultQuestionExpiryMs: null,
+        maxQuestionExpiryMs: null,
+        askHumanAgents,
+        revision,
+      };
+    }
+    /** Each policy read main is asked for, answered by the test. */
+    let reads: Array<{ resolve: (p: DecisionsPolicy) => void; reject: (e: unknown) => void }>;
+    const agentsOffWarning = () => screen.queryByText(/No agents are switched on/);
+    const probed = useCliAvailabilityStore.getState();
+
+    beforeEach(() => {
+      useCliAvailabilityStore.setState({
+        availability: { claude: "ready" },
+        hasRealData: true,
+        error: null,
+      });
+      reads = [];
+      window.electron.decisions.getPolicy = () =>
+        new Promise<DecisionsPolicy>((resolve, reject) => reads.push({ resolve, reject }));
+      getStatus.mockResolvedValue(FINISHED);
+      checkRelay.mockReturnValue(new Promise(() => {}));
+    });
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+      useCliAvailabilityStore.setState({
+        availability: probed.availability,
+        hasRealData: probed.hasRealData,
+        error: probed.error,
+      });
+    });
+
+    it("says so only once main has answered, and follows what it answers next", async () => {
+      await renderTab();
+      // Unread is never taken for none.
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByText("Setup isn't finished")).toBeNull();
+
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+      expect(agentsOffWarning()).toBeTruthy();
+
+      // Another window switches one on; main pushes the status and the policy is read again.
+      act(() => pushStatus({ ...FINISHED, revision: 2 }));
+      await act(async () => reads.at(-1)!.resolve(policy(["claude"], 2)));
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByText("Setup isn't finished")).toBeNull();
+
+      act(() => pushStatus({ ...FINISHED, revision: 3 }));
+      await act(async () => reads.at(-1)!.resolve(policy([], 3)));
+      expect(agentsOffWarning()).toBeTruthy();
+    });
+
+    it("keeps saying what the last read answered when a refresh fails, as the switches and facts line do", async () => {
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeTruthy();
+
+      act(() => pushStatus({ ...FINISHED, revision: 2 }));
+      await act(async () => reads.at(-1)!.reject(new Error("bridge closed")));
+      expect(agentsOffWarning()).toBeTruthy();
+      expect(screen.getByTestId("decisions-status-facts").textContent).toContain(
+        "No agents switched on"
+      );
+    });
+
+    it("tells none at once from an empty policy, and waits for the CLI probe to count a listed one (#18059)", async () => {
+      useCliAvailabilityStore.setState({ hasRealData: false });
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeTruthy();
+      cleanup();
+
+      await renderTab();
+      // Codex is switched on but not installed: no launch of it can ask.
+      await act(async () => reads.at(-1)!.resolve(policy(["codex"], 1)));
+      expect(agentsOffWarning()).toBeNull();
+
+      act(() => useCliAvailabilityStore.setState({ hasRealData: true }));
+      expect(agentsOffWarning()).toBeTruthy();
+      expect(screen.getByTestId("decisions-status-facts").textContent).toContain(
+        "No agents switched on"
+      );
+    });
+
+    it("never says so in a remote window, whose agents are the Host's", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio" };
+      _resetHostPlatformForTests();
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeNull();
+      expect(screen.queryByRole("button", { name: "Choose agents" })).toBeNull();
+    });
+  });
+
+  it("groups the phone and desktop notification settings apart from Questions, from Connection's check and Devices' read (#18061)", async () => {
+    getStatus.mockResolvedValue({
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      agentStoppedPushes: true,
+      desktopNotifications: false,
+      revision: 1,
+    });
+    const versions = { protocolMin: 1, protocolMax: 1, workerVersion: "0.4.0" };
+    checkRelay.mockResolvedValue({
+      result: "claimed",
+      origin: ORIGIN,
+      compatibility: { relay: versions, daintree: versions, diverges: false },
+      advertisesAgentStoppedPushes: false,
+    });
+    listDevices.mockResolvedValue({
+      result: "listed",
+      devices: [
+        {
+          deviceId: "dev_pixel",
+          label: "Pixel 9",
+          role: "phone",
+          pairedAt: "2026-10-30T00:00:00.000Z",
+          lastSeenAt: null,
+          pushEnabled: false,
+        },
+      ],
+    });
+    await renderTab();
+    await screen.findByText("Pixel 9");
+
+    const notifications = document.getElementById("decisions-notifications")!;
+    const questions = document.getElementById("decisions-questions")!;
+    const holdSwitch = () =>
+      within(notifications).getByRole("switch", {
+        name: /Hold phone notifications/,
+      }) as HTMLButtonElement;
+    const stopped = within(notifications).getByRole("switch", {
+      name: /Notify my phone when an agent stops/,
+    });
+    expect(
+      within(questions).queryByRole("switch", { name: /Hold phone notifications/ })
+    ).toBeNull();
+    expect(
+      within(questions).queryByRole("switch", { name: /Notify my phone when an agent stops/ })
+    ).toBeNull();
+    expect(
+      within(notifications).getByRole("button", { name: "Open notification settings" })
+    ).toBeTruthy();
+    expect(holdSwitch().disabled).toBe(true);
+    // One read of the devices and one check of the relay, shared with Devices and Connection.
+    expect(listDevices).toHaveBeenCalledOnce();
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    const described = (stopped.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain(
+      "Your relay lists no paired phone or tablet with notifications turned on"
+    );
+    expect(described).toContain("Your relay didn't advertise support for them");
+
+    act(() =>
+      pushStatus({
+        state: "connected",
+        consentedAt: 1,
+        relayOrigin: ORIGIN,
+        agentStoppedPushes: true,
+        revision: 2,
+      })
+    );
+    expect(holdSwitch().disabled).toBe(false);
+  });
+
+  it("says once, in a remote window, that these settings are this computer's and what the Host runs under (#18066)", async () => {
+    remote.hostName = "build-box";
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    // This computer's own default, which the Host's seven days mustn't replace.
+    window.electron.decisions.getPolicy = async () => ({
+      gates: [],
+      defaultQuestionExpiryMs: 3 * 24 * 60 * 60_000,
+      maxQuestionExpiryMs: 30 * 24 * 60 * 60_000,
+      askHumanAgents: [],
+      revision: 0,
+    });
+    await renderTab();
+    expect(document.body.textContent?.split("These settings are saved on")).toHaveLength(2);
+    expect((await screen.findByRole("combobox", { name: "Default expiry" })).textContent).toBe(
+      "3 days"
+    );
+
+    const notes = screen.getAllByTestId("decisions-remote-window-note");
+    expect(notes).toHaveLength(1);
+    const note = notes[0]!.textContent ?? "";
+    expect(note).toMatch(/^These settings are saved on this (Mac|PC|machine)\./);
+    expect(note).toMatch(
+      /On build-box, once this (Mac|PC|machine) enrolls it, every agent that supports ask_human gets it,/
+    );
+    expect(note).toContain("a question waits 7 days unless its agent sets a time");
+    expect(note).toContain("from a local window");
+    // The note is why Agents is missing here, and Questions' default stays this computer's.
+    expect(document.getElementById("decisions-agents")).toBeNull();
+    const expiry = document.getElementById("decisions-questions-expiry")?.textContent ?? "";
+    expect(expiry).toContain("on this computer");
+    expect(expiry).not.toContain("Remote Host");
+  });
+
+  it("says nothing of a Host in a local window, or while Decisions is off (#18066)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    await renderTab();
+    expect(screen.queryByTestId("decisions-remote-window-note")).toBeNull();
+    expect(document.getElementById("decisions-agents")).not.toBeNull();
+    cleanup();
+
+    remote.hostName = "build-box";
+    getStatus.mockResolvedValue({ state: "off" });
+    await renderTab();
+    expect(screen.queryByTestId("decisions-remote-window-note")).toBeNull();
+  });
+
+  it("keeps Involvement behind the switch, and reads it only while the tab shows (#18060)", async () => {
+    getStatus.mockResolvedValue({ state: "off" });
+    await renderTab();
+    expect(document.getElementById("decisions-involvement")).toBeNull();
+    cleanup();
+
+    getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, revision: 1 });
+    getInvolvement.mockResolvedValue({
+      result: "read",
+      role: "owner",
+      settable: true,
+      preference: {
+        status: "available",
+        normalMode: "recommend",
+        consultCount: 2,
+        override: null,
+        mode: "recommend",
+        overrideActive: false,
+        revision: 3,
+        setOn: "phone",
+        setAt: "2026-11-18T09:00:00.000Z",
+        lastSyncedAt: "2026-11-18T09:59:00.000Z",
+        stale: false,
+      },
+    });
+    const tab = (isActive: boolean) => (
+      <TooltipProvider>
+        <DecisionsSettingsTab isActive={isActive} />
+      </TooltipProvider>
+    );
+    // A visited tab stays mounted while another shows.
+    const view = render(tab(false));
+    await act(async () => {});
+    const section = document.getElementById("decisions-involvement");
+    expect(section).not.toBeNull();
+    expect(within(section!).getByText("How involved you want to be")).toBeTruthy();
+    expect(getInvolvement).not.toHaveBeenCalled();
+
+    view.rerender(tab(true));
+    await act(async () => {});
+    expect(getInvolvement).toHaveBeenCalledTimes(1);
+    expect(within(section!).getByTestId("decisions-involvement-mode").textContent).toBe(
+      "Bring a recommendation"
+    );
   });
 
   it("closes Settings before it opens the inbox (#17231)", async () => {

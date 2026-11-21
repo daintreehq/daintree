@@ -1,13 +1,14 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { FactRun } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { pluralize } from "@/lib/pluralize";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
-import { useDecisionsAgentSupport } from "./DecisionsAgentsSection";
+import { switchedOnCount, useDecisionsAgentSupport } from "./DecisionsAgentsSection";
 import { deviceKind } from "./devicesCopy";
 import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
@@ -66,10 +67,8 @@ function agentsFact(
   installedError: string | null
 ): string {
   if (policy === null) return loadError === null ? "Reading agents…" : "Agents couldn't be read";
-  if (!installedRead)
-    return installedError === null ? "Reading agents…" : "Agents couldn't be read";
-  // The switches the Agents section shows: one left on for an agent since removed isn't counted.
-  const on = supported.filter((id) => policy.askHumanAgents.includes(id)).length;
+  const on = switchedOnCount(policy.askHumanAgents, supported, installedRead);
+  if (on === null) return installedError === null ? "Reading agents…" : "Agents couldn't be read";
   return on === 0 ? "No agents switched on" : `${pluralize(on, "agent")} switched on`;
 }
 
@@ -91,7 +90,7 @@ function questionFact(latest: LatestDecisionQuestion): string | number {
  * ask, and when the last question came in. Every fact holds its place from
  * the first render, and the line never wraps, so the page doesn't move as
  * the facts arrive; in a narrow window its tail is clipped, and the whole
- * line is its title. A remote window's agents are the Host's, so it names none.
+ * line is its tooltip. A remote window's agents are the Host's, so it names none.
  */
 export function DecisionsStatusFacts({
   devices,
@@ -118,8 +117,10 @@ export function DecisionsStatusFacts({
     facts.push(question);
   }
   return (
-    <span className="block truncate" title={words.join(" · ")} data-testid="decisions-status-facts">
-      <FactRun facts={facts} />
-    </span>
+    <TruncatedTooltip content={words.join(" · ")}>
+      <span className="block truncate" data-testid="decisions-status-facts">
+        <FactRun facts={facts} />
+      </span>
+    </TruncatedTooltip>
   );
 }

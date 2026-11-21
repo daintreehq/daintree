@@ -40,7 +40,17 @@ vi.mock("../relayRemove", async (importOriginal) => ({
   openRelayRemoveTerminal,
 }));
 
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { useRelayCheck } from "../useRelayCheck";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(
+  props: Omit<ComponentProps<typeof ConnectionSection>, "relay">
+) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://relay.example.workers.dev";
 const COMPATIBLE = {
@@ -229,7 +239,10 @@ describe("Remove relay", () => {
     expect(dialog.textContent).toContain("Remove 'relay.example.workers.dev' from Cloudflare?");
     expect(dialog.textContent).toMatch(/Worker.*attachments.*R2 bucket/);
     expect(dialog.textContent).toMatch(/Every phone paired with it stops working/);
-    expect(dialog.textContent).toMatch(/can't be undone/);
+    expect(dialog.textContent).toMatch(/a relay deployed again starts empty/);
+    expect(dialog.textContent).toMatch(/each phone paired to it afresh/);
+    // The specific consequence, never the generic irreversibility ConfirmDialog flags.
+    expect(dialog.textContent).not.toMatch(/can['’]t be undone|cannot be undone/);
     expect(dialog.textContent).toMatch(/type the Worker's name before it deletes anything/);
     const history = screen.getByRole("checkbox", {
       name: "Also delete this computer's decision history",

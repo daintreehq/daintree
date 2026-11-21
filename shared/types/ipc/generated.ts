@@ -939,7 +939,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisionsQuestion.js").DecisionQuestionDeclineResult;
   };
   "decisions:delete-local-data": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsLocalDeleteResult;
   };
   "decisions:delete-relay-data": {
@@ -947,7 +947,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisions.js").DecisionsRelayDeleteResult;
   };
   "decisions:disconnect-relay": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsStatus;
   };
   "decisions:enroll-host": {
@@ -1010,6 +1010,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImageByReferencePayload];
     result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
   };
+  "decisions:get-question-pane-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionPaneResult;
+  };
   "decisions:get-question-summaries": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
@@ -1027,6 +1031,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:host-attention": {
+    args: [request: import("../decisionsAttention.js").DecisionsHostAttentionRequest];
+    result: import("../decisionsAttention.js").DecisionsHostAttentionResult;
   };
   "decisions:list-answer-destinations": {
     args: [questionId: string];
@@ -1063,6 +1071,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:reassign-answer": {
     args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:remove-settled-questions": {
+    args: [];
+    result: import("../decisions.js").DecisionsHistoryRemoveResult;
   };
   "decisions:report-composer-drafts": {
     args: [keys: string[]];
@@ -1123,10 +1135,6 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-model-threshold": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
-  };
-  "decisions:set-proxy-allowlisted": {
-    args: [allowed: boolean];
-    result: import("../decisions.js").DecisionsPolicy;
   };
   "decisions:set-terminal-snapshots": {
     args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];

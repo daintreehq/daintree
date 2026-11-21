@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,30 +18,18 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/unused" },
 }));
 
-// Atomic writes pass through; `fault` fails the next one before its rename, or after it.
-const writeFaults = vi.hoisted(() => ({ fault: null as null | "before-rename" | "after-rename" }));
-vi.mock("../../../utils/fs.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
-  return {
-    ...actual,
-    resilientAtomicWriteFile: async (
-      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
-    ) => {
-      const fault = writeFaults.fault;
-      writeFaults.fault = null;
-      if (fault === "before-rename") throw new Error("rename failed");
-      await actual.resilientAtomicWriteFile(...args);
-      if (fault === "after-rename") throw new Error("directory sync failed");
-    },
-  };
-});
-
 import {
   _resetSecretStorageSessionForTests,
   keychainSessionFailure,
   SECRET_STORAGE_TIMEOUT_MS,
 } from "../../osKeychain.js";
-import { DecisionsKeyStoreError, KeyFileChangedError, SealedKeyStore } from "../keyStore.js";
+import {
+  DecisionsKeyStoreError,
+  KeyFileChangedError,
+  keyFileVersion,
+  onKeyFileWritten,
+  SealedKeyStore,
+} from "../keyStore.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const filesystemPlatform = process.platform;
@@ -203,71 +192,6 @@ describe("SealedKeyStore", () => {
     await expect(stat(file)).resolves.toBeDefined();
   });
 
-  it("tells its observer the keys it read, wrote or removed, and nothing a refusal or failure didn't land (#18063)", async () => {
-    keyed("v10");
-    const heard: Array<StoredIdentity | null> = [];
-    const observed = new SealedKeyStore(file, (stored) => heard.push(stored));
-
-    await observed.load();
-    const owner = identity();
-    await observed.save(owner);
-    await observed.load();
-    await expect(observed.saveIf(() => "Something else holds it", identity())).rejects.toThrow();
-    await observed.clear();
-    expect(heard).toEqual([null, owner, owner, null]);
-
-    // Another store's write reaches this observer only once this store reads it.
-    heard.length = 0;
-    await new SealedKeyStore(file).save(owner);
-    expect(heard).toEqual([]);
-    await expect(observed.clearIf(() => true)).resolves.toBe(true);
-    expect(heard).toEqual([null]);
-
-    // A keychain that won't open the keys tells the observer nothing.
-    heard.length = 0;
-    await new SealedKeyStore(file).save(owner);
-    noKey();
-    await expect(observed.load()).rejects.toBeDefined();
-    expect(heard).toEqual([]);
-  });
-
-  it("tells its observer of keys a failed write left in place, and of none it didn't (#18063)", async () => {
-    keyed("v10");
-    const heard: Array<StoredIdentity | null> = [];
-    const observed = new SealedKeyStore(file, (stored) => heard.push(stored));
-    const first = identity();
-    await observed.save(first);
-    heard.length = 0;
-
-    const staged = identity({ epochs: [...first.epochs, { epoch: 3, raw: "EPOCH-THREE" }] });
-    writeFaults.fault = "before-rename";
-    await expect(observed.save(staged)).rejects.toThrow("rename failed");
-    expect(heard).toEqual([]);
-
-    writeFaults.fault = "after-rename";
-    await expect(observed.save(staged)).rejects.toThrow("directory sync failed");
-    expect(heard).toEqual([staged]);
-    await expect(new SealedKeyStore(file).load()).resolves.toEqual(staged);
-
-    // A conditional removal that leaves the keys says nothing either.
-    heard.length = 0;
-    await expect(observed.clearIf(() => false)).resolves.toBe(false);
-    expect(heard).toEqual([]);
-  });
-
-  it("never fails a read or write for an observer that throws", async () => {
-    keyed("v10");
-    const store = new SealedKeyStore(file, () => {
-      throw new Error("observer broke");
-    });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await expect(store.save(identity())).resolves.toBeUndefined();
-    await expect(store.load()).resolves.toEqual(identity());
-    expect(warn).toHaveBeenCalledTimes(2);
-    warn.mockRestore();
-  });
-
   it("runs every store's steps on one file in turn, so one's read never lands inside another's write", async () => {
     keyed("v10");
     await new SealedKeyStore(file).save(identity());
@@ -304,6 +228,58 @@ describe("SealedKeyStore", () => {
     const loaded = await store.load();
     expect(loaded?.currentEpoch).toBe(2);
     expect(loaded?.epochs.map((epoch) => epoch.epoch)).toEqual([1, 2]);
+  });
+
+  it("versions the file by what it holds, opening nothing (#18064)", async () => {
+    const store = new SealedKeyStore(file);
+    await expect(store.version()).resolves.toBeNull();
+    await expect(keyFileVersion(file)).resolves.toBeNull();
+
+    keyed("v10");
+    expect(store.lastWrittenVersion()).toBeNull();
+    await store.save(identity());
+    safeStorageMock.decryptStringAsync.mockClear();
+    const first = await store.version();
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    await expect(keyFileVersion(file)).resolves.toBe(first);
+    // What this store wrote, and only this store: another on the same file wrote nothing.
+    expect(store.lastWrittenVersion()).toBe(first);
+    expect(new SealedKeyStore(file).lastWrittenVersion()).toBeNull();
+
+    const rotated = identity({
+      epochs: [...identity().epochs, { epoch: 3, raw: "EPOCH-THREE-SENTINEL" }],
+    });
+    await store.save(rotated);
+    safeStorageMock.decryptStringAsync.mockClear();
+    const second = await store.version();
+    expect(second).toMatch(/^[0-9a-f]{64}$/);
+    expect(second).not.toBe(first);
+    expect(safeStorageMock.decryptStringAsync).not.toHaveBeenCalled();
+
+    await store.clear();
+    await expect(store.version()).resolves.toBeNull();
+  });
+
+  it("tells its listeners of each write and removal once it has landed, from any store (#18064)", async () => {
+    keyed("v10");
+    const heard: Array<string | null> = [];
+    const stop = onKeyFileWritten((path) => {
+      expect(path).toBe(file);
+      heard.push(existsSync(path) ? "written" : null);
+    });
+    try {
+      await new SealedKeyStore(file).save(identity());
+      await new SealedKeyStore(file).saveIf(() => "refused", identity()).catch(() => {});
+      await new SealedKeyStore(file).clearIf(() => true);
+      await new SealedKeyStore(file).save(identity());
+      await new SealedKeyStore(file).clear();
+    } finally {
+      stop();
+    }
+    await new SealedKeyStore(file).save(identity());
+
+    // A refused save wrote nothing, and a listener stopped hears nothing more.
+    expect(heard).toEqual(["written", null, "written", null]);
   });
 
   it("reads a missing file as no keys without asking the keychain, even a locked one", async () => {

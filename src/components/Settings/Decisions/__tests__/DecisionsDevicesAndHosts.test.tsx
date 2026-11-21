@@ -121,6 +121,8 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     const confirm = dialog();
     expect(within(confirm).getByText("Revoke 'Pixel 9'?")).toBeTruthy();
     expect(confirm.textContent).toContain("already on 'Pixel 9' can't be recalled");
+    // A revocation is a rotation too, so saved kits lack its key (#18064).
+    expect(confirm.textContent).toContain("Recovery kits saved before the new key won't hold it");
     fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -153,6 +155,9 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(await screen.findByText(/'Pixel 9' is revoked/)).toBeTruthy();
     expect(screen.queryByText("Pixel 9")).toBeNull();
     expect(document.activeElement).toBe(rotate);
+    const keyRow = document.getElementById("decisions-encryption")?.textContent ?? "";
+    expect(keyRow).toContain("encrypts questions and answers");
+    expect(keyRow).not.toMatch(/seal/i);
   });
 
   it("keeps the dialog open with what was observed when the relay's answer was lost", async () => {
@@ -169,7 +174,38 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(alert.textContent).toContain("sends it again");
   });
 
-  it("rotates without revoking anyone, one request at a time, and says what it came to", async () => {
+  it("confirms a rotation naming the relay, the devices it last listed and what it means for saved kits, and Cancel sends nothing (#18064)", async () => {
+    const otherOwner: DecisionsDevice = {
+      ...PIXEL,
+      deviceId: "dev_other_owner",
+      label: "laptop",
+      role: "owner-desktop",
+    };
+    listDevices.mockResolvedValue({
+      result: "listed",
+      devices: [PIXEL, otherOwner, STUDIO_DEVICE],
+    });
+    await renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rotate keys" }));
+
+    const confirm = dialog();
+    expect(
+      within(confirm).getByText("Rotate keys for 'decisions.example.workers.dev'?")
+    ).toBeTruthy();
+    const recipients = within(confirm)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    expect(recipients).toEqual(["Pixel 9 · Phone", "studio.local · Remote Host"]);
+    expect(confirm.textContent).toContain("Recovery kits saved before the new key won't hold it");
+    expect(rotateKeys).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(rotateKeys).not.toHaveBeenCalled();
+  });
+
+  it("rotates without revoking anyone once confirmed, one request at a time, and says what it came to", async () => {
     const rotation = deferred<DecisionsRotateKeysResult>();
     rotateKeys.mockReturnValue(rotation.promise);
     await renderSection();
@@ -177,11 +213,15 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     const rotate = screen.getByRole("button", { name: "Rotate keys" }) as HTMLButtonElement;
     rotate.focus();
     fireEvent.click(rotate);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Rotate keys" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // A second press while it runs asks nothing and sends nothing.
     fireEvent.click(rotate);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     // Busy, not disabled, so the button keeps focus; nothing else changes the key meanwhile.
     expect(rotate.getAttribute("aria-busy")).toBe("true");
     expect(rotate.disabled).toBe(false);
-    expect(document.activeElement).toBe(rotate);
+    await waitFor(() => expect(document.activeElement).toBe(rotate));
     expect(revokeButton("Pixel 9").disabled).toBe(true);
     await act(async () => {
       rotation.resolve({ result: "rotated", keyEpoch: 3 });
@@ -191,6 +231,59 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
     expect(revokeDevice).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toContain("The relay holds a new key");
     expect(revokeButton("Pixel 9").disabled).toBe(false);
+  });
+
+  it("closes a rotation's confirmation when another relay is set up, and starts nothing while locked (#18064)", async () => {
+    const view = render(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={STATUS} />
+      </TooltipProvider>
+    );
+    await screen.findByText("Pixel 9");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rotate keys" }));
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts status={STATUS} locked />
+      </TooltipProvider>
+    );
+    const confirm = within(dialog()).getByRole("button", { name: "Rotate keys" });
+    expect(
+      confirm.getAttribute("aria-disabled") === "true" ||
+        (confirm instanceof HTMLButtonElement && confirm.disabled)
+    ).toBe(true);
+    fireEvent.click(confirm);
+    expect(rotateKeys).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsDevicesAndHosts
+          status={{ state: "connected", relayOrigin: "https://other.example.workers.dev" }}
+        />
+      </TooltipProvider>
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(rotateKeys).not.toHaveBeenCalled();
+  });
+
+  it("doesn't promise no devices from an empty list whose next read failed (#18064)", async () => {
+    listDevices.mockResolvedValue({ result: "listed", devices: [] });
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <DecisionsDevicesAndHosts status={STATUS} />
+        </TooltipProvider>
+      );
+    });
+    listDevices.mockResolvedValue({ result: "unreachable", origin: ORIGIN, reason: "network" });
+    await act(async () => {
+      for (const push of [...pushes]) push();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rotate keys" }));
+
+    expect(dialog().textContent).toContain("The relay's devices couldn't be read");
+    expect(dialog().textContent).not.toContain("only this computer gets the new key");
   });
 
   it("offers a rotation with no device paired", async () => {
@@ -203,8 +296,12 @@ describe("DecisionsDevicesAndHosts revoke and rotate (#16010)", () => {
 
     rotateKeys.mockResolvedValue({ result: "rotated", keyEpoch: 2 });
     const rotate = await screen.findByRole("button", { name: "Rotate keys" });
+    fireEvent.click(rotate);
+    await waitFor(() =>
+      expect(dialog().textContent).toContain("only this computer gets the new key")
+    );
     await act(async () => {
-      fireEvent.click(rotate);
+      fireEvent.click(within(dialog()).getByRole("button", { name: "Rotate keys" }));
     });
 
     expect(rotateKeys).toHaveBeenCalledOnce();

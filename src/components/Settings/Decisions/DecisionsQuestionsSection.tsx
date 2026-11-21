@@ -1,34 +1,36 @@
 import { useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowActions,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Button } from "@/components/ui/button";
-import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
-import { pluralize } from "@/lib/pluralize";
+import { decisionsObservations } from "@/components/Layout/decisionsToolbarSignal";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+} from "@/hooks/useDecisionsWaitingCount";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
-import {
-  useDecisionsAttentionCount,
-  type DecisionsAttentionCount,
-} from "./useDecisionsAttentionCount";
+import { offersUnlisted, useUnlistedStoppedAnswers } from "./useUnlistedStoppedAnswers";
 
-function attentionDescription(attention: DecisionsAttentionCount): string {
-  switch (attention.state) {
-    case "counted":
-      return attention.count === 0
-        ? "None right now. Answers Daintree won't type in on its own are listed here"
-        : `${pluralize(attention.count, "answer")} Daintree won't type in on its own`;
-    case "failed":
-      return "Couldn't count them just now. Review opens the list";
-    case "not-running":
-      return "Decisions isn't delivering answers right now, so none can be read";
-    case "loading":
-      return "Answers Daintree won't type in on its own are listed here";
-  }
+const INBOX_TEXT =
+  "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided";
+
+/**
+ * The inbox row's description: what the toolbar's button observes, the
+ * questions waiting and the deliveries stopped (#18048), ahead of what the
+ * inbox holds. Nothing is counted until the list is read.
+ */
+export function inboxDescription(waiting: number, stopped: number): string {
+  const observed = decisionsObservations(waiting, stopped);
+  return observed.length === 0 ? INBOX_TEXT : `${observed.join(", ")}. ${INBOX_TEXT}.`;
 }
 import {
   DEFAULT_QUESTION_EXPIRY_MS,
@@ -37,7 +39,6 @@ import {
 import { questionExpiryLabel, questionExpiryText } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 import { useDecisionsTerminalSnapshots } from "./useDecisionsTerminalSnapshots";
-import { useDecisionsSwitch } from "./useDecisionsSwitch";
 import { DecisionsTerminalSnapshotsConsentDialog } from "./DecisionsTerminalSnapshotsConsentDialog";
 
 const NEVER = "never";
@@ -66,12 +67,11 @@ interface DecisionsQuestionsSectionProps {
 /**
  * Questions: how long one waits when its agent sets no expiry (#16122), as
  * the library applies the saved choice, whether the phone may show the pane
- * that asked one (#16228), whether a new question's phone push waits while
- * the person is here (#17240), whether the phone hears when an agent here
- * stops while they're away (#17319), the answers that couldn't be typed in on
- * their own (#16020), and the inbox of every question (#17231). The
+ * that asked one (#16228), and the inbox of every question (#17231), which
+ * also holds the answers that couldn't be typed in on their own (#18048). The
  * description follows what main has saved, not a choice still being saved.
- * Snapshots ask before every turn on.
+ * Snapshots ask before every turn on. The phone and desktop notification settings are
+ * Notifications' (#18061).
  */
 export function DecisionsQuestionsSection({
   policy: read,
@@ -86,46 +86,36 @@ export function DecisionsQuestionsSection({
   const [snapshotsConsentOpen, setSnapshotsConsentOpen] = useState(false);
   const snapshotsLocked = locked || snapshots.saving;
   const snapshotsFailure = snapshots.failure;
-  const hold = useDecisionsSwitch(
-    status.holdPhonePushes !== false,
-    (enabled) => window.electron.decisions.setHoldPhonePushes(enabled),
-    onChanged
-  );
-  const holdLocked = locked || hold.saving;
-  const holdFailure = hold.failure;
-  const stopped = useDecisionsSwitch(
-    status.agentStoppedPushes === true,
-    (enabled) => window.electron.decisions.setAgentStoppedPushes(enabled),
-    onChanged
-  );
-  const stoppedLocked = locked || stopped.saving;
-  const stoppedFailure = stopped.failure;
   const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
-  const attention = useDecisionsAttentionCount();
-  const openAttention = useDecisionsAttentionStore((state) => state.open);
-  const noneToReview = attention.state === "counted" && attention.count === 0;
+  // The section shows only while Decisions is on, so the toolbar's watch is shared, not doubled.
+  const waiting = useDecisionsWaitingCount(true);
+  const stopped = useDecisionsStoppedCount(true);
+  const unlisted = useUnlistedStoppedAnswers(stopped);
+  // Offered while the attention list holds an answer the inbox can't list, or a read couldn't say.
+  const reviewUnlisted = offersUnlisted(unlisted);
   const openInbox = useDecisionsInboxStore((state) => state.open);
-  const showInbox = () => {
+  const openAttention = useDecisionsAttentionStore((state) => state.open);
+  // Settings goes first, so nothing stacks over it; reopened before it had gone, nothing opens.
+  const afterSettings = (show: () => void) => {
     if (onClose === undefined) {
-      openInbox();
+      show();
       return;
     }
-    // Settings goes first; reopened before it had gone, nothing opens.
     void onClose((closed) => {
-      if (closed) openInbox();
+      if (closed) show();
     }).catch(() => {});
   };
+  // At the first stopped delivery when it lists one (#18048), else where the inbox opens itself.
+  const showInbox = () => afterSettings(() => openInbox({ prefer: "stopped" }));
+  // Only the attention list holds an answer the inbox can't list.
+  const showUnlisted = () => afterSettings(() => openAttention());
   return (
     <SettingsSection title="Questions" id="decisions-questions">
       <SettingsGroup>
         <SettingsSelect
           id="decisions-questions-expiry"
           label="Default expiry"
-          description={
-            policy === null
-              ? "An expired question authorises nothing, and the agent is told so"
-              : questionExpiryText(policy)
-          }
+          description={questionExpiryText(policy)}
           value={shownExpiry === null ? "" : expiryValue(shownExpiry.ms)}
           placeholder="Loading…"
           onValueChange={(value) =>
@@ -156,73 +146,40 @@ export function DecisionsQuestionsSection({
           }}
           resetAriaLabel="Turn off terminal snapshots"
         />
-        <SettingsSwitchCard
-          id="decisions-hold-phone-pushes"
-          title="Hold phone notifications while I'm at this computer"
-          subtitle="While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question"
-          isEnabled={hold.enabled}
-          onChange={() => {
-            if (!holdLocked) void hold.set(!hold.enabled);
-          }}
-          disabled={holdLocked}
-          isModified={status.holdPhonePushes === false}
-          onReset={() => {
-            if (!holdLocked) void hold.set(true);
-          }}
-          resetAriaLabel="Hold phone notifications again"
-        />
-        <SettingsSwitchCard
-          id="decisions-agent-stopped-pushes"
-          title="Notify my phone when an agent stops"
-          subtitle="While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on."
-          isEnabled={stopped.enabled}
-          onChange={() => {
-            if (!stoppedLocked) void stopped.set(!stopped.enabled);
-          }}
-          disabled={stoppedLocked}
-          isModified={status.agentStoppedPushes === true}
-          onReset={() => {
-            if (!stoppedLocked) void stopped.set(false);
-          }}
-          resetAriaLabel="Stop notifying my phone when an agent stops"
-        />
         <SettingsRow
           id="decisions-questions-inbox"
           label="Inbox"
-          description="Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided"
-          control={({ descriptionId }) => (
-            <Button
-              variant="outline"
-              size="sm"
-              aria-describedby={descriptionId}
-              onClick={showInbox}
-              data-testid="decisions-inbox-open"
-            >
-              Open inbox
-            </Button>
-          )}
-        />
-        <SettingsRow
-          id="decisions-questions-attention"
-          label="Answers needing attention"
-          description={attentionDescription(attention)}
-          control={
-            <Button
-              variant="outline"
-              size="sm"
-              // Nothing to review only once a read said so; unknown still opens the list.
-              // Unavailable rather than disabled, so a list emptied from here can
-              // still hand focus back to it.
-              aria-disabled={noneToReview || undefined}
-              className={noneToReview ? ARIA_DISABLED_CLASSES : undefined}
-              onClick={() => {
-                if (!noneToReview) openAttention();
-              }}
-              data-testid="decisions-attention-review"
-            >
-              Review
-            </Button>
-          }
+          description={inboxDescription(waiting, stopped)}
+          // Two actions would squeeze the label on the rail.
+          layout={reviewUnlisted ? "stacked" : "inline"}
+          control={({ descriptionId }) => {
+            const open = (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-describedby={descriptionId}
+                onClick={showInbox}
+                data-testid="decisions-inbox-open"
+              >
+                Open inbox
+              </Button>
+            );
+            if (!reviewUnlisted) return open;
+            return (
+              <SettingsRowActions>
+                {open}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-describedby={descriptionId}
+                  onClick={showUnlisted}
+                  data-testid="decisions-attention-review"
+                >
+                  Review other answers
+                </Button>
+              </SettingsRowActions>
+            );
+          }}
         />
       </SettingsGroup>
       {policy === null && loadError !== null && (
@@ -242,32 +199,6 @@ export function DecisionsQuestionsSection({
           message={snapshotsFailure.message}
           onRetry={() => {
             if (!snapshotsLocked) void snapshots.set(snapshotsFailure.payload);
-          }}
-        />
-      )}
-      {holdFailure && (
-        <SettingsLoadErrorBanner
-          title={
-            holdFailure.enabled
-              ? "Couldn't turn on holding phone notifications"
-              : "Couldn't turn off holding phone notifications"
-          }
-          message={holdFailure.message}
-          onRetry={() => {
-            if (!holdLocked) void hold.set(holdFailure.enabled);
-          }}
-        />
-      )}
-      {stoppedFailure && (
-        <SettingsLoadErrorBanner
-          title={
-            stoppedFailure.enabled
-              ? "Couldn't turn on phone notifications when an agent stops"
-              : "Couldn't turn off phone notifications when an agent stops"
-          }
-          message={stoppedFailure.message}
-          onRetry={() => {
-            if (!stoppedLocked) void stopped.set(stoppedFailure.enabled);
           }}
         />
       )}

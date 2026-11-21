@@ -62,7 +62,15 @@ export type FleetBand = (typeof FLEET_BANDS)[number];
  */
 export type BandableRun = Pick<
   FleetRunRow,
-  "agentState" | "waitingReason" | "handBack" | "wait" | "handbackReport" | "canopy" | "quietSince"
+  | "agentState"
+  | "waitingReason"
+  | "handBack"
+  | "wait"
+  | "handbackReport"
+  | "canopy"
+  | "quietSince"
+  | "answerAttention"
+  | "questionAttention"
 > & {
   /** Read for presence alone, like the snooze. */
   park?: unknown;
@@ -79,7 +87,7 @@ export type BandableRun = Pick<
  * bar, a shell sitting at its prompt — has handed nothing back and reads as
  * `idle`, not as the agent asking for something.
  *
- * `needs-you` has two sources, and neither is a guess from the patterns:
+ * `needs-you` has three sources, and none is a guess from the patterns:
  *
  * - The agent's own needs-you marker (#16190), while the run is still stopped.
  *   Daintree saw it printed, so it is an observation of the agent's claim, and
@@ -88,6 +96,12 @@ export type BandableRun = Pick<
  *   one that sits for hours. It leaves when the terminal's handback clears, on
  *   the next prompt or a respawn, and a park or snooze sets it aside as it
  *   does every other state.
+ * - What Daintree Decisions recorded for the run while its agent is still
+ *   there: a question open in Needs you that the user hasn't cleared on this
+ *   computer, or an answer whose delivery stopped for them to decide. It
+ *   holds whatever the agent is doing, at work or stopped, since an agent
+ *   told to carry on after asking still waits for the answer. It outranks a
+ *   reading of the screen, and an error wait stays `blocked`, the worse band.
  * - A Canopy reading of the run's current turn that says it asks the user
  *   something, which the user hasn't had in front of them since. Looking
  *   answers nothing, but an ask already seen is no longer news, and it lands
@@ -114,6 +128,8 @@ export function bandForRun(run: BandableRun): FleetBand {
   // The agent's own word beats a model's reading of its screen, and seeing it
   // answers nothing, so no read mark is consulted.
   if (isAgentReportedNeed(run)) return "needs-you";
+  // What Decisions recorded, so like the agent's word no read mark is consulted.
+  if (isDecisionsNeed(run)) return "needs-you";
   // Canopy's reading refines the free rules below and sits under the user's
   // own decisions and the agent's word above. Whether an ask was seen is
   // Canopy's read mark for its turn, not the hand-back's: a hand-back record is
@@ -170,6 +186,21 @@ export function isAgentReportedNeed(
 }
 
 /**
+ * Daintree Decisions holds something for the user on this run (an open
+ * question they haven't cleared, or an answer whose delivery stopped) while
+ * its agent is still there and not failed: an exited agent can't be asked
+ * anything, and an error wait is `blocked`.
+ */
+export function isDecisionsNeed(
+  run: Pick<FleetRunRow, "agentState" | "waitingReason" | "answerAttention" | "questionAttention">
+): boolean {
+  if ((run.answerAttention ?? 0) <= 0 && (run.questionAttention ?? 0) <= 0) return false;
+  const state = run.agentState;
+  if (state === undefined || state === "exited") return false;
+  return !(state === "waiting" && run.waitingReason === "error");
+}
+
+/**
  * Whose ask an outstanding one is: the agent printed that it needs the user,
  * Canopy read the stop as asking, or the patterns observed an approval or
  * question wait no reading placed.
@@ -187,13 +218,28 @@ export type UnseenAsk = "agent" | "canopy" | "observed";
  * Read off the band, so the park, the snooze, the agent's report and Canopy
  * keep their precedence, and the look that marks a Canopy ask or an observed
  * wait seen drops it. Only the pane edge reads it: glyphs and counts keep to
- * the band, where an observed ask is unread news and never a demand.
+ * the band, where an observed ask is unread news and never a demand. What
+ * Decisions recorded is no ask on the screen: a run it placed is marked only
+ * for an ask its screen shows as well, read as it would be without Decisions,
+ * and the pane's own Decisions chip says what is open.
  */
 export function runUnseenAsk(
   run: BandableRun,
   band: FleetBand = bandForRun(run)
 ): UnseenAsk | undefined {
-  if (band === "needs-you") return isAgentReportedNeed(run) ? "agent" : "canopy";
+  if (band === "needs-you") {
+    if (isAgentReportedNeed(run)) return "agent";
+    const canopy = runCanopyPlacement(run);
+    if (canopy !== undefined) return canopy.kind === "asked" && !canopy.seen ? "canopy" : undefined;
+    // Without Decisions this wait would sit in `review` for itself.
+    const state = run.agentState;
+    const observed =
+      state !== undefined &&
+      isObservedAskWait(state, run.waitingReason) &&
+      isWaitUnseen(run.wait) &&
+      isDecisionsNeed(run);
+    return observed ? "observed" : undefined;
+  }
   if (band !== "review" || run.agentState === undefined) return undefined;
   if (!isObservedAskWait(run.agentState, run.waitingReason)) return undefined;
   return runCanopyPlacement(run) === undefined ? "observed" : undefined;
@@ -201,8 +247,8 @@ export function runUnseenAsk(
 
 /**
  * The Canopy reading that placed this run in `band`, or undefined when
- * something else did: a park or snooze, the agent's own needs-you report, or
- * the free rules alone. Each of those outranks a reading in
+ * something else did: a park or snooze, the agent's own needs-you report,
+ * what Decisions recorded, or the free rules alone. Each of those outranks a reading in
  * {@link bandForRun}, so a refinement that would still apply to the observed
  * state isn't the run's placement while one of them holds.
  */
@@ -210,7 +256,9 @@ export function canopyPlacingRun(
   run: BandableRun,
   band: FleetBand = bandForRun(run)
 ): RunCanopyRefinement | undefined {
-  if (band === "parked" || band === "snoozed" || isAgentReportedNeed(run)) return undefined;
+  if (band === "parked" || band === "snoozed" || isAgentReportedNeed(run) || isDecisionsNeed(run)) {
+    return undefined;
+  }
   return runCanopyPlacement(run);
 }
 

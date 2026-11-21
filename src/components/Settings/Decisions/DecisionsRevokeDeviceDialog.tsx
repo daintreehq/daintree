@@ -2,6 +2,7 @@ import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { deviceRoleLabel } from "./devicesCopy";
+import { KITS_AFTER_NEW_KEY } from "./recoveryKitCopy";
 import type { DecisionsRevokeTarget } from "./useDecisionsKeyActions";
 
 interface DecisionsRevokeDeviceDialogProps {
@@ -41,7 +42,7 @@ export function DecisionsRevokeDeviceDialog({
       onClose={onCancel}
       variant="destructive"
       title={`Revoke '${label}'?`}
-      description={`${device ? `${deviceRoleLabel(device.role)} '${label}'` : `'${label}'`} can no longer reach your relay, and Daintree seals a new key to each device that remains. Questions, answers and screenshots already on '${label}' can't be recalled.${device?.recordedHost ? " It isn't enrolled automatically again; Enroll does that while this computer is connected to it." : ""}`}
+      description={`${device ? `${deviceRoleLabel(device.role)} '${label}'` : `'${label}'`} can no longer reach your relay, and Daintree encrypts a new key for each device that remains. Questions, answers and screenshots already on '${label}' can't be recalled.${device?.recordedHost ? " It isn't enrolled automatically again; Enroll does that while this computer is connected to it." : ""} ${KITS_AFTER_NEW_KEY}`}
       confirmLabel="Revoke device"
       onConfirm={onConfirm}
       isConfirmLoading={revoking}

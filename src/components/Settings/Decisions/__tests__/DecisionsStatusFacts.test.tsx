@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 
@@ -6,6 +7,19 @@ const remote = vi.hoisted(() => ({ hostName: null as string | null }));
 vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
   useRemoteHostName: () => remote.hostName,
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="tooltip-content">{children}</div>
+  ),
+}));
+
+const truncation = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.value }),
 }));
 
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -68,7 +82,6 @@ function policyRead(
       ? null
       : {
           gates: [],
-          proxyAllowlisted: false,
           defaultQuestionExpiryMs: 1,
           maxQuestionExpiryMs: 2,
           askHumanAgents,
@@ -77,14 +90,11 @@ function policyRead(
   return {
     policy,
     loadError,
-    pending: null,
-    saveFailure: null,
     pendingExpiry: null,
     expirySaveFailure: null,
     pendingAgents: new Map(),
     agentSaveFailures: new Map(),
     reload: async () => {},
-    setProxyAllowlisted: async () => {},
     setDefaultQuestionExpiry: async () => {},
     setAgentAskHuman: async () => {},
   };
@@ -96,6 +106,10 @@ function asked(askedAt: string): DecisionQuestionListItem {
 
 function facts(): string {
   return screen.getByTestId("decisions-status-facts").textContent ?? "";
+}
+
+function tooltip(): string {
+  return screen.getByTestId("tooltip-content").textContent ?? "";
 }
 
 async function renderFacts(
@@ -110,6 +124,7 @@ async function renderFacts(
 describe("DecisionsStatusFacts (#18059)", () => {
   beforeEach(() => {
     remote.hostName = null;
+    truncation.value = false;
     listeners.clear();
     listQuestions.mockReset();
     listQuestions.mockResolvedValue({ revision: 1, questions: [] });
@@ -137,24 +152,50 @@ describe("DecisionsStatusFacts (#18059)", () => {
   });
 
   it("holds every fact's place before anything is read, then fills each in", async () => {
+    truncation.value = true;
     const list = deferred<DecisionQuestionList>();
     listQuestions.mockReturnValue(list.promise);
     const view = await renderFacts(devicesRead(null), policyRead(null));
     expect(facts()).toBe("Reading phones… · Reading agents… · Reading questions…");
+    expect(tooltip()).toBe(facts());
 
     const lastAsked = new Date(Date.now() - 5 * 60_000).toISOString();
     view.rerender(
       <DecisionsStatusFacts devices={devicesRead([PHONE])} policy={policyRead(["claude"])} />
     );
     expect(facts()).toBe("1 phone with notifications · 1 agent switched on · Reading questions…");
+    expect(tooltip()).toBe(facts());
     await act(async () => {
       list.resolve({ revision: 1, questions: [asked(lastAsked)] });
     });
 
     expect(facts()).toMatch(/^1 phone with notifications · 1 agent switched on · Last question /);
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(lastAsked);
-    // One line that clips in a narrow window, so its title carries all of it.
-    expect(screen.getByTestId("decisions-status-facts").title).toBe(facts());
+    // One line that clips in a narrow window, so its tooltip carries all of it.
+    expect(tooltip()).toBe(facts());
+  });
+
+  it("discloses the whole line in a styled tooltip only while it's clipped, never a native title", async () => {
+    const devices = devicesRead([PHONE, { ...PHONE, deviceId: "dev_phone_2" }]);
+    const policy = policyRead(["claude"]);
+    const view = await renderFacts(devices, policy);
+    const line = () => screen.getByTestId("decisions-status-facts");
+    const rerender = () =>
+      view.rerender(<DecisionsStatusFacts devices={devices} policy={policy} />);
+    expect(line().hasAttribute("title")).toBe(false);
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+    expect(line().hasAttribute("tabindex")).toBe(false);
+
+    truncation.value = true;
+    rerender();
+    expect(line().hasAttribute("title")).toBe(false);
+    expect(tooltip()).toBe("2 phones with notifications · 1 agent switched on · No questions yet");
+    expect(line().tabIndex).toBe(0);
+
+    truncation.value = false;
+    rerender();
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+    expect(line().hasAttribute("tabindex")).toBe(false);
   });
 
   it("counts the phones and tablets the relay can notify, nothing else", async () => {
@@ -224,6 +265,11 @@ describe("DecisionsStatusFacts (#18059)", () => {
     useCliAvailabilityStore.setState({ hasRealData: false, error: "The probe failed." });
     await renderFacts();
     expect(facts()).toContain(" · Agents couldn't be read · ");
+    cleanup();
+
+    // A policy that lists no agent needs no probe to say none is switched on (#18057).
+    await renderFacts(undefined, policyRead([]));
+    expect(facts()).toContain(" · No agents switched on · ");
   });
 
   it("names no agents in a remote window, whose agents are the Host's", async () => {

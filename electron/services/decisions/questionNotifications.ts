@@ -62,6 +62,20 @@ export function questionKey(reference: DecisionQuestionReference): string {
 }
 
 /** Just asked: committed and not yet sent, or sent and waiting for its first answer. */
+/** The machine and question a claim's key names; null for one it can't read. */
+function claimNames(key: string): { hostId: string; questionId: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    if (!Array.isArray(parsed) || parsed.length !== 4) return null;
+    const [hostId, , , questionId] = parsed as unknown[];
+    return typeof hostId === "string" && typeof questionId === "string"
+      ? { hostId, questionId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function isNewlyAsked(question: DecisionQuestionListItem): boolean {
   const { standing } = question;
   return standing.kind === "queued" || (standing.kind === "waiting" && standing.reason === "open");
@@ -136,6 +150,24 @@ export class QuestionNotifier implements QuestionNotifications {
   /** Resolves once every claim made so far has been written, or failed to be. */
   settled(): Promise<void> {
     return this.record.settled();
+  }
+
+  /**
+   * Lets go of the claims of `hostId`'s questions `questionIds` names, which
+   * were removed from its history (#18033) and can never ask again.
+   */
+  forget(hostId: string, questionIds: ReadonlySet<string>): void {
+    const claimed = this.claimed;
+    if (this.stopped || claimed === null) return;
+    let changed = false;
+    for (const key of claimed) {
+      const names = claimNames(key);
+      if (names !== null && names.hostId === hostId && questionIds.has(names.questionId)) {
+        claimed.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.record.save(claimed);
   }
 
   private follow(list: DecisionQuestionList): void {

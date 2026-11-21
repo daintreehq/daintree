@@ -354,6 +354,35 @@ describe("PaneSnapshots", () => {
       expect(env.pane.reads).toBe(0);
     });
 
+    it("publishes exited, without the screen, once another agent shows in the same live pane", async () => {
+      const env = setup();
+      env.pane.record.detectedAgentId = "codex";
+      env.pane.screen = "the other agent's screen";
+      const bridge = fakeBridge();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(published(bridge)).toEqual([
+        expect.objectContaining({ agentState: "exited", terminal: [] }),
+      ]);
+      expect(env.pane.reads).toBe(0);
+    });
+
+    it("publishes exited, without the screen, once the agent that asked exited to its shell", async () => {
+      const env = setup();
+      env.pane.record.agentState = "exited";
+      env.pane.record.detectedAgentId = undefined;
+      env.pane.screen = "$ ls";
+      const bridge = fakeBridge();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(published(bridge)).toEqual([
+        expect.objectContaining({ agentState: "exited", terminal: [] }),
+      ]);
+      expect(env.pane.reads).toBe(0);
+    });
+
     it("publishes exited, never the screen it read, for a pane relaunched while being read", async () => {
       const env = setup();
       env.pane.screen = "maybe the new run's screen";

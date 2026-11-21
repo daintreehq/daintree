@@ -1,8 +1,6 @@
 import {
   DECISIONS_MODEL_ADAPTERS,
   DECISIONS_SETUP_CHECK_STEPS,
-  type DecisionsKitCoverage,
-  type DecisionsKitEpoch,
   type DecisionsModelAdapter,
   type DecisionsRecoveryKitRecord,
   type DecisionsSettings,
@@ -88,34 +86,10 @@ function relayId(value: unknown): string | null {
   return isRelayId(value) ? value : null;
 }
 
-function isEpoch(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-
-/** A kit's epochs that read whole: each a number and key digest, ascending, holding the current one. */
-function kitCoverage(value: unknown): DecisionsKitCoverage | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const { currentEpoch, epochs } = value as Partial<Record<keyof DecisionsKitCoverage, unknown>>;
-  if (!isEpoch(currentEpoch) || !Array.isArray(epochs)) return null;
-  const read: DecisionsKitEpoch[] = [];
-  // A dense copy, so a hole reads as damage rather than being skipped.
-  for (const entry of Array.from(epochs as unknown[])) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const { epoch, sha256 } = entry as Partial<Record<keyof DecisionsKitEpoch, unknown>>;
-    if (!isEpoch(epoch) || typeof sha256 !== "string" || !SHA256_HEX.test(sha256)) return null;
-    if (read.length > 0 && epoch <= read[read.length - 1]!.epoch) return null;
-    read.push({ epoch, sha256 });
-  }
-  return read.some((entry) => entry.epoch === currentEpoch) ? { currentEpoch, epochs: read } : null;
-}
-
 /**
  * A recovery kit verification that reads whole and names the identity the
  * setting records; anything else is no verification, which leaves setup
- * unfinished without turning Decisions off. Damaged epochs leave the
- * verification without them, as one recorded before kits' epochs were.
+ * unfinished without turning Decisions off.
  */
 function recoveryKitRecord(
   value: unknown,
@@ -136,15 +110,18 @@ function recoveryKitRecord(
   ) {
     return null;
   }
-  const coverage = kitCoverage(record.coverage);
   return {
     verifiedAt,
     relayOrigin,
     installationId: record.installationId,
     deviceId: record.deviceId,
-    ...(coverage ? { coverage } : {}),
-    ...(record.outOfDate === true ? { outOfDate: true as const } : {}),
+    ...(isKeyFileVersion(record.keys) ? { keys: record.keys } : {}),
   };
+}
+
+/** A key file version as `keyFileVersion` writes it: a SHA-256 in hex. */
+function isKeyFileVersion(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 type RecordedRelay = Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">;

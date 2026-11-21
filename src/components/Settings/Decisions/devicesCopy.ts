@@ -122,7 +122,7 @@ function describeRotationProblem(
     case "conflict":
       return "The relay's devices or key changed while this ran, so nothing was changed. Try again.";
     case "unverified":
-      return "A device the relay lists has a certificate that doesn't verify against this computer's key, so no new key was sealed to it and nothing was changed.";
+      return "A device the relay lists has a certificate that doesn't verify against this computer's key, so it wasn't given a new key and nothing was changed.";
     default:
       return describeRelayRequestFailure(problem);
   }
@@ -140,7 +140,7 @@ export function describeRevokeResult(
     case "revoked":
       return {
         finished: true,
-        message: `'${label}' is revoked. The relay holds a new key, sealed to each device that remains. ${NEW_KIT_NEEDED}`,
+        message: `'${label}' is revoked. The relay holds a new key, encrypted for each device that remains. ${NEW_KIT_NEEDED}`,
       };
     case "not-found":
       return { finished: true, message: `The relay no longer lists '${label}' as paired.` };
@@ -157,7 +157,7 @@ export function describeRotateResult(result: DecisionsRotateKeysResult): {
   if (result.result === "rotated") {
     return {
       finished: true,
-      message: `The relay holds a new key, sealed to each paired device. ${NEW_KIT_NEEDED}`,
+      message: `The relay holds a new key, encrypted for each paired device. ${NEW_KIT_NEEDED}`,
     };
   }
   return { finished: false, message: describeRotationProblem(result) };

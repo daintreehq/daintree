@@ -1,4 +1,5 @@
 import type { KeyboardEvent, RefObject } from "react";
+import { listStepOf } from "@/lib/listStepChord";
 import { isMac } from "@/lib/platform";
 import { useCanopyStore } from "@/store/canopyStore";
 import {
@@ -10,23 +11,6 @@ import {
 import type { CanopyItem } from "./canopyModel";
 import type { CanopyAssistantItem } from "./canopyAssistants";
 import { stepEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
-
-/**
- * ⌘↑/⌘↓ on macOS, Alt+↑/↓ elsewhere (Slack's channel switch): the agent above
- * or below, from anywhere in the panel. Ctrl+↑/↓ is not used off the Mac
- * because terminals send it to the program as its own key.
- */
-function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
-  // An input method's own keys: switching agents would unmount what it is composing in.
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
-  if (event.shiftKey) return null;
-  const chord = isMac()
-    ? event.metaKey && !event.ctrlKey && !event.altKey
-    : event.altKey && !event.ctrlKey && !event.metaKey;
-  if (!chord) return null;
-  return event.key === "ArrowUp" ? -1 : 1;
-}
 
 /** ⌘A on macOS, Ctrl+A elsewhere, and nothing more held. */
 function isSelectAll(event: KeyboardEvent<HTMLElement>): boolean {
@@ -199,7 +183,7 @@ export function useCanopyInboxKeyboard({
   // the user can work down the list — reply, next, reply — without leaving the
   // keyboard where it is. The keyboard lands in the same place on the next run.
   const onAgentStepKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
-    const step = agentStepOf(event);
+    const step = listStepOf(event);
     if (step === null || visible.length === 0) return;
     // Renaming: ⌘↑/↓ move the caret in the name, not to another agent.
     if (event.target instanceof Element && event.target.closest("[data-canopy-rename]")) return;

@@ -32,13 +32,18 @@ export function contentDeadlineElapsed(
   return at !== null && at <= nowMs;
 }
 
+/** Whether a deadline is ahead of `nowMs` by no more than a day. */
+export function withinAday(deadline: number, nowMs: number): boolean {
+  return deadline > nowMs && deadline - nowMs <= EXPIRY_SOON_MS;
+}
+
 /** Whether a question still asking closes soon enough for its row to say so. */
 export function expiresSoon(
   item: { expiresAt: string | null; standing: DecisionQuestionStanding },
   nowMs: number
 ): boolean {
   const at = deadlineMs(item.expiresAt);
-  return at !== null && asksByDeadline(item.standing) && at > nowMs && at - nowMs <= EXPIRY_SOON_MS;
+  return at !== null && asksByDeadline(item.standing) && withinAday(at, nowMs);
 }
 
 /** "8 minutes left", in the largest whole unit; the last minute is "Less than a minute left". */
@@ -76,6 +81,25 @@ export function clockText(deadline: number, nowMs: number): string {
 /** "Reply by 14:15", the deadline in local time. */
 export function replyByText(deadline: number, nowMs: number): string {
   return `Reply by ${clockText(deadline, nowMs)}`;
+}
+
+/**
+ * What a waiting question says of a deadline inside a day, on the inbox's row
+ * and the pane's popover alike (#18054): that its reply is advice only, when
+ * it is, then when to reply by and how long is left.
+ */
+export function expiryText(
+  deadline: number,
+  nowMs: number,
+  replyMode: "advisory" | "blocking" | undefined
+): string {
+  return [
+    replyMode === "advisory" ? "Advisory" : null,
+    replyByText(deadline, nowMs),
+    remainingText(deadline, nowMs),
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
 }
 
 /**

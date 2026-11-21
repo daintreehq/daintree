@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   answerKey,
+  readAnswerRecord,
   useAnswerRecord,
   useDecisionsAnswerStore,
   type AnswerRecord,
@@ -101,6 +102,13 @@ export interface DecisionAnswerComposerProps {
   onMoved: () => void;
   /** Said beside Send once it would go, when an answer sent now won't go at once. */
   sendNote?: string | null;
+  /**
+   * Why nothing can take an answer now (#18029), said before one is
+   * written; the form stays usable, since an answer is still recorded.
+   */
+  deliveryNotice?: string | null;
+  /** Send started an answer; `prior` is the submission the record held before it, if any. */
+  onSend?: (prior: string | null) => void;
 }
 
 /** Whether this question shows its composer rather than the plain list of its options. */
@@ -123,6 +131,8 @@ export function DecisionAnswerComposer({
   unshown,
   onMoved,
   sendNote = null,
+  deliveryNotice = null,
+  onSend,
 }: DecisionAnswerComposerProps) {
   const key = answerKey(question.reference);
   const record = useAnswerRecord(key);
@@ -279,7 +289,10 @@ export function DecisionAnswerComposer({
 
   const send = () => {
     if (!ready) return;
-    void sendAnswer(key, target, unshown).finally(onMoved);
+    const prior = readAnswerRecord(key).submission?.answerId ?? null;
+    const sending = sendAnswer(key, target, unshown);
+    onSend?.(prior);
+    void sending.finally(onMoved);
   };
 
   if (mode === "none") return null;
@@ -287,7 +300,12 @@ export function DecisionAnswerComposer({
   if (mode !== "form") {
     const lost = submission?.phase.kind === "lost";
     return (
-      <section className="flex flex-col gap-1.5" aria-label="Your answer" {...trackFocus}>
+      <section
+        className="flex flex-col gap-1.5"
+        aria-label="Your answer"
+        data-decision-answer=""
+        {...trackFocus}
+      >
         <h3 className="text-xs font-medium text-text-secondary">Your answer</h3>
         <div
           ref={statusRef}
@@ -320,6 +338,8 @@ export function DecisionAnswerComposer({
     <section
       className="flex flex-col gap-3"
       aria-label="Your answer"
+      // Where a surface that shows the question sends the keyboard to answer it.
+      data-decision-answer=""
       data-testid="decision-answer-composer"
       // From anywhere in the answer, a choice as much as the words: the chips on Send say so.
       onKeyDown={(event) => {
@@ -358,6 +378,12 @@ export function DecisionAnswerComposer({
         {notice !== null && (
           <Callout severity="warning" size="compact" data-testid="decision-answer-notice">
             {notice}
+          </Callout>
+        )}
+        {/* Not past the deadline: the locked form already says it can't be sent. */}
+        {deliveryNotice !== null && !elapsed && (
+          <Callout severity="warning" size="compact" data-testid="decision-answer-delivery">
+            {deliveryNotice}
           </Callout>
         )}
       </div>

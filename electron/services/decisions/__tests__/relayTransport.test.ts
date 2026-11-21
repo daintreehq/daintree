@@ -27,6 +27,7 @@ import {
   RetiredAttemptError,
   TrailingPump,
   holdingTerminalSink,
+  drainWithoutAnnouncing,
   inertAttemptDelivery,
   isRelaySocketUrl,
   retireable,
@@ -204,6 +205,26 @@ describe("inertAttemptDelivery", () => {
     expect(listed).not.toHaveBeenCalled();
     expect(attempt.delivery.closureWrite("q1")).toBe(writing);
     expect(attempt.delivery.closureWrite("q2")).toBeNull();
+  });
+
+  it("drains an inert attempt without first reading the rows it would announce deliveries from (#18033)", async () => {
+    const store = new MemoryLocalStore();
+    const listed = vi.spyOn(store, "listQuestions");
+    const ordinary = await attemptBridge(store);
+    inertAttemptDelivery(ordinary.delivery, () => null);
+    // The bridge's own deliverNow reads every question but the queued before it drains.
+    await (ordinary as unknown as { deliverNow: () => Promise<void> }).deliverNow();
+    expect(listed).toHaveBeenCalled();
+    listed.mockClear();
+
+    const attempt = await attemptBridge(store);
+    inertAttemptDelivery(attempt.delivery, () => null);
+    drainWithoutAnnouncing(attempt);
+    const drain = vi.spyOn(attempt.delivery, "drain");
+    await (attempt as unknown as { deliverNow: () => Promise<void> }).deliverNow();
+
+    expect(drain).toHaveBeenCalledOnce();
+    expect(listed).not.toHaveBeenCalled();
   });
 
   it("takes the lifetime's wait for the ledger as its own, and wakes the lifetime when its read lets it go (#17941)", async () => {

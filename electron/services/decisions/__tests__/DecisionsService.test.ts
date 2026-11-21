@@ -17,7 +17,7 @@ import {
   type HostServedQuestions,
   type QuestionInboxFacts,
 } from "../DecisionsService.js";
-import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
+import type { DaintreeLocalStore, StoreCommit } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { DEFAULT_QUESTION_EXPIRY_MS } from "../../../../shared/config/decisionsQuestionExpiry.js";
 import type {
@@ -26,6 +26,7 @@ import type {
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
+import type { RunDecisionAttention } from "../../runAnswerAttentionSource.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
@@ -33,9 +34,11 @@ import type {
   AnswerDecisionQuestionPayload,
   DeclineDecisionQuestionPayload,
   DecisionQuestionCancelResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionListItem,
   SendDecisionFollowUpPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
+import type { DecisionsQuestions } from "../mcpRoute.js";
 import type {
   DecisionsInvolvementRead,
   SetDecisionsInvolvementPayload,
@@ -47,7 +50,7 @@ import {
   parseQuestionMarks,
   serializeQuestionMarks,
 } from "../questionMarks.js";
-import type { LearnedDecision, QuestionRow, StoredIdentity } from "@daintreehq/decisions-client";
+import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
   MemoryHistoryStore,
@@ -56,6 +59,7 @@ import {
 } from "@daintreehq/decisions-model";
 import { SqliteHistoryStore } from "@daintreehq/decisions-model/sqlite";
 import { DecisionModelRuntime } from "../decisionModel.js";
+import type { QueuedClosing } from "../paneDecisionState.js";
 import { BUSY_RESTART_DELAYS_MS, DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
 import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 
@@ -71,8 +75,20 @@ function fakeStore(): FakeStore & DaintreeLocalStore {
     onFault: () => () => {},
     faultReason: () => null,
     listQuestions: async () => [],
+    getQuestions: async () => [],
     referencedAttachmentIds: vi.fn(async () => new Set<string>()),
   } as unknown as FakeStore & DaintreeLocalStore;
+}
+
+/** A commit naming `questions`, and `meta` keys, as the store tells its listeners. */
+function commitOf(questions: Iterable<string> = [], meta: Iterable<string> = []): StoreCommit {
+  return { questions: new Set(questions), meta: new Set(meta) };
+}
+
+/** The stored rows `ids` names, as `getQuestions` reads them. */
+function rowsOf(rows: readonly QuestionRow[], ids: Iterable<string>): QuestionRow[] {
+  const wanted = new Set(ids);
+  return rows.filter((r) => wanted.has(r.question_id));
 }
 
 /** A key file nothing writes, so each start finds no deletion to finish. */
@@ -276,86 +292,6 @@ describe("DecisionsService", () => {
     await expect(second.load()).rejects.toMatchObject({ kind: "closed" });
   });
 
-  it("keeps what its key store last read of an owner's keys, telling of every read (#18063)", async () => {
-    const onOwnerKeys = vi.fn();
-    const service = new DecisionsService({
-      openStore: async () => fakeStore(),
-      keyFilePath: () => "/tmp/decisions-test/keys.bin",
-      onOwnerKeys,
-    });
-    const owner = (currentEpoch: number, epochs: number[]): StoredIdentity => ({
-      v: 1,
-      config: {
-        relayOrigin: "https://relay.example.com",
-        installationId: "inst_12345678",
-        deviceId: "dev_12345678",
-        label: "Daintree",
-      },
-      keys: {
-        signing_private_pkcs8: "signing-private",
-        signing_public: "signing-public",
-        exchange_private_pkcs8: "exchange-private",
-        exchange_public: "exchange-public",
-      },
-      epochs: epochs.map((epoch) => ({ epoch, raw: `epoch-${epoch}` })),
-      currentEpoch,
-    });
-    // What the store tells its observer once it has read or written keys.
-    const heard = (store: object, stored: StoredIdentity | null) =>
-      (store as { heard(stored: StoredIdentity | null): void }).heard(stored);
-    await service.start(on());
-    const first = service.getKeyStore();
-    expect(service.getOwnerKeys()).toBeNull();
-
-    const epochsOf = (keys: { coverage: { epochs: Array<{ epoch: number }> } } | null) =>
-      keys?.coverage.epochs.map(({ epoch }) => epoch) ?? null;
-    const reports = () =>
-      onOwnerKeys.mock.calls.map(([seen]) => [
-        epochsOf(seen.keys),
-        epochsOf(seen.first),
-        seen.changed,
-      ]);
-
-    heard(first, null);
-    heard(first, owner(1, [1]));
-    heard(first, owner(1, [1]));
-    expect(service.getOwnerKeys()).toMatchObject({
-      relayOrigin: "https://relay.example.com",
-      installationId: "inst_12345678",
-      deviceId: "dev_12345678",
-      coverage: { currentEpoch: 1 },
-    });
-    heard(first, owner(1, [1, 2]));
-    expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2]);
-    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1]);
-    // Every read is told, with the first owner keys the store saw and whether these differ.
-    expect(reports()).toEqual([
-      [null, null, true],
-      [[1], [1], true],
-      [[1], [1], false],
-      [[1, 2], [1], true],
-    ]);
-    heard(first, null);
-    expect(service.getOwnerKeys()).toBeNull();
-    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1]);
-
-    // A store let go of still tells of the writes it finishes, against what it saw, but they
-    // aren't this lifetime's.
-    await service.stop();
-    onOwnerKeys.mockClear();
-    heard(first, owner(3, [1, 2, 3]));
-    expect(reports()).toEqual([[[1, 2, 3], [1], true]]);
-    await service.start(on());
-    const second = service.getKeyStore();
-    expect(service.getFirstOwnerKeys()).toBeNull();
-    heard(second, owner(3, [1, 2, 3]));
-    heard(first, owner(4, [1, 2, 3, 4]));
-    expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2, 3]);
-    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1, 2, 3]);
-    await service.dispose();
-    expect(service.getOwnerKeys()).toBeNull();
-  });
-
   it("waits for the key store to close before a stop settles", async () => {
     const service = new DecisionsService({
       openStore: async () => fakeStore(),
@@ -524,14 +460,15 @@ describe("DecisionsService pane state", () => {
 
   it("shows each pane what the store holds when it starts, and again after each commit", async () => {
     let rows = [row(1)];
-    const listeners = new Set<() => void>();
+    const listeners = new Set<(commit: StoreCommit) => void>();
     const store = {
       ...fakeStore(),
-      onCommit: (listener: () => void) => {
+      onCommit: (listener: (commit: StoreCommit) => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
       listQuestions: async () => rows,
+      getQuestions: async (ids: Iterable<string>) => rowsOf(rows, ids),
     } as unknown as DaintreeLocalStore;
     const pushes: PaneDecisionState[] = [];
     const service = new DecisionsService({
@@ -544,8 +481,8 @@ describe("DecisionsService pane state", () => {
     expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(1);
 
     rows = [row(1), row(2)];
-    for (const listener of listeners) listener();
-    for (const listener of listeners) listener();
+    for (const listener of listeners) listener(commitOf([qid(2)]));
+    for (const listener of listeners) listener(commitOf([qid(2)]));
     await vi.waitFor(() => expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(2));
     expect(pushes).toHaveLength(2);
 
@@ -685,6 +622,7 @@ describe("DecisionsService question list (#17229)", () => {
       handled?: Record<string, number>;
       notifyQuestions?: DecisionsServiceOptions["notifyQuestions"];
       connect?: DecisionsServiceOptions["connect"];
+      askerPresence?: DecisionsServiceOptions["askerPresence"];
     } = {}
   ) {
     let rows: QuestionRow[] = [];
@@ -692,18 +630,28 @@ describe("DecisionsService question list (#17229)", () => {
     let handled = options.handled ?? null;
     // The person's marks (#17895) as stored, or an error to throw reading them.
     let marks: string | Error | null = null;
+    // Withdrawals and declines queued (#18052), or an error to throw reading them.
+    let closings: QueuedClosing[] | Error = [];
     // Set to hold the next read until the test lets it land.
     let gate: Promise<void> | null = null;
-    const listeners = new Set<() => void>();
+    // Every question the harness ever held, so a commit names each row that came or went.
+    const known = new Set<string>();
+    const listeners = new Set<(commit: StoreCommit) => void>();
     const store = {
       ...fakeStore(),
-      onCommit: (listener: () => void) => {
+      onCommit: (listener: (commit: StoreCommit) => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
       listQuestions: async () => {
         reads += 1;
         const read = rows;
+        if (gate !== null) await gate;
+        return read;
+      },
+      getQuestions: async (ids: Iterable<string>) => {
+        reads += 1;
+        const read = rowsOf(rows, ids);
         if (gate !== null) await gate;
         return read;
       },
@@ -716,6 +664,10 @@ describe("DecisionsService question list (#17229)", () => {
           ? JSON.stringify(handled)
           : null;
       },
+      pendingClosings: async () => {
+        if (closings instanceof Error) throw closings;
+        return [...closings];
+      },
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
     const inboxes: Array<QuestionInboxFacts | undefined> = [];
@@ -723,7 +675,7 @@ describe("DecisionsService question list (#17229)", () => {
     const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
     const paneProjects: string[] = [];
-    const attention: Array<Map<string, number>> = [];
+    const attention: Array<Map<string, RunDecisionAttention>> = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
@@ -741,11 +693,21 @@ describe("DecisionsService question list (#17229)", () => {
         hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
       notifyQuestions: options.notifyQuestions,
       ...(options.connect ? { connect: options.connect } : {}),
+      ...(options.askerPresence ? { askerPresence: options.askerPresence } : {}),
     });
-    const commit = async (next: QuestionRow[]) => {
+    const setRows = (next: QuestionRow[]) => {
       rows = next;
+      for (const r of next) known.add(r.question_id);
+    };
+    // Every question, and the meta the feed reads beside them, as written.
+    const fireCommit = () => {
+      const commit = commitOf(known, [HANDLED_ANSWERS_META_KEY, QUESTION_MARKS_META_KEY]);
+      for (const listener of listeners) listener(commit);
+    };
+    const commit = async (next: QuestionRow[]) => {
+      setRows(next);
       const before = lists.length;
-      for (const listener of listeners) listener();
+      fireCommit();
       await vi.waitFor(() => expect(lists.length).toBeGreaterThan(before));
     };
     return {
@@ -754,17 +716,19 @@ describe("DecisionsService question list (#17229)", () => {
       lists,
       inboxes,
       setMarks: (next: string | Error | null) => (marks = next),
+      setClosings: (next: QueuedClosing[] | Error) => (closings = next),
       listing,
       hostLists,
       panes,
       paneProjects,
       attention,
       commit,
-      setRows: (next: QuestionRow[]) => (rows = next),
+      setRows,
       reads: () => reads,
       setHandled: (next: Record<string, number>) => (handled = next),
-      fireCommit: () => {
-        for (const listener of listeners) listener();
+      fireCommit,
+      fire: (commit: StoreCommit) => {
+        for (const listener of listeners) listener(commit);
       },
       hold: () => {
         let release!: () => void;
@@ -865,7 +829,8 @@ describe("DecisionsService question list (#17229)", () => {
     await service.start(on(HOST));
     expect(lists.at(-1)?.[1]?.standing).toMatchObject({ kind: "needs-attention" });
     expect(panes.at(-1)?.needsAttention.map((item) => item.alias)).toEqual([2]);
-    expect([...attention.at(-1)!]).toEqual([["pane-a", 1]]);
+    // Its open question raises the pane beside the answer (#18050).
+    expect([...attention.at(-1)!]).toEqual([["pane-a", { answers: 1, questions: 1 }]]);
 
     // Then it expired unanswered, and its notice stopped too.
     await commit([
@@ -896,7 +861,8 @@ describe("DecisionsService question list (#17229)", () => {
       needsAttention: [],
       openQuestions: [expect.objectContaining({ alias: 1 })],
     });
-    expect(attention.at(-1)?.size).toBe(0);
+    // No answer needs a person; the question still open raises the pane alone.
+    expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]));
     await service.stop();
   });
 
@@ -920,6 +886,35 @@ describe("DecisionsService question list (#17229)", () => {
       outcome: "answered",
       handled: true,
     });
+    await service.stop();
+  });
+
+  it("lists again on a commit that wrote only what a person marked handled, reading no row (#18033)", async () => {
+    const attention = row(1, {
+      question_id: "q_handled_0001",
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      answers_json: answers({ revision: 1 }),
+    });
+    const { service, lists, store, setRows, setHandled, fire } = listed();
+    setRows([attention]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)?.[0]?.standing).toMatchObject({ kind: "needs-attention" });
+    const getQuestions = vi.spyOn(store, "getQuestions");
+    const listQuestions = vi.spyOn(store, "listQuestions");
+
+    setHandled({ q_handled_0001: 1 });
+    const before = lists.length;
+    fire(commitOf([], [HANDLED_ANSWERS_META_KEY]));
+    await vi.waitFor(() => expect(lists.length).toBeGreaterThan(before));
+
+    expect(lists.at(-1)?.[0]?.standing).toEqual({
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    });
+    expect(getQuestions).toHaveBeenCalledWith([]);
+    expect(listQuestions).not.toHaveBeenCalled();
     await service.stop();
   });
 
@@ -1004,6 +999,115 @@ describe("DecisionsService question list (#17229)", () => {
     await service.stop();
   });
 
+  it("raises each run's questions in Needs you on the fleet, and lowers one cleared at its ask with no row change", async () => {
+    const { service, attention, setRows, setMarks, fireCommit } = listed();
+    setRows([
+      row(1),
+      row(2),
+      row(3, {
+        origin: { project_id: "project-b", pane_id: "pane-b" },
+        messages_json: messages({
+          message_id: "note-3",
+          side: "agent",
+          event_seq: 4,
+          delivery: null,
+        }),
+      }),
+      row(4, { local_status: "expired" }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(
+        new Map([
+          ["pane-a", { answers: 0, questions: 2 }],
+          ["pane-b", { answers: 0, questions: 1 }],
+        ])
+      )
+    );
+
+    // A mark is a meta write, which commits: the feed reads it again though no row moved.
+    // Cleared at the agent's latest message, the ask the question shows now.
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(3) }),
+            { hostId: "host_1", questionId: qid(3), ask: "note-3", seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    fireCommit();
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 2 }]]))
+    );
+
+    await service.stop();
+    expect(attention.at(-1)?.size).toBe(0);
+  });
+
+  it("stops raising a run once its question's deadline passes by the clock, with no row change", async () => {
+    const { service, attention, setRows } = listed();
+    const soon = new Date(Date.now() + 300).toISOString();
+    const later = new Date(Date.now() + 600).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    setRows([
+      row(1, { expires_at: soon }),
+      row(2, { expires_at: past, origin: { pane_id: "pane-b" } }),
+      row(3, { origin: { pane_id: "pane-c" } }),
+      row(4, { expires_at: later, origin: { pane_id: "pane-d" } }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(
+        new Map([
+          ["pane-a", { answers: 0, questions: 1 }],
+          ["pane-c", { answers: 0, questions: 1 }],
+          ["pane-d", { answers: 0, questions: 1 }],
+        ])
+      )
+    );
+    // Each deadline in turn, the second counted on the wait the first armed.
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-c", { answers: 0, questions: 1 }]]))
+    );
+    await service.stop();
+  });
+
+  it("raises no run for what an old host id counted while the read for a new one is held", async () => {
+    const { service, attention, setRows, hold } = listed();
+    setRows([row(1, { expires_at: new Date(Date.now() + 60_000).toISOString() })]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
+    const release = hold();
+    service.updateSettings(on({ hostId: "host_2" }));
+    expect(attention.at(-1)?.size).toBe(0);
+    release();
+    await service.stop();
+  });
+
+  it("raises a Remote Host lifetime's own questions on its fleet, which has no marks to clear them", async () => {
+    const { service, attention, setRows, setMarks } = listed();
+    setMarks(
+      serializeQuestionMarks(
+        new Map([
+          [
+            markKey({ hostId: "host_1", questionId: qid(1) }),
+            { hostId: "host_1", questionId: qid(1), ask: null, seen: false, cleared: true },
+          ],
+        ])
+      )
+    );
+    setRows([row(1)]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() =>
+      expect(attention.at(-1)).toEqual(new Map([["pane-a", { answers: 0, questions: 1 }]]))
+    );
+    await service.stop();
+  });
+
   it("keeps the marks it last read when a read of them fails", async () => {
     const { service, inboxes, setRows, setMarks, commit } = listed();
     const record = serializeQuestionMarks(
@@ -1026,6 +1130,68 @@ describe("DecisionsService question list (#17229)", () => {
       new Map([
         [qid(1), null],
         [qid(2), null],
+      ])
+    );
+    await service.stop();
+  });
+
+  it("shows a withdrawal or decline queued from any view on its pane and in the list's facts, keeping the last read when one fails (#18052)", async () => {
+    const { service, inboxes, panes, setRows, setClosings, commit } = listed();
+    setRows([row(1), row(2), row(3, { question_revision: 2 })]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(3));
+    expect(panes.at(-1)?.openQuestions.some((question) => "closing" in question)).toBe(false);
+
+    setClosings([
+      { questionId: qid(1), closing: "withdrawing", revision: null },
+      { questionId: qid(2), closing: "declining", revision: 1 },
+      // Signed for a round since replaced: it closes nothing now.
+      { questionId: qid(3), closing: "declining", revision: 1 },
+    ]);
+    const queued = new Map([
+      [qid(1), "withdrawing"],
+      [qid(2), "declining"],
+    ] as const);
+    await commit([row(1), row(2), row(3, { question_revision: 2 })]);
+    await vi.waitFor(() =>
+      expect(panes.at(-1)?.openQuestions.map((question) => question.closing ?? null)).toEqual([
+        "withdrawing",
+        "declining",
+        null,
+      ])
+    );
+    expect(inboxes.at(-1)?.closings).toEqual(queued);
+
+    setClosings(new Error("SQLITE_BUSY"));
+    await commit([row(1), row(2), row(3, { question_revision: 2 }), row(4)]);
+    await vi.waitFor(() => expect(panes.at(-1)?.openQuestions).toHaveLength(4));
+    expect(inboxes.at(-1)?.closings).toEqual(queued);
+    expect(panes.at(-1)?.openQuestions.map((question) => question.closing ?? null)).toEqual([
+      "withdrawing",
+      "declining",
+      null,
+      null,
+    ]);
+
+    // Let go once the relay takes it: the question still waits until it closes.
+    setClosings([]);
+    await commit([row(1), row(2), row(3, { question_revision: 2 }), row(4)]);
+    await vi.waitFor(() =>
+      expect(panes.at(-1)?.openQuestions.some((question) => "closing" in question)).toBe(false)
+    );
+    expect(inboxes.at(-1)?.closings).toEqual(new Map());
+    expect(panes.at(-1)?.openQuestions).toHaveLength(4);
+    await service.stop();
+  });
+
+  it("shows a withdrawal queued on a Remote Host's own lifetime on its pane, for its owner's Shell (#18052)", async () => {
+    const { service, panes, setRows, setClosings } = listed();
+    setRows([row(1)]);
+    setClosings([{ questionId: qid(1), closing: "withdrawing", revision: null }]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() =>
+      expect(panes.at(-1)?.openQuestions.map((question) => question.closing)).toEqual([
+        "withdrawing",
       ])
     );
     await service.stop();
@@ -1119,6 +1285,12 @@ describe("DecisionsService question list (#17229)", () => {
     await vi.waitFor(() =>
       expect(notice()).toEqual({ delivery: "pending", disposition: "fallback-withheld" })
     );
+
+    // The connection stops with no write to the store: listed again as the lifetime was configured (#18033).
+    made[0]!.onStatus({ state: "not-connected", problem: "keys" });
+    await vi.waitFor(() =>
+      expect(notice()).toEqual({ delivery: "pending", disposition: "fallback-due" })
+    );
     await service.stop();
   });
 
@@ -1129,6 +1301,118 @@ describe("DecisionsService question list (#17229)", () => {
     expect(lists.at(-1)).toHaveLength(1);
     await service.stop();
     expect(hostLists.filter((list) => list !== null)).toEqual([]);
+  });
+
+  /** One pane, as the pty host reports it, and the pane events main would emit (#18029). */
+  function panes(asked: QuestionRow["origin"]) {
+    const record: { id: string; hasPty: boolean; isTrashed?: boolean } & Record<string, unknown> = {
+      id: asked.pane_id,
+      hasPty: true,
+      launchGeneration: asked.terminal_generation,
+      agentIncarnation: Number(asked.agent_incarnation),
+      agentSessionId: asked.agent_session_id ?? undefined,
+      worktreeId: asked.worktree_id,
+      detectedAgentId: asked.agent_kind,
+      everDetectedAgent: true,
+    };
+    const listeners = new Set<() => void>();
+    const sources: NonNullable<DecisionsServiceOptions["askerPresence"]> = {
+      hostId: () => HOST.hostId,
+      principalFor: () => asked.ownership_principal,
+      getPtyClient: () => ({
+        getLiveGeneration: () => asked.terminal_generation,
+        isLiveGeneration: () => true,
+        getAllTerminalsWithCompletenessAsync: async () => ({
+          terminals: [{ ...record }],
+          degraded: false,
+        }),
+      }),
+      stat: async () => ({ isDirectory: () => true }),
+      watch: (onPane) => {
+        listeners.add(onPane);
+        return () => listeners.delete(onPane);
+      },
+      settleMs: 0,
+    };
+    return {
+      sources,
+      record,
+      watching: () => listeners.size,
+      emit: () => {
+        for (const listener of [...listeners]) listener();
+      },
+    };
+  }
+
+  it("lists what it observed of an open question's asker, again on a pane event, without reading the store (#18029)", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, lists, setRows, reads } = listed({ askerPresence: pane.sources });
+    setRows([
+      open,
+      row(2, {
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() =>
+      expect(lists.at(-1)?.[0]?.asker).toEqual({
+        target: "running",
+        directory: "present",
+        resume: "resumable",
+      })
+    );
+    // Only an open ask is observed: a delivered answer says how delivery went instead.
+    expect(lists.at(-1)?.[1]).not.toHaveProperty("asker");
+    const readsBefore = reads();
+
+    pane.record.isTrashed = true;
+    pane.emit();
+
+    await vi.waitFor(() => expect(lists.at(-1)?.[0]?.asker?.target).toBe("trashed"));
+    expect(reads()).toBe(readsBefore);
+    // Observed, never acted on: the question still waits for the person.
+    expect(lists.at(-1)?.[0]?.standing).toEqual({ kind: "waiting", reason: "open" });
+    await service.stop();
+    expect(pane.watching()).toBe(0);
+  });
+
+  it("stops watching panes once its last open question is answered (#18029)", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, lists, setRows, commit } = listed({ askerPresence: pane.sources });
+    setRows([open]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)?.[0]?.asker?.target).toBe("running"));
+    expect(pane.watching()).toBe(1);
+
+    await commit([
+      row(1, {
+        origin: { agent_incarnation: "4" },
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
+    ]);
+
+    expect(pane.watching()).toBe(0);
+    expect(lists.at(-1)?.[0]).not.toHaveProperty("asker");
+    await service.stop();
+  });
+
+  it("observes no asker for a Remote Host's lifetime, whose owner can't see its panes", async () => {
+    const open = row(1, { origin: { agent_incarnation: "4" } });
+    const pane = panes(open.origin);
+    const { service, hostLists, setRows } = listed({ askerPresence: pane.sources });
+    setRows([open]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() => expect(hostLists.at(-1)?.questions).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(pane.watching()).toBe(0);
+    expect(hostLists.at(-1)?.questions[0]).not.toHaveProperty("asker");
+    await service.stop();
   });
 });
 
@@ -1298,18 +1582,22 @@ describe("DecisionsService relay connection", () => {
     expect(made[0]!.options.policy).toBe(policy);
     expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
 
-    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    service.updateSettings(on({ ...RELAY, defaultQuestionExpiryMs: 60 * 60_000 }));
     expect(service.getPolicy()).toBe(policy);
-    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    expect(policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+
+    // The saved consent alone lets nothing take a proxy answer: only an armed model does (#18062).
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
 
     // Another relay identity gets a new connection on the same policy.
     service.updateSettings(on({ ...RELAY, proxyAllowlisted: true, deviceId: "dev_87654321" }));
     expect(made).toHaveLength(2);
     expect(made[1]!.options.policy).toBe(policy);
 
-    await service.start(on({ ...RELAY, proxyAllowlisted: false, deviceId: "dev_87654321" }));
+    await service.start(on({ ...RELAY, defaultQuestionExpiryMs: null, deviceId: "dev_87654321" }));
     expect(service.getPolicy()).toBe(policy);
-    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    expect(policy?.defaultQuestionExpiryMs).toBeNull();
   });
 
   it.each([
@@ -2178,14 +2466,22 @@ describe("DecisionsService relay connection", () => {
     expect(service.getStatus()).toEqual({ state: "off" });
   });
 
-  it("feeds the panes every question row at the start and after each question write", async () => {
+  it("feeds the panes every question row at the start, then only the questions each commit wrote (#18033)", async () => {
     let rows = [row(1)];
     const pushes: string[] = [];
+    const listeners = new Set<(commit: StoreCommit) => void>();
     const store = Object.assign(fakeStore(), {
+      onCommit: (listener: (commit: StoreCommit) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       listQuestions: vi.fn(async () => rows),
-      updateQuestion: vi.fn(async () => null),
+      getQuestions: vi.fn(async (ids: Iterable<string>) => rowsOf(rows, ids)),
       getMeta: vi.fn(async () => null),
     });
+    const commit = (c: StoreCommit) => {
+      for (const listener of listeners) listener(c);
+    };
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => "/nonexistent/keys.bin",
@@ -2199,19 +2495,26 @@ describe("DecisionsService relay connection", () => {
     let connection: RelayConnectionOptions | null = null;
     await service.start(on(RELAY));
     await vi.waitFor(() => expect(pushes).toEqual(["pane-a:1"]));
+    // The connection writes to the store itself: its commits are what the feed follows.
+    expect(connection!.store).toBe(store);
+
+    // A commit that wrote no question (the outbox, the cursor, the audit log) reads nothing.
+    commit(commitOf([], ["cursor"]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getQuestions).not.toHaveBeenCalled();
 
     rows = [];
-    await connection!.store.getMeta("k");
-    expect(store.listQuestions).toHaveBeenCalledTimes(1);
-    await connection!.store.updateQuestion("q_1", { local_status: "cancelled" });
+    commit(commitOf([qid(1)]));
     await vi.waitFor(() => expect(pushes).toEqual(["pane-a:1", "pane-a:0"]));
-    expect(store.listQuestions).toHaveBeenCalledTimes(2);
+    expect(store.getQuestions).toHaveBeenCalledWith([qid(1)]);
+    expect(store.listQuestions).toHaveBeenCalledTimes(1);
 
     await service.stop();
     rows = [row(2)];
-    await connection!.store.updateQuestion("q_2", { local_status: "open" });
+    commit(commitOf([qid(2)]));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(store.listQuestions).toHaveBeenCalledTimes(2);
+    expect(store.getQuestions).toHaveBeenCalledTimes(1);
+    expect(store.listQuestions).toHaveBeenCalledTimes(1);
   });
 
   it("opens a connection's questions only once the route they replace has let go of the listener", async () => {
@@ -2340,15 +2643,28 @@ describe("DecisionsService deleting local data", () => {
     const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-feed-"));
     try {
       const stores: Array<
-        FakeStore & DaintreeLocalStore & { listQuestions: ReturnType<typeof vi.fn> }
+        FakeStore &
+          DaintreeLocalStore & {
+            listQuestions: ReturnType<typeof vi.fn>;
+            getQuestions: ReturnType<typeof vi.fn>;
+            commit: (c: StoreCommit) => void;
+          }
       > = [];
       const connections: RelayConnectionOptions[] = [];
       const service = new DecisionsService({
         keyFilePath: () => join(dir, "keys.bin"),
         openStore: async () => {
+          const listeners = new Set<(commit: StoreCommit) => void>();
           const store = Object.assign(fakeStore(), {
+            onCommit: (listener: (commit: StoreCommit) => void) => {
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
             listQuestions: vi.fn(async () => []),
-            updateQuestion: vi.fn(async () => null),
+            getQuestions: vi.fn(async () => []),
+            commit: (c: StoreCommit) => {
+              for (const listener of listeners) listener(c);
+            },
           });
           stores.push(store);
           return store;
@@ -2373,8 +2689,10 @@ describe("DecisionsService deleting local data", () => {
       expect(connections).toHaveLength(2);
       await vi.waitFor(() => expect(stores[1]!.listQuestions).toHaveBeenCalledTimes(1));
 
-      await connections[1]!.store.updateQuestion("q_1", { local_status: "open" });
-      await vi.waitFor(() => expect(stores[1]!.listQuestions).toHaveBeenCalledTimes(2));
+      stores[0]!.commit(commitOf(["q_0"]));
+      stores[1]!.commit(commitOf(["q_1"]));
+      await vi.waitFor(() => expect(stores[1]!.getQuestions).toHaveBeenCalledWith(["q_1"]));
+      expect(stores[0]!.getQuestions).not.toHaveBeenCalled();
       expect(stores[0]!.listQuestions).toHaveBeenCalledTimes(1);
       await service.stop();
     } finally {
@@ -2386,6 +2704,7 @@ describe("DecisionsService deleting local data", () => {
     const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-unlist-"));
     try {
       const published: Array<{ count: number; listing: boolean }> = [];
+      const attention: Array<Map<string, RunDecisionAttention>> = [];
       let opens = 0;
       const service = new DecisionsService({
         keyFilePath: () => join(dir, "keys.bin"),
@@ -2405,16 +2724,20 @@ describe("DecisionsService deleting local data", () => {
         forgetIdentity: () => on(RELAY),
         publishQuestions: (questions, listing) =>
           published.push({ count: questions.length, listing }),
+        publishAnswerAttention: (counts) => attention.push(new Map(counts)),
         connect: () => ({ start: () => {}, stop: () => {} }),
       });
       await service.start(on(RELAY));
       await vi.waitFor(() => expect(published.at(-1)).toEqual({ count: 1, listing: true }));
+      await vi.waitFor(() => expect(attention.at(-1)?.size).toBe(1));
 
       await service.eraseLocalData();
 
       expect(opens).toBe(2);
       // Not listing at all, so no Remote Host's questions stay listed with no store here.
       expect(published.at(-1)).toEqual({ count: 0, listing: false });
+      // Nor does any run stay raised by what the closed store showed.
+      expect(attention.at(-1)?.size).toBe(0);
       await service.stop();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3048,22 +3371,101 @@ describe("DecisionsService decision model (#16026)", () => {
   it("asks the running connection to replace its attempt each time the proxy arms or disarms", async () => {
     const t = modelled();
     try {
-      await t.service.start(on({ ...RELAY, modelLearning: true, modelAdapter: "claude" }));
+      const settings = { ...RELAY, modelLearning: true, modelAdapter: "claude" as const };
+      await t.service.start(on({ ...settings, proxyAllowlisted: true }));
       const hooks = t.made[0]!.options.model!;
       await vi.waitFor(() => expect(t.histories).toHaveLength(1));
       for (let n = 1; n <= 36; n += 1) await hooks.learner.learn(decision(n));
+      // What a question without a gate asking for a proxy would be recorded as, when the connection hears.
+      const ungated = () => t.service.getPolicy()?.resolve({ requested: "proxy-ok" }).requirement;
+      const heard: Array<string | undefined> = [];
+      t.made[0]!.modelChanged.mockImplementation(() => heard.push(ungated()));
 
       const model = t.service.getDecisionModel()!;
       await model.evaluate();
       expect(t.made[0]!.modelChanged).not.toHaveBeenCalled();
+      expect(ungated()).toBe("human-required");
       await model.setAutoAnswerThreshold(0.8);
       expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(1);
       expect(hooks.proxy()).toBe(model.proxy());
       expect(hooks.proxy()).not.toBeNull();
 
-      t.service.updateSettings(on({ ...RELAY, modelLearning: false, modelAdapter: "claude" }));
+      t.service.updateSettings(on({ ...settings, modelLearning: false, proxyAllowlisted: true }));
       await vi.waitFor(() => expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(2));
       expect(hooks.proxy()).toBeNull();
+      // The policy follows the proxy, and is set before the connection is told (#18062).
+      expect(heard).toEqual(["proxy-ok", "human-required"]);
+      expect(ungated()).toBe("human-required");
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  // #18062: answering automatically is one choice, and the policy follows the armed model.
+  it("arms nothing from a threshold while the setting withholds consent, and takes a withdrawal at once", async () => {
+    const t = modelled();
+    try {
+      const settings = { ...RELAY, modelLearning: true, modelAdapter: "claude" as const };
+      await t.service.start(on({ ...settings, proxyAllowlisted: false }));
+      const hooks = t.made[0]!.options.model!;
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      for (let n = 1; n <= 36; n += 1) await hooks.learner.learn(decision(n));
+      const ungated = () => t.service.getPolicy()?.resolve({ requested: "proxy-ok" }).requirement;
+
+      const model = t.service.getDecisionModel()!;
+      await model.evaluate();
+      await model.setAutoAnswerThreshold(0.8);
+      expect(hooks.proxy()).toBeNull();
+      expect(model.snapshot().answeringFrom).toBeNull();
+      expect(ungated()).toBe("human-required");
+      expect(t.made[0]!.modelChanged).not.toHaveBeenCalled();
+
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: true }));
+      await model.settled();
+      expect(hooks.proxy()).not.toBeNull();
+      expect(ungated()).toBe("proxy-ok");
+      // A design review still needs the person, armed or not.
+      expect(
+        t.service.getPolicy()?.resolve({ gateId: "design-review/final", requested: "proxy-ok" })
+          .requirement
+      ).toBe("human-required");
+
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: false }));
+      // Before the model's queue runs anything.
+      expect(hooks.proxy()).toBeNull();
+      expect(ungated()).toBe("human-required");
+      await model.settled();
+      expect(hooks.proxy()).toBeNull();
+
+      // Closing the model, as stopping or a store's recovery does, disarms
+      // without its callback, so the policy is told before the close finishes.
+      t.service.updateSettings(on({ ...settings, proxyAllowlisted: true }));
+      await model.settled();
+      expect(ungated()).toBe("proxy-ok");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = DecisionModelRuntime.prototype.close;
+      const close = vi
+        .spyOn(DecisionModelRuntime.prototype, "close")
+        .mockImplementation(async function (this: DecisionModelRuntime) {
+          await held;
+          return original.call(this);
+        });
+      try {
+        const stopping = t.service.stop();
+        await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+        expect(ungated()).toBe("human-required");
+        release();
+        await stopping;
+      } finally {
+        close.mockRestore();
+      }
+
+      // The saved choice arms the next lifetime's model again, and its policy follows.
+      await t.service.start(on({ ...settings, proxyAllowlisted: true }));
+      await vi.waitFor(() => expect(t.service.getDecisionModel()?.proxy()).not.toBeNull());
+      expect(ungated()).toBe("proxy-ok");
       await t.service.stop();
     } finally {
       t.cleanup();
@@ -3830,5 +4232,182 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("DecisionsService removing settled history (#18033)", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+    hostId: "host_1",
+  };
+
+  function removing(
+    remove: (hostId: string, busy: () => ReadonlySet<string>) => Promise<string[]>,
+    options: { openStore?: () => Promise<DaintreeLocalStore> } = {}
+  ) {
+    const store = Object.assign(fakeStore(), { removeSettledQuestions: vi.fn(remove) });
+    const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
+    let followUp: ReturnType<typeof deferredFollowUp> | null = null;
+    const service = new DecisionsService({
+      openStore: options.openStore ?? (async () => store),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      connect: (connection) => {
+        const record = { options: connection, stopped: false };
+        made.push(record);
+        return { start: () => {}, stop: () => void (record.stopped = true) };
+      },
+      openQuestions: () =>
+        ({
+          listenerPort: async () => 4100,
+          close: async () => {},
+          followUpForPerson: () => {
+            followUp = deferredFollowUp();
+            return followUp.promise;
+          },
+        }) as unknown as DecisionsQuestions,
+    });
+    const lock = { run: vi.fn(<T>(fn: () => Promise<T>) => fn()) };
+    const ready = () =>
+      made[0]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as QuestionSource["store"],
+        policy: {} as QuestionSource["policy"],
+        advisoryDeadlines: false,
+        lock: lock as unknown as QuestionSource["lock"],
+      });
+    return { service, store, made, lock, ready, followUp: () => followUp };
+  }
+
+  function deferredFollowUp() {
+    let resolve!: (value: DecisionQuestionFollowUpResult) => void;
+    const promise = new Promise<DecisionQuestionFollowUpResult>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+
+  it("removes from the open store under the connection's lock, and leaves the rest running", async () => {
+    const { service, store, made, lock, ready } = removing(async () => ["q_a", "q_b"]);
+    await service.start(on(RELAY));
+    ready();
+
+    expect(await service.removeSettledQuestions()).toEqual({
+      result: { result: "removed", count: 2 },
+      hostId: "host_1",
+      questionIds: ["q_a", "q_b"],
+    });
+    expect(store.removeSettledQuestions).toHaveBeenCalledWith("host_1", expect.any(Function));
+    expect(lock.run).toHaveBeenCalledOnce();
+    expect(service.getHistoryRemovals()).toBe(1);
+    // The store, the connection and the settings are as they were.
+    expect(service.getStore()).toBe(store);
+    expect(store.close).not.toHaveBeenCalled();
+    expect(made).toHaveLength(1);
+    expect(made[0]!.stopped).toBe(false);
+    expect(service.getSettings()?.relayOrigin).toBe(RELAY.relayOrigin);
+    await service.stop();
+  });
+
+  it("removes nothing until the connection's lock comes free", async () => {
+    const { service, store, lock, ready } = removing(async () => ["q_a"]);
+    await service.start(on(RELAY));
+    ready();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    lock.run.mockImplementationOnce(async <T>(fn: () => Promise<T>) => {
+      await held;
+      return fn();
+    });
+
+    const pending = service.removeSettledQuestions();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.removeSettledQuestions).not.toHaveBeenCalled();
+    release();
+    await expect(pending).resolves.toMatchObject({ questionIds: ["q_a"] });
+    expect(store.removeSettledQuestions).toHaveBeenCalledOnce();
+    await service.stop();
+  });
+
+  it("holds back a question a person's follow-up is still on its way for", async () => {
+    const seen: string[][] = [];
+    const { service, ready, followUp } = removing(async (_hostId, busy) => {
+      seen.push([...busy()]);
+      return [];
+    });
+    await service.start(on(RELAY));
+    ready();
+
+    const reference = {
+      hostId: "host_1",
+      projectId: "project-1",
+      terminalId: "pane-a",
+      questionId: "q_answered",
+    };
+    const sent = service.sendFollowUp({ reference, messageId: "m1", text: "one more thing" });
+    await service.removeSettledQuestions();
+    followUp()!.resolve({ result: "submitted", messageId: "m1", outcome: { status: "queued" } });
+    await sent;
+    await service.removeSettledQuestions();
+
+    expect(seen).toEqual([["q_answered"], []]);
+    await service.stop();
+  });
+
+  it("removes nothing and counts nothing when the store refuses", async () => {
+    const refusal = (reason: string) =>
+      Object.assign(new Error("refused"), { name: "DecisionsStoreUnavailableError", reason });
+    let next = refusal("disk-pressure");
+    const { service } = removing(async () => {
+      throw next;
+    });
+    await service.start(on(RELAY));
+
+    expect((await service.removeSettledQuestions()).result).toEqual({
+      result: "failed",
+      reason: "disk-pressure",
+    });
+    next = refusal("disk-full");
+    expect((await service.removeSettledQuestions()).result).toEqual({
+      result: "failed",
+      reason: "storage",
+    });
+    expect(service.getHistoryRemovals()).toBe(0);
+    await service.stop();
+  });
+
+  it("says the history isn't open while the store couldn't be opened", async () => {
+    const { service, store } = removing(async () => ["q_a"], {
+      openStore: async () => {
+        throw new Error("SQLITE_CANTOPEN");
+      },
+    });
+    // On, with no store: the start says so, and the lifetime carries on without one.
+    await expect(service.start(on(RELAY))).rejects.toThrow("SQLITE_CANTOPEN");
+
+    expect((await service.removeSettledQuestions()).result).toEqual({
+      result: "failed",
+      reason: "store-unavailable",
+    });
+    expect(store.removeSettledQuestions).not.toHaveBeenCalled();
+    await service.stop();
+  });
+
+  it("removes nothing without a host id, since nothing is listed then", async () => {
+    const { service, store } = removing(async () => ["q_a"]);
+    await service.start(on({ ...RELAY, hostId: null }));
+
+    expect((await service.removeSettledQuestions()).result).toEqual({
+      result: "removed",
+      count: 0,
+    });
+    expect(store.removeSettledQuestions).not.toHaveBeenCalled();
+    expect(service.getHistoryRemovals()).toBe(0);
+    await service.stop();
+  });
+
+  it("refuses while off", async () => {
+    const { service } = removing(async () => []);
+    await expect(service.removeSettledQuestions()).rejects.toThrow(/off/);
   });
 });

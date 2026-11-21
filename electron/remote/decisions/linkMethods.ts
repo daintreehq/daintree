@@ -104,6 +104,23 @@ export const DecisionsLinkMethod = {
    * and is read with `QUESTION_CONTENT_V2` instead, whose content is strict.
    */
   QUESTION_CONTENT_V3: "decisions.questionContent.v3",
+  /**
+   * Shell → Host (#18031): one of the Host's own stopped deliveries, by
+   * reference, read with what the Host would offer, copied, resumed or marked
+   * handled through the Host's own delivery, so resolving it once holds for
+   * the Host's window too. Answered only to the owner that enrolled the Host,
+   * while that owner's Decisions is on. A Host from before it answers
+   * UNSUPPORTED, and its stalls are resolved on the Host.
+   */
+  ATTENTION: "decisions.attention",
+  /**
+   * Shell → Host (#18037): the pane that asked one of the Host's questions,
+   * as it shows now, redacted as a terminal snapshot is. Answered only to the
+   * owner that enrolled the Host, while that owner's Decisions is on, and
+   * whatever the snapshot switch says. A Host from before it answers
+   * UNSUPPORTED, and the owner is told the Host needs updating.
+   */
+  QUESTION_PANE: "decisions.questionPane",
 } as const;
 
 /**
@@ -127,6 +144,8 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.QUESTIONS_CHANGED_V3]: "shell",
   [DecisionsLinkMethod.QUESTION_CONTENT_V2]: "host",
   [DecisionsLinkMethod.QUESTION_CONTENT_V3]: "host",
+  [DecisionsLinkMethod.ATTENTION]: "host",
+  [DecisionsLinkMethod.QUESTION_PANE]: "host",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"
