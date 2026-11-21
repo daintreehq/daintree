@@ -349,7 +349,10 @@ function installApi(
   };
   const globalHelpDefaults: HelpApi = {
     getGlobalAssistantState: vi.fn().mockResolvedValue({
+      slot: 0,
       phase: "absent",
+      pinnedAgentId: null,
+      occupied: false,
       generation: 0,
       agentId: null,
       terminalId: null,
@@ -3189,7 +3192,10 @@ describe("SessionLiveStatusCard (live help session)", () => {
       {},
       {
         getGlobalAssistantState: vi.fn().mockResolvedValue({
+          slot: 0,
           phase: "running",
+          pinnedAgentId: null,
+          occupied: true,
           generation: 1,
           agentId: "codex",
           terminalId: "g-1",

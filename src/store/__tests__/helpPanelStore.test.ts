@@ -626,6 +626,38 @@ describe("helpPanelStore persistence migration", () => {
       expect(persisted).not.toHaveProperty("globalTarget");
     });
 
+    it("shows the global session named, keeps it through a re-pick, and never persists it (#18142)", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      expect(store.getState().globalSlot).toBe(0);
+      store.getState().selectGlobal(null, 1);
+      expect(store.getState()).toMatchObject({ globalSelected: true, globalSlot: 1 });
+      // The scope switch picks Global again without moving off the session shown.
+      store.getState().setActiveSlot(0);
+      store.getState().selectGlobal(null);
+      expect(store.getState().globalSlot).toBe(1);
+      const persisted: unknown = store.persist.getOptions().partialize?.(store.getState());
+      expect(persisted).not.toHaveProperty("globalSlot");
+    });
+
+    it("carries the session a window showed over a project switch, the first when none is named", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().applyWindowGlobalPanel({ showing: true, target: null, slot: 1 });
+      expect(store.getState()).toMatchObject({ isOpen: true, globalSelected: true, globalSlot: 1 });
+      const shown = store.getState();
+      store.getState().applyWindowGlobalPanel({ showing: true, target: null, slot: 1 });
+      expect(store.getState()).toBe(shown);
+      store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+      expect(store.getState().globalSlot).toBe(0);
+
+      // Closed there, the session picked still comes along for the next open.
+      store.getState().applyWindowGlobalPanel({ showing: false, target: null, slot: 1 });
+      expect(store.getState()).toMatchObject({ isOpen: false, globalSlot: 1 });
+      store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+      expect(store.getState().globalSlot).toBe(1);
+    });
+
     describe("a window's panel carried over a project switch (#16099)", () => {
       it("shows Global in one update, without asking for the keyboard", async () => {
         installLocalStorage({});

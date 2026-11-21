@@ -77,9 +77,15 @@ function SessionIdentity({
 // exactly the one named.
 export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
   const globalSelected = useHelpPanelStore((s) => s.globalSelected);
+  const globalSlot = useHelpPanelStore((s) => s.globalSlot);
   return (
     <SettingsGroup>
-      {globalSelected ? <GlobalSessionRow /> : <ProjectLaneRow configuredTier={configuredTier} />}
+      {/* Keyed by session, so nothing read of one is shown as another's (#18142). */}
+      {globalSelected ? (
+        <GlobalSessionRow key={globalSlot} />
+      ) : (
+        <ProjectLaneRow configuredTier={configuredTier} />
+      )}
     </SettingsGroup>
   );
 }
@@ -202,6 +208,7 @@ function ProjectLaneRow({ configuredTier }: SessionLiveStatusCardProps) {
  */
 function GlobalSessionRow() {
   const target = useHelpPanelStore((s) => s.globalTarget);
+  const slot = useHelpPanelStore((s) => s.globalSlot);
   const globalIdentity = useGlobalAssistantIdentity();
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
@@ -217,12 +224,12 @@ function GlobalSessionRow() {
     // Subscribed before reading: a change pushed while the read is in flight is
     // at least as new as its answer, so the answer never overwrites it.
     const off = help.onGlobalAssistantChanged((state) => {
-      if (disposed) return;
+      if (disposed || state.slot !== slot) return;
       pushed = true;
       setReadFailed(false);
       setView(state);
     });
-    help.getGlobalAssistantState().then(
+    help.getGlobalAssistantState(slot).then(
       (state) => {
         if (!disposed && !pushed) setView(state);
       },
@@ -236,7 +243,7 @@ function GlobalSessionRow() {
       disposed = true;
       off();
     };
-  }, [boundElsewhere, attempt]);
+  }, [boundElsewhere, attempt, slot]);
 
   const subject = view?.phase === "running" ? (view.subject ?? null) : null;
   // The run "Open in Assistant" chose, gone by now: said, as the dock says it,

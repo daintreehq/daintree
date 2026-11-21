@@ -161,7 +161,10 @@ const GLOBAL_SUBJECT = {
 /** The global assistant as main tells a view of it. */
 function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    occupied: true,
     generation: 1,
     agentId: "claude",
     terminalId: "g-1",
@@ -185,6 +188,7 @@ let ownerOnAttach: (attachmentId: string) => string | null;
 function makeHelp() {
   return {
     onGlobalAssistantChanged: vi.fn((_listener: (state: GlobalAssistantView) => void) => () => {}),
+    listGlobalAssistantSessions: vi.fn(async () => [globalView]),
     attachGlobalAssistant: vi.fn(async () => {
       const attachmentId = `attachment-${++attachments}`;
       const owner = ownerOnAttach(attachmentId);
@@ -1359,7 +1363,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     await settle();
     expect(dock()).toBeNull();
     expect(toggle.getAttribute("aria-label")).toBe("Global assistant");
-    expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1");
+    expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1", 0);
   });
 
   it("stays docked whatever the filters hide", async () => {
@@ -1464,7 +1468,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
         vi.advanceTimersByTime(5_000);
       });
       await act(async () => fireEvent.click(buttonIn(dock()!, "Cancel")!));
-      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3);
+      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3, 0);
       expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
       expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
     } finally {
@@ -1495,7 +1499,11 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     act(() => take.focus());
     await act(async () => fireEvent.click(take));
     await settle();
-    expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith("attachment-1");
+    expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith(
+      "attachment-1",
+      undefined,
+      0
+    );
     expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 4 });
     // The button went with the stream it was in; the keyboard follows to the composer.
     expect(document.activeElement).toBe(dock()!.querySelector("[data-testid=global-composer]"));

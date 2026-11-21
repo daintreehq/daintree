@@ -43,8 +43,8 @@ export interface AgentSessionFileDeps {
   probeCodex?: (rootPid: number) => Promise<AgentSessionFileResult>;
   locateClaude?: typeof locateClaudeTranscript;
   getClaudeProjectsRoot?: (terminalId: string, sessionId?: string) => string | null;
-  /** The terminal main confirmed as the global assistant's run, if one is running. */
-  globalAssistantTerminalId?: () => string | null;
+  /** The terminals main confirmed as its global assistant sessions' runs, one per running session. */
+  globalAssistantTerminalIds?: () => readonly string[];
   deadlineMs?: number;
 }
 
@@ -136,13 +136,15 @@ async function locateClaude(
   };
 }
 
-async function confirmedGlobalAssistantTerminalId(
+async function confirmedGlobalAssistantTerminalIds(
   deps: AgentSessionFileDeps
-): Promise<string | null> {
-  if (deps.globalAssistantTerminalId) return deps.globalAssistantTerminalId();
+): Promise<readonly string[]> {
+  if (deps.globalAssistantTerminalIds) return deps.globalAssistantTerminalIds();
   // Loaded only for a record in the global workspace, so other lookups never do.
-  const { peekGlobalAssistantService } = await import("./globalAssistant.js");
-  return peekGlobalAssistantService()?.getRunningSession()?.terminalId ?? null;
+  const { peekGlobalAssistantServices } = await import("./globalAssistant.js");
+  return peekGlobalAssistantServices().flatMap(
+    (service) => service.getRunningSession()?.terminalId ?? []
+  );
 }
 
 /**
@@ -166,7 +168,7 @@ async function inCallerScope(
     return (
       record.isAssistantTerminal === true &&
       (isProjectWorkspaceId(senderWorkspaceId) || isScratchWorkspaceId(senderWorkspaceId)) &&
-      (await confirmedGlobalAssistantTerminalId(deps)) === terminalId
+      (await confirmedGlobalAssistantTerminalIds(deps)).includes(terminalId)
     );
   }
   return workspaceId === senderWorkspaceId;

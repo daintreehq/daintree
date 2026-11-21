@@ -189,9 +189,10 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     },
   },
 }));
-vi.mock("../../../services/globalAssistant.js", () => ({
-  peekGlobalAssistantService: () =>
+vi.mock("../../../services/globalAssistant.js", () => {
+  const globalService = () =>
     assistants.global && {
+      slot: 0,
       getState: () => ({
         phase: "running",
         generation: assistants.global?.generation ?? 0,
@@ -202,8 +203,18 @@ vi.mock("../../../services/globalAssistant.js", () => ({
       canWrite: (attachmentId: string, epoch: number) =>
         assistants.global?.holder?.attachmentId === attachmentId &&
         assistants.global.holder.epoch === epoch,
+    };
+  return {
+    peekGlobalAssistantServices: () => {
+      const service = globalService();
+      return service ? [service] : [];
     },
-}));
+    peekGlobalAssistantServiceForTerminal: (terminalId: string) => {
+      const service = globalService();
+      return service && assistants.global?.terminalId === terminalId ? service : null;
+    },
+  };
+});
 const saved = vi.hoisted(() => ({
   state: null as {
     terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
@@ -4115,10 +4126,12 @@ describe("where Open in Assistant from the Canopy window finds a lane's view (#1
   });
 
   it("names the view with the global session's input, and none without one", async () => {
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: 9 };
-    expect(await globalAssistantInputOwner()).toBe(9);
+    expect(await globalAssistantInputOwner("g")).toBe(9);
+    // Another session's terminal names that session's owner, never this one's (#18142).
+    expect(await globalAssistantInputOwner("other")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: null };
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
   });
 });

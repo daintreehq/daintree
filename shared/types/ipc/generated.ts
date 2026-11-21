@@ -2569,7 +2569,7 @@ export interface GeneratedIpcInvokeMap {
     result: string[];
   };
   "help:global-assistant-attach": {
-    args: [eligible?: boolean | undefined];
+    args: [eligible?: boolean | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
   "help:global-assistant-can-run": {
@@ -2577,31 +2577,39 @@ export interface GeneratedIpcInvokeMap {
     result: boolean;
   };
   "help:global-assistant-cancel-launch": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-claim-input": {
-    args: [attachmentId: string, from?: string | undefined];
+    args: [attachmentId: string, from?: string | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
     result: void;
   };
   "help:global-assistant-discard": {
-    args: [expectedGeneration?: number | undefined];
+    args: [
+      expectedGeneration?: number | undefined,
+      slot?: number | undefined,
+      expectedRunning?: boolean | undefined,
+    ];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-ensure": {
-    args: [];
+    args: [slot?: number | undefined, launchGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-input-eligible": {
-    args: [attachmentId: string, eligible: boolean];
+    args: [attachmentId: string, eligible: boolean, slot?: number | undefined];
     result: void;
   };
+  "help:global-assistant-list": {
+    args: [];
+    result: import("./help.js").GlobalAssistantView[];
+  };
   "help:global-assistant-release-input": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-replace": {
@@ -2609,11 +2617,15 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-restart": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-start-new": {
+    args: [agentId: string];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-state": {
-    args: [];
+    args: [slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {

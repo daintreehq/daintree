@@ -620,6 +620,8 @@ export const CHANNEL_LOCALITY = {
   "help:get-pinned-action-context": "host",
   "help:global-assistant-ensure": "host",
   "help:global-assistant-state": "host",
+  "help:global-assistant-list": "host",
+  "help:global-assistant-start-new": "host",
   "help:global-assistant-attach": "host",
   "help:global-assistant-detach": "host",
   "help:global-assistant-claim-input": "host",

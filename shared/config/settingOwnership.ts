@@ -163,6 +163,8 @@ export const SETTING_CATALOG = {
       voiceInput: device,
       mcpServer: host,
       helpAssistant: host,
+      // The agent each of this machine's global assistant sessions runs on (#18142).
+      globalAssistantPinnedAgents: host,
       pendingErrors: device,
       // The removals happened on the machine whose worktrees they were.
       mergedWorktreeRemovalReceipts: host,

@@ -154,7 +154,8 @@ describe("assistant subject adapter", () => {
     it("opens in this view's Assistant panel, pinned to the exact run, moving nothing", async () => {
       canopy.resolveAssistant.mockResolvedValue(globalDestination);
       expect(await openInAssistant(globalSubject)).toEqual({ ok: true });
-      expect(panel.selectGlobal).toHaveBeenCalledWith(globalSubject);
+      // A host that names no session means the first.
+      expect(panel.selectGlobal).toHaveBeenCalledWith(globalSubject, 0);
       expect(panel.setOpen).toHaveBeenCalledWith(true);
       expect(panel.requestFocus).toHaveBeenCalled();
       expect(switchProject).not.toHaveBeenCalled();

@@ -1430,6 +1430,33 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect((await control.list(RELAY)).global).toBeNull();
     });
 
+    it("lists the first session whichever started first, and reaches both (#18142)", async () => {
+      addLane(1, "t-global-2", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session-2",
+        attached: false,
+      });
+      addGlobal({ generation: 7 });
+
+      expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global");
+      expect(control.resolve(LOCAL, "t-global-2")?.scope).toBe("global");
+      // One global session is never a project peer of the other.
+      expect(control.resolve(GLOBAL_CALLER, "t-global-2")).toBeNull();
+      const fromGlobal = await control.list(GLOBAL_CALLER);
+      expect(fromGlobal.assistants).toEqual([]);
+      expect(fromGlobal.global).toBeNull();
+    });
+
+    it("lists the first session when it started first, too", async () => {
+      addGlobal({ generation: 7 });
+      addLane(1, "t-global-2", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session-2",
+        attached: false,
+      });
+      expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global");
+    });
+
     it("lists none while no global runs, or before its run has a generation", async () => {
       expect((await control.list(LOCAL)).global).toBeNull();
       addGlobal();

@@ -793,8 +793,8 @@ if (!gotTheLock) {
             console.warn("[main] revokeByWebContentsId failed during eviction:", err);
           });
         // The global assistant is no project's: the view only stops showing it.
-        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
-          peekGlobalAssistantService()?.detachWebContents(wcId)
+        void import("./services/globalAssistant.js").then(({ detachGlobalAssistantWebContents }) =>
+          detachGlobalAssistantWebContents(wcId)
         );
       },
       onViewCached: (wcId) => {
@@ -853,8 +853,8 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] revokeByWebContentsId failed during crash:", err);
           });
-        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
-          peekGlobalAssistantService()?.detachWebContents(wc.id)
+        void import("./services/globalAssistant.js").then(({ detachGlobalAssistantWebContents }) =>
+          detachGlobalAssistantWebContents(wc.id)
         );
       },
       onViewWarmActivated: (wc) => {

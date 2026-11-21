@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "../utils/errorTypes.js";
 import type { GlobalAssistantPhase, GlobalAssistantState } from "../../shared/types/ipc/help.js";
+import {
+  GLOBAL_ASSISTANT_SLOT,
+  type GlobalAssistantSlot,
+} from "../../shared/config/globalAssistant.js";
 
 /**
  * The installation's one global Daintree Assistant (#14159).
@@ -21,6 +25,11 @@ import type { GlobalAssistantPhase, GlobalAssistantState } from "../../shared/ty
  * Each change of owner bumps an epoch so a write queued by the previous owner
  * is refused rather than landing in the new owner's line. Composer drafts live
  * in the windows, not here, so a handover cannot overwrite one.
+ *
+ * A machine may hold a second session beside the first (#18142). Each is its
+ * own instance of this service, on its own lane and resume pointer, so every
+ * guarantee here holds for each session alone and nothing one does reaches
+ * the other.
  */
 
 /** Why a run ended; decides whether its conversation is kept for the next one. */
@@ -58,7 +67,10 @@ export interface GlobalAssistantChoice {
 }
 
 export interface GlobalAssistantDeps {
-  /** The agent the global assistant runs as now, or null when none can. */
+  /**
+   * The agent the session runs as when no agent was chosen for it, or null
+   * when none can (a second session follows no default: it runs as chosen).
+   */
   agentId(): Promise<string | null>;
   /** Whether this agent, named for a run, can run the global assistant here. */
   canRun(agentId: string): Promise<boolean>;
@@ -79,6 +91,22 @@ export interface GlobalAssistantDeps {
   kill(terminalId: string): void;
   /** Ids of the windows that have been focused, most recent first; read when input needs an owner. */
   focusedWindows(): readonly number[];
+  /** Whether the session's lane keeps a conversation for its next run. Absent, none is known. */
+  keepsConversation?(): boolean;
+  /** Keep the agent chosen for the session across restarts, or forget it with null. */
+  savePinnedAgent?(agentId: string | null): void;
+}
+
+export interface GlobalAssistantOptions {
+  slot?: GlobalAssistantSlot;
+  /** The agent chosen for the session in an earlier run of the app. */
+  pinnedAgentId?: string | null;
+  /**
+   * Whether the session runs as the assistant's default agent when none was
+   * chosen for it (the first session). One that doesn't keeps the agent it
+   * first runs on as if it had been chosen.
+   */
+  followsDefault?: boolean;
 }
 
 interface Attachment {
@@ -107,9 +135,10 @@ const LAUNCH_ENV_KEYS = {
 
 function refuse(
   code: "VALIDATION" | "STALE_GENERATION" | "NOT_FOUND" | "UNSUPPORTED" | "INTERNAL" | "CANCELLED",
-  message: string
+  message: string,
+  userMessage?: string
 ): AppError {
-  return new AppError({ code, message });
+  return new AppError({ code, message, ...(userMessage ? { userMessage } : {}) });
 }
 
 const stoppedWhileStarting = () =>
@@ -133,14 +162,34 @@ export class GlobalAssistantService {
   private inputOwner: string | null = null;
   private inputEpoch = 0;
   private readonly listeners = new Set<(state: GlobalAssistantState) => void>();
+  readonly slot: GlobalAssistantSlot;
+  /**
+   * The agent a person started this session on (#18142), kept until it is
+   * stopped: it follows no change of the assistant's default agent. Null, the
+   * session runs as that default.
+   */
+  private pinnedAgentId: string | null;
+  /** Restarts and stops under way: the session stays taken until each has finished. */
+  private holds = 0;
+  private readonly followsDefault: boolean;
 
-  constructor(private readonly deps: GlobalAssistantDeps) {}
+  constructor(
+    private readonly deps: GlobalAssistantDeps,
+    options: GlobalAssistantOptions = {}
+  ) {
+    this.slot = options.slot ?? GLOBAL_ASSISTANT_SLOT;
+    this.pinnedAgentId = options.pinnedAgentId ?? null;
+    this.followsDefault = options.followsDefault ?? true;
+  }
 
   getState(): GlobalAssistantState {
     return {
+      slot: this.slot,
       phase: this.run ? "running" : this.launchInFlight() ? "launching" : "absent",
+      occupied: this.isOccupied(),
+      pinnedAgentId: this.pinnedAgentId,
       generation: this.generation,
-      agentId: this.run?.agentId ?? this.starting?.agentId ?? null,
+      agentId: this.run?.agentId ?? this.starting?.agentId ?? this.pinnedAgentId ?? null,
       terminalId: this.run?.terminalId ?? null,
       attachments: [...this.attachments.values()].map(({ attachmentId, windowId }) => ({
         attachmentId,
@@ -157,6 +206,28 @@ export class GlobalAssistantService {
    */
   private launchInFlight(): boolean {
     return this.launch !== null && this.launchGeneration === this.generation;
+  }
+
+  /**
+   * Whether the session counts toward the machine's limit (#18142): it runs,
+   * is starting, was started on an agent of the person's choosing, or keeps a
+   * conversation its next start picks up. Only a stop frees it.
+   */
+  isOccupied(): boolean {
+    if (
+      this.run ||
+      this.starting ||
+      this.launchInFlight() ||
+      this.pinnedAgentId !== null ||
+      this.holds > 0
+    ) {
+      return true;
+    }
+    try {
+      return this.deps.keepsConversation?.() === true;
+    } catch {
+      return false;
+    }
   }
 
   /** The live run's session and PTY, or null while none is confirmed running. */
@@ -253,13 +324,22 @@ export class GlobalAssistantService {
     await this.teardownTail;
     if (superseded()) throw stoppedWhileStarting();
 
-    const agentId = choice ? choice.agentId : await this.deps.agentId();
+    // Chosen before the await, so a stop meanwhile can't hand it another's agent.
+    // A hand-off names its own agent for the run (#18140).
+    const pinned = this.pinnedAgentId;
+    let agentId = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
     if (superseded()) throw stoppedWhileStarting();
     if (!agentId) throw refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
     this.launchAgentId = agentId;
     this.startingExited = false;
 
     const pending = fresh ? null : await this.deps.takeResume();
+    // A conversation kept on another agent than the one chosen was left by a
+    // build that knew no choice: it is the newer of the two, so it wins.
+    if (!choice && pinned !== null && pending?.agentSessionId && pending.agentId !== pinned) {
+      agentId = pending.agentId;
+      this.launchAgentId = agentId;
+    }
     const resume =
       pending && pending.agentId === agentId && pending.agentSessionId ? pending : null;
     // Awaited, so a Start right after a Cancel finds the conversation free to take.
@@ -269,6 +349,21 @@ export class GlobalAssistantService {
     if (superseded()) {
       await releaseResume();
       throw stoppedWhileStarting();
+    }
+    // The agent it will run, when no default chose it, is checked here: the CLI
+    // may have gone, or be too old for its wiring. The conversation is kept.
+    // A hand-off's agent was checked as it was asked for.
+    if (!choice && (pinned !== null || !this.followsDefault)) {
+      const usable = await this.canRun(agentId);
+      if (!usable || superseded()) {
+        await releaseResume();
+        if (superseded()) throw stoppedWhileStarting();
+        throw refuse(
+          "UNSUPPORTED",
+          `${agentId} can't run the global assistant here now.`,
+          "This session's agent isn't available on this machine now. Its conversation is kept."
+        );
+      }
     }
 
     let session: GlobalAssistantProvision | null;
@@ -322,6 +417,12 @@ export class GlobalAssistantService {
 
     this.starting = null;
     this.run = run;
+    // Kept once it runs: a conversation that won over the choice, or the agent
+    // a session that follows no default first ran on, so a clear that forgets
+    // the conversation still knows what to start.
+    if (this.pinnedAgentId !== agentId && (pinned !== null || !this.followsDefault)) {
+      this.setPinnedAgent(agentId);
+    }
     // Teardown left input with nobody: the new run's goes to a reader that can type.
     this.fillVacancy();
     return this.getState();
@@ -376,14 +477,72 @@ export class GlobalAssistantService {
     return work;
   }
 
-  /** Start over on a new conversation. */
+  /**
+   * Start over on a new conversation. The session stays taken throughout, so
+   * a new session asked for meanwhile never lands in it.
+   */
   async restart(): Promise<GlobalAssistantState> {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
-    const torn = this.teardown("restart");
-    const generation = this.generation;
-    await torn;
-    // A Cancel or a stop while the old run was going ends the restart with it.
-    if (this.generation !== generation) throw stoppedWhileStarting();
+    this.holds += 1;
+    let held = true;
+    const release = () => {
+      if (!held) return;
+      held = false;
+      this.holds -= 1;
+    };
+    try {
+      const torn = this.teardown("restart");
+      const generation = this.generation;
+      await torn;
+      // A Cancel or a stop while the old run was going ends the restart with it.
+      if (this.generation !== generation) throw stoppedWhileStarting();
+      // The launch claims the session before the hold lets go of it.
+      const launch = this.ensureSession({ fresh: true });
+      release();
+      return await launch;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * End the run and forget its conversation; nothing starts it again until
+   * asked. Once that is done the agent chosen for it goes too, which frees
+   * the session: never before, so nothing takes it while it winds down, and
+   * not if it was started again meanwhile.
+   */
+  discard(): Promise<void> {
+    if (this.closed) return this.teardown("discard");
+    this.holds += 1;
+    const work = this.teardown("discard");
+    // Quitting meanwhile still frees it: the conversation went, so the choice goes too.
+    const release = () => {
+      if (this.run !== null || this.launchInFlight() || this.pinnedAgentId === null) return;
+      this.setPinnedAgent(null);
+    };
+    return work.finally(() => {
+      this.holds -= 1;
+      // A start queued behind the stop keeps the agent only if it comes to run.
+      const successor = this.launchInFlight() ? this.launch : null;
+      if (successor) void successor.then(release, release);
+      else release();
+      this.emit();
+    });
+  }
+
+  /**
+   * Start this session afresh on the agent the person chose (#18142). Only a
+   * session with nothing in it starts this way, so neither a run nor a kept
+   * conversation is ever replaced by it.
+   */
+  startOn(agentId: string): Promise<GlobalAssistantState> {
+    if (this.closed) {
+      return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
+    }
+    if (this.isOccupied()) {
+      return Promise.reject(refuse("VALIDATION", "This global assistant session is in use."));
+    }
+    this.setPinnedAgent(agentId);
     return this.ensureSession({ fresh: true });
   }
 
@@ -420,9 +579,20 @@ export class GlobalAssistantService {
     return this.deps.canRun(agentId).catch(() => false);
   }
 
-  /** End the run and forget its conversation; nothing starts it again until asked. */
-  discard(): Promise<void> {
-    return this.teardown("discard");
+  /** Tell listeners the state again: a kept conversation it reads may have become readable. */
+  refresh(): void {
+    this.emit();
+  }
+
+  private setPinnedAgent(agentId: string | null): void {
+    if (this.pinnedAgentId === agentId) return;
+    this.pinnedAgentId = agentId;
+    try {
+      this.deps.savePinnedAgent?.(agentId);
+    } catch (err) {
+      console.warn("[GlobalAssistant] Keeping the session's agent failed:", err);
+    }
+    this.emit();
   }
 
   /**
@@ -437,10 +607,12 @@ export class GlobalAssistantService {
 
   /**
    * The assistant agent changed: the run belongs to the old one. Nothing starts
-   * until asked. A run started on an agent chosen for it was never the
-   * default's, so it carries on.
+   * until asked. A session started on an agent of the person's choosing keeps
+   * it, and a run started on an agent chosen for it was never the default's,
+   * so it carries on.
    */
   async onAgentChanged(agentId: string | null): Promise<void> {
+    if (this.pinnedAgentId !== null) return;
     if (this.run ? this.run.chosen : (this.starting?.chosen ?? this.launchChosen)) return;
     const current = this.run?.agentId ?? this.starting?.agentId ?? this.launchAgentId ?? undefined;
     if (current === undefined || current === agentId) return;

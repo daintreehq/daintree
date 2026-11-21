@@ -379,6 +379,8 @@ export const CHANNEL_LEASE_POLICY = {
   "help:get-pinned-action-context": "free",
   "help:global-assistant-ensure": "free",
   "help:global-assistant-state": "free",
+  "help:global-assistant-list": "free",
+  "help:global-assistant-start-new": "free",
   "help:global-assistant-attach": "free",
   "help:global-assistant-detach": "free",
   "help:global-assistant-claim-input": "free",

@@ -31,7 +31,7 @@ const target = {
   incarnation: 3,
 };
 const shown: WindowGlobalAssistantPanel = { showing: true, target };
-const closed: WindowGlobalAssistantPanel = { showing: false, target: null };
+const closed: WindowGlobalAssistantPanel = { showing: false, target: null, slot: 0 };
 
 let reads: Array<(panel: WindowGlobalAssistantPanel | null) => void>;
 const getPanel = vi.fn(
@@ -94,7 +94,7 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
       focusRequest: 1,
       globalFocusHandledThrough: 1,
     });
-    expect(reported()).toEqual([shown]);
+    expect(reported()).toEqual([{ ...shown, slot: 0 }]);
   });
 
   it("says nothing of its own defaults before it has read the window's record", async () => {
@@ -157,9 +157,9 @@ describe("useWindowGlobalAssistantPanel (#16099)", () => {
     act(() => useHelpPanelStore.getState().setOpen(true));
 
     expect(reported()).toEqual([
-      shown,
-      { showing: true, target: { ...target, incarnation: 4 } },
-      { showing: true, target: null },
+      { ...shown, slot: 0 },
+      { showing: true, target: { ...target, incarnation: 4 }, slot: 0 },
+      { showing: true, target: null, slot: 0 },
       closed,
     ]);
   });

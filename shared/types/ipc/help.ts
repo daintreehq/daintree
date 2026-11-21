@@ -1,5 +1,6 @@
 import type { AgentState } from "../agent.js";
 import type { AgentDirectorySubject } from "../agentDirectory.js";
+import type { GlobalAssistantSlot } from "../../config/globalAssistantSessions.js";
 
 /**
  * Narrow, display-only projection of the `ActionContext` snapshot pinned to a
@@ -85,7 +86,16 @@ export interface GlobalAssistantAttachmentInfo {
  * Never the bearer, the command line or the environment.
  */
 export interface GlobalAssistantState {
+  /** Which of the machine's global assistant sessions this is (#18142); 0 is the first. */
+  slot: GlobalAssistantSlot;
   phase: GlobalAssistantPhase;
+  /**
+   * Whether the session counts toward the machine's limit: running, starting,
+   * started on a chosen agent, or keeping a conversation. Only a stop frees it.
+   */
+  occupied: boolean;
+  /** The agent a person started it on, kept until it is stopped; null when it runs as the default. */
+  pinnedAgentId: string | null;
   /** Bumps with every run, so a panel can tell a new session from the one it showed. */
   generation: number;
   agentId: string | null;
@@ -143,6 +153,8 @@ export interface GlobalAssistantInputStamp {
 export interface WindowGlobalAssistantPanel {
   showing: boolean;
   target: AgentDirectorySubject | null;
+  /** The session it showed (#18142); absent reads as the first. */
+  slot?: GlobalAssistantSlot;
 }
 
 /** A window's reader on the global assistant, and the input epoch it holds. */

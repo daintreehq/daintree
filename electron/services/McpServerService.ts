@@ -575,8 +575,13 @@ export class McpServerService {
         handleProjectRunCommand(rawArgs, signal, authorize),
       handleAgentResumeOwned: (rawArgs, projectId, signal, authorize) =>
         handleAgentResumeOwned(rawArgs, projectId, signal, authorize),
-      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants, admittedGlobal) =>
-        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants, admittedGlobal),
+      handleTerminalGetStatusViewless: (
+        rawArgs,
+        workspaceId,
+        admittedAssistants,
+        admittedGlobals
+      ) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants, admittedGlobals),
       machineName: () => (localMachineName ??= machineDisplayName()),
       readCodexQuota: async () => {
         const { readCodexQuota } = await import("./codex/CodexQuotaService.js");

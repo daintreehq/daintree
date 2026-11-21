@@ -26,15 +26,20 @@ export interface LiveAssistantSources {
   onSessionEnded(
     listener: (event: { projectId: string; slot: number; sessionId: string }) => void
   ): () => void;
-  /** The global assistant, when its service exists; null on an install that never made it. */
-  global: {
-    getState(): Pick<GlobalAssistantState, "phase" | "generation" | "terminalId">;
-    onChange(listener: () => void): () => void;
-    /** The window view whose attachment holds input now; null when none does. */
-    inputOwnerWebContentsId(): number | null;
-    /** Whether this attachment still holds input at the epoch it was given. */
-    canWrite(attachmentId: string, epoch: number): boolean;
-  } | null;
+  /**
+   * The global assistant sessions whose services exist (#18142), each with its
+   * own run and input owner; empty on an install that never made one.
+   */
+  globals: readonly LiveGlobalAssistantSource[];
+}
+
+export interface LiveGlobalAssistantSource {
+  getState(): Pick<GlobalAssistantState, "phase" | "generation" | "terminalId">;
+  onChange(listener: () => void): () => void;
+  /** The window view whose attachment holds input now; null when none does. */
+  inputOwnerWebContentsId(): number | null;
+  /** Whether this attachment still holds input at the epoch it was given. */
+  canWrite(attachmentId: string, epoch: number): boolean;
 }
 
 export function parseGlobalAssistantInputStamp(value: unknown): GlobalAssistantInputStamp | null {
@@ -133,11 +138,14 @@ export async function resolveLiveAssistant(
     if (subject.lane !== undefined) {
       throw refuse("VALIDATION", "The global assistant has no lane");
     }
-    const global = sources.global;
+    // The session whose run is on that terminal: each has its own input owner,
+    // and a stamp taken on one is never another's.
+    const global = sources.globals.find((candidate) => {
+      const now = candidate.getState();
+      return now.phase === "running" && now.terminalId === subject.terminalId;
+    });
     const state = global?.getState();
-    if (!global || !state || state.phase !== "running" || state.terminalId !== subject.terminalId) {
-      throw refuse("NOT_FOUND", GONE, GONE);
-    }
+    if (!global || !state) throw refuse("NOT_FOUND", GONE, GONE);
     const { generation } = state;
     isBound = () => {
       const now = global.getState();

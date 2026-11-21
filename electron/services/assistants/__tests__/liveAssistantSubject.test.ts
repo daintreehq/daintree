@@ -3,20 +3,43 @@ import {
   parseGlobalAssistantInputStamp,
   resolveLiveAssistant,
   type LiveAssistantSources,
+  type LiveGlobalAssistantSource,
 } from "../liveAssistantSubject.js";
 
 type Lane = { sessionId: string; terminalId: string } | null;
+
+function globalSession(terminalId: string) {
+  return {
+    state: {
+      phase: "running" as "running" | "absent",
+      generation: 7,
+      terminalId: terminalId as string | null,
+    },
+    owner: null as number | null,
+    holder: null as { attachmentId: string; epoch: number } | null,
+    listeners: new Set<() => void>(),
+  };
+}
+
+function sourceOf(global: ReturnType<typeof globalSession>): LiveGlobalAssistantSource {
+  return {
+    getState: () => global.state,
+    onChange: (listener) => {
+      global.listeners.add(listener);
+      return () => global.listeners.delete(listener);
+    },
+    inputOwnerWebContentsId: () => global.owner,
+    canWrite: (attachmentId, epoch) =>
+      global.holder?.attachmentId === attachmentId && global.holder.epoch === epoch,
+  };
+}
 
 function sources(overrides: Partial<LiveAssistantSources> = {}) {
   const lane: { current: Lane } = { current: { sessionId: "s1", terminalId: "t1" } };
   const generation = { current: 3 as number | null };
   const ended = new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>();
-  const global = {
-    state: { phase: "running" as const, generation: 7, terminalId: "g1" as string | null },
-    owner: null as number | null,
-    holder: null as { attachmentId: string; epoch: number } | null,
-    listeners: new Set<() => void>(),
-  };
+  const global = globalSession("g1");
+  const second = globalSession("g2");
   const src: LiveAssistantSources = {
     hostId: "local",
     ptyClient: {
@@ -29,19 +52,10 @@ function sources(overrides: Partial<LiveAssistantSources> = {}) {
       ended.add(listener);
       return () => ended.delete(listener);
     },
-    global: {
-      getState: () => global.state,
-      onChange: (listener) => {
-        global.listeners.add(listener);
-        return () => global.listeners.delete(listener);
-      },
-      inputOwnerWebContentsId: () => global.owner,
-      canWrite: (attachmentId, epoch) =>
-        global.holder?.attachmentId === attachmentId && global.holder.epoch === epoch,
-    },
+    globals: [sourceOf(global), sourceOf(second)],
     ...overrides,
   };
-  return { src, lane, generation, ended, global };
+  return { src, lane, generation, ended, global, second };
 }
 
 const laneSubject = {
@@ -205,7 +219,42 @@ describe("resolveLiveAssistant", () => {
 
   it("refuses the global subject when no global session runs", async () => {
     await expect(
-      resolveLiveAssistant(globalSubject, sources({ global: null }).src)
+      resolveLiveAssistant(globalSubject, sources({ globals: [] }).src)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("binds the session whose run is on the named terminal, with that session's own input (#18142)", async () => {
+    const { src, global, second } = sources();
+    // The first session's holder is no say over the second's input.
+    global.owner = 4;
+    global.holder = { attachmentId: "a1", epoch: 2 };
+    second.owner = 5;
+    second.holder = { attachmentId: "b1", epoch: 9 };
+    const subject = { ...globalSubject, terminalId: "g2" };
+
+    const borrowed = await resolveLiveAssistant(subject, src, {
+      attachmentId: "a1",
+      inputEpoch: 2,
+    });
+    expect(borrowed.mayType(4)).toBe(false);
+    const own = await resolveLiveAssistant(subject, src, { attachmentId: "b1", inputEpoch: 9 });
+    expect(own.mayType(5)).toBe(true);
+
+    // The first session ending is not the second's end.
+    const end = vi.fn();
+    own.onEnded(end);
+    global.state = { ...global.state, phase: "absent", terminalId: null };
+    for (const listener of global.listeners) listener();
+    expect(end).not.toHaveBeenCalled();
+    expect(own.isBound()).toBe(true);
+    second.state = { ...second.state, phase: "absent", terminalId: null };
+    for (const listener of second.listeners) listener();
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a terminal no session runs, though both sessions do", async () => {
+    await expect(
+      resolveLiveAssistant({ ...globalSubject, terminalId: "g3" }, sources().src)
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
