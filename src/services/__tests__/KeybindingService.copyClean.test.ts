@@ -17,7 +17,11 @@ async function serviceOn(os: "mac" | "windows" | "linux") {
   platform.linux = os === "linux";
   vi.resetModules();
   const { KeybindingService } = await import("../KeybindingService");
-  return new KeybindingService();
+  const { buildKeybindingWhenContext } = await import("../keybindingWhenContext");
+  const service = new KeybindingService();
+  // As useGlobalKeybindings installs it.
+  service.setWhenContextProvider(buildKeybindingWhenContext);
+  return service;
 }
 
 function keydownIn(target: Element, init: KeyboardEventInit): KeyboardEvent {
