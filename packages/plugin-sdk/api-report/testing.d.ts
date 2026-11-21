@@ -3584,7 +3584,9 @@ interface PluginHandlerOptions {
      * Deadline, in milliseconds, for one invoke of this channel. When it passes,
      * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
      * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
-     * `0` disables the deadline for handlers that legitimately run longer.
+     * `0` disables the deadline for handlers that legitimately run longer. A
+     * {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is always held to
+     * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} or less.
      */
     timeoutMs?: number;
 }

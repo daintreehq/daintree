@@ -47,7 +47,6 @@ import {
   PinOff,
   Play,
   Plug,
-  Puzzle,
   RefreshCw,
   RotateCw,
   Save,
@@ -96,6 +95,7 @@ import {
   type PluginContextMenuItemEntry,
 } from "@/hooks/usePluginContextMenuItems";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
@@ -1368,6 +1368,7 @@ export function WorktreeMenuItems({
   // Contributions register against the worktree menu location; whether any of
   // them works on a bare workspace root is unverified, so a root shows none.
   const pluginGroups = worktree ? [...pluginsById.entries()] : [];
+  const pluginDispatchArgs = worktree ? { worktreeId: worktree.id } : undefined;
   const extensionsSub = pluginGroups.length > 0 && (
     <C.Sub key="extensions">
       <C.SubTrigger>
@@ -1384,21 +1385,15 @@ export function WorktreeMenuItems({
                   pluginManifestIdFromInstanceKey(pluginId)}
               </C.Label>
             )}
-            {entries.map((entry) => (
-              <C.Item
-                key={`${entry.pluginId}:${entry.item.actionId}`}
-                onSelect={() =>
-                  void actionService.dispatch(
-                    entry.item.actionId,
-                    worktree ? { worktreeId: worktree.id } : undefined,
-                    { source }
-                  )
-                }
-              >
-                <Puzzle className={ICON} />
-                <span className="truncate">{entry.item.label}</span>
-              </C.Item>
-            ))}
+            {/* The shared section owns the row, the dispatch and an
+                availability check's disabled state, so the worktree's
+                Extensions rows can't drift from every other surface's. */}
+            <PluginContextMenuSection
+              items={entries}
+              leadingSeparator={false}
+              components={{ Item: C.Item, Separator: C.Separator, Meta: C.Meta }}
+              dispatchArgs={pluginDispatchArgs}
+            />
           </Fragment>
         ))}
       </C.SubContent>

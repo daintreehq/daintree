@@ -1082,6 +1082,7 @@ Adds entries to right-click menus on specific UI elements, and to the Assistant 
 | `location` | yes | `"worktree"`, `"terminal"`, `"file"`, `"browser"`, `"project"` or `"assistant"`. |
 | `label` | yes | Menu entry label. |
 | `when` | no | Context expression gating whether the item appears, in the same syntax as a [keybinding `when`](#keybindings--shipped). See below. |
+| `availability` | no | An id for your availability handler: letters, digits, `_` and `-`, at most 64 characters. Set it on an item that applies to a subject but can't always run on it. See [Showing an item as unavailable](#showing-an-item-as-unavailable). |
 
 **`when` context keys.** A context menu's `when` is evaluated in the renderer against keys describing what was right-clicked, not the keybinding keys:
 
@@ -1103,6 +1104,56 @@ An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides
 **Targeting rows.** A `file` item can declare which rows it appears on, and the host evaluates it per row, ANDed with `when`: `kind` (`"file"` or `"folder"`), `extensions` (bare lower-case suffixes without the dot, matched case-insensitively against a file's last suffix; a dotfile or bare name has none; not allowed with `kind: "folder"`) and `paths` (globs relative to the worktree root using `**`, `*` and `?`, the same grammar as `fileEditors[].paths`). Omitted fields match everything, and the three fields are rejected on any other location.
 
 **Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop project and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu. In the project assistant's session picker, `assistant` items act on the session on screen and sit after New session and before Clear conversation and Close session; in the global assistant's **More actions** menu they sit after Open docs and before Stop global assistant, and appear only while a run is on screen. They act on the session the menu was opened on: if that session is replaced while the menu is open (another lane, a relaunch in the same lane, a terminal coming up in a lane that had none, a new launch of the global assistant), its items go until the menu is opened again. The global assistant belongs to no project, but its menu offers the items visible in the window it is shown in, so a project plugin's `assistant` items appear there only in that project's windows, and its dispatch still carries no `projectId`.
+
+### Showing an item as unavailable
+
+`when` decides whether an item applies to what was right-clicked. When it applies but can't run right now (a pane whose session file isn't known yet, an agent your plugin doesn't support), hiding it leaves the person wondering where it went. Set `availability` on the item instead, and answer for it at runtime: the item stays visible but disabled, with your reason beside it, the way Daintree's own **New session** row reads at the session ceiling.
+
+```json
+[
+  {
+    "actionId": "acme.continue.continue",
+    "location": "terminal",
+    "label": "Continue in another agent…",
+    "when": "panelKind == 'terminal'",
+    "availability": "continue"
+  },
+  {
+    "actionId": "acme.continue.continue",
+    "location": "assistant",
+    "label": "Continue in another agent…",
+    "availability": "continue"
+  }
+]
+```
+
+```ts
+import {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  type ContextMenuAvailabilityRequest,
+} from "@daintreehq/plugin-sdk";
+
+await host.registerHandler(CONTEXT_MENU_AVAILABILITY_CHANNEL, async (_ctx, payload: unknown) => {
+  const request = payload as ContextMenuAvailabilityRequest;
+  if (request.availability !== "continue") return null;
+  // A worker pane names its terminal as the panel; an assistant session names it directly.
+  const terminalId = request.panelId ?? request.terminalId;
+  if (!terminalId) return "Session hasn't started yet";
+  const found = await host.dispatch("terminal.sessionFile.get", { terminalId });
+  if (!found.ok) return "Couldn't find this session";
+  const file = found.result as { status: string; reason?: string };
+  if (file.status === "observed") return null;
+  return file.reason === "unsupported-agent"
+    ? "Not supported for this agent"
+    : "Session file not found yet";
+});
+```
+
+Each time a menu shows the item (as the menu or its **Extensions** submenu opens), Daintree invokes your plugin's `CONTEXT_MENU_AVAILABILITY_CHANNEL` handler with a `ContextMenuAvailabilityRequest`: the item's `availability` id, its `location`, and the ids that name what was right-clicked — `panelId` and `panelKind` on `terminal` and `browser`, `worktreeId` on `worktree` (and on a `terminal` whose panel has one), `projectId` on `project`, `isDirectory` on `file`, with `relativePath` when the row is inside a worktree, and on `assistant` the session's identifying fields as the action receives them (`assistantScope`, `projectId`, `slot`, `terminalId`, `incarnation`, `agentId`, each when the session has it). A browser page's URL, a file's absolute path and its worktree root are not sent; they arrive with the dispatch, when the person picks the item. One handler answers for every item that sets `availability`, so branch on the id. The handler receives the request as its second argument, typed `unknown` by the untyped `registerHandler` overload; register it with a [channel schema](./host-api.md#registerhandler-and-broadcasttorenderer) instead to have it parsed.
+
+Return `null` when the item can run, or a short reason when it can't: one line, at most `CONTEXT_MENU_AVAILABILITY_REASON_MAX` (120) characters, sentence case with no full stop. The reason is shown beside the dimmed label and read out to screen readers, which skip disabled rows. The item can't be picked while Daintree waits or when you name a reason; it shows "Checking…" if your answer takes longer than a moment.
+
+The answer is advice about one opening of one menu, never a gate: the action can still be dispatched from the palette, a keybinding or `host.dispatch`, so check again when it runs. The menu waits up to `CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS` (three seconds from opening, including starting your plugin if it isn't running), and when the handler is missing, throws, answers late or answers anything other than `null` or a valid reason, the item is offered as if it didn't set `availability`. Separately, the host stops waiting for your handler three seconds after it starts, whatever longer `timeoutMs` you register it with; the handler itself isn't interrupted. Nothing is cached: every opening asks again. Items without `availability` are never asked about.
 
 Context menus follow the same `actionId` dispatch pattern as menu items. A `terminal`-location item appears in the right-click menu of terminal-backed panels, not on browser, dev preview or review panels; gate it with `when` (for example `panelKind == 'terminal'`). To put entries on your own panels, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 

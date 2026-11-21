@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenuItem,
+  DropdownMenuMeta,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
@@ -7,7 +11,7 @@ import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsSt
 /**
  * The assistant session a plugin `assistant` item was opened on, as its action
  * receives it. `slot` and `incarnation` are numbers, which a `when` clause has no
- * type for, so they reach the action only.
+ * type for, so they reach the action and an availability check only.
  */
 export type AssistantPluginMenuSubject =
   | {
@@ -28,7 +32,11 @@ export type AssistantPluginMenuSubject =
       agentId?: string;
     };
 
-const SECTION_COMPONENTS = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator };
+const SECTION_COMPONENTS = {
+  Item: DropdownMenuItem,
+  Separator: DropdownMenuSeparator,
+  Meta: DropdownMenuMeta,
+};
 
 /**
  * Whether `current` is still the session the menu opened on: the same lane with

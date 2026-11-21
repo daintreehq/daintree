@@ -1327,6 +1327,16 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Registered whole and matched per row by the file menu against the worktree-relative path.",
     },
+    availability: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Plugin/PluginContextMenuSection.tsx",
+          symbol: "CheckedPluginMenuRow",
+        },
+      ],
+      note: "Sent to the plugin's availability handler when the row mounts; a reason disables the row.",
+    },
   },
   commands: {
     id: {

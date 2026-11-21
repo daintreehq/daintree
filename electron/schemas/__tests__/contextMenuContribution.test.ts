@@ -66,3 +66,40 @@ describe("ContextMenuContributionSchema file match", () => {
     );
   });
 });
+
+describe("ContextMenuContributionSchema availability", () => {
+  it("accepts an availability id on every location", () => {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
+      expect(
+        ContextMenuContributionSchema.safeParse({
+          ...base,
+          location,
+          availability: "continue-session_2",
+        }).success
+      ).toBe(true);
+    }
+  });
+
+  it.each(["Continue_Session-2", "a".repeat(64)])("accepts availability %j", (availability) => {
+    expect(
+      ContextMenuContributionSchema.safeParse({ ...base, location: "terminal", availability })
+        .success
+    ).toBe(true);
+  });
+
+  it("keeps an item without one valid", () => {
+    expect(ContextMenuContributionSchema.safeParse({ ...base, location: "terminal" }).success).toBe(
+      true
+    );
+  });
+
+  it.each(["", "a".repeat(65), "acme.continue", "has space", "colon:id", 3])(
+    "rejects availability %j",
+    (availability) => {
+      expect(
+        ContextMenuContributionSchema.safeParse({ ...base, location: "terminal", availability })
+          .success
+      ).toBe(false);
+    }
+  );
+});
