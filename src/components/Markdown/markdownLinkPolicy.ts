@@ -17,8 +17,7 @@ export const HTTPish = /^(https?|mailto):/i;
 const OTHER_SCHEME = /^[a-z][a-z\d+.-]+:/i;
 
 export type MarkdownLinkTarget =
-  | { kind: "external"; url: string }
-  | { kind: "file"; path: string; rootPath: string };
+  { kind: "external"; url: string } | { kind: "file"; path: string; rootPath: string };
 
 /**
  * Where a Markdown link goes under the host's policy, or null when it goes
