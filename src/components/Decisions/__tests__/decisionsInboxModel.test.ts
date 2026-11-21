@@ -45,6 +45,7 @@ import {
   landedBy,
   markedText,
   movedText,
+  nextAfter,
   nextWaiting,
   originFacts,
   paneTitle,
@@ -1817,6 +1818,49 @@ describe("moving on once the person's action takes a question out of Needs you (
       const groups = inboxGroups([only, item("q2", { kind: "to-type" })]);
       expect(nextWaiting(groups, referenceKey(at("q1")))).toBeNull();
       expect(nextWaiting(inboxGroups([]), null)).toBeNull();
+    });
+  });
+
+  describe("nextAfter", () => {
+    const cleared = { ask: null, seen: true, cleared: true };
+    const aside = (id: string, minute: number) =>
+      item(id, OPEN, { inbox: cleared, askedAt: `2026-11-02T09:${minute}:00.000Z` });
+    const key = (id: string) => referenceKey(at(id));
+    const idOf = (found: DecisionQuestionListItem | null) => found?.reference.questionId ?? null;
+
+    it("prefers the next question waiting in Needs you, from either group", () => {
+      const waiting = item("q1", OPEN);
+      const groups = inboxGroups([waiting, aside("q2", 10), aside("q3", 20)]);
+      expect(nextAfter(groups, key("q2"), "cleared", [key("q3")])).toBe(waiting);
+      expect(nextAfter(groups, key("q9"), "needs-you", [])).toBe(waiting);
+    });
+
+    it("with nothing waiting, stays in Cleared on the first still listed of those after it", () => {
+      const groups = inboxGroups([aside("q1", 10), aside("q3", 30), aside("q4", 40)]);
+      // q2 left from between q1 and q3: q3 closes up over its place.
+      expect(idOf(nextAfter(groups, key("q2"), "cleared", [key("q3"), key("q4")]))).toBe("q3");
+      // One after it no longer listed, as when the list narrows, is passed over, not skipped past.
+      expect(idOf(nextAfter(groups, key("q2"), "cleared", [key("q9"), key("q4")]))).toBe("q4");
+      // Taken in the order they followed it, not the order the list draws them now.
+      expect(idOf(nextAfter(groups, key("q2"), "cleared", [key("q9"), key("q3")]))).toBe("q3");
+      expect(idOf(nextAfter(groups, key("q2"), "cleared", [key("q4"), key("q3")]))).toBe("q4");
+      // With none after it left, the last in Cleared; never itself, and never from Needs you.
+      expect(idOf(nextAfter(groups, key("q2"), "cleared", [key("q9")]))).toBe("q4");
+      expect(idOf(nextAfter(groups, key("q4"), "cleared", []))).toBe("q3");
+      expect(nextAfter(groups, key("q2"), "needs-you", [key("q3")])).toBeNull();
+    });
+
+    it("finds nothing once the question was the only one in either", () => {
+      const groups = inboxGroups([aside("q1", 10)]);
+      expect(nextAfter(groups, key("q1"), "cleared", [])).toBeNull();
+      const declined = item("q1", { kind: "settled", outcome: "declined" });
+      expect(nextAfter(inboxGroups([declined]), key("q1"), "cleared", [])).toBeNull();
+    });
+
+    it("goes on to the one other question in Cleared once it has landed in History", () => {
+      const declined = item("q1", { kind: "settled", outcome: "declined" });
+      const groups = inboxGroups([declined, aside("q2", 20)]);
+      expect(idOf(nextAfter(groups, key("q1"), "cleared", []))).toBe("q2");
     });
   });
 

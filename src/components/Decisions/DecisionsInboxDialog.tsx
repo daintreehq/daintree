@@ -125,6 +125,7 @@ import {
   paneTitle,
   questionOfKey,
   movedText,
+  nextAfter,
   nextWaiting,
   recordedLabel,
   referenceKey,
@@ -240,14 +241,18 @@ const LOADING: ListRead = { state: "loading" };
 
 /**
  * What the person did from this opening to the question shown while it was
- * in Needs you (#18035), kept until it lands where that action takes it, or
- * plainly won't.
+ * in Needs you (#18035), or declined or withdrew from Cleared (#18130), kept
+ * until it lands where that action takes it, or plainly won't.
  */
 interface InboxActed {
   seq: number;
   /** Which press this was, so a late result of an earlier one changes nothing. */
   id: number;
   key: string;
+  /** The group it was acted on in: still listed there, it hasn't moved yet. */
+  from: "needs-you" | "cleared";
+  /** Those listed after it in that group then, so a move on from Cleared takes the one that followed it. */
+  following: string[];
   /** What it asked as the person acted: a new ask while it waits is no longer theirs to move on from. */
   ask: string;
   /** Its answer record, where an answer or a dismissal from here stands. */
@@ -1755,11 +1760,18 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
   const [acted, setActed] = useState<InboxActed | null>(null);
   const actedCount = useRef(0);
   const liveActed = useRef<number | null>(null);
+  const liveShown = useRef<string | null>(null);
   useLayoutEffect(() => {
     liveActed.current = acted?.id ?? null;
+    liveShown.current = selectedKey;
   });
   // Only from Needs you: what moves a question out of it moves the inbox on.
   const actOn = selected !== null && selectedGroup === "needs-you" ? selected : null;
+  // A decline or withdrawal moves it on from Cleared too (#18130); a restore stays put.
+  const declineOn =
+    selected !== null && (selectedGroup === "needs-you" || selectedGroup === "cleared")
+      ? selected
+      : null;
   const act = (
     item: DecisionQuestionListItem,
     action: InboxAction,
@@ -1771,10 +1783,18 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
     }
     actedCount.current += 1;
     const id = actedCount.current;
+    const key = referenceKey(item.reference);
+    const from = inboxGroupOf(item, nowMs) === "cleared" ? "cleared" : "needs-you";
+    const peers = (groups.find((group) => group.id === from)?.items ?? []).map((candidate) =>
+      referenceKey(candidate.reference)
+    );
+    const following = peers.slice(peers.indexOf(key) + 1);
     setActed({
       seq: request.seq,
       id,
-      key: referenceKey(item.reference),
+      key,
+      from,
+      following,
       ask: askKey(item),
       record: answerKey(item.reference),
       label: aliasLabel(item.alias),
@@ -1786,6 +1806,14 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
       ...over,
     });
     return id;
+  };
+  // A confirmation's reply can come back once another question is shown: not one to move on from.
+  const actOnDecline = (
+    action: "dismiss" | "withdraw",
+    over: Partial<Pick<InboxActed, "fate" | "held">>
+  ) => {
+    if (declineOn === null || liveShown.current !== referenceKey(declineOn.reference)) return;
+    act(declineOn, action, over);
   };
   const stay = () =>
     setActed((current) =>
@@ -2302,7 +2330,7 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
       at === undefined ||
       item === undefined ||
       fate === "failed" ||
-      (at.id === "needs-you" ? askKey(item) !== acted.ask : !landedBy(acted.action, item, at.id))
+      (at.id === acted.from ? askKey(item) !== acted.ask : !landedBy(acted.action, item, at.id))
     ) {
       setActed(null);
       // A clear that was taken, whose move would have said so: said on its own.
@@ -2315,11 +2343,17 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
           stayText: CLEARED_ONE,
         });
       }
-    } else if (at.id !== "needs-you" && fate === "taken" && !acted.held) {
-      // Taken once: with nothing else waiting it stays shown, and a question asked later is no
+    } else if (at.id !== acted.from && fate === "taken" && !acted.held) {
+      // Taken once: with nothing else to go on to it stays shown, and a question asked later is no
       // reason to move.
       setActed(null);
-      const next = nextWaiting(groups, acted.key);
+      // From Cleared, staying in it only while it's open: one the person shut they've left.
+      const next = nextAfter(
+        groups,
+        acted.key,
+        acted.from === "cleared" && openGroups.has("cleared") ? "cleared" : "needs-you",
+        acted.following
+      );
       const after = next === null ? waitingLine : null;
       setArrival({
         id: acted.id,
@@ -2945,10 +2979,10 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
         {...cancel.dialog}
         onDismissing={() => {
           cancel.dialog.onDismissing();
-          if (actOn !== null) act(actOn, "dismiss", { held: true });
+          actOnDecline("dismiss", { held: true });
         }}
         onWithdrawn={() => {
-          if (actOn !== null) act(actOn, "withdraw", { fate: "taken", held: true });
+          actOnDecline("withdraw", { fate: "taken", held: true });
         }}
         // The button goes once the question stops waiting; the detail then takes focus.
         restoreFocusTo={() =>
