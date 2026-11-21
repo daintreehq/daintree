@@ -1347,7 +1347,28 @@ export function nextWaiting(
   return waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null;
 }
 
-/** What the person did from the inbox to a question in Needs you (#18035). */
+/**
+ * The question to go on to once the one keyed `from` leaves the group it was
+ * acted on in: the next waiting in Needs you, else, for one that left
+ * Cleared (#18130), the one in Cleared now at the place it held there, so
+ * someone working through Cleared stays in it. Null when there is neither.
+ */
+export function nextAfter(
+  groups: readonly InboxGroup[],
+  from: string | null,
+  left: "needs-you" | "cleared",
+  place: number
+): DecisionQuestionListItem | null {
+  const waiting = nextWaiting(groups, from);
+  if (waiting !== null || left !== "cleared") return waiting;
+  const cleared = (groups.find((group) => group.id === "cleared")?.items ?? []).filter(
+    (item) => referenceKey(item.reference) !== from
+  );
+  if (cleared.length === 0) return null;
+  return cleared[Math.min(Math.max(place, 0), cleared.length - 1)]!;
+}
+
+/** What the person did from the inbox to a question in Needs you (#18035), or a decline from Cleared (#18130). */
 export type InboxAction = "answer" | "clear" | "dismiss" | "withdraw";
 
 /** Where what the person did stands by its own record: taken, refused or over, or not yet known. */

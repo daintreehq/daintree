@@ -5112,6 +5112,155 @@ describe("DecisionsInboxDialog", () => {
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
     });
+
+    describe("from Cleared (#18130)", () => {
+      const cleared = { ask: null, seen: true, cleared: true };
+      const setAside = { ...asked, inbox: cleared };
+      const declinedAside = {
+        ...setAside,
+        standing: { kind: "settled", outcome: "declined" } as const,
+      };
+      const third = item("question-5", 5, OPEN, {
+        askedAt: "2026-11-02T10:00:00.000Z",
+        inbox: cleared,
+      });
+
+      beforeEach(() => {
+        CONTENT["question-5"] = content("question-5", 5, { status: "open" });
+      });
+      afterEach(() => {
+        delete CONTENT["question-5"];
+      });
+
+      async function pick(alias: string) {
+        await screen.findByTestId("decisions-inbox-fold-cleared");
+        unfold("cleared");
+        fireEvent.click(rowNamed(alias));
+        await waitFor(() => expect(selectedAlias()).toBe(alias));
+        await waitFor(() =>
+          expect(shownBody()).toContain(`Body of question ${alias.slice("q-".length)}`)
+        );
+      }
+
+      async function decline() {
+        fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+        const confirm = await screen.findByRole("alertdialog");
+        await act(async () => {
+          fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+        });
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      }
+
+      it("goes on to the question waiting in Needs you once a decline confirmed here lands in History", async () => {
+        listQuestions.mockResolvedValue(listed(setAside));
+        open();
+        await pick("q-2");
+        await decline();
+        // Still in Cleared while the list hasn't moved it: nothing moves yet.
+        expect(selectedAlias()).toBe("q-2");
+        expect(moved()).toEqual([]);
+
+        push(listed(declinedAside, 2));
+        await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+        expect(moved()).toEqual(["Question q-2 declined. It's in History now. Showing q-4."]);
+      });
+
+      it("with nothing waiting, goes on to the question in Cleared that took its place", async () => {
+        const later = { ...waiting, inbox: cleared };
+        listQuestions.mockResolvedValue(listed(setAside, 1, [later, third]));
+        open();
+        await pick("q-2");
+        const order = rows()
+          .filter((row) => screen.getByTestId("decisions-inbox-group-cleared").contains(row))
+          .map(aliasOf);
+        expect(order).toHaveLength(3);
+        await decline();
+
+        push(listed(declinedAside, 2, [later, third]));
+        const after = order.filter((alias) => alias !== "q-2");
+        const expected = after[Math.min(order.indexOf("q-2"), after.length - 1)]!;
+        await waitFor(() => expect(selectedAlias()).toBe(expected));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed(expected)));
+        expect(bar("cleared").getAttribute("aria-expanded")).toBe("true");
+        expect(moved()).toEqual([
+          `Question q-2 declined. It's in History now. Showing ${expected}.`,
+        ]);
+      });
+
+      it("goes on once a withdrawal confirmed here lands in History", async () => {
+        declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+          result: "submitted",
+          declineId,
+          outcome: { status: "unsupported", by: "relay" },
+        }));
+        listQuestions.mockResolvedValue(listed(setAside));
+        open();
+        await pick("q-2");
+        fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+        const confirm = await screen.findByRole("alertdialog");
+        await act(async () => {
+          fireEvent.click(within(confirm).getByRole("button", { name: "Decline question" }));
+        });
+        const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+        await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+        await act(async () => {
+          fireEvent.click(withdraw);
+        });
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        expect(selectedAlias()).toBe("q-2");
+
+        push(listed({ ...setAside, standing: { kind: "settled", outcome: "withdrawn" } }, 2));
+        await waitFor(() => expect(selectedAlias()).toBe("q-4"));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
+        expect(moved()).toEqual(["Question q-2 withdrawn. It's in History now. Showing q-4."]);
+      });
+
+      it("stays and says so with nothing left to go on to", async () => {
+        listQuestions.mockResolvedValue(listed(setAside, 1, []));
+        open();
+        await pick("q-2");
+        await decline();
+        push(listed(declinedAside, 2, []));
+        await waitFor(() => expect(moved()).toHaveLength(1));
+        expect(moved()[0]).toMatch(/^Question q-2 declined\. It's in History now\./);
+        expect(moved()[0]).not.toMatch(/Showing/);
+        expect(selectedAlias()).toBe("q-2");
+      });
+
+      it("stays on a cleared question closed some other way than the decline taken here", async () => {
+        listQuestions.mockResolvedValue(listed(setAside));
+        open();
+        await pick("q-2");
+        await decline();
+        push(listed({ ...setAside, standing: { kind: "settled", outcome: "expired" } }, 2));
+        await waitFor(() => expect(heldIn("history")).toContain("1 question"));
+        await act(async () => {});
+        expect(selectedAlias()).toBe("q-2");
+        expect(moved()).toEqual([]);
+      });
+
+      it("stays on a cleared question restored to Needs you", async () => {
+        listQuestions.mockResolvedValue(listed(setAside));
+        open();
+        await pick("q-2");
+        fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+        await waitFor(() =>
+          expect(markQuestions).toHaveBeenLastCalledWith({
+            action: "restore",
+            questions: [{ reference: reference("question-2"), ask: null }],
+          })
+        );
+        push(listed({ ...setAside, inbox: unmarked }, 2));
+        await waitFor(() =>
+          expect(screen.getByTestId("decisions-inbox-group-needs-you").textContent).toContain("q-2")
+        );
+        await act(async () => {});
+        expect(selectedAlias()).toBe("q-2");
+        expect(moved()).toEqual([]);
+      });
+    });
   });
 
   describe("what holds a delivery (#18032)", () => {

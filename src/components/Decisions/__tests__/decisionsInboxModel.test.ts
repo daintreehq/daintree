@@ -45,6 +45,7 @@ import {
   landedBy,
   markedText,
   movedText,
+  nextAfter,
   nextWaiting,
   originFacts,
   paneTitle,
@@ -1817,6 +1818,49 @@ describe("moving on once the person's action takes a question out of Needs you (
       const groups = inboxGroups([only, item("q2", { kind: "to-type" })]);
       expect(nextWaiting(groups, referenceKey(at("q1")))).toBeNull();
       expect(nextWaiting(inboxGroups([]), null)).toBeNull();
+    });
+  });
+
+  describe("nextAfter", () => {
+    const cleared = { ask: null, seen: true, cleared: true };
+    const aside = (id: string, minute: number) =>
+      item(id, OPEN, { inbox: cleared, askedAt: `2026-11-02T09:${minute}:00.000Z` });
+
+    it("prefers the next question waiting in Needs you, from either group", () => {
+      const waiting = item("q1", OPEN);
+      const groups = inboxGroups([waiting, aside("q2", 10), aside("q3", 20)]);
+      expect(nextAfter(groups, referenceKey(at("q2")), "cleared", 0)).toBe(waiting);
+      expect(nextAfter(groups, referenceKey(at("q9")), "needs-you", 0)).toBe(waiting);
+    });
+
+    it("with nothing waiting, stays in Cleared at the place the question left, and never from Needs you", () => {
+      const groups = inboxGroups([aside("q1", 10), aside("q2", 20), aside("q3", 30)]);
+      const order = groups
+        .find((group) => group.id === "cleared")!
+        .items.map((entry) => entry.reference.questionId);
+      // The one gone from the list: the rest close up over its place.
+      const leaving = order[1]!;
+      const left = groups.map((group) => ({
+        ...group,
+        items: group.items.filter((entry) => entry.reference.questionId !== leaving),
+      }));
+      const rest = order.filter((id) => id !== leaving);
+      expect(nextAfter(left, referenceKey(at(leaving)), "cleared", 1)?.reference.questionId).toBe(
+        rest[1]
+      );
+      // Past the end, the last; still listed there, never itself.
+      expect(nextAfter(left, referenceKey(at(leaving)), "cleared", 5)?.reference.questionId).toBe(
+        rest[rest.length - 1]
+      );
+      expect(
+        nextAfter(groups, referenceKey(at(order[2]!)), "cleared", 2)?.reference.questionId
+      ).toBe(order[1]);
+      expect(nextAfter(groups, referenceKey(at(order[0]!)), "needs-you", 0)).toBeNull();
+    });
+
+    it("finds nothing once the question was the only one in either", () => {
+      const groups = inboxGroups([aside("q1", 10)]);
+      expect(nextAfter(groups, referenceKey(at("q1")), "cleared", 0)).toBeNull();
     });
   });
 
