@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
 import { suggestProjectEmoji } from "@shared/utils/projectEmoji";
@@ -462,9 +462,35 @@ describe("CloneRepoDialog", () => {
       });
     }
 
-    it("offers no group row while no groups exist", () => {
+    it("offers only New group… while no groups exist", () => {
       render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
       expect(groupField()).toBeNull();
+      expect(screen.getByTestId("project-group-new")).toBeTruthy();
+    });
+
+    it("makes the first group here and clones the project into it", async () => {
+      const onSuccess = vi.fn();
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/my-repo.git" },
+      });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: "Clients" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(groupField()?.value).toBe("new-Clients"));
+      expect(screen.getByLabelText<HTMLInputElement>(/^url$/i).value).toBe(
+        "https://github.com/user/my-repo.git"
+      );
+
+      await fillAndClone();
+      fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/my-repo",
+        { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
+        { disposition: "current", groupId: "new-Clients" }
+      );
     });
 
     it("hands the chosen group on with the cloned project", async () => {
@@ -484,6 +510,58 @@ describe("CloneRepoDialog", () => {
         { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
         { disposition: "current", groupId: "g1" }
       );
+    });
+
+    it("hands a group made here to a local clone started in the background", async () => {
+      const onStartBackground = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={vi.fn()}
+        />
+      );
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: "Clients" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(groupField()?.value).toBe("new-Clients"));
+
+      await fillAndClone();
+
+      expect(cloneRepoMock).not.toHaveBeenCalled();
+      expect(onStartBackground).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ groupId: "new-Clients" }),
+        { disposition: "current" }
+      );
+    });
+
+    it("keeps the group chosen before a cancelled New group…", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      const onSuccess = vi.fn();
+      const onCancel = vi.fn();
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={onCancel} />);
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      fireEvent.change(await screen.findByTestId("project-group-name-input"), {
+        target: { value: "Never made" },
+      });
+      // The second dialog on screen is the name prompt, stacked over this one.
+      const [, namePrompt] = screen.getAllByTestId("app-dialog");
+      fireEvent.click(within(namePrompt!).getByText("dialog-close"));
+      await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(groupField()?.value).toBe("g1");
+      expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["g1"]);
+      await fillAndClone();
+      fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith("/tmp/my-repo", expect.any(Object), {
+        disposition: "current",
+        groupId: "g1",
+      });
     });
 
     it("hands on no group when the chosen one is deleted during the clone", async () => {
