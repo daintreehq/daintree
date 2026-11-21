@@ -2337,7 +2337,13 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
       // Taken once: with nothing else to go on to it stays shown, and a question asked later is no
       // reason to move.
       setActed(null);
-      const next = nextAfter(groups, acted.key, acted.from, acted.place);
+      // From Cleared, staying in it only while it's open: one the person shut they've left.
+      const next = nextAfter(
+        groups,
+        acted.key,
+        acted.from === "cleared" && openGroups.has("cleared") ? "cleared" : "needs-you",
+        acted.place
+      );
       const after = next === null ? waitingLine : null;
       setArrival({
         id: acted.id,

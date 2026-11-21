@@ -5151,8 +5151,16 @@ describe("DecisionsInboxDialog", () => {
         await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       }
 
+      /** The rows Cleared draws, in order. */
+      function clearedOrder() {
+        const group = screen.getByTestId("decisions-inbox-group-cleared");
+        return rows()
+          .filter((row) => group.contains(row))
+          .map(aliasOf);
+      }
+
       it("goes on to the question waiting in Needs you once a decline confirmed here lands in History", async () => {
-        listQuestions.mockResolvedValue(listed(setAside));
+        listQuestions.mockResolvedValue(listed(setAside, 1, [waiting, third]));
         open();
         await pick("q-2");
         await decline();
@@ -5160,33 +5168,80 @@ describe("DecisionsInboxDialog", () => {
         expect(selectedAlias()).toBe("q-2");
         expect(moved()).toEqual([]);
 
-        push(listed(declinedAside, 2));
+        // Needs you comes first, even with another still in Cleared.
+        push(listed(declinedAside, 2, [waiting, third]));
         await waitFor(() => expect(selectedAlias()).toBe("q-4"));
         await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-4")));
+        expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true");
         await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+        expect(screen.getByTestId("decisions-inbox-clear").textContent).toBe(
+          "Clear from Needs you"
+        );
+        expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
         expect(moved()).toEqual(["Question q-2 declined. It's in History now. Showing q-4."]);
       });
 
       it("with nothing waiting, goes on to the question in Cleared that took its place", async () => {
         const later = { ...waiting, inbox: cleared };
+        const byAlias: Record<string, DecisionQuestionListItem> = {
+          "q-2": setAside,
+          "q-4": later,
+          "q-5": third,
+        };
         listQuestions.mockResolvedValue(listed(setAside, 1, [later, third]));
         open();
-        await pick("q-2");
-        const order = rows()
-          .filter((row) => screen.getByTestId("decisions-inbox-group-cleared").contains(row))
-          .map(aliasOf);
+        await screen.findByTestId("decisions-inbox-fold-cleared");
+        unfold("cleared");
+        const order = clearedOrder();
         expect(order).toHaveLength(3);
+        // From the middle, so the one after it is the one closing up over its place.
+        const [, middle, last] = order as [string, string, string];
+        fireEvent.click(rowNamed(middle));
+        await waitFor(() => expect(selectedAlias()).toBe(middle));
         await decline();
 
-        push(listed(declinedAside, 2, [later, third]));
-        const after = order.filter((alias) => alias !== "q-2");
-        const expected = after[Math.min(order.indexOf("q-2"), after.length - 1)]!;
-        await waitFor(() => expect(selectedAlias()).toBe(expected));
-        await waitFor(() => expect(document.activeElement).toBe(rowNamed(expected)));
+        const rest = Object.entries(byAlias)
+          .filter(([alias]) => alias !== middle)
+          .map(([, question]) => question);
+        const gone = {
+          ...byAlias[middle]!,
+          standing: { kind: "settled", outcome: "declined" } as const,
+        };
+        push({ revision: 2, questions: [gone, ...rest, delivering] });
+        await waitFor(() => expect(selectedAlias()).toBe(last));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed(last)));
+        expect(rowNamed(last).getAttribute("aria-current")).toBe("true");
+        await waitFor(() =>
+          expect(shownBody()).toContain(`Body of question ${last.slice("q-".length)}`)
+        );
+        // Shown with what it offers, still in Cleared.
+        expect(screen.getByTestId("decisions-inbox-clear").textContent).toBe(
+          "Restore to Needs you"
+        );
+        expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
         expect(bar("cleared").getAttribute("aria-expanded")).toBe("true");
+        expect(clearedOrder()).toEqual(order.filter((alias) => alias !== middle));
         expect(moved()).toEqual([
-          `Question q-2 declined. It's in History now. Showing ${expected}.`,
+          `Question ${middle} declined. It's in History now. Showing ${last}.`,
         ]);
+      });
+
+      it("stays on it once the person has shut Cleared, saying nothing else waits", async () => {
+        const later = { ...waiting, inbox: cleared };
+        listQuestions.mockResolvedValue(listed(setAside, 1, [later]));
+        open();
+        await pick("q-2");
+        fireEvent.click(bar("cleared"));
+        expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+        await decline();
+        push(listed(declinedAside, 2, [later]));
+        await waitFor(() =>
+          expect(moved()).toEqual([
+            "Question q-2 declined. It's in History now. No questions waiting on you.",
+          ])
+        );
+        expect(bar("cleared").getAttribute("aria-expanded")).toBe("false");
+        expect(shownBody()).toContain("Body of question 2");
       });
 
       it("goes on once a withdrawal confirmed here lands in History", async () => {
