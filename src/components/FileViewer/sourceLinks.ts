@@ -36,9 +36,10 @@ function urlNodeAt(view: EditorView, pos: number): SyntaxNode | null {
 }
 
 // A second press of a double-click selects a word; Shift and Alt extend or
-// draw a selection.
+// draw a selection; Control-click is the context menu on macOS.
 function isPlainPress(event: MouseEvent): boolean {
-  return event.button === 0 && event.detail <= 1 && !event.shiftKey && !event.altKey;
+  const { button, detail, shiftKey, altKey, ctrlKey } = event;
+  return button === 0 && detail <= 1 && !shiftKey && !altKey && !ctrlKey;
 }
 
 function linkUnder(view: EditorView, target: EventTarget | null): SyntaxNode | null {
@@ -58,12 +59,15 @@ function linkUnder(view: EditorView, target: EventTarget | null): SyntaxNode | n
  * press can redraw the link (clearing a find match does), and Chromium sends
  * no click once the node pressed is gone. The release is hit-tested afresh,
  * so it finds the redrawn link and notices a pointer that slid off its edge.
+ * The link follows once CodeMirror has settled the selection, and only if
+ * the press left none: a drag of a pixel or two can still select a character.
  */
 export function sourceLinks(policy: SourceLinkPolicy): Extension {
   const plugin = ViewPlugin.fromClass(
     class implements PluginValue {
       decorations: DecorationSet;
       press: Press | null = null;
+      pending: string | null = null;
       private readonly doc: Document;
 
       constructor(readonly view: EditorView) {
@@ -124,8 +128,23 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
         const link = linkUnder(this.view, event.target);
         if (!link || link.from !== press.linkFrom) return;
         const href = urlNodeHref(this.view.state, link);
-        if (href !== null && policy.canFollow(href)) policy.follow(href);
+        if (href === null || !policy.canFollow(href)) return;
+        // CodeMirror settles the selection on the document as this bubbles up;
+        // the window hears it after that.
+        this.pending = href;
+        this.doc.defaultView?.addEventListener("mouseup", this.onSettled);
       };
+
+      onSettled = () => {
+        const href = this.pending;
+        this.cancelPending();
+        if (href !== null && this.view.state.selection.main.empty) policy.follow(href);
+      };
+
+      cancelPending() {
+        this.pending = null;
+        this.doc.defaultView?.removeEventListener("mouseup", this.onSettled);
+      }
 
       stopTracking() {
         this.doc.removeEventListener("mousemove", this.onMove, true);
@@ -134,6 +153,7 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
 
       begin(event: MouseEvent) {
         this.stopTracking();
+        this.cancelPending();
         this.press = null;
         if (!isPlainPress(event)) return;
         const link = linkUnder(this.view, event.target);
@@ -145,6 +165,7 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
 
       destroy() {
         this.stopTracking();
+        this.cancelPending();
         this.press = null;
       }
     },

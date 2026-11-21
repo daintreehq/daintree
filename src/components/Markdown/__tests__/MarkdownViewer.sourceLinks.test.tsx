@@ -113,12 +113,13 @@ describe("MarkdownViewer Source links", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("does not follow a Shift-press, an Alt-press, or the second press of a double-click", async () => {
+  it("does not follow a Shift-, Alt- or Control-press, or the second press of a double-click", async () => {
     const { view } = await mountSource("Read https://bare.dev today.\n");
     const link = linkWithText(view, "https://bare.dev");
 
     clickLink(link, { shiftKey: true });
     clickLink(link, { altKey: true });
+    clickLink(link, { ctrlKey: true });
     clickLink(link, { detail: 2 });
     expect(dispatchMock).not.toHaveBeenCalled();
 
@@ -166,6 +167,26 @@ describe("MarkdownViewer Source links", () => {
       { url: "https://bare.dev" },
       { source: "user" }
     );
+  });
+
+  // A drag of a pixel or two can cross a character boundary and select it.
+  it("does not follow a press that leaves a selection once CodeMirror settles it", async () => {
+    const { view } = await mountSource("Read https://bare.dev today.\n");
+    const link = linkWithText(view, "https://bare.dev");
+    // Stands in for CodeMirror leaving a selection as the release bubbles
+    // through the document, before the window hears it.
+    document.addEventListener(
+      "mouseup",
+      () => view.dispatch({ selection: { anchor: 5, head: 7 } }),
+      {
+        once: true,
+      }
+    );
+
+    mouse(link, "mousedown");
+    mouse(link, "mouseup");
+
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("does not follow a press released just off the link", async () => {
