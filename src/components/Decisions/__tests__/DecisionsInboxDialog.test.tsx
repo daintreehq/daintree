@@ -3790,6 +3790,195 @@ describe("DecisionsInboxDialog", () => {
       }
     });
 
+    describe("asked for a question while narrowed (#18119)", () => {
+      function askFor(question: {
+        terminalId: string;
+        questionId: string;
+        reference?: DecisionQuestionReference;
+      }) {
+        act(() => useDecisionsInboxStore.getState().open({ question }));
+      }
+      const byReference = (listed: DecisionQuestionListItem) => ({
+        terminalId: listed.reference.terminalId,
+        questionId: listed.reference.questionId,
+        reference: listed.reference,
+      });
+      async function narrow() {
+        open();
+        await waitFor(() => expect(rows()).toHaveLength(4));
+        fireEvent.click(scopeSegment("project"));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      }
+
+      it("shows another project's question on every project, its row taking the keyboard", async () => {
+        const said: string[] = [];
+        const announce = useAnnouncerStore.getState().announce;
+        useAnnouncerStore.setState({ announce: (message: string) => said.push(message) });
+        onTestFinished(() => useAnnouncerStore.setState({ announce }));
+        await narrow();
+        const { seq } = useDecisionsInboxStore.getState().request;
+        askFor(byReference(BETA_WAITING));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-6", "q-2", "q-7", "q-3"]));
+        expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+        expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true");
+        await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+        await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-6")));
+        expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
+          "Clear Needs you in all projects"
+        );
+        // The same opening, which says the list widened, once.
+        expect(useDecisionsInboxStore.getState().request.seq).toBe(seq);
+        const widened = () => said.filter((message) => message.startsWith("Showing all projects"));
+        await waitFor(() => expect(widened()).toEqual(["Showing all projects for q-6"]));
+        fireEvent.click(rowNamed("q-2"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        fireEvent.click(rowNamed("q-6"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+        expect(widened()).toHaveLength(1);
+
+        // Narrowed again by the person, it stays narrowed as the list moves.
+        fireEvent.click(scopeSegment("project"));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+        expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+        push({ ...MIXED, revision: 2 });
+        await act(async () => {});
+        expect(rows().map(aliasOf)).toEqual(["q-2"]);
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+
+        // Asked for again, it's shown again, and said again.
+        askFor(byReference(BETA_WAITING));
+        await waitFor(() => expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true"));
+        expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true");
+        await waitFor(() => expect(widened()).toHaveLength(2));
+      });
+
+      it("shows one a pane names by its terminal and id, and another computer's in the same project id", async () => {
+        await narrow();
+        askFor({ terminalId: "t6", questionId: "question-6" });
+        await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+        expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+
+        fireEvent.click(scopeSegment("project"));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+        askFor(byReference(STUDIO_WAITING));
+        await waitFor(() => expect(rowNamed("q-7").getAttribute("aria-current")).toBe("true"));
+        expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+        await waitFor(() => expect(shownBody()).toContain("Body of question 7"));
+      });
+
+      it("stays narrowed for this project's own question", async () => {
+        await narrow();
+        askFor(byReference(LIST.questions[0]!));
+        // History opens for it, in this project's list.
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2", "q-1"]));
+        expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+        expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
+          "Clear Needs you in this project"
+        );
+        await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      });
+
+      it("keeps a row the person picked before another project's question asked for is listed", async () => {
+        const later = item("question-4", 4, OPEN, {
+          reference: reference("question-4", { projectId: "project-b", terminalId: "t4" }),
+          projectLabel: "Beta",
+        });
+        listQuestions.mockResolvedValue({
+          ...MIXED,
+          questions: [...MIXED.questions, ALPHA_CLEARED],
+        });
+        CONTENT["question-8"] = content("question-8", 8, {
+          status: "open",
+          terminalId: "t8",
+          reference: ALPHA_CLEARED.reference,
+        });
+        onTestFinished(() => {
+          delete CONTENT["question-8"];
+        });
+        await narrow();
+        askFor(byReference(later));
+        await act(async () => {});
+        unfold("cleared");
+        fireEvent.click(rowNamed("q-8"));
+        await waitFor(() => expect(rowNamed("q-8").getAttribute("aria-current")).toBe("true"));
+        push({ ...MIXED, revision: 2, questions: [...MIXED.questions, ALPHA_CLEARED, later] });
+        await act(async () => {});
+        expect(rows().map(aliasOf)).toEqual(["q-2", "q-8"]);
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+        expect(rowNamed("q-8").getAttribute("aria-current")).toBe("true");
+      });
+
+      it("stays narrowed once a row picked since the ask goes before the question is listed", async () => {
+        const later = item("question-4", 4, OPEN, {
+          reference: reference("question-4", { projectId: "project-b", terminalId: "t4" }),
+          projectLabel: "Beta",
+        });
+        listQuestions.mockResolvedValue({
+          ...MIXED,
+          questions: [...MIXED.questions, ALPHA_CLEARED],
+        });
+        CONTENT["question-8"] = content("question-8", 8, {
+          status: "open",
+          terminalId: "t8",
+          reference: ALPHA_CLEARED.reference,
+        });
+        onTestFinished(() => {
+          delete CONTENT["question-8"];
+        });
+        await narrow();
+        askFor(byReference(later));
+        await act(async () => {});
+        unfold("cleared");
+        fireEvent.click(rowNamed("q-8"));
+        await waitFor(() => expect(rowNamed("q-8").getAttribute("aria-current")).toBe("true"));
+        // Every row of this project goes, the pick with them.
+        push({ revision: 2, questions: [BETA_WAITING, LIST.questions[2]!, STUDIO_WAITING] });
+        await waitFor(() => expect(rows()).toHaveLength(0));
+        push({ ...MIXED, revision: 3, questions: [...MIXED.questions, later] });
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      });
+
+      it("stays narrowed when the person narrows after asking, until asked again", async () => {
+        const later = item("question-4", 4, OPEN, {
+          reference: reference("question-4", { projectId: "project-b", terminalId: "t4" }),
+          projectLabel: "Beta",
+        });
+        open();
+        await waitFor(() => expect(rows()).toHaveLength(4));
+        askFor(byReference(later));
+        await act(async () => {});
+        fireEvent.click(scopeSegment("project"));
+        await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2"]));
+        push({ ...MIXED, revision: 2, questions: [...MIXED.questions, later] });
+        await act(async () => {});
+        expect(rows().map(aliasOf)).toEqual(["q-2"]);
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+
+        askFor(byReference(later));
+        await waitFor(() => expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true"));
+        expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+      });
+
+      it("shows another project's question listed only after it was asked for", async () => {
+        const later = item("question-4", 4, OPEN, {
+          reference: reference("question-4", { projectId: "project-b", terminalId: "t4" }),
+          projectLabel: "Beta",
+        });
+        await narrow();
+        askFor(byReference(later));
+        await act(async () => {});
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+        expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+        push({ ...MIXED, revision: 2, questions: [...MIXED.questions, later] });
+        await waitFor(() => expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true"));
+        expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+        await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      });
+    });
+
     it("takes a Remote Host window's project to be that Host's", async () => {
       remote = true;
       open();
