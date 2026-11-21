@@ -1,5 +1,6 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getAgentConfig } from "@/config/agents";
+import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { notify } from "@/lib/notify";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
@@ -34,7 +35,9 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
   // A panel tucked away by the focus gesture stays parked while that flag stands.
   useFocusStore.getState().clearAssistantGesture();
   const panel = useHelpPanelStore.getState();
-  panel.selectGlobal(null);
+  // A hand-off replaces the first session's run until choosing the one that
+  // coordinates lands (#18137), so that is the session shown.
+  panel.selectGlobal(null, GLOBAL_ASSISTANT_SLOT);
   panel.setOpen(true);
   // Nothing here asked for focus, so a pane mounting now has none to serve.
   useHelpPanelStore.setState((s) => ({ globalFocusHandledThrough: s.focusRequest }));
@@ -83,6 +86,8 @@ export function GlobalAssistantReplaceConfirmDialog() {
   const incoming = agentName(current.agentId);
   const replacing = expected.phase !== "absent";
   const outgoing = currentAgentId ? agentName(currentAgentId) : "Its agent";
+  // Beside a second session, the one replaced is named: always the first.
+  const target = current.namesSession ? "global assistant session 1" : "the global assistant";
 
   return (
     <ConfirmDialog
@@ -90,12 +95,18 @@ export function GlobalAssistantReplaceConfirmDialog() {
       onClose={() => takeGlobalAssistantReplacement(requestId)}
       onConfirm={() => void approveGlobalAssistantReplacement(requestId)}
       title={
-        replacing ? "Replace the global assistant?" : "Start a new global assistant conversation?"
+        current.namesSession
+          ? replacing
+            ? "Replace global assistant session 1?"
+            : "Start a new conversation in global assistant session 1?"
+          : replacing
+            ? "Replace the global assistant?"
+            : "Start a new global assistant conversation?"
       }
       description={
         replacing
-          ? `${pluginName} asks to move the global assistant to ${incoming}. ${outgoing} stops in every window and ${incoming} starts a new conversation from the message below.`
-          : `${pluginName} asks to start the global assistant in ${incoming}, from the message below. Any conversation it kept for its next start is cleared.`
+          ? `${pluginName} asks to move ${target} to ${incoming}. ${outgoing} stops in every window and ${incoming} starts a new conversation from the message below.`
+          : `${pluginName} asks to start ${target} in ${incoming}, from the message below. Any conversation it kept for its next start is cleared.`
       }
       confirmLabel={replacing ? "Replace global assistant" : "Start global assistant"}
       cancelLabel="Cancel"

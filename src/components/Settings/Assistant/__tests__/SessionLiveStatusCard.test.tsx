@@ -16,6 +16,7 @@ interface DockState {
   sessions: Record<number, Lane>;
   globalSelected: boolean;
   globalTarget: AgentDirectorySubject | null;
+  globalSlot: 0 | 1;
   /** The agent new sessions launch with; a running lane's own agent can differ. */
   preferredAgentId: string | null;
 }
@@ -38,6 +39,7 @@ const {
       sessions: {},
       globalSelected: false,
       globalTarget: null,
+      globalSlot: 0,
       preferredAgentId: null,
     },
   };
@@ -130,7 +132,10 @@ const globalSubject = (incarnation: number): AgentDirectorySubject => ({
 
 function globalView(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "absent",
+    pinnedAgentId: null,
+    occupied: false,
     generation: 0,
     agentId: null,
     terminalId: null,
@@ -145,7 +150,10 @@ function globalView(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantVi
 
 const globalRunning = (patch: Partial<GlobalAssistantView> = {}) =>
   globalView({
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    occupied: true,
     generation: 1,
     agentId: "claude",
     terminalId: "g-1",
@@ -172,6 +180,7 @@ beforeEach(() => {
     sessions: { 0: LANE_ONE },
     globalSelected: false,
     globalTarget: null,
+    globalSlot: 0,
     preferredAgentId: null,
   };
   vi.mocked(logError).mockClear();

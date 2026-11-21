@@ -19,6 +19,8 @@ export const HELP_METHOD_CHANNELS = {
   getPinnedActionContext: "help:get-pinned-action-context",
   ensureGlobalAssistant: "help:global-assistant-ensure",
   getGlobalAssistantState: "help:global-assistant-state",
+  listGlobalAssistantSessions: "help:global-assistant-list",
+  startNewGlobalAssistant: "help:global-assistant-start-new",
   attachGlobalAssistant: "help:global-assistant-attach",
   detachGlobalAssistant: "help:global-assistant-detach",
   claimGlobalAssistantInput: "help:global-assistant-claim-input",

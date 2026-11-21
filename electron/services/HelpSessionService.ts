@@ -781,6 +781,34 @@ export class HelpSessionService {
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
     this.pendingHibernationStore = store;
+    if (store) this.markPendingHibernationStoreWired?.();
+  }
+
+  private markPendingHibernationStoreWired: (() => void) | null = null;
+  private readonly pendingHibernationStoreWired = new Promise<void>((resolve) => {
+    this.markPendingHibernationStoreWired = resolve;
+  });
+
+  /**
+   * Whether the resume pointers read at boot are wired in, once they are or
+   * after `timeoutMs` if they never are: a lane read before then would say it
+   * keeps nothing when it does (#18142).
+   */
+  /** Resolves once the resume pointers read at boot are wired in, however long that takes. */
+  pendingHibernationStoreReady(): Promise<void> {
+    return this.pendingHibernationStore ? Promise.resolve() : this.pendingHibernationStoreWired;
+  }
+
+  whenPendingHibernationStoreWired(timeoutMs = 5_000): Promise<boolean> {
+    if (this.pendingHibernationStore) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+      void this.pendingHibernationStoreWired.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
 
   /**

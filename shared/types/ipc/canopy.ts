@@ -10,6 +10,7 @@
  */
 
 import type { FleetRunRow } from "./fleet.js";
+import type { GlobalAssistantSlot } from "../../config/globalAssistantSessions.js";
 import type { TerminalInputLineState } from "../terminalStatus.js";
 
 /** The screen's current state, as the classifier read it. */
@@ -251,7 +252,14 @@ export type AssistantOpenDestination =
       terminalId: string;
       incarnation: number;
     }
-  | { scope: "global"; hostId: string; terminalId: string; incarnation: number };
+  | {
+      scope: "global";
+      hostId: string;
+      terminalId: string;
+      incarnation: number;
+      /** Which global assistant session runs it (#18142); absent reads as the first. */
+      slot?: GlobalAssistantSlot;
+    };
 
 /**
  * Why "Open in Assistant" from the Canopy window moved nothing, for an

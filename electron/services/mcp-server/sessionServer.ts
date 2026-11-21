@@ -1984,13 +1984,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // This machine's global Assistant, for a project's assistant here
         // (#16410): refused here unless the call is a send or a status read
         // that quotes none of its screen, before anything is read or sent.
-        const globalAssistantId =
+        const globalAssistantIds = new Set(
           assistantCaller === null
-            ? undefined
-            : assistantIds.find(
+            ? []
+            : assistantIds.filter(
                 (id) => assistantControl!.resolve(assistantCaller, id)?.scope === "global"
-              );
-        if (globalAssistantId !== undefined) {
+              )
+        );
+        if (globalAssistantIds.size > 0) {
           const refusal = globalTargetRefusal(actionId, args);
           if (refusal !== null) {
             outcome = {
@@ -2028,7 +2029,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 args,
                 assistantCaller.projectId,
                 new Set(assistantIds),
-                globalAssistantId
+                globalAssistantIds.size > 0 ? globalAssistantIds : undefined
               )
             );
             outcome = { kind: "result", value: { ok: true, result } };

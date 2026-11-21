@@ -307,6 +307,12 @@ export interface StoreSchema {
    */
   agentToolbarPins?: Record<string, boolean>;
   /**
+   * The agent each global assistant session was started on by choice
+   * (#18142), by slot, kept until that session is stopped. See
+   * `electron/services/globalAssistant.ts`.
+   */
+  globalAssistantPinnedAgents?: Record<string, string>;
+  /**
    * This machine's agent usage tracking switch (#17981); absent reads as on.
    * See `electron/services/agentUsage/AgentUsageTracking.ts`.
    */

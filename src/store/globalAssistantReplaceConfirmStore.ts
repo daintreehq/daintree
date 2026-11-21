@@ -17,6 +17,11 @@ export interface PendingGlobalAssistantReplacement {
   /** The agent that run is on, when one is starting or running. */
   currentAgentId: string | null;
   pluginName: string;
+  /**
+   * A second global session exists beside the first (#18142), so the session a
+   * hand-off replaces is named: it is always the first.
+   */
+  namesSession?: boolean;
 }
 
 interface GlobalAssistantReplaceConfirmState {

@@ -128,18 +128,18 @@ export function useCanopyInboxFilters({
     });
   }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
-  // Its row, whatever the list shows: no filter or host hides the dock.
-  const globalItem = useMemo(() => {
+  // Its rows, whatever the list shows: no filter or host hides the dock. A
+  // machine may run two global sessions (#18142); the dock picks its own.
+  const globalItems = useMemo(() => {
     if (!assistantsReadable) {
-      return (
-        buildAssistantItems(directory, {
-          projectName: () => null,
-          seen: handbacksSeen,
-        }).find(isOwnGlobalAssistant) ?? null
-      );
+      return buildAssistantItems(directory, {
+        projectName: () => null,
+        seen: handbacksSeen,
+      }).filter(isOwnGlobalAssistant);
     }
-    return assistantItems.find(isOwnGlobalAssistant) ?? null;
+    return assistantItems.filter(isOwnGlobalAssistant);
   }, [assistantsReadable, directory, handbacksSeen, assistantItems]);
+  const globalItem = globalItems[0] ?? null;
   // "Show its work" (#14166): the workers one assistant made or was handed,
   // from each host's own records of it. Every host shown is read, since an
   // assistant here starts workers on others too.
@@ -387,6 +387,7 @@ export function useCanopyInboxFilters({
     assistantAsks,
     globalDocked,
     globalItem,
+    globalItems,
     workOf,
     showWorkOf,
     workPartial,

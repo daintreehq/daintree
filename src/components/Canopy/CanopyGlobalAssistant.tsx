@@ -9,6 +9,8 @@ import { HelpLaunchingState } from "@/components/HelpPanel/HelpLaunchingState";
 import { refocusStartAfterCancel } from "@/components/HelpPanel/refocusStartAfterCancel";
 import { useAssistantSendFailure } from "@/components/HelpPanel/useAssistantSendFailure";
 import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
+import { useGlobalAssistantSessions } from "@/components/HelpPanel/useGlobalAssistantSessions";
+import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
 import { useGlobalAssistantIdentity } from "@/store/assistantIdentityStore";
 import { displayIdentityLabel } from "@shared/utils/displayIdentity";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -32,10 +34,13 @@ function keepEscape(event: KeyboardEvent<HTMLDivElement>): void {
  * attaches while it is shown and types under the input it holds, as the
  * Assistant panel does; input the panel behind Canopy holds comes here and
  * goes back to it, and input another window holds is only taken by asking.
- * Nothing starts it but the person pressing Start.
+ * Nothing starts it but the person pressing Start. Of a machine's two
+ * sessions (#18142) the dock shows the first; a selected row shows its own.
  */
 export function CanopyGlobalAssistant({
   item,
+  followsRow = false,
+  candidates,
   refusal,
   workOf,
   onOpen,
@@ -43,6 +48,13 @@ export function CanopyGlobalAssistant({
 }: {
   /** The directory's row for this machine's global assistant, while it lists one. */
   item: CanopyAssistantItem | null;
+  /**
+   * The row was selected, so the session it names is the one shown. Docked,
+   * the first session stays put whatever order the directory lists them in.
+   */
+  followsRow?: boolean;
+  /** Docked, every row of this machine's global sessions: the one on screen heads the dock. */
+  candidates?: readonly CanopyAssistantItem[];
   /** Why the last "Open in Assistant" didn't, in words, and for which assistant. */
   refusal: { id: string; text: string } | null;
   /** The assistant whose work the inbox is narrowed to, if any. */
@@ -54,11 +66,34 @@ export function CanopyGlobalAssistant({
   // A window bound to another host reaches that host's assistants, not this one's.
   const boundElsewhere = getViewHostId() !== null;
   const identity = useGlobalAssistantIdentity();
+  const shown = !viewCached && !boundElsewhere;
+  // Listened to while docked as well, so picking the row never waits on a read
+  // and the stream already open for the same session is kept.
+  const sessions = useGlobalAssistantSessions(shown);
+  const row = followsRow ? (item?.subject ?? null) : null;
+  // A selected row shows only the session running its exact run: never the
+  // other session, nor a successor in the same one, under it.
+  const rowSlot =
+    row === null
+      ? undefined
+      : sessions?.find(
+          (session) =>
+            session.phase === "running" &&
+            session.subject?.terminalId === row.terminalId &&
+            session.subject.incarnation === row.incarnation
+        )?.slot;
+  const slot = rowSlot ?? GLOBAL_ASSISTANT_SLOT;
+  const resolved = row === null || rowSlot !== undefined;
   const { view, attachmentId, error, start, claimInput, cancelLaunch } = useGlobalAssistant(
-    !viewCached && !boundElsewhere,
+    shown && resolved,
     undefined,
-    true
+    true,
+    slot
   );
+  // Its run is no session's, or a second session stopped under it: over, and
+  // nothing restarts it from here.
+  const rowGone = !resolved && sessions !== null;
+  const vacated = rowGone || (slot !== GLOBAL_ASSISTANT_SLOT && view !== null && !view.occupied);
   // The generation a Start was pressed at. A Cancel moves the generation on,
   // so Start is offered again at once, before the stopped launch has wound down.
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -83,7 +118,10 @@ export function CanopyGlobalAssistant({
   const agentId = view?.agentId ?? null;
   const composerAgentId = agentId && isBuiltInAgentId(agentId) ? agentId : undefined;
   // The directory's row only for the run on screen: a read from before a restart names the last one.
-  const shownItem = item !== null && isSameAssistantRun(item.subject, subject) ? item : null;
+  const shownItem =
+    (followsRow || !candidates ? (item ? [item] : []) : candidates).find((each) =>
+      isSameAssistantRun(each.subject, subject)
+    ) ?? null;
 
   // Taking input remounts the terminal under it, which drops the pressed
   // button; the keyboard follows to the composer.
@@ -186,6 +224,10 @@ export function CanopyGlobalAssistant({
           <p className="px-6 py-8 text-center text-xs text-text-secondary">
             This window runs on another host. Open the global assistant from a window on this
             machine.
+          </p>
+        ) : rowGone || (view !== null && vacated) ? (
+          <p className="px-6 py-8 text-center text-xs text-text-secondary">
+            This global assistant session has ended
           </p>
         ) : view === null ? (
           <div className="flex-1" aria-busy="true" />

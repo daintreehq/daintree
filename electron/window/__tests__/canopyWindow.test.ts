@@ -6,7 +6,7 @@ vi.mock("electron", () => ({ app: {}, BrowserWindow: class {} }));
 
 const detachWebContents = vi.hoisted(() => vi.fn());
 vi.mock("../../services/globalAssistant.js", () => ({
-  peekGlobalAssistantService: () => ({ detachWebContents }),
+  detachGlobalAssistantWebContents: detachWebContents,
 }));
 const setCanopyWindowOpen = vi.hoisted(() => vi.fn());
 vi.mock("../openWindowsTracker.js", async (importOriginal) => ({

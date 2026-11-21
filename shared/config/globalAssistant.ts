@@ -16,8 +16,16 @@ import {
  */
 export const GLOBAL_ASSISTANT_ID = "daintree:global-assistant";
 
-/** The lane its resume pointer is stored under, in the project hibernation store. */
-export const GLOBAL_ASSISTANT_SLOT = 0;
+export {
+  GLOBAL_ASSISTANT_SESSION_AGENT_IDS,
+  GLOBAL_ASSISTANT_SESSION_LIMIT,
+  GLOBAL_ASSISTANT_SLOT,
+  GLOBAL_ASSISTANT_SLOTS,
+  VIEWLESS_ASSISTANT_AGENT_IDS,
+  globalAssistantSessionNumber,
+  isGlobalAssistantSlot,
+  type GlobalAssistantSlot,
+} from "./globalAssistantSessions.js";
 
 /** Folder under userData whose path stands in for the project path, so its session directory is stable. */
 export const GLOBAL_ASSISTANT_DIR_NAME = "global-assistant";

@@ -12,7 +12,7 @@ function deferred<T>() {
 }
 
 type MockedDeps = {
-  [K in keyof GlobalAssistantDeps]: Mock<GlobalAssistantDeps[K]>;
+  [K in keyof GlobalAssistantDeps]: Mock<NonNullable<GlobalAssistantDeps[K]>>;
 };
 
 function makeDeps(overrides: Partial<MockedDeps> = {}) {

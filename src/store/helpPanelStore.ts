@@ -10,6 +10,10 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { WindowGlobalAssistantPanel } from "@shared/types/ipc/help";
+import {
+  GLOBAL_ASSISTANT_SLOT,
+  type GlobalAssistantSlot,
+} from "@shared/config/globalAssistantSessions";
 import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
 import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { logError } from "@/utils/logger";
@@ -246,6 +250,11 @@ interface HelpPanelState {
    */
   globalTarget: AgentDirectorySubject | null;
   /**
+   * Which of the machine's global assistant sessions the pane shows (#18142).
+   * Each window picks its own; every window names a session by this slot.
+   */
+  globalSlot: GlobalAssistantSlot;
+  /**
    * The latest `focusRequest` the global pane must treat as already served,
    * or -1. Global brought back by a project switch (#16099) wasn't asked for,
    * so the keyboard stays where the switch put it until a newer request.
@@ -283,8 +292,11 @@ interface HelpPanelActions {
   /** Drop a lane. Never removes the last one: the panel always has slot 0. */
   closeSlot: (slot: number) => void;
   setActiveSlot: (slot: number) => void;
-  /** Show the global assistant, pinned to one exact run or following whichever runs. */
-  selectGlobal: (target?: AgentDirectorySubject | null) => void;
+  /**
+   * Show the global assistant, pinned to one exact run or following whichever
+   * runs, in the session named or the one shown already.
+   */
+  selectGlobal: (target?: AgentDirectorySubject | null, slot?: GlobalAssistantSlot) => void;
   /**
    * Take on the window's panel as the view it switched from left it (#16099).
    * Global showing there shows here, at once and without taking the keyboard;
@@ -346,6 +358,7 @@ const initialState: HelpPanelState = {
   dictationFocusRequest: null,
   globalSelected: false,
   globalTarget: null,
+  globalSlot: GLOBAL_ASSISTANT_SLOT,
   globalFocusHandledThrough: -1,
 };
 
@@ -656,15 +669,28 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
             : s
         ),
 
-      selectGlobal: (target = null) => set({ globalSelected: true, globalTarget: target }),
+      selectGlobal: (target = null, slot) =>
+        set((s) => ({
+          globalSelected: true,
+          globalTarget: target,
+          globalSlot: slot ?? s.globalSlot,
+        })),
 
       applyWindowGlobalPanel: (panel) =>
         set((s) => {
           if (!panel) return s;
-          if (!panel.showing) return s.isOpen && s.globalSelected ? { isOpen: false } : s;
+          if (!panel.showing) {
+            // Closed there, Global keeps the session picked for when it opens here.
+            const slot = panel.slot ?? s.globalSlot;
+            const close = s.isOpen && s.globalSelected;
+            if (!close && slot === s.globalSlot) return s;
+            return { ...(close ? { isOpen: false } : {}), globalSlot: slot };
+          }
+          const slot = panel.slot ?? GLOBAL_ASSISTANT_SLOT;
           if (
             s.isOpen &&
             s.globalSelected &&
+            s.globalSlot === slot &&
             (s.globalTarget === panel.target || isSameAssistantRun(s.globalTarget, panel.target))
           ) {
             return s;
@@ -675,6 +701,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
             isOpen: true,
             globalSelected: true,
             globalTarget: panel.target,
+            globalSlot: slot,
             globalFocusHandledThrough: s.focusRequest,
           };
         }),

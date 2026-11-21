@@ -142,7 +142,7 @@ export const canopyWindowNamespace = defineIpcNamespace({
         const destination = await resolveAssistantDestination(subject);
         if (!destination) return "ended";
         if (destination.scope === "global") {
-          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner());
+          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner(subject.terminalId));
           return null;
         }
         const holder = await assistantLaneHolder(destination.projectId, destination.lane);

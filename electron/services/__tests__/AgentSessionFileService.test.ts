@@ -6,10 +6,14 @@ import { locateAgentSessionFile, type AgentSessionFileDeps } from "../AgentSessi
 
 const globalRun = vi.hoisted(() => ({
   current: null as { sessionId: string; terminalId: string } | null,
+  second: null as { sessionId: string; terminalId: string } | null,
 }));
 
 vi.mock("../globalAssistant.js", () => ({
-  peekGlobalAssistantService: () => ({ getRunningSession: () => globalRun.current }),
+  peekGlobalAssistantServices: () => [
+    { getRunningSession: () => globalRun.current },
+    { getRunningSession: () => globalRun.second },
+  ],
 }));
 
 const PROJECT = "project-a";
@@ -346,7 +350,7 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
       probeCodex: vi.fn().mockResolvedValue(OBSERVED_CODEX),
       getClaudeProjectsRoot: vi.fn((): string | null => STORE),
       locateClaude: vi.fn().mockResolvedValue({ status: "found", file: transcript }),
-      globalAssistantTerminalId: vi.fn((): string | null => TERMINAL),
+      globalAssistantTerminalIds: vi.fn((): readonly string[] => [TERMINAL]),
     };
   }
 
@@ -478,7 +482,7 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
     "answers only main's confirmed global run in the global workspace, not %s",
     async (_label, pane, confirmed) => {
       const d = deps(pane);
-      d.globalAssistantTerminalId.mockReturnValue(confirmed);
+      d.globalAssistantTerminalIds.mockReturnValue(confirmed === null ? [] : [confirmed]);
       await expect(locateAgentSessionFile(TERMINAL, HERE, d)).resolves.toEqual({
         status: "unknown",
         reason: "terminal-unavailable",
@@ -488,7 +492,7 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
   );
 
   it("reads the confirmed global run from main's global assistant service", async () => {
-    const { globalAssistantTerminalId: _injected, ...live } = deps(
+    const { globalAssistantTerminalIds: _injected, ...live } = deps(
       codexAssistant(GLOBAL_ASSISTANT_ID)
     );
     globalRun.current = { sessionId: "help-1", terminalId: TERMINAL };
@@ -504,10 +508,29 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
     }
   });
 
+  it("answers a second global session's confirmed run as it does the first's (#18142)", async () => {
+    const { globalAssistantTerminalIds: _injected, ...live } = deps(
+      codexAssistant(GLOBAL_ASSISTANT_ID)
+    );
+    globalRun.current = { sessionId: "help-1", terminalId: "term-other" };
+    globalRun.second = { sessionId: "help-2", terminalId: TERMINAL };
+    try {
+      await expect(locateAgentSessionFile(TERMINAL, HERE, live)).resolves.toEqual(OBSERVED_CODEX);
+      globalRun.second = null;
+      await expect(locateAgentSessionFile(TERMINAL, HERE, live)).resolves.toEqual({
+        status: "unknown",
+        reason: "terminal-unavailable",
+      });
+    } finally {
+      globalRun.current = null;
+      globalRun.second = null;
+    }
+  });
+
   it("never asks main for the global run when the record isn't in the global workspace", async () => {
     const d = deps(codexAssistant(HERE));
     await expect(locateAgentSessionFile(TERMINAL, HERE, d)).resolves.toEqual(OBSERVED_CODEX);
-    expect(d.globalAssistantTerminalId).not.toHaveBeenCalled();
+    expect(d.globalAssistantTerminalIds).not.toHaveBeenCalled();
   });
 });
 

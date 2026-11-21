@@ -110,7 +110,10 @@ const subject = {
 
 function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "absent",
+    pinnedAgentId: null,
+    occupied: false,
     generation: 0,
     agentId: null,
     terminalId: null,
@@ -125,7 +128,10 @@ function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
 
 const running = (patch: Partial<GlobalAssistantView> = {}) =>
   viewOf({
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    occupied: true,
     generation: 1,
     agentId: "claude",
     terminalId: "g1",
@@ -147,6 +153,13 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
     restartGlobalAssistant: vi.fn(),
     discardGlobalAssistant: vi.fn(),
     cancelGlobalAssistantLaunch: vi.fn(async () => viewOf()),
+    listGlobalAssistantSessions: vi.fn(async (): Promise<GlobalAssistantView[]> => [
+      initial,
+      viewOf({ slot: 1 }),
+    ]),
+    startNewGlobalAssistant: vi.fn(async (): Promise<GlobalAssistantView> => {
+      throw new Error("no new session in this test");
+    }),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
@@ -168,13 +181,18 @@ function push(state: GlobalAssistantView) {
   });
 }
 
-function renderPane(isVisible = true) {
+function renderPane(isVisible = true, newSessionAgentIds: readonly string[] = []) {
   // The panel header's slot, where the pane draws its agent and menu.
   const controls = document.createElement("div");
   document.body.appendChild(controls);
   const wrap = (visible: boolean) => (
     <TooltipProvider delayDuration={0}>
-      <GlobalAssistantPane isVisible={visible} controlsHost={controls} onOpenDocs={vi.fn()} />
+      <GlobalAssistantPane
+        isVisible={visible}
+        controlsHost={controls}
+        onOpenDocs={vi.fn()}
+        newSessionAgentIds={newSessionAgentIds}
+      />
     </TooltipProvider>
   );
   const result = render(wrap(isVisible));
@@ -256,6 +274,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       isOpen: true,
       globalSelected: true,
       globalTarget: null,
+      globalSlot: 0,
       focusRequest: 0,
       globalFocusHandledThrough: -1,
     });
@@ -309,7 +328,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     await flush();
     rerenderVisible(false);
     await flush();
-    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1");
+    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1", 0);
     rerenderVisible(true);
     await flush();
     expect(help.attachGlobalAssistant).toHaveBeenCalledTimes(2);
@@ -329,7 +348,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     const { unmount } = renderPane();
     unmount();
     await act(async () => answer({ attachmentId: "late", state: running() }));
-    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("late");
+    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("late", 0);
   });
 
   it("types only under the ownership it holds, and reopens the stream when that moves", async () => {
@@ -352,7 +371,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     // Taking it back is explicit, and is a new ownership, not the old one.
     fireEvent.click(screen.getByTestId("help-global-take-input"));
     await flush();
-    expect(help.claimGlobalAssistantInput).toHaveBeenCalledWith("a1");
+    expect(help.claimGlobalAssistantInput).toHaveBeenCalledWith("a1", undefined, 0);
     expect(apis.at(-1)?.stamp).toEqual({ attachmentId: "a1", inputEpoch: 5 });
   });
 
@@ -383,21 +402,21 @@ describe("GlobalAssistantPane (#14454)", () => {
     installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
     const { rerenderVisible } = renderPane();
     await flush();
-    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false, 0);
     expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
 
     canopy.isOpen = false;
     rerenderVisible(true);
     await flush();
     expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(1);
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true, 0);
     expect(help.attachGlobalAssistant).toHaveBeenCalledTimes(1);
     expect(help.detachGlobalAssistant).not.toHaveBeenCalled();
 
     canopy.isOpen = true;
     rerenderVisible(true);
     await flush();
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", false);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", false, 0);
   });
 
   it("tells main of a change made while its attach was on its way", async () => {
@@ -415,9 +434,9 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
     await act(async () => answer({ attachmentId: "a1", state: running() }));
     await flush();
-    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false, 0);
     expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(1);
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true, 0);
   });
 
   it("attaches again as it can type now, not as it could when it let go", async () => {
@@ -430,7 +449,10 @@ describe("GlobalAssistantPane (#14454)", () => {
     canopy.isOpen = false;
     rerenderVisible(true);
     await flush();
-    expect(help.attachGlobalAssistant.mock.calls).toEqual([[false], [true]]);
+    expect(help.attachGlobalAssistant.mock.calls).toEqual([
+      [false, 0],
+      [true, 0],
+    ]);
     expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
   });
 
@@ -442,7 +464,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     canopy.isOpen = false;
     rerenderVisible(false);
     await flush();
-    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1");
+    expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1", 0);
     expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
   });
 
@@ -486,14 +508,14 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.ensureGlobalAssistant).not.toHaveBeenCalled();
     // It can't type to the successor it hides, so input nobody holds passes it
     // over, from the attach on: the chosen run isn't known to be running yet.
-    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false, 0);
     expect(help.setGlobalAssistantInputEligible).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("help-global-show-current"));
     await flush();
     expect(useHelpPanelStore.getState().globalTarget).toBeNull();
     expect(screen.getByTestId("global-terminal")).not.toBeNull();
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", true);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenLastCalledWith("a1", true, 0);
   });
 
   it("offers no restart, stop or input for a successor hidden behind an ended run", async () => {
@@ -540,8 +562,8 @@ describe("GlobalAssistantPane (#14454)", () => {
     await flush();
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g1");
     // Seen running, the chosen run can take input nobody holds.
-    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false);
-    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true);
+    expect(help.attachGlobalAssistant).toHaveBeenCalledWith(false, 0);
+    expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledWith("a1", true, 0);
   });
 
   it("attaches again behind a chosen run as unable to type until main shows it running", async () => {
@@ -549,7 +571,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     installHelp(running());
     const { rerenderVisible } = renderPane();
     await flush();
-    expect(help.setGlobalAssistantInputEligible.mock.calls).toEqual([["a1", true]]);
+    expect(help.setGlobalAssistantInputEligible.mock.calls).toEqual([["a1", true, 0]]);
 
     // The run it last saw is no evidence of the run now: it asks as unable to
     // type, and says it can once the answer shows the chosen run still going.
@@ -557,10 +579,10 @@ describe("GlobalAssistantPane (#14454)", () => {
     await flush();
     rerenderVisible(true);
     await flush();
-    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false);
+    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false, 0);
     expect(help.setGlobalAssistantInputEligible.mock.calls).toEqual([
-      ["a1", true],
-      ["a1", true],
+      ["a1", true, 0],
+      ["a1", true, 0],
     ]);
 
     // Replaced while the pane looked away: it never says it can type to the successor.
@@ -572,7 +594,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     }));
     rerenderVisible(true);
     await flush();
-    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false);
+    expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(false, 0);
     expect(help.setGlobalAssistantInputEligible).toHaveBeenCalledTimes(2);
   });
 
@@ -594,7 +616,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
     await flush();
-    expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7);
+    expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7, 0);
   });
 
   it("confirms a stop without claiming the conversation is gone or in past sessions (#14979)", async () => {
@@ -612,7 +634,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Stop global assistant" }));
     await flush();
-    expect(help.discardGlobalAssistant).toHaveBeenCalledWith(7);
+    expect(help.discardGlobalAssistant).toHaveBeenCalledWith(7, 0, true);
   });
 
   describe("while it starts (#16603)", () => {
@@ -659,7 +681,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       act(() => cancelButton()!.focus());
       fireEvent.click(cancelButton()!);
       await flush();
-      expect(help.cancelGlobalAssistantLaunch).toHaveBeenCalledWith(4);
+      expect(help.cancelGlobalAssistantLaunch).toHaveBeenCalledWith(4, 0);
       expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
       expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
       advance(50);
@@ -1311,6 +1333,275 @@ describe("GlobalAssistantPane (#14454)", () => {
         "Open docs",
         "Stop global assistant",
       ]);
+    });
+  });
+
+  describe("a second session beside the first (#18142)", () => {
+    const second = (patch: Partial<GlobalAssistantView> = {}) =>
+      running({
+        slot: 1,
+        generation: 3,
+        agentId: "codex",
+        pinnedAgentId: "codex",
+        terminalId: "g2",
+        subject: { ...subject, terminalId: "g2" },
+        ...patch,
+      });
+    const openMenu = () =>
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+
+    it("starts a new session on the agent chosen and shows the one it claimed", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      help.startNewGlobalAssistant.mockResolvedValue(second({ phase: "launching", subject: null }));
+      help.ensureGlobalAssistant.mockResolvedValue(second());
+      renderPane(true, ["codex", "antigravity"]);
+      await flush();
+
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+
+      expect(help.startNewGlobalAssistant).toHaveBeenCalledWith("codex");
+      expect(useHelpPanelStore.getState().globalSlot).toBe(1);
+      // Joins exactly the launch the claim began.
+      expect(help.ensureGlobalAssistant).toHaveBeenCalledWith(1, 3);
+      expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(true, 1);
+    });
+
+    it("says why a new session can't start once two are in use", async () => {
+      installHelp(running());
+      help.listGlobalAssistantSessions.mockResolvedValue([running(), second()]);
+      renderPane(true, ["codex"]);
+      await flush();
+
+      openMenu();
+      const row = await screen.findByTestId("help-global-new-codex");
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain("2 of 2 open");
+      expect(row.textContent).toContain("maximum for one machine");
+    });
+
+    it("shows the session refused when a third is asked for", async () => {
+      installHelp(running());
+      help.startNewGlobalAssistant.mockRejectedValue(
+        refusedBy(
+          "VALIDATION",
+          "This machine already has two global assistant sessions. Stop one to start another."
+        )
+      );
+      renderPane(true, ["codex"]);
+      await flush();
+
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+      expect(screen.getByText(/already has two global assistant sessions/)).not.toBeNull();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(0);
+    });
+
+    it("switches between the sessions and stops only the one on screen", async () => {
+      installHelp(running());
+      help.listGlobalAssistantSessions.mockResolvedValue([running(), second()]);
+      help.discardGlobalAssistant.mockResolvedValue(second({ phase: "absent", occupied: false }));
+      renderPane();
+      await flush();
+
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs.map((tab) => tab.textContent)).toEqual([
+        "Session 1Claude Code",
+        "Session 2Claude Code",
+      ]);
+      help.attachGlobalAssistant.mockResolvedValue({ attachmentId: "b1", state: second() });
+      fireEvent.click(tabs[1]!);
+      await flush();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(1);
+      expect(help.detachGlobalAssistant).toHaveBeenCalledWith("a1", 0);
+      expect(help.attachGlobalAssistant).toHaveBeenLastCalledWith(true, 1);
+      expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
+
+      openMenu();
+      fireEvent.click(await screen.findByText("Stop session 2"));
+      expect((await screen.findByRole("alertdialog")).textContent).toContain(
+        "Stop global assistant session 2?"
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Stop session 2" }));
+      await flush();
+      expect(help.discardGlobalAssistant).toHaveBeenCalledWith(3, 1, true);
+    });
+
+    it("goes back to the first session once the second is stopped anywhere", async () => {
+      useHelpPanelStore.setState({ globalSlot: 1 });
+      installHelp(second(), "b1");
+      renderPane();
+      await flush();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(1);
+
+      push(second({ phase: "absent", occupied: false, pinnedAgentId: null, subject: null }));
+      await flush();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(0);
+    });
+
+    it("never shows the first session's state as the second's while switching", async () => {
+      installHelp(running());
+      help.listGlobalAssistantSessions.mockResolvedValue([running(), second()]);
+      renderPane();
+      await flush();
+      help.attachGlobalAssistant.mockImplementationOnce(() => new Promise(() => {}));
+
+      act(() => useHelpPanelStore.getState().selectGlobal(null, 1));
+      await flush();
+      // Still attaching: nothing of session 1 stands in for it.
+      expect(screen.queryByTestId("global-terminal")).toBeNull();
+      push(running({ generation: 9 }));
+      expect(screen.queryByTestId("global-terminal")).toBeNull();
+    });
+
+    it("puts a confirmation down when another session is shown", async () => {
+      installHelp(running({ generation: 7 }));
+      help.listGlobalAssistantSessions.mockResolvedValue([running({ generation: 7 }), second()]);
+      renderPane();
+      await flush();
+
+      openMenu();
+      fireEvent.click(await screen.findByText("Clear conversation"));
+      await screen.findByRole("alertdialog");
+      act(() => useHelpPanelStore.getState().selectGlobal(null, 1));
+      await flush();
+      await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      act(() => useHelpPanelStore.getState().selectGlobal(null, 0));
+      await flush();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
+    });
+
+    it("offers to stop a session that keeps a conversation with nothing running", async () => {
+      installHelp(viewOf({ occupied: true, generation: 5 }));
+      help.discardGlobalAssistant.mockResolvedValue(viewOf({ generation: 6 }));
+      renderPane();
+      await flush();
+
+      openMenu();
+      expect(screen.queryByText("Clear conversation")).toBeNull();
+      fireEvent.click(await screen.findByText("Stop global assistant"));
+      expect((await screen.findByRole("alertdialog")).textContent).toContain(
+        "kept conversation is forgotten"
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Stop global assistant" }));
+      await flush();
+      expect(help.discardGlobalAssistant).toHaveBeenCalledWith(5, 0, false);
+    });
+
+    it("keeps a late answer about one session off the other's pane", async () => {
+      installHelp(running({ generation: 7 }));
+      help.listGlobalAssistantSessions.mockResolvedValue([running({ generation: 7 }), second()]);
+      let clear!: (view: GlobalAssistantView) => void;
+      help.restartGlobalAssistant.mockImplementationOnce(
+        () =>
+          new Promise<GlobalAssistantView>((resolve) => {
+            clear = resolve;
+          })
+      );
+      renderPane();
+      await flush();
+      openMenu();
+      fireEvent.click(await screen.findByText("Clear conversation"));
+      fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
+      await flush();
+
+      help.attachGlobalAssistant.mockResolvedValue({ attachmentId: "b1", state: second() });
+      act(() => useHelpPanelStore.getState().selectGlobal(null, 1));
+      await flush();
+      expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
+
+      // The first session's restart answers after the switch, with its own state.
+      await act(async () =>
+        clear(
+          running({ generation: 8, terminalId: "g9", subject: { ...subject, terminalId: "g9" } })
+        )
+      );
+      await flush();
+      expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
+    });
+
+    it("leaves the panel where the person went when a new session is claimed late", async () => {
+      installHelp(running());
+      let claim!: (view: GlobalAssistantView) => void;
+      help.startNewGlobalAssistant.mockImplementation(
+        () =>
+          new Promise<GlobalAssistantView>((resolve) => {
+            claim = resolve;
+          })
+      );
+      help.ensureGlobalAssistant.mockResolvedValue(second());
+      renderPane(true, ["codex"]);
+      await flush();
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+
+      act(() => useHelpPanelStore.getState().setActiveSlot(0));
+      await act(async () => claim(second({ phase: "launching", subject: null })));
+      await flush();
+      expect(useHelpPanelStore.getState()).toMatchObject({ globalSelected: false, globalSlot: 0 });
+      // Its launch is still joined, so a failure would still be said.
+      expect(help.ensureGlobalAssistant).toHaveBeenCalledWith(1, 3);
+    });
+
+    it("keeps the session a closed panel remembers when a new session is claimed late", async () => {
+      installHelp(running());
+      let claim!: (view: GlobalAssistantView) => void;
+      help.startNewGlobalAssistant.mockImplementation(
+        () =>
+          new Promise<GlobalAssistantView>((resolve) => {
+            claim = resolve;
+          })
+      );
+      help.ensureGlobalAssistant.mockResolvedValue(second());
+      renderPane(true, ["codex"]);
+      await flush();
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+
+      act(() => useHelpPanelStore.getState().setOpen(false));
+      await act(async () => claim(second({ phase: "launching", subject: null })));
+      await flush();
+      expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: false, globalSlot: 0 });
+    });
+
+    it("offers no new session in a window bound to another host", async () => {
+      host.id = "studio-02";
+      installHelp(running());
+      renderPane(true, ["codex"]);
+      await flush();
+      openMenu();
+      await screen.findByText("Open docs");
+      expect(screen.queryByTestId("help-global-new-codex")).toBeNull();
+    });
+
+    it("shows a reused second session it just claimed, never bouncing off its old vacancy", async () => {
+      useHelpPanelStore.setState({ globalSlot: 1 });
+      installHelp(second(), "b1");
+      renderPane(true, ["codex"]);
+      await flush();
+      // The first session answers at once; the second's next attach never does.
+      help.attachGlobalAssistant.mockImplementation(async (_eligible?: boolean, at?: number) =>
+        at === 1 ? new Promise<never>(() => {}) : { attachmentId: "a1", state: running() }
+      );
+      // Stopped: the pane goes back to the first session, keeping what it heard.
+      push(second({ phase: "absent", occupied: false, pinnedAgentId: null, subject: null }));
+      await flush();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(0);
+
+      help.startNewGlobalAssistant.mockResolvedValue(
+        second({ generation: 5, phase: "launching", subject: null })
+      );
+      help.ensureGlobalAssistant.mockImplementation(() => new Promise(() => {}));
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+      expect(useHelpPanelStore.getState().globalSlot).toBe(1);
+      expect(help.ensureGlobalAssistant).toHaveBeenCalledWith(1, 5);
     });
   });
 });

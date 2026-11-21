@@ -445,18 +445,24 @@ export class AssistantTerminalControl {
   }
 
   private scopeOf(caller: AssistantCaller, laneProjectId: string): AssistantTarget["scope"] | null {
-    if (laneProjectId === caller.projectId) return "project";
-    return isGlobalAssistantId(laneProjectId) && reachesGlobal(caller) ? "global" : null;
+    // A global session is never a project peer, not even of the other global session (#18142).
+    if (isGlobalAssistantId(laneProjectId)) return reachesGlobal(caller) ? "global" : null;
+    return laneProjectId === caller.projectId ? "project" : null;
   }
 
   async list(caller: AssistantCaller): Promise<AssistantListResult> {
     const assistants: AssistantEntry[] = [];
     const occupied = new Set<number>();
-    let global: GlobalAssistantEntry | null = null;
+    // The first global session, whichever started first, until choosing the
+    // one that coordinates lands (#18137).
+    let globalLane: RunningLane | null = null;
     for (const lane of this.deps.listRunningLanes()) {
-      if (lane.projectId !== caller.projectId) {
-        if (global === null && this.scopeOf(caller, lane.projectId) === "global") {
-          global = await this.globalEntryFor(lane);
+      if (lane.projectId !== caller.projectId || isGlobalAssistantId(lane.projectId)) {
+        if (
+          this.scopeOf(caller, lane.projectId) === "global" &&
+          (globalLane === null || lane.slot < globalLane.slot)
+        ) {
+          globalLane = lane;
         }
         continue;
       }
@@ -489,6 +495,7 @@ export class AssistantTerminalControl {
     const vacantSlots = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
       (slot) => !occupied.has(slot) && !kept.has(slot)
     );
+    const global = globalLane === null ? null : await this.globalEntryFor(globalLane);
     return { projectId: caller.projectId, assistants, vacantSlots, keptSlots, global };
   }
 

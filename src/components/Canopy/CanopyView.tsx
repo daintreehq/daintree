@@ -652,6 +652,7 @@ function CanopyInbox({
     assistantAsks,
     globalDocked,
     globalItem,
+    globalItems,
     workOf,
     showWorkOf,
     workPartial,
@@ -2319,6 +2320,8 @@ function CanopyInbox({
                 globalPaneShown ? (
                   <CanopyGlobalAssistant
                     item={selectedGlobal ? selectedAssistant : globalItem}
+                    followsRow={selectedGlobal}
+                    candidates={globalItems}
                     refusal={assistantRefusal}
                     workOf={workOf?.assistantId ?? null}
                     // Docked, the agent beside it stays selected.

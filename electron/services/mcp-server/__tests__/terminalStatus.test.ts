@@ -321,7 +321,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(read.terminals[0]).toMatchObject({ terminalId: "g", agentState: "waiting" });
 
@@ -334,6 +334,34 @@ describe("buildViewlessTerminalStatus results", () => {
       expect(refused.terminals[0]?.error).toBe("Terminal not found or status unavailable");
     });
 
+    it("reads both global sessions named in one call, and only those admitted (#18142)", async () => {
+      const d = deps([globalRecord(), globalRecord({ id: "g2", agentState: "working" })], {
+        owners: { g: GLOBAL_ASSISTANT_ID, g2: GLOBAL_ASSISTANT_ID },
+      });
+      const both = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g", "g2"] },
+        new Set(["g", "g2"]),
+        new Set(["g", "g2"])
+      );
+      expect(both.terminals.map((t) => [t.terminalId, t.agentState])).toEqual([
+        ["g", "waiting"],
+        ["g2", "working"],
+      ]);
+
+      const one = await buildViewlessTerminalStatus(
+        deps([globalRecord(), globalRecord({ id: "g2" })], {
+          owners: { g: GLOBAL_ASSISTANT_ID, g2: GLOBAL_ASSISTANT_ID },
+        }),
+        WORKSPACE,
+        { terminalIds: ["g", "g2"] },
+        new Set(["g", "g2"]),
+        new Set(["g"])
+      );
+      expect(one.terminals[1]?.error).toBe("Terminal not found or status unavailable");
+    });
+
     it("never discloses a record the backend places elsewhere, whatever the ledger said", async () => {
       const d = deps([globalRecord({ projectId: "ws-other" })], {
         owners: { g: GLOBAL_ASSISTANT_ID },
@@ -343,7 +371,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
       expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
@@ -367,7 +395,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"], submissionToken: "mine" },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(result.terminals[0]?.submission).toMatchObject({
         token: "mine",
@@ -383,7 +411,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
       expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
@@ -396,7 +424,7 @@ describe("buildViewlessTerminalStatus results", () => {
           WORKSPACE,
           { terminalIds: ["g"], ...(submissionToken ? { submissionToken } : {}) },
           new Set(["g"]),
-          "g"
+          new Set(["g"])
         );
       expect((await read("mine")).terminals[0]?.lastHandback?.message).toBe("Use studio-02");
       expect((await read("theirs")).terminals[0]?.lastHandback).toBeUndefined();
@@ -413,7 +441,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"], includeOutput: true },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getSerializedStateAsync).not.toHaveBeenCalled();
       expect(JSON.stringify(result)).not.toContain("the person's conversation");
