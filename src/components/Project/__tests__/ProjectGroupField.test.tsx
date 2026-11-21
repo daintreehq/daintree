@@ -23,13 +23,16 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import { ProjectGroupField } from "../ProjectGroupField";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
-import {
-  createGroupLikeHost,
-  makeProjectGroup,
-} from "@/store/__tests__/projectGroupsStoreMock";
+import { createGroupLikeHost, makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 /** A creation dialog reduced to one typed field and the group row. */
-function Harness({ isOpen = true, onClose = () => {} }: { isOpen?: boolean; onClose?: () => void }) {
+function Harness({
+  isOpen = true,
+  onClose = () => {},
+}: {
+  isOpen?: boolean;
+  onClose?: () => void;
+}) {
   const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(isOpen);
   return (
     <AppDialog isOpen={isOpen} onClose={onClose}>

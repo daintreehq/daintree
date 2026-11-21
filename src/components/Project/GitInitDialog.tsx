@@ -32,11 +32,7 @@ import {
   FIELD_CONTROL_SIZE,
   FIELD_INPUT,
 } from "@/components/Worktree/views/WorktreeFormLayout";
-import {
-  EMOJI_SLOT_CLASS,
-  SlottedInputField,
-  PathCaption,
-} from "./projectDialogFields";
+import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
 import { ProjectGroupField } from "./ProjectGroupField";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import {
