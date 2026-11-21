@@ -23,7 +23,6 @@ import {
 } from "../../shared/types/agentSessionFile.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import { getPtyClient } from "../window/serviceRefs.js";
-import { forksClaudeConversation } from "./claude/claudeForkSession.js";
 import { locateClaudeTranscript } from "./claude/ClaudeSessionReader.js";
 import { getClaudePaneProjectsRoot } from "./claude/ClaudeSessionStore.js";
 import { probeCodexSessionFile } from "./codex/CodexSessionFileProbe.js";
@@ -44,6 +43,8 @@ export interface AgentSessionFileDeps {
   probeCodex?: (rootPid: number) => Promise<AgentSessionFileResult>;
   locateClaude?: typeof locateClaudeTranscript;
   getClaudeProjectsRoot?: (terminalId: string, sessionId?: string) => string | null;
+  /** The terminal main confirmed as the global assistant's run, if one is running. */
+  globalAssistantTerminalId?: () => string | null;
   deadlineMs?: number;
 }
 
@@ -97,13 +98,8 @@ async function locateClaude(
 ): Promise<AgentSessionFileResult> {
   const sessionId = record.agentSessionId;
   // The id was recorded for the run Daintree launched. A later run in the same
-  // pane (the user quit Claude Code and started it again) isn't that session,
-  // and neither is a launch that forked the one it resumed.
-  if (
-    !sessionId ||
-    record.agentIncarnation !== 0 ||
-    forksClaudeConversation(record.agentLaunchFlags, record.launchAgentId)
-  ) {
+  // pane (the user quit Claude Code and started it again) isn't that session.
+  if (!sessionId || record.agentIncarnation !== 0) {
     return unknownSessionFile("session-id-unknown");
   }
   const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(
@@ -140,22 +136,37 @@ async function locateClaude(
   };
 }
 
+async function confirmedGlobalAssistantTerminalId(
+  deps: AgentSessionFileDeps
+): Promise<string | null> {
+  if (deps.globalAssistantTerminalId) return deps.globalAssistantTerminalId();
+  // Loaded only for a record in the global workspace, so other lookups never do.
+  const { peekGlobalAssistantService } = await import("./globalAssistant.js");
+  return peekGlobalAssistantService()?.getRunningSession()?.terminalId ?? null;
+}
+
 /**
  * Whether a caller in `senderWorkspaceId` may look up `record`. A workspace
  * reaches its own terminals, its assistants among them. The global assistant's
  * run belongs to no workspace and every local one can show it, so any project
- * or scratch here reaches it, and nothing else in its workspace: the sealed
- * stamp says which run it is, never the renderer's late mark. A remote view
+ * or scratch here reaches it, and nothing else in its workspace: which run it
+ * is comes from main, never from the workspace id a spawn named. A remote view
  * never gets this far.
  */
-function inCallerScope(record: TerminalRecord, senderWorkspaceId: string | null): boolean {
+async function inCallerScope(
+  terminalId: string,
+  record: TerminalRecord,
+  senderWorkspaceId: string | null,
+  deps: AgentSessionFileDeps
+): Promise<boolean> {
+  if (senderWorkspaceId === null) return false;
   const workspaceId = record.projectId ?? null;
-  if (senderWorkspaceId === null || workspaceId === null) return false;
   if (isHostThrowawayWorkspaceId(workspaceId)) return false;
-  if (isGlobalAssistantId(workspaceId)) {
+  if (workspaceId !== null && isGlobalAssistantId(workspaceId)) {
     return (
       record.isAssistantTerminal === true &&
-      (isProjectWorkspaceId(senderWorkspaceId) || isScratchWorkspaceId(senderWorkspaceId))
+      (isProjectWorkspaceId(senderWorkspaceId) || isScratchWorkspaceId(senderWorkspaceId)) &&
+      (await confirmedGlobalAssistantTerminalId(deps)) === terminalId
     );
   }
   return workspaceId === senderWorkspaceId;
@@ -170,7 +181,7 @@ async function lookUp(
   if (!queries) return unknownSessionFile("terminal-unavailable");
   const record = await queries.getTerminalAsync(terminalId);
   // Out of scope answers as if there were no such terminal.
-  if (!record || !inCallerScope(record, senderWorkspaceId)) {
+  if (!record || !(await inCallerScope(terminalId, record, senderWorkspaceId, deps))) {
     return unknownSessionFile("terminal-unavailable");
   }
   const agentId = subagentTerminalAgentId(record);

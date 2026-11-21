@@ -804,7 +804,7 @@ export function registerTerminalLifecycleActions(
         .min(1)
         .max(128)
         .describe(
-          "Terminal panel id in this project, an Assistant session's included, or the global Assistant's. Required; no focus fallback."
+          "Terminal panel id in this workspace, an Assistant session's included, or the global Assistant's. Required; no focus fallback."
         ),
     }),
     resultSchema: z.object({

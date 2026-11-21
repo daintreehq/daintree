@@ -218,21 +218,6 @@ describe("locateAgentSessionFile — Claude Code", () => {
     expect(result).toEqual({ status: "unknown", reason: "session-id-unknown" });
   });
 
-  it.each([["--fork-session"], ["--fork-session=true"]])(
-    "doesn't name the resumed transcript for a launch that forks it (%s)",
-    async (flag) => {
-      const locateClaude = vi.fn().mockResolvedValue({ status: "found", file: transcript });
-      const result = await locateAgentSessionFile(TERMINAL, PROJECT, {
-        ptyClient: queries(claudePane({ agentLaunchFlags: ["--resume", CLAUDE_SESSION, flag] })),
-        getClaudeProjectsRoot: () => "/Users/x/.claude/projects",
-        locateClaude,
-      });
-
-      expect(result).toEqual({ status: "unknown", reason: "session-id-unknown" });
-      expect(locateClaude).not.toHaveBeenCalled();
-    }
-  );
-
   it.each([
     ["restarted", claudePane({ spawnedAt: 2_000 })],
     ["changed agent", claudePane({ detectedAgentId: "codex" })],
@@ -271,24 +256,25 @@ describe("locateAgentSessionFile — which terminals", () => {
     ).resolves.toEqual({ status: "unknown", reason: "terminal-unavailable" });
   });
 
-  it("answers a caller in no workspace for nothing, a terminal in none included", async () => {
+  it.each([
+    ["a caller in no workspace, a terminal in none included", null, undefined],
+    [
+      "a host's throwaway run, even to a caller naming its workspace",
+      HOST_THROWAWAY_WORKSPACE_ID,
+      HOST_THROWAWAY_WORKSPACE_ID,
+    ],
+  ])("answers %s as if it weren't there", async (_label, caller, projectId) => {
+    const pane = queries(record({ projectId }));
+    const probe = probeCodex();
     await expect(
-      locateAgentSessionFile(TERMINAL, null, {
-        ptyClient: queries(record({ projectId: undefined })),
+      locateAgentSessionFile(TERMINAL, caller, {
+        ptyClient: pane,
         platform: "darwin",
-        probeCodex: probeCodex(),
+        probeCodex: probe,
       })
     ).resolves.toEqual({ status: "unknown", reason: "terminal-unavailable" });
-  });
-
-  it("answers a host's throwaway run even to a caller naming its workspace", async () => {
-    await expect(
-      locateAgentSessionFile(TERMINAL, HOST_THROWAWAY_WORKSPACE_ID, {
-        ptyClient: queries(record({ projectId: HOST_THROWAWAY_WORKSPACE_ID })),
-        platform: "darwin",
-        probeCodex: probeCodex(),
-      })
-    ).resolves.toEqual({ status: "unknown", reason: "terminal-unavailable" });
+    expect(pane.getTerminalInfo).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it("says when the pane runs no agent or one it can't read", async () => {
@@ -352,7 +338,15 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
       probeCodex: vi.fn().mockResolvedValue(OBSERVED_CODEX),
       getClaudeProjectsRoot: vi.fn((): string | null => STORE),
       locateClaude: vi.fn().mockResolvedValue({ status: "found", file: transcript }),
+      globalAssistantTerminalId: vi.fn((): string | null => TERMINAL),
     };
+  }
+
+  function expectNothingLookedAt(d: ReturnType<typeof deps>): void {
+    expect(d.ptyClient.getTerminalInfo).not.toHaveBeenCalled();
+    expect(d.probeCodex).not.toHaveBeenCalled();
+    expect(d.getClaudeProjectsRoot).not.toHaveBeenCalled();
+    expect(d.locateClaude).not.toHaveBeenCalled();
   }
 
   describe.each([
@@ -384,15 +378,6 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
           deps(claudeAssistant(assistantProject, { agentIncarnation: 1 }))
         )
       ).resolves.toEqual({ status: "unknown", reason: "session-id-unknown" });
-
-      const forked = deps(
-        claudeAssistant(assistantProject, { agentLaunchFlags: ["--fork-session"] })
-      );
-      await expect(locateAgentSessionFile(TERMINAL, HERE, forked)).resolves.toEqual({
-        status: "unknown",
-        reason: "session-id-unknown",
-      });
-      expect(forked.locateClaude).not.toHaveBeenCalled();
 
       const noStore = deps(claudeAssistant(assistantProject));
       noStore.getClaudeProjectsRoot.mockReturnValue(null);
@@ -446,8 +431,7 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
       status: "unknown",
       reason: "terminal-unavailable",
     });
-    expect(d.probeCodex).not.toHaveBeenCalled();
-    expect(d.locateClaude).not.toHaveBeenCalled();
+    expectNothingLookedAt(d);
   });
 
   it.each([
@@ -465,18 +449,40 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
         status: "unknown",
         reason: "terminal-unavailable",
       });
-      expect(d.probeCodex).not.toHaveBeenCalled();
-      expect(d.locateClaude).not.toHaveBeenCalled();
+      expectNothingLookedAt(d);
     }
   });
 
-  it("answers only the global assistant's own run in the global workspace", async () => {
-    const d = deps(record({ projectId: GLOBAL_ASSISTANT_ID }));
-    await expect(locateAgentSessionFile(TERMINAL, HERE, d)).resolves.toEqual({
-      status: "unknown",
-      reason: "terminal-unavailable",
-    });
-    expect(d.probeCodex).not.toHaveBeenCalled();
+  it.each([
+    ["an unstamped terminal", record({ projectId: GLOBAL_ASSISTANT_ID }), TERMINAL],
+    [
+      "a terminal stamped not an assistant",
+      record({ projectId: GLOBAL_ASSISTANT_ID, isAssistantTerminal: false }),
+      TERMINAL,
+    ],
+    [
+      "an assistant main didn't confirm as the global run",
+      codexAssistant(GLOBAL_ASSISTANT_ID),
+      "term-other",
+    ],
+    ["an assistant while no global run is confirmed", codexAssistant(GLOBAL_ASSISTANT_ID), null],
+  ])(
+    "answers only main's confirmed global run in the global workspace, not %s",
+    async (_label, pane, confirmed) => {
+      const d = deps(pane);
+      d.globalAssistantTerminalId.mockReturnValue(confirmed);
+      await expect(locateAgentSessionFile(TERMINAL, HERE, d)).resolves.toEqual({
+        status: "unknown",
+        reason: "terminal-unavailable",
+      });
+      expectNothingLookedAt(d);
+    }
+  );
+
+  it("never asks main for the global run when the record isn't in the global workspace", async () => {
+    const d = deps(codexAssistant(HERE));
+    await expect(locateAgentSessionFile(TERMINAL, HERE, d)).resolves.toEqual(OBSERVED_CODEX);
+    expect(d.globalAssistantTerminalId).not.toHaveBeenCalled();
   });
 });
 
