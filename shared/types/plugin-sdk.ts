@@ -37,6 +37,7 @@ export type {
   KeybindingContribution,
   ContextMenuContribution,
   ContextMenuLocation,
+  ContextMenuAvailabilityRequest,
   TerminalLinkContribution,
   TerminalLinkUrlContribution,
   TerminalLinkSubject,
@@ -74,6 +75,13 @@ export type {
 // the attribute name at runtime. A raw `plugin://` view cannot import this, so
 // `PanelViewProps.styleRootAttributes` carries the same thing as a prop.
 export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "./plugin.js";
+// Values, not types: a worker registers its availability handler on this
+// channel at runtime and trims its reasons to the host's limit.
+export {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  CONTEXT_MENU_AVAILABILITY_REASON_MAX,
+  CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS,
+} from "./plugin.js";
 
 // ── Panel lifecycle (worker-facing) ─────────────────────────────────
 

@@ -1172,6 +1172,64 @@ export interface ContextMenuContribution {
   extensions?: string[];
   /** `location: "file"` only: worktree-relative globs, any of which must match. */
   paths?: string[];
+  /**
+   * Opts the item into an availability check (#18141). Each time a menu shows
+   * the item, the host asks the plugin's {@link CONTEXT_MENU_AVAILABILITY_CHANNEL}
+   * handler with this id and the clicked subject, and keeps the item visible but
+   * disabled, with the answer beside it, when the plugin names a reason. Letters,
+   * digits, `_` and `-`, at most 64 characters. Omitted, the item is offered as
+   * soon as its `when` holds, without asking.
+   */
+  availability?: string;
+}
+
+/**
+ * The handler channel a plugin registers with {@link PluginHostApi.registerHandler}
+ * to answer for its `contributes.contextMenus` items that set `availability`
+ * (#18141). The handler receives one {@link ContextMenuAvailabilityRequest} and
+ * returns `null` when the item can run on that subject, or a short reason when
+ * it can't. A reason is one line of at most
+ * {@link CONTEXT_MENU_AVAILABILITY_REASON_MAX} characters.
+ *
+ * The answer is advisory: the item is disabled while the menu waits (up to
+ * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} from opening, starting the
+ * plugin included), and when the handler is missing, throws, answers late or
+ * answers anything else, the item is offered as it would be without the check.
+ * The host separately stops waiting for the handler that long after it
+ * starts, whatever longer `timeoutMs` it was registered with.
+ */
+export const CONTEXT_MENU_AVAILABILITY_CHANNEL = "@daintree/context-menu-availability";
+
+/** Max length of a reason a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler returns. */
+export const CONTEXT_MENU_AVAILABILITY_REASON_MAX = 120;
+
+/**
+ * How long a menu waits for a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} answer
+ * before offering the item anyway, and the longest the host waits for the handler.
+ */
+export const CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS = 3000;
+
+/**
+ * What a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is asked: the
+ * item's `availability` id, its `location`, and the subject the menu was
+ * opened on. Only the subject fields that location carries are present.
+ */
+export interface ContextMenuAvailabilityRequest {
+  /** The item's manifest `availability` id. */
+  availability: string;
+  location: ContextMenuLocation;
+  /** `terminal` and `browser`: the panel the menu was opened on. */
+  panelId?: string;
+  /** `terminal` and `browser`: that panel's kind. */
+  panelKind?: string;
+  /** `terminal` (when the panel has one) and `worktree`: the worktree. */
+  worktreeId?: string;
+  /** `project`: the project. */
+  projectId?: string;
+  /** `file`: the row's path relative to its worktree root, when it is inside one. */
+  relativePath?: string;
+  /** `file`: whether the row is a folder. */
+  isDirectory?: boolean;
 }
 
 /**
@@ -5000,7 +5058,9 @@ export interface PluginHandlerOptions {
    * Deadline, in milliseconds, for one invoke of this channel. When it passes,
    * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
    * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
-   * `0` disables the deadline for handlers that legitimately run longer.
+   * `0` disables the deadline for handlers that legitimately run longer. A
+   * {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is always held to
+   * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} or less.
    */
   timeoutMs?: number;
 }

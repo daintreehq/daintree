@@ -108,6 +108,14 @@ export const ContextMenuContributionSchema = z
       .min(1)
       .max(FILE_EDITOR_MAX_PATH_PATTERNS)
       .optional(),
+    // The id handed to the plugin's availability handler (#18141). Plugin-local
+    // and never a command name: the host invokes one fixed channel with it.
+    availability: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/, {
+        message: "availability must be 1-64 letters, digits, '_' or '-'",
+      })
+      .optional(),
   })
   .strict()
   .superRefine((item, ctx) => {

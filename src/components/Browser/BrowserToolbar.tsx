@@ -55,6 +55,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -1523,7 +1524,11 @@ export function BrowserToolbar({
                 <PluginContextMenuSection
                   items={pluginItems}
                   leadingSeparator={hasNativeMenuContent}
-                  components={{ Item: DropdownMenuItem, Separator: DropdownMenuSeparator }}
+                  components={{
+                    Item: DropdownMenuItem,
+                    Separator: DropdownMenuSeparator,
+                    Meta: DropdownMenuMeta,
+                  }}
                   dispatchArgs={pluginDispatchArgs}
                 />
               </DropdownMenuContent>

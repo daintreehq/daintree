@@ -1,8 +1,19 @@
 import { Puzzle } from "lucide-react";
-import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
-import { useMenuActionSource } from "@/components/ui/menu-source";
+import {
+  ContextMenuItem,
+  ContextMenuMeta,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import {
+  contextMenuAvailabilityRequest,
+  usePluginContextMenuAvailability,
+} from "@/hooks/usePluginContextMenuAvailability";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
 
 interface PluginContextMenuSectionProps {
   items: PluginContextMenuItemEntry[];
@@ -14,6 +25,8 @@ interface PluginContextMenuSectionProps {
   components?: {
     Item: React.ElementType;
     Separator: React.ElementType;
+    /** The surface's trailing metadata slot, for an unavailable item's reason. */
+    Meta?: React.ElementType;
   };
   /**
    * Args handed to every item's `actionService.dispatch` for this surface — the
@@ -44,7 +57,9 @@ interface PluginContextMenuSectionProps {
  * `dispatchArgs` lets a surface pass the clicked subject (a file path, a
  * worktree id) into the dispatched action so a plugin's `file`/`worktree`
  * context-menu item receives the thing it was clicked on rather than
- * `undefined`.
+ * `undefined`. An item that sets `availability` also sends the subject-naming
+ * part of those args to its plugin's availability handler as the row mounts,
+ * and shows the plugin's reason in the surface's `Meta` when it can't run.
  */
 export function PluginContextMenuSection({
   items,
@@ -59,20 +74,106 @@ export function PluginContextMenuSection({
   return (
     <>
       {leadingSeparator && <Separator />}
-      {items.map((entry) => (
-        <Item
-          key={`${entry.pluginId}:${entry.item.actionId}`}
-          onSelect={() =>
-            void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
-          }
-        >
-          {/* The manifest names no icon, so every contributed row takes the
-              plugin glyph the panel menus give theirs (`genericPanelMenu.ts`),
-              and the host menu's icon column stays unbroken. */}
-          <Puzzle data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">{entry.item.label}</span>
-        </Item>
-      ))}
+      {items.map((entry) =>
+        entry.item.availability ? (
+          <CheckedPluginMenuRow
+            key={`${entry.pluginId}:${entry.item.actionId}`}
+            entry={entry}
+            availability={entry.item.availability}
+            Item={Item}
+            Meta={components?.Meta}
+            source={source}
+            dispatchArgs={dispatchArgs}
+          />
+        ) : (
+          <Item
+            key={`${entry.pluginId}:${entry.item.actionId}`}
+            onSelect={() =>
+              void actionService.dispatch(entry.item.actionId, dispatchArgs, { source })
+            }
+          >
+            <PluginMenuRowLabel label={entry.item.label} />
+          </Item>
+        )
+      )}
     </>
+  );
+}
+
+function PluginMenuRowLabel({ label }: { label: string }) {
+  return (
+    <>
+      {/* The manifest names no icon, so every contributed row takes the
+          plugin glyph the panel menus give theirs (`genericPanelMenu.ts`),
+          and the host menu's icon column stays unbroken. */}
+      <Puzzle data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </>
+  );
+}
+
+interface CheckedPluginMenuRowProps {
+  entry: PluginContextMenuItemEntry;
+  availability: string;
+  Item: React.ElementType;
+  /** Defaults to the context-menu slot, read only by a row that checks availability. */
+  Meta: React.ElementType | undefined;
+  source: MenuActionSourceValue;
+  dispatchArgs: Record<string, unknown> | undefined;
+}
+
+/**
+ * A row whose plugin answers, each time the menu shows it, whether it can run
+ * on this subject (#18141). It stays visible throughout: disabled while the
+ * answer is pending and when the plugin names a reason, which sits beside the
+ * dimmed label as the built-in "New session" ceiling row's does.
+ */
+function CheckedPluginMenuRow({
+  entry,
+  availability,
+  Item,
+  Meta = ContextMenuMeta,
+  source,
+  dispatchArgs,
+}: CheckedPluginMenuRowProps) {
+  const { label, location, actionId } = entry.item;
+  const state = usePluginContextMenuAvailability(
+    entry.pluginId,
+    label,
+    contextMenuAvailabilityRequest(availability, location, dispatchArgs)
+  );
+  // A warm plugin answers well inside the gate, so the row doesn't flash.
+  const showChecking = useDeferredLoading(state.status === "checking", UI_INLINE_LOADING_GATE_MS);
+  const disabled = state.status !== "available";
+  const dimmed = state.status === "unavailable" || showChecking;
+  return (
+    <Item
+      disabled={disabled}
+      onSelect={() => {
+        // Radix withholds onSelect from a disabled row; this keeps an answer
+        // still pending or unfavourable from dispatching whatever the primitive does.
+        if (state.status !== "available") return;
+        void actionService.dispatch(actionId, dispatchArgs, { source });
+      }}
+      // The row dims its own label rather than everything in it, so the reason
+      // beside it stays readable.
+      className="data-[disabled]:opacity-100"
+    >
+      <span className={cn("flex min-w-0 items-center", dimmed && "opacity-50")}>
+        <PluginMenuRowLabel label={label} />
+      </span>
+      {state.status === "unavailable" && (
+        <>
+          <Meta className="max-w-56 break-words">{state.reason}</Meta>
+          <span className="sr-only">, {state.reason}</span>
+        </>
+      )}
+      {state.status === "checking" && showChecking && (
+        <>
+          <Meta>Checking…</Meta>
+          <span className="sr-only">, checking availability</span>
+        </>
+      )}
+    </Item>
   );
 }
