@@ -925,6 +925,46 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(launch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
   });
 
+  it("carries a pinned launch's hand-off into its retry and version recheck (#18140)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const recorded = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+
+    ctrl.retryLaunch("codex");
+    expect(recorded).toHaveBeenLastCalledWith({
+      agentId: "codex",
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+
+    ctrl["_versionGate"]["host"].maybeAutoLaunch(readyInputs);
+    expect(recorded).toHaveBeenLastCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl.retryLaunch("codex");
+    expect(recorded).toHaveBeenLastCalledWith(
+      expect.objectContaining({ vacantOnly: true, pinAgent: true, seedPrompt: "hand-off" })
+    );
+  });
+
+  it("never hands one agent's hand-off to a retry on another", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({ agentId: "claude" });
+  });
+
   it("wakes a hibernated lane on the agent that held it, not the default (#13442)", () => {
     const ctrl = new HelpSessionController();
     const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
@@ -1011,6 +1051,132 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     ctrl.launch({ agentId: "claude" });
     expect(ctrl["_lastPinnedAgentId"]).toBeNull();
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a hand-off go with the next launch, even one pinned to the same agent (#18140)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_executeLaunch"] = vi.fn().mockResolvedValue(undefined);
+
+    ctrl.launch({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBe("hand-off");
+
+    // A second conversation on the same agent, started without one.
+    ctrl["_isLaunching"] = false;
+    ctrl.launch({ agentId: "codex", replaceExisting: true, pinAgent: true });
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+
+    const relaunch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl.retryLaunch("codex");
+    expect(relaunch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
+  });
+
+  it("drops a failed hand-off's Retry once another launch binds a session into the tab", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl["_patch"]({ launchError: { kind: "spawn-failed", agentId: "codex" } as never });
+
+    // The lane's own reservation is not another launch's session.
+    ctrl["_pendingNewTerminalId"] = "terminal-own";
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-own" });
+    expect(ctrl.getSnapshot().launchError).not.toBeNull();
+    expect(ctrl["_lastVacantFresh"]).toBe("codex");
+    ctrl["_pendingNewTerminalId"] = null;
+
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-live" });
+
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(ctrl["_lastPinnedAgentId"]).toBeNull();
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+    expect(ctrl["_lastVacantFresh"]).toBeNull();
+  });
+
+  it("drops a superseded hand-off's version gate, which would hide the new session's Resume", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_patch"]({
+      assistantVersionTooOld: {
+        agentId: "codex",
+        agentName: "Codex",
+        installedVersion: "0.1.0",
+        requiredVersion: "0.2.0",
+      } as never,
+      isCheckingVersion: true,
+    });
+
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-live" });
+
+    expect(ctrl.getSnapshot()).toMatchObject({
+      assistantVersionTooOld: null,
+      isCheckingVersion: false,
+    });
+  });
+
+  it("leaves a session bound while its own reserved launch waited, and offers no Retry over it", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    helpPanelState.setTerminal = vi.fn((_slot: number, terminalId: string) => {
+      helpPanelState.terminalId = terminalId;
+    });
+    // Another launch wins the slot on main while this one provisions.
+    window.electron.help.provisionSession = vi.fn(async () => {
+      helpPanelState.terminalId = "terminal-live";
+      return null;
+    }) as never;
+
+    ctrl.launch({
+      agentId: "codex",
+      replaceExisting: true,
+      requestedId: "terminal-reserved",
+      vacantOnly: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+    await vi.waitFor(() => expect(window.electron.help.provisionSession).toHaveBeenCalled());
+    await vi.waitFor(() => expect(ctrl["_isLaunching"]).toBe(false));
+
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(helpPanelState.terminalId).toBe("terminal-live");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+    expect(ctrl["_lastVacantFresh"]).toBeNull();
+  });
+
+  it("never lets a vacant-only Retry end a session another launch bound into the tab since", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const execute = vi.fn().mockResolvedValue(undefined);
+    ctrl["_executeLaunch"] = execute;
+    const teardown = vi.fn();
+    ctrl["_teardownBoundSession"] = teardown;
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl["_patch"]({ launchError: { kind: "spawn-failed", agentId: "codex" } as never });
+    // `help.launchAgent` bound a live session here after the failed hand-off.
+    helpPanelState.terminalId = "terminal-live";
+
+    ctrl.retryLaunch("codex");
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(teardown).not.toHaveBeenCalled();
+    expect(helpPanelState.terminalId).toBe("terminal-live");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+
+    // With the tab empty again, the same Retry goes ahead with its hand-off.
+    helpPanelState.terminalId = null;
+    ctrl.retryLaunch("codex");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.lastCall?.[1]).toMatchObject({ vacantOnly: true, seedPrompt: "hand-off" });
   });
 
   it("launches immediately when the lane is already ready", () => {

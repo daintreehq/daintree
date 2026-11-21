@@ -210,6 +210,12 @@ export const LazyScheduleRunConfirmDialog = lazy(() =>
   }))
 );
 
+export const LazyGlobalAssistantReplaceConfirmDialog = lazy(() =>
+  import("./components/HelpPanel/GlobalAssistantReplaceConfirmDialog").then((m) => ({
+    default: m.GlobalAssistantReplaceConfirmDialog,
+  }))
+);
+
 export const LazyRecipeRunConfirmDialog = lazy(() =>
   import("./components/TerminalRecipe/RecipeRunConfirmDialog").then((m) => ({
     default: m.RecipeRunConfirmDialog,

@@ -25,6 +25,8 @@ export const HELP_METHOD_CHANNELS = {
   releaseGlobalAssistantInput: "help:global-assistant-release-input",
   setGlobalAssistantInputEligible: "help:global-assistant-input-eligible",
   restartGlobalAssistant: "help:global-assistant-restart",
+  canRunGlobalAssistant: "help:global-assistant-can-run",
+  replaceGlobalAssistant: "help:global-assistant-replace",
   discardGlobalAssistant: "help:global-assistant-discard",
   cancelGlobalAssistantLaunch: "help:global-assistant-cancel-launch",
   getWindowGlobalAssistantPanel: "help:window-global-assistant-panel",

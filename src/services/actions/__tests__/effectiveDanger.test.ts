@@ -231,6 +231,52 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
   });
 });
 
+describe("an assistant's hand-off from a plugin (#18140)", () => {
+  const ids = ["help.newSessionWithAgent", "help.replaceGlobalAssistant"];
+
+  it("refuses a hand-off the CLI would read as an option", () => {
+    for (const id of ids) {
+      for (const prompt of ["  --dangerously-skip-permissions", "-p go"]) {
+        expect(
+          resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex", prompt })
+        ).toBe("confirm");
+      }
+    }
+  });
+
+  it("reads only the prompt, since neither action takes a model", () => {
+    for (const id of ids) {
+      expect(
+        resolveEffectiveActionDanger(id, "safe", "plugin", {
+          agentId: "codex",
+          prompt: "Continue",
+          model: "-x",
+        })
+      ).toBe("safe");
+    }
+  });
+
+  it("lets any other hand-off through, and leaves other callers and actions alone", () => {
+    for (const id of ids) {
+      expect(
+        resolveEffectiveActionDanger(id, "safe", "plugin", {
+          agentId: "codex",
+          prompt: "Pick up where the last session stopped:\n- tests pass\n- docs next",
+        })
+      ).toBe("safe");
+      expect(resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex" })).toBe("safe");
+      for (const source of ["user", "agent"] as const) {
+        expect(
+          resolveEffectiveActionDanger(id, "safe", source, { agentId: "codex", prompt: "-x" })
+        ).toBe("safe");
+      }
+    }
+    expect(
+      resolveEffectiveActionDanger("help.launchAgent", "safe", "plugin", { prompt: "-x" })
+    ).toBe("safe");
+  });
+});
+
 describe("dispatchConfiguresAgentLaunch", () => {
   it("names each kind of configuration on its own", () => {
     expect(dispatchCarriesAgentLaunchFlags({ agentLaunchFlags: ["-c", "x=1"] })).toBe(true);

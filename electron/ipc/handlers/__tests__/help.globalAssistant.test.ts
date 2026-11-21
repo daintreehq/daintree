@@ -58,6 +58,7 @@ const handlers = await import("../helpGlobalAssistant.js");
 function makeService() {
   return new GlobalAssistantService({
     agentId: async () => "claude",
+    canRun: async () => true,
     provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
     takeResume: async () => null,
     releaseResume: async () => {},
@@ -178,11 +179,114 @@ describe("global assistant IPC handlers", () => {
     expect(discarded.phase).toBe("absent");
   });
 
+  describe("replacing the run from a hand-off (#18140)", () => {
+    const replacement = (generation: number, phase: "absent" | "launching" | "running") => ({
+      agentId: "codex",
+      prompt: "Continue from the hand-off",
+      expected: { generation, phase },
+    });
+
+    it("replaces the run the person approved with one on the chosen agent, from its hand-off", async () => {
+      const spawn = vi.fn(async () => true);
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      const replaced = await handlers.handleReplaceGlobalAssistant(
+        ctx(10, 1),
+        replacement(first.generation, "running")
+      );
+      expect(replaced).toMatchObject({ phase: "running", agentId: "codex" });
+      expect(replaced.terminalId).not.toBe(first.terminalId);
+      expect(spawn).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentId: "codex", prompt: "Continue from the hand-off" })
+      );
+    });
+
+    it("tells the person how to recover when the new agent doesn't start", async () => {
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn: async () => false,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), replacement(0, "absent"))
+      ).rejects.toMatchObject({
+        code: "INTERNAL",
+        userMessage:
+          "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    });
+
+    it("answers whether an agent could replace the run, for a window only", async () => {
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "codex")).toBe(true);
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "")).toBe(false);
+      await expect(
+        handlers.handleCanRunGlobalAssistant(ctx(10, null), "codex")
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    });
+
+    it("says nothing was replaced when the run changed since the person was asked", async () => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      await handlers.handleRestartGlobalAssistant(ctx(10, 1), first.generation);
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(20, 2), replacement(first.generation, "running"))
+      ).rejects.toMatchObject({
+        code: "STALE_GENERATION",
+        userMessage: "The global assistant changed since you were asked. Nothing was replaced.",
+      });
+      expect((await handlers.handleGetGlobalAssistantState()).agentId).toBe("claude");
+    });
+
+    it.each([
+      ["a blank hand-off", { prompt: "   " }],
+      ["a hand-off of tabs and line breaks", { prompt: "\t\n" }],
+      ["a hand-off the CLI would read as an option", { prompt: " --dangerously-skip-permissions" }],
+      ["a hand-off that reads as a short option", { prompt: "-p go" }],
+      ["a hand-off with a control character", { prompt: "go\u001b[2J" }],
+      ["a missing run to compare", { expected: undefined }],
+      ["an unknown phase", { expected: { generation: 0, phase: "stopped" } }],
+    ])("refuses %s before anything stops", async (_name, override) => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+          ...replacement(first.generation, "running"),
+          ...override,
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect((await handlers.handleGetGlobalAssistantState()).terminalId).toBe(first.terminalId);
+    });
+
+    it("refuses a caller with no window", async () => {
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, null), replacement(0, "absent"))
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("absent");
+    });
+  });
+
   it("stops a launch from any window, only the launch it was asked about, and never a run (#16603)", async () => {
     let spawned: ((started: boolean) => void) | null = null;
     const discardResume = vi.fn(async () => {});
     service = new GlobalAssistantService({
       agentId: async () => "claude",
+      canRun: async () => true,
       provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
       takeResume: async () => null,
       releaseResume: async () => {},
@@ -223,6 +327,7 @@ describe("global assistant IPC handlers", () => {
     let spawned: ((started: boolean) => void) | null = null;
     service = new GlobalAssistantService({
       agentId: async () => "claude",
+      canRun: async () => true,
       provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
       takeResume: async () => null,
       releaseResume: async () => {},

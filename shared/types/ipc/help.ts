@@ -98,6 +98,17 @@ export interface GlobalAssistantState {
 }
 
 /**
+ * A replacement of the global assistant's run (#18140) as the person approved
+ * it: the agent and hand-off the new run starts from, and the run they were
+ * shown, which must still be the one there.
+ */
+export interface GlobalAssistantReplacement {
+  agentId: string;
+  prompt: string;
+  expected: { generation: number; phase: GlobalAssistantPhase };
+}
+
+/**
  * The global assistant as a window is told it: the lifecycle, and while it
  * runs, the exact subject — terminal and PTY launch generation — a view watches
  * it by. A subject that no longer matches is a run that ended or was replaced.

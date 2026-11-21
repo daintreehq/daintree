@@ -976,6 +976,9 @@ export interface GeneratedElectronAPI {
     cancelGlobalAssistantLaunch(
       ...args: IpcInvokeMap["help:global-assistant-cancel-launch"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-cancel-launch"]["result"]>;
+    canRunGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-can-run"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-can-run"]["result"]>;
     claimGlobalAssistantInput(
       ...args: IpcInvokeMap["help:global-assistant-claim-input"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-claim-input"]["result"]>;
@@ -1027,6 +1030,9 @@ export interface GeneratedElectronAPI {
     releaseGlobalAssistantInput(
       ...args: IpcInvokeMap["help:global-assistant-release-input"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-release-input"]["result"]>;
+    replaceGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-replace"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-replace"]["result"]>;
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;

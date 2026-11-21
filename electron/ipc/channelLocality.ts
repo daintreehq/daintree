@@ -626,6 +626,8 @@ export const CHANNEL_LOCALITY = {
   "help:global-assistant-release-input": "host",
   "help:global-assistant-input-eligible": "host",
   "help:global-assistant-restart": "host",
+  "help:global-assistant-can-run": "host",
+  "help:global-assistant-replace": "host",
   "help:global-assistant-discard": "host",
   "help:global-assistant-cancel-launch": "host",
   "help:global-assistant-changed": "host",

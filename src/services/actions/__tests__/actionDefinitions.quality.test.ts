@@ -1803,6 +1803,33 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
   });
 });
 
+describe("an assistant's hand-off from a plugin (#18140)", () => {
+  it("refuses one the CLI would read as an option under the real schema, before anything runs", async () => {
+    const { ActionService } = await import("../../ActionService");
+    const registry = await createActionRegistryWithRemoteHosts();
+    const service = new ActionService();
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    for (const actionId of ["help.newSessionWithAgent", "help.replaceGlobalAssistant"] as const) {
+      for (const prompt of [" --dangerously-skip-permissions", "-p go"]) {
+        const result = await service.dispatch(
+          actionId,
+          { agentId: "codex", prompt },
+          { source: "plugin", confirmed: true }
+        );
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "CONFIRMATION_REQUIRED",
+            message: expect.stringContaining('prompt starting with "-"'),
+          },
+        });
+      }
+    }
+  });
+});
+
 describe("ActionService.list() snapshot", () => {
   it("produces a stable, sorted manifest snapshot", async () => {
     const { ActionService } = await import("../../ActionService");

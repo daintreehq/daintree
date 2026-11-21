@@ -385,6 +385,8 @@ export const CHANNEL_LEASE_POLICY = {
   "help:global-assistant-release-input": "free",
   "help:global-assistant-input-eligible": "free",
   "help:global-assistant-restart": "free",
+  "help:global-assistant-can-run": "free",
+  "help:global-assistant-replace": "free",
   "help:global-assistant-discard": "free",
   "help:global-assistant-cancel-launch": "free",
   "help:global-assistant-changed": "free",

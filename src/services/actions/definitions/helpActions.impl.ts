@@ -14,6 +14,12 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { stageGlobalAssistantReplacement } from "@/store/globalAssistantReplaceConfirmStore";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import { isProjectViewCached } from "@/lib/viewCacheState";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import { isUsableHandoff } from "@shared/utils/assistantHandoff";
 import {
   notifyLaunchFailed,
   LAUNCH_BLOCKED_LOADING,
@@ -458,14 +464,16 @@ export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
 
 /**
  * Start one session on `agentId` (#13442) without touching the assistant's
- * default, which later sessions keep starting on. It lands where a help launch
- * would — the active tab when it is empty, else another free one, else a new
- * tab — so it never displaces a conversation, including one main still keeps
- * for a slot this view has no tab for. Only when every free slot holds one does
- * it start afresh over a conversation past sessions keeps (#16495).
+ * default, which later sessions keep starting on, given `prompt` as its first
+ * turn when there is one (#18140). It lands where a help launch would — the
+ * active tab when it is empty, else another free one, else a new tab — so it
+ * never displaces a conversation, including one main still keeps for a slot
+ * this view has no tab for. Only when every free slot holds one does it start
+ * afresh over a conversation past sessions keeps (#16495).
  */
 async function startHelpSessionWithAgent(
-  agentId: string
+  agentId: string,
+  prompt?: string
 ): Promise<{ outcome: HelpNewSessionOutcome }> {
   const projectState = useProjectStore.getState();
   const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
@@ -571,16 +579,74 @@ async function startHelpSessionWithAgent(
     // Queued before a new tab appears, or its first input sync would auto-launch
     // the default into it. Pinned so a failed launch waits on Retry for this
     // agent rather than being replaced by the default's.
+    //
+    // A hand-off (#18140) never takes over an assistant it finds running in the
+    // tab, so it provisions only while nothing holds the slot: one started
+    // there since the tabs were read is left running, not displaced.
+    const seedPrompt = prompt?.trim() ? prompt : undefined;
     controller.launchWhenReady(
-      free
+      free && !seedPrompt
         ? { agentId, replaceExisting: true, pinAgent: true }
-        : { ...freshSessionLaunch(agentId), pinAgent: true }
+        : { ...freshSessionLaunch(agentId), pinAgent: true, ...(seedPrompt ? { seedPrompt } : {}) }
     );
     if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
     revealHelpLane(target.slot);
     holdLaneClaimUntilSettled(controller, claimKey);
     return { outcome: "started" };
   }
+}
+
+/** How a plugin's request to replace the global assistant went (#18140). */
+export type GlobalAssistantReplaceOutcome = "awaiting-confirmation" | "unavailable";
+
+/**
+ * Put a plugin's hand-off to the global assistant to the person (#18140). The
+ * answer comes later, in the dialog, and nothing is replaced until then, so
+ * the plugin hears only whether it was asked: a dispatch can't wait that long.
+ * Turned away where nobody would see the question, in a window on another
+ * host, for an agent that can't run the assistant, and while one waits here.
+ */
+async function requestGlobalAssistantReplacement(
+  args: { agentId: string; prompt: string },
+  ctx: ActionContext
+): Promise<{ outcome: GlobalAssistantReplaceOutcome }> {
+  const unavailable = { outcome: "unavailable" as const };
+  const unseen = () => isProjectViewCached() || getViewHostId() !== null;
+  // Never ask about a hand-off main would refuse once it was approved.
+  if (unseen() || !isUsableHandoff(args.prompt)) return unavailable;
+  const { availability, isInitialized } = useCliAvailabilityStore.getState();
+  if (
+    !getAssistantWiredAgentIds().includes(args.agentId) ||
+    (isInitialized &&
+      isBuiltInAgentId(args.agentId) &&
+      !isAgentLaunchable(availability[args.agentId]))
+  ) {
+    return unavailable;
+  }
+  let state: Awaited<ReturnType<typeof window.electron.help.getGlobalAssistantState>>;
+  try {
+    // Main's own word on the agent: it runs the global assistant on fewer
+    // agents than a project's, and only on a CLI new enough.
+    if (!(await window.electron.help.canRunGlobalAssistant(args.agentId))) return unavailable;
+    state = await window.electron.help.getGlobalAssistantState();
+  } catch (err) {
+    logError("Couldn't read the global assistant to ask about replacing it", err);
+    return unavailable;
+  }
+  if (unseen()) return unavailable;
+  const caller = ctx.callerPluginId;
+  const pluginName = caller
+    ? (usePluginRuntimeStore.getState().pluginMetaById.get(caller)?.displayName ??
+      pluginManifestIdFromInstanceKey(caller))
+    : "A plugin";
+  const staged = stageGlobalAssistantReplacement({
+    agentId: args.agentId,
+    prompt: args.prompt,
+    expected: { generation: state.generation, phase: state.phase },
+    currentAgentId: state.agentId,
+    pluginName,
+  });
+  return staged ? { outcome: "awaiting-confirmation" } : unavailable;
 }
 
 // Agents a launch here last refused as too old. Version probes are cached for
@@ -1008,8 +1074,12 @@ export const helpActionRuns = {
     if (!launch) throw new Error("help.launchAgent needs the snapshot taken at dispatch.");
     return launchHelpAgent(readArgs<HelpLaunchArgs | undefined>(args), launch);
   },
-  "help.newSessionWithAgent": async (args) =>
-    startHelpSessionWithAgent(readArgs<{ agentId: string }>(args).agentId),
+  "help.newSessionWithAgent": async (args) => {
+    const { agentId, prompt } = readArgs<{ agentId: string; prompt?: string }>(args);
+    return startHelpSessionWithAgent(agentId, prompt);
+  },
+  "help.replaceGlobalAssistant": async (args, ctx) =>
+    requestGlobalAssistantReplacement(readArgs<{ agentId: string; prompt: string }>(args), ctx),
   "help.resumePastSession": async (args) => {
     const picked = readArgs<
       { agentId: "claude" | "codex"; sessionId: string; slot?: number } | undefined

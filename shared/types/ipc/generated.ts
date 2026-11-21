@@ -2572,6 +2572,10 @@ export interface GeneratedIpcInvokeMap {
     args: [eligible?: boolean | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
+  "help:global-assistant-can-run": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "help:global-assistant-cancel-launch": {
     args: [expectedGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
@@ -2598,6 +2602,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:global-assistant-release-input": {
     args: [attachmentId: string];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-replace": {
+    args: [replacement: import("./help.js").GlobalAssistantReplacement];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-restart": {

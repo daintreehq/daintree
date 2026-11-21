@@ -41,6 +41,12 @@ const {
   >(),
 }));
 
+const { mockViewCached } = vi.hoisted(() => ({ mockViewCached: vi.fn(() => false) }));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => mockViewCached(),
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: mockDispatch, getContext: mockGetContext },
 }));
@@ -118,6 +124,8 @@ import {
   resetHelpPanelRuntimeGateForTests,
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useGlobalAssistantReplaceConfirmStore } from "@/store/globalAssistantReplaceConfirmStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -1794,6 +1802,58 @@ describe("help.newSessionWithAgent (#13442)", () => {
     expect(after.sessions[0]?.terminalId).toBe("term-0");
   });
 
+  it("gives the picked agent a hand-off as its first message (#18140)", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await action.run({ agentId: "codex", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "started",
+    });
+
+    // Never a takeover of whatever runs there by now: a hand-off provisions
+    // only while nothing holds the slot.
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      requestedId: expect.stringMatching(/^terminal-/),
+      checkVersion: true,
+      vacantOnly: true,
+      pinAgent: true,
+      seedPrompt: "Continue from here",
+    });
+  });
+
+  it("starts over a kept conversation with the hand-off too (#18140)", async () => {
+    bindLane(0, "term-0", "claude");
+    for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "claude";
+
+    expect(await action.run({ agentId: "claude", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "started",
+    });
+
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ vacantOnly: true, seedPrompt: "Continue from here" })
+    );
+  });
+
+  it("still refuses a hand-off once every tab holds a session (#18140)", async () => {
+    for (const slot of ASSISTANT_SLOTS) bindLane(slot, `term-${slot}`, "claude");
+
+    expect(await action.run({ agentId: "codex", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("treats a blank hand-off as none, leaving the agent waiting", async () => {
+    await action.run({ agentId: "codex", prompt: "   " }, {});
+
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+    });
+  });
+
   it("fills the empty tab in front rather than opening another", async () => {
     expect(await run("codex")).toEqual({ outcome: "started" });
 
@@ -1926,6 +1986,152 @@ describe("help.newSessionWithAgent (#13442)", () => {
 
     expect(await run("codex")).toEqual({ outcome: "unavailable" });
     expect(controllers.size).toBe(0);
+  });
+});
+
+describe("help.replaceGlobalAssistant (#18140)", () => {
+  let action: AnyActionDefinition;
+  let getGlobalAssistantState: ReturnType<typeof vi.fn>;
+  let canRunGlobalAssistant: ReturnType<typeof vi.fn>;
+  let replaceGlobalAssistant: ReturnType<typeof vi.fn>;
+  const handoff = { agentId: "codex", prompt: "Continue from the hand-off" };
+  const fromPlugin: ActionContext = { dispatchSource: "plugin", callerPluginId: "acme.handoff" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockViewCached.mockReturnValue(false);
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
+    getGlobalAssistantState = vi.fn(async () => ({
+      phase: "running",
+      generation: 4,
+      agentId: "claude",
+      terminalId: "term-global",
+    }));
+    canRunGlobalAssistant = vi.fn(async () => true);
+    replaceGlobalAssistant = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: { getGlobalAssistantState, canRunGlobalAssistant, replaceGlobalAssistant },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+    useGlobalAssistantReplaceConfirmStore.setState({ current: null, requestSeq: 0 });
+    usePluginRuntimeStore.setState({ pluginMetaById: new Map() });
+    action = extractAction("help.replaceGlobalAssistant");
+  });
+
+  it("is hidden from agents and the palette, and never repeated", () => {
+    expect(action.mcpVisibility).toBe("hidden");
+    expect(action.palette).toEqual({ mode: "hidden" });
+    expect(action.nonRepeatable).toBe(true);
+    expect(action.argsSchema!.safeParse({ agentId: "codex", prompt: "  " }).success).toBe(false);
+  });
+
+  it("asks the person about the run they're shown, and replaces nothing itself", async () => {
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([["acme.handoff", { devMode: false, displayName: "Hand-off" }]]),
+    });
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "awaiting-confirmation" });
+
+    expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
+    // Counted, so the host mounts the dialog that asks.
+    expect(useGlobalAssistantReplaceConfirmStore.getState().requestSeq).toBe(1);
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toMatchObject({
+      agentId: "codex",
+      prompt: "Continue from the hand-off",
+      expected: { generation: 4, phase: "running" },
+      currentAgentId: "claude",
+      pluginName: "Hand-off",
+    });
+    expect(replaceGlobalAssistant).not.toHaveBeenCalled();
+  });
+
+  it("names a project plugin it has no name for by its manifest id, never its instance key", async () => {
+    await action.run(handoff, {
+      dispatchSource: "plugin",
+      callerPluginId: "project__p1__acme.handoff",
+    });
+
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current?.pluginName).toBe(
+      "acme.handoff"
+    );
+  });
+
+  it("turns a second request away while one waits, keeping the first", async () => {
+    await action.run(handoff, fromPlugin);
+    const first = useGlobalAssistantReplaceConfirmStore.getState().current;
+    expect(first).not.toBeNull();
+
+    expect(await action.run({ agentId: "claude", prompt: "Another" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBe(first);
+  });
+
+  it("isn't asked in a view nobody can see, or one showing another host", async () => {
+    mockViewCached.mockReturnValue(true);
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+
+    mockViewCached.mockReturnValue(false);
+    Object.assign(window, { __DAINTREE_HOST_ID__: { id: "host-b" } });
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+    expect(getGlobalAssistantState).not.toHaveBeenCalled();
+  });
+
+  it("isn't asked when the view is put away while the run is read", async () => {
+    getGlobalAssistantState.mockImplementationOnce(async () => {
+      mockViewCached.mockReturnValue(true);
+      return { phase: "absent", generation: 0, agentId: null, terminalId: null };
+    });
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
+  it("isn't asked for an agent that can't run the assistant here", async () => {
+    expect(await action.run({ ...handoff, agentId: "not-an-agent" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability({ codex: "missing" }),
+      isInitialized: true,
+    });
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
+  it("isn't asked about a hand-off the agent would read as an option", async () => {
+    expect(await action.run({ ...handoff, prompt: "--yolo" }, {})).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
+  it("isn't asked when the global assistant can't be read", async () => {
+    getGlobalAssistantState.mockRejectedValueOnce(new Error("ipc down"));
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(getGlobalAssistantState).toHaveBeenCalledTimes(1);
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+
+  it("isn't asked for an agent main won't run the global assistant on", async () => {
+    // Installed and wired, but main won't run it: say a CLI older than its wiring needs.
+    canRunGlobalAssistant.mockResolvedValueOnce(false);
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
+    expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
+    expect(getGlobalAssistantState).not.toHaveBeenCalled();
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
   });
 });
 

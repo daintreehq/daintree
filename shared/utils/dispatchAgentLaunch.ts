@@ -79,10 +79,16 @@ export function dispatchCarriesAgentPreset(args: unknown): boolean {
  * whitespace the command builder trims.
  */
 export function dispatchCarriesOptionLikeValue(args: unknown): boolean {
-  return ["prompt", "model"].some((field) => {
-    const value = readField(args, field);
-    return typeof value === "string" && value.trim().startsWith("-");
-  });
+  return ["prompt", "model"].some((field) => isOptionLike(readField(args, field)));
+}
+
+/** The prompt half of {@link dispatchCarriesOptionLikeValue}, for actions that take no model. */
+export function dispatchCarriesOptionLikePrompt(args: unknown): boolean {
+  return isOptionLike(readField(args, "prompt"));
+}
+
+function isOptionLike(value: unknown): boolean {
+  return typeof value === "string" && value.trim().startsWith("-");
 }
 
 /**
