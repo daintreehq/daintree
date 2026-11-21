@@ -62,6 +62,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Move panel to grid | `⌘+⇧+⌥+G` | `Ctrl+Shift+Alt+G` |
 | Inject context into focused terminal | `⌘+⇧+I` | `Ctrl+Shift+I` |
 | Send selection to another terminal | `⌘+K ⌘+I` | `Ctrl+K Ctrl+I` |
+| Copy selection as clean text | `⌘+⇧+⌥+C` | `Ctrl+Shift+Alt+C` (Linux only) |
 | Arm all eligible terminals in the current worktree | `⌘+⇧+B` | `Ctrl+Shift+B` |
 | Focus panel above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
 | Focus panel below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |

@@ -877,6 +877,12 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
     expect(writeText).toHaveBeenCalledWith(
       "Release notes:\n- Added a clean copy\n  - next to Copy"
     );
+    // The menu's own panel, never whichever one has focus.
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.copyClean",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
     expect(dispatch).not.toHaveBeenCalledWith(
       "terminal.copy",
       expect.anything(),

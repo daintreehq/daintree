@@ -132,12 +132,36 @@ describe("buildDefaultKeybindings", () => {
       .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
     expect(changed).toEqual([
+      "terminal.copyClean",
       "fleet.accept",
       "canopy.toggle",
       "voiceInput.toggle",
       "voiceInput.stopAndSend",
     ]);
     expect(windows.length).toBeGreaterThan(core.length);
+  });
+
+  // Ctrl+Alt is AltGr on Windows, where AltGr+C types ć or č (#18132).
+  it("binds Copy clean text from a focused terminal on macOS and Linux, and leaves Windows unbound", () => {
+    expect(globalCombo(mac, "terminal.copyClean")).toEqual(["Cmd+Shift+Alt+C"]);
+    expect(globalCombo(linux, "terminal.copyClean").map(foldCmd)).toEqual(["Ctrl+Shift+Alt+C"]);
+    expect(globalCombo(windows, "terminal.copyClean")).toEqual([""]);
+    for (const table of [mac, windows, linux]) {
+      expect(table.find((b) => b.actionId === "terminal.copyClean")?.when).toBe("terminalFocused");
+    }
+  });
+
+  it("keeps Copy clean text clear of every other default and the terminal's own copy key", () => {
+    for (const table of [mac, linux]) {
+      const [copyClean] = table.filter((b) => b.actionId === "terminal.copyClean");
+      const collisions = table.filter((b) => {
+        if (b === copyClean || !b.combo) return false;
+        const [first] = b.combo.split(" ");
+        return foldCmd(first!) === foldCmd(copyClean!.combo);
+      });
+      expect(collisions.map((b) => b.actionId)).toEqual([]);
+      expect(foldCmd(copyClean!.combo)).not.toBe("Ctrl+Shift+C");
+    }
   });
 
   it("leaves Ctrl+Y to text fields off the Mac, where it is Redo", () => {
