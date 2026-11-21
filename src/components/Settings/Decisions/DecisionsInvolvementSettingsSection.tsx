@@ -22,7 +22,10 @@ import {
   OVERRIDE_MAX_MS,
   STALE_TEXT,
   WAITING_TEXT,
-  draftIssue,
+  MODE_LABEL,
+  countApplies,
+  draftIssues,
+  earliestUntil,
   localDateTime,
 } from "@/components/Decisions/decisionsInvolvementModel";
 import {
@@ -62,7 +65,8 @@ export function DecisionsInvolvementSettingsSection({
   statusRevision,
   locked,
 }: DecisionsInvolvementSettingsSectionProps) {
-  const involvement = useInvolvementPreference({
+  // The refs apart from the rest, so reading the rest during render reads no ref.
+  const { sectionRef, changeRef, formRef, saveRef, ...involvement } = useInvolvementPreference({
     active,
     opening: SETTINGS_OPENING,
     statusRevision,
@@ -89,7 +93,7 @@ export function DecisionsInvolvementSettingsSection({
     <SettingsSection title="Involvement" id={INVOLVEMENT_SECTION_ID}>
       {/* Unnamed, so not a landmark: the page has one per section otherwise. */}
       <section
-        ref={involvement.sectionRef}
+        ref={sectionRef}
         // The keyboard's last resort once a save settles with nothing here left to take it.
         tabIndex={-1}
         className="grid grid-cols-[minmax(0,1fr)] gap-3"
@@ -110,7 +114,7 @@ export function DecisionsInvolvementSettingsSection({
             control={
               involvement.canStart ? (
                 <Button
-                  ref={involvement.changeRef}
+                  ref={changeRef}
                   variant="outline"
                   size="sm"
                   onClick={involvement.startEditing}
@@ -122,7 +126,13 @@ export function DecisionsInvolvementSettingsSection({
             }
           />
           {involvement.draft !== null && (
-            <Editor involvement={involvement} now={now} locked={locked} />
+            <Editor
+              involvement={involvement}
+              formRef={formRef}
+              saveRef={saveRef}
+              now={now}
+              locked={locked}
+            />
           )}
         </SettingsGroup>
         {/* Announced once when a save settles. Kept mounted to announce; out of the gap while it says nothing. */}
@@ -139,7 +149,12 @@ export function DecisionsInvolvementSettingsSection({
 }
 
 /** What agents are told now, what that asks of them, and anything that keeps it from applying or changing. */
-function Current({ involvement }: { involvement: InvolvementPreference }) {
+type InvolvementState = Omit<
+  InvolvementPreference,
+  "sectionRef" | "changeRef" | "formRef" | "saveRef"
+>;
+
+function Current({ involvement }: { involvement: InvolvementState }) {
   const { load, read, now } = involvement;
   if (load.state === "not-running") {
     return (
@@ -153,7 +168,7 @@ function Current({ involvement }: { involvement: InvolvementPreference }) {
   return (
     <div className="grid gap-0.5" data-testid="decisions-involvement-summary">
       <p>
-        <InvolvementValue read={read} now={now} full />
+        <InvolvementValue read={read} now={now} full count={false} />
       </p>
       <InvolvementDetail read={read} now={now} />
       {problem !== null && <p data-testid="decisions-involvement-read-only">{problem}</p>}
@@ -165,20 +180,41 @@ function Current({ involvement }: { involvement: InvolvementPreference }) {
 
 function Editor({
   involvement,
+  formRef,
+  saveRef,
   now,
   locked,
 }: {
-  involvement: InvolvementPreference;
+  involvement: InvolvementState;
+  formRef: InvolvementPreference["formRef"];
+  saveRef: InvolvementPreference["saveRef"];
   now: number;
   locked: boolean;
 }) {
   const draft = involvement.draft;
   if (draft === null) return null;
-  const issue = draftIssue(draft, now);
+  const issues = draftIssues(draft, now);
+  const issueFor = (field: "count" | "until") =>
+    issues.find((issue) => issue.field === field)?.text;
   const saving = involvement.busy;
+  const count = countApplies(draft) ? (
+    <SettingsNumberInput
+      label="Other agents to consult"
+      description={`Before agents bring you a recommendation, from 1 to ${CONSULT_MAX}`}
+      min={1}
+      max={CONSULT_MAX}
+      step={1}
+      value={Number.isNaN(draft.consultCount) ? "" : String(draft.consultCount)}
+      onChange={(event) => involvement.change({ consultCount: event.currentTarget.valueAsNumber })}
+      error={issueFor("count")}
+      data-testid="decisions-involvement-consult-count"
+    />
+  ) : null;
+  // The count belongs to whichever choice brings a recommendation: the usual mode, or the one for a while.
+  const countFollowsUsual = draft.normalMode === "recommend";
   return (
     <form
-      ref={involvement.formRef}
+      ref={formRef}
       // The draft is checked here, against the protocol's limits, rather than by the browser's bubbles.
       noValidate
       className="divide-y divide-border-subtle"
@@ -201,44 +237,26 @@ function Editor({
           onChange={(normalMode) => involvement.change({ normalMode })}
           disabled={saving}
         />
-        <SettingsNumberInput
-          label="Other agents to consult"
-          description={`Before agents bring you a recommendation, from 1 to ${CONSULT_MAX}`}
-          min={1}
-          max={CONSULT_MAX}
-          step={1}
-          value={Number.isNaN(draft.consultCount) ? "" : String(draft.consultCount)}
-          onChange={(event) =>
-            involvement.change({ consultCount: event.currentTarget.valueAsNumber })
-          }
-          error={issue?.field === "count" ? issue.text : undefined}
-          data-testid="decisions-involvement-consult-count"
-        />
+        {countFollowsUsual && count}
         <SettingsCheckbox
           label="For a while"
-          description="Another mode until a time you choose, at most 30 days away, then back to the usual one"
+          description={`${MODE_LABEL[draft.temporaryMode]} instead, until a time you choose, at most 30 days away, then back to the usual one`}
           checked={draft.temporary}
           onChange={(temporary) => involvement.change({ temporary })}
           disabled={saving}
         />
-        <SettingsDependents disabled={!draft.temporary} reason="Turn on For a while to choose them">
-          <SettingsPresetGroup
-            label="Mode for a while"
-            options={MODE_OPTIONS}
-            value={draft.temporaryMode}
-            onChange={(temporaryMode) => involvement.change({ temporaryMode })}
-            disabled={saving || !draft.temporary}
-          />
+        <SettingsDependents disabled={!draft.temporary} reason="Turn on For a while to choose it">
+          {!countFollowsUsual && count}
           <SettingsInput
             type="datetime-local"
             label="Until"
             layout="inline"
             controlWidth="wide"
-            min={localDateTime(now)}
+            min={earliestUntil(now)}
             max={localDateTime(now + OVERRIDE_MAX_MS)}
             value={draft.until}
             onChange={(event) => involvement.changeUntil(event.currentTarget.value)}
-            error={draft.temporary && issue?.field === "until" ? issue.text : undefined}
+            error={draft.temporary ? issueFor("until") : undefined}
             data-testid="decisions-involvement-until"
           />
         </SettingsDependents>
@@ -248,13 +266,13 @@ function Editor({
           Cancel
         </Button>
         <Button
-          ref={involvement.saveRef}
+          ref={saveRef}
           type="submit"
           variant="contrast"
           size="sm"
           loading={saving}
           disabled={!involvement.dirty || locked}
-          aria-disabled={issue !== null || undefined}
+          aria-disabled={issues.length > 0 || undefined}
           data-testid="decisions-involvement-save"
         >
           Save
