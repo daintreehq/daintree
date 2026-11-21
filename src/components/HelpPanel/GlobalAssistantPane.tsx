@@ -252,17 +252,20 @@ export function GlobalAssistantPane({
                   Open docs
                 </DropdownMenuItem>
                 {/* Only for the run on screen: never one this pane isn't attached
-                    to, or the successor behind an ended run. */}
-                {active && shown && (
-                  <AssistantPluginMenuItems
-                    subject={{
-                      assistantScope: "global",
-                      terminalId: shown.terminalId,
-                      incarnation: shown.incarnation,
-                      agentId: agentId ?? undefined,
-                    }}
-                  />
-                )}
+                    to, or the successor behind an ended run. Always mounted, so it
+                    holds the run the menu opened on through a restart's gap. */}
+                <AssistantPluginMenuItems
+                  subject={
+                    active && shown
+                      ? {
+                          assistantScope: "global",
+                          terminalId: shown.terminalId,
+                          incarnation: shown.incarnation,
+                          agentId: agentId ?? undefined,
+                        }
+                      : null
+                  }
+                />
                 {controllable && (
                   <>
                     <DropdownMenuSeparator />

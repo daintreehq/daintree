@@ -31,20 +31,22 @@ function item(
   return { pluginId: "acme", item: { actionId, label, location, ...(when && { when }) } };
 }
 
+// The worker row carries no `when`, so only the location keeps it off an assistant.
 const CONTRIBUTIONS = [
-  item("Worker only", "terminal", "panelKind == 'terminal'"),
+  item("Worker pane", "terminal"),
   item("Any assistant", "assistant"),
   item("Project lane", "assistant", "assistantScope == 'project'"),
   item("Global run", "assistant", "assistantScope == 'global'"),
   item("Live lane", "assistant", "assistantScope == 'project' && terminalId"),
-  item("Claude lane", "assistant", "agentId == 'claude'"),
+  item("Claude session", "assistant", "agentId == 'claude'"),
+  item("Project one", "assistant", "projectId == 'proj-1'"),
 ];
 
 function seed(entries = CONTRIBUTIONS) {
   act(() => usePluginContextMenuItemsStore.setState({ entries }));
 }
 
-function Menu({ subject }: { subject: AssistantPluginMenuSubject }) {
+function Menu({ subject }: { subject: AssistantPluginMenuSubject | null }) {
   return (
     <DropdownMenu open>
       <DropdownMenuTrigger>More</DropdownMenuTrigger>
@@ -56,21 +58,24 @@ function Menu({ subject }: { subject: AssistantPluginMenuSubject }) {
   );
 }
 
-const project = (patch: Partial<AssistantPluginMenuSubject> = {}): AssistantPluginMenuSubject =>
-  ({
-    assistantScope: "project",
-    projectId: "proj-1",
-    slot: 2,
-    terminalId: "help-term-2",
-    agentId: "claude",
-    ...patch,
-  }) as AssistantPluginMenuSubject;
+type ProjectSubject = Extract<AssistantPluginMenuSubject, { assistantScope: "project" }>;
+type GlobalSubject = Extract<AssistantPluginMenuSubject, { assistantScope: "global" }>;
 
-const globalRun = (incarnation = 4): AssistantPluginMenuSubject => ({
+const project = (patch: Partial<ProjectSubject> = {}): ProjectSubject => ({
+  assistantScope: "project",
+  projectId: "proj-1",
+  slot: 2,
+  terminalId: "help-term-2",
+  agentId: "claude",
+  ...patch,
+});
+
+const globalRun = (patch: Partial<GlobalSubject> = {}): GlobalSubject => ({
   assistantScope: "global",
   terminalId: "global-term",
-  incarnation,
+  incarnation: 4,
   agentId: "codex",
+  ...patch,
 });
 
 async function rows() {
@@ -81,6 +86,13 @@ async function rows() {
 }
 
 const separators = () => within(screen.getByRole("menu")).queryAllByRole("separator").length;
+
+function dispatchedArgs(): Record<string, unknown> {
+  expect(dispatchMock).toHaveBeenCalledTimes(1);
+  const call = dispatchMock.mock.calls[0] as unknown as [string, Record<string, unknown>, unknown];
+  expect(call[2]).toEqual({ source: "menu" });
+  return call[1];
+}
 
 beforeEach(() => {
   _resetPluginContextMenuItemsStoreForTest();
@@ -100,77 +112,129 @@ describe("AssistantPluginMenuItems", () => {
       "Any assistant",
       "Project lane",
       "Live lane",
-      "Claude lane",
+      "Claude session",
+      "Project one",
     ]);
   });
 
-  it("tells a lane with no terminal apart from a live one", async () => {
+  it("tells a lane whose terminal isn't up apart from a live one", async () => {
     seed();
-    render(<Menu subject={project({ terminalId: undefined, agentId: undefined })} />);
-    expect(await rows()).toEqual(["Open docs", "Any assistant", "Project lane"]);
+    render(<Menu subject={project({ terminalId: undefined })} />);
+    expect(await rows()).toEqual([
+      "Open docs",
+      "Any assistant",
+      "Project lane",
+      "Claude session",
+      "Project one",
+    ]);
   });
 
-  it("offers the global run its own items, not a project lane's", async () => {
+  it("matches the lane's own project and agent", async () => {
     seed();
-    render(<Menu subject={globalRun()} />);
-    expect(await rows()).toEqual(["Open docs", "Any assistant", "Global run"]);
+    render(<Menu subject={project({ projectId: "proj-2", agentId: "codex" })} />);
+    expect(await rows()).toEqual(["Open docs", "Any assistant", "Project lane", "Live lane"]);
+  });
+
+  it("offers the global run its own items and reads its agent, never a project's", async () => {
+    seed();
+    render(<Menu subject={globalRun({ agentId: "claude" })} />);
+    expect(await rows()).toEqual(["Open docs", "Any assistant", "Global run", "Claude session"]);
   });
 
   it("dispatches a project lane's identity with the menu as the source", async () => {
     seed();
     render(<Menu subject={project()} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Project lane" }));
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "acme.project-lane",
-      {
-        assistantScope: "project",
-        projectId: "proj-1",
-        slot: 2,
-        terminalId: "help-term-2",
-        agentId: "claude",
-      },
-      { source: "menu" }
-    );
+    expect(dispatchedArgs()).toStrictEqual({
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 2,
+      terminalId: "help-term-2",
+      agentId: "claude",
+    });
   });
 
   it("leaves out what a lane doesn't have rather than passing it empty", async () => {
     seed();
     render(<Menu subject={project({ slot: 0, terminalId: undefined, agentId: undefined })} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Any assistant" }));
-    const [, args] = dispatchMock.mock.calls[0] as unknown as [string, Record<string, unknown>];
-    expect(Object.keys(args).sort()).toEqual(["assistantScope", "projectId", "slot"]);
-    expect(args.slot).toBe(0);
+    expect(dispatchedArgs()).toStrictEqual({
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 0,
+    });
   });
 
   it("dispatches the global run by terminal and incarnation, with no project", async () => {
     seed();
-    render(<Menu subject={globalRun(7)} />);
+    render(<Menu subject={globalRun({ incarnation: 7 })} />);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Global run" }));
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "acme.global-run",
-      { assistantScope: "global", terminalId: "global-term", incarnation: 7, agentId: "codex" },
-      { source: "menu" }
-    );
+    expect(dispatchedArgs()).toStrictEqual({
+      assistantScope: "global",
+      terminalId: "global-term",
+      incarnation: 7,
+      agentId: "codex",
+    });
   });
 
-  it("drops its rows when the run it opened on is replaced while the menu is open", async () => {
+  it("leaves out the global run's agent while nothing says", async () => {
     seed();
-    const { rerender } = render(<Menu subject={globalRun(4)} />);
-    expect(await rows()).toContain("Global run");
+    render(<Menu subject={globalRun({ agentId: undefined })} />);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Global run" }));
+    expect(dispatchedArgs()).toStrictEqual({
+      assistantScope: "global",
+      terminalId: "global-term",
+      incarnation: 4,
+    });
+  });
+
+  it.each([
+    ["a new launch of the global run", globalRun(), globalRun({ incarnation: 5 })],
+    ["another global terminal", globalRun(), globalRun({ terminalId: "global-term-2" })],
+    ["another lane", project({ slot: 1 }), project({ slot: 3 })],
+    ["a relaunch in the same lane", project(), project({ terminalId: "help-term-9" })],
+    ["the lane's terminal going away", project(), project({ terminalId: undefined })],
+    ["another workspace's lane", project(), project({ projectId: "proj-2" })],
+    ["the other assistant", project(), globalRun()],
+  ])("drops its rows when the menu's session is replaced by %s", async (_, opened, next) => {
+    seed();
+    const { rerender } = render(<Menu subject={opened} />);
+    expect(await rows()).toContain("Any assistant");
     const before = separators();
 
-    rerender(<Menu subject={globalRun(5)} />);
+    rerender(<Menu subject={next} />);
     expect(await rows()).toEqual(["Open docs"]);
     expect(separators()).toBe(before - 1);
   });
 
-  it("drops its rows when the lane it opened on is swapped for another", async () => {
+  it("keeps its rows when the lane's terminal comes up while the menu is open", async () => {
     seed();
-    const { rerender } = render(<Menu subject={project({ slot: 1 })} />);
-    expect(await rows()).toContain("Project lane");
+    const { rerender } = render(<Menu subject={project({ terminalId: undefined })} />);
+    expect(await rows()).not.toContain("Live lane");
 
-    rerender(<Menu subject={project({ slot: 3 })} />);
+    rerender(<Menu subject={project({ terminalId: "help-term-2" })} />);
+    expect(await rows()).toContain("Live lane");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Live lane" }));
+    expect(dispatchedArgs().terminalId).toBe("help-term-2");
+  });
+
+  it("offers nothing for the rest of an opening that started with no session", async () => {
+    seed();
+    const { rerender } = render(<Menu subject={null} />);
     expect(await rows()).toEqual(["Open docs"]);
+
+    rerender(<Menu subject={globalRun()} />);
+    expect(await rows()).toEqual(["Open docs"]);
+  });
+
+  it("brings its rows back when the session it opened on returns", async () => {
+    seed();
+    const { rerender } = render(<Menu subject={globalRun()} />);
+    rerender(<Menu subject={null} />);
+    expect(await rows()).toEqual(["Open docs"]);
+
+    rerender(<Menu subject={globalRun()} />);
+    expect(await rows()).toContain("Global run");
   });
 
   it("follows a plugin unloading while the menu is open", async () => {
@@ -184,7 +248,7 @@ describe("AssistantPluginMenuItems", () => {
   });
 
   it("adds nothing to the menu when no plugin contributes an assistant item", async () => {
-    seed([item("Worker only", "terminal")]);
+    seed([item("Worker pane", "terminal")]);
     render(<Menu subject={project()} />);
     expect(await rows()).toEqual(["Open docs"]);
     expect(separators()).toBe(0);

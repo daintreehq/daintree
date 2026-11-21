@@ -208,7 +208,7 @@ interface HelpSessionTabsProps {
    * items are offered only with one, since it is half of what names the lane.
    */
   workspaceId?: string | null;
-  /** The selected lane's terminal, when it has one. */
+  /** The selected lane's terminal, once it is up. */
   activeTerminalId?: string | null;
 }
 
@@ -512,18 +512,21 @@ export function HelpSessionTabs({
               </DropdownMenuItem>
             ))}
           {/* Plugin rows act on the selected lane, so they close the ways to another
-              one and stay clear of Clear and Close, which end the menu. */}
-          {workspaceId && (
-            <AssistantPluginMenuItems
-              subject={{
-                assistantScope: "project",
-                projectId: workspaceId,
-                slot: activeTab.slot,
-                terminalId: activeTerminalId ?? undefined,
-                agentId: activeTab.agentId ?? undefined,
-              }}
-            />
-          )}
+              one and stay clear of Clear and Close, which end the menu. Always
+              mounted, so it holds the lane the menu opened on. */}
+          <AssistantPluginMenuItems
+            subject={
+              workspaceId
+                ? {
+                    assistantScope: "project",
+                    projectId: workspaceId,
+                    slot: activeTab.slot,
+                    terminalId: activeTerminalId ?? undefined,
+                    agentId: activeTab.agentId ?? undefined,
+                  }
+                : null
+            }
+          />
           <DropdownMenuSeparator />
           {/* Hidden rather than disabled where the lane has nothing to restart, as the
               header's overflow item is. */}

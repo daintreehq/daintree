@@ -685,7 +685,6 @@ describe("HelpSessionTabs plugin assistant items (#18138)", () => {
               actionId: "acme.worker",
               label: "Continue in another agent…",
               location: "terminal",
-              when: "panelKind == 'terminal'",
             },
           },
           {
@@ -710,6 +709,12 @@ describe("HelpSessionTabs plugin assistant items (#18138)", () => {
       })
     );
 
+  /** Every row and separator, in order: radio rows (the lane list) aren't counted. */
+  const structure = (menu: HTMLElement) =>
+    Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]')).map((el) =>
+      el.getAttribute("role") === "separator" ? "—" : el.textContent
+    );
+
   it("puts the selected lane's items after the ways to another session and before Clear and Close", async () => {
     seedContributions();
     render(
@@ -719,16 +724,24 @@ describe("HelpSessionTabs plugin assistant items (#18138)", () => {
         onRestart: vi.fn(),
         onOpenSession: vi.fn(),
         canOpenSession: true,
+        newSessionAgentIds: ["claude", "codex"],
+        onOpenSessionWithAgent: vi.fn(),
         workspaceId: "proj-1",
         activeTerminalId: "help-term-2",
       })
     );
     const menu = await openPicker();
-    expect(
-      within(menu)
-        .getAllByRole("menuitem")
-        .map((a) => a.textContent)
-    ).toEqual(["New session", "Hand this lane on…", "Clear conversation", "Close session"]);
+    expect(structure(menu)).toEqual([
+      "—",
+      "New session",
+      "New session with Claude",
+      "New session with Codex",
+      "—",
+      "Hand this lane on…",
+      "—",
+      "Clear conversation",
+      "Close session",
+    ]);
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Hand this lane on…" }));
     expect(dispatchAction).toHaveBeenCalledWith(
@@ -744,13 +757,23 @@ describe("HelpSessionTabs plugin assistant items (#18138)", () => {
     );
   });
 
+  it("offers a lane whose terminal isn't up yet, named by workspace and slot", async () => {
+    seedContributions();
+    render(strip({ tabs: lanes(2), activeSlot: 1, workspaceId: "scratch-1" }));
+    const menu = await openPicker();
+    expect(structure(menu)).toEqual(["—", "Hand this lane on…", "—", "Close session"]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Hand this lane on…" }));
+    expect(dispatchAction.mock.calls[0]?.[1]).toStrictEqual({
+      assistantScope: "project",
+      projectId: "scratch-1",
+      slot: 1,
+    });
+  });
+
   it("offers no plugin item without a workspace to name the lane by", async () => {
     seedContributions();
-    render(strip({ tabs: lanes(2), activeSlot: 0 }));
-    expect(
-      within(await openPicker())
-        .getAllByRole("menuitem")
-        .map((a) => a.textContent)
-    ).toEqual(["Close session"]);
+    render(strip({ tabs: lanes(2), activeSlot: 0, activeTerminalId: "help-term-0" }));
+    expect(structure(await openPicker())).toEqual(["—", "Close session"]);
   });
 });

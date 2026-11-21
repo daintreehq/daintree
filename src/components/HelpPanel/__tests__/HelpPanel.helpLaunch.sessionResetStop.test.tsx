@@ -402,8 +402,12 @@ vi.mock("@/components/Terminal/MissingCliGate", () => ({
   ),
 }));
 
+const assistantMenuSubjects = vi.hoisted(() => [] as unknown[]);
 vi.mock("@/components/Plugin/AssistantPluginMenuItems", () => ({
-  AssistantPluginMenuItems: () => null,
+  AssistantPluginMenuItems: ({ subject }: { subject: unknown }) => {
+    assistantMenuSubjects.push(subject);
+    return null;
+  },
 }));
 vi.mock("@shared/config/agentIds", () => {
   const ids = ["claude", "gemini", "codex"];
@@ -1588,6 +1592,35 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
+
+  it("names the picker's plugin rows by the selected lane's workspace, slot and terminal (#18138)", () => {
+    setupTwoLanes();
+    assistantMenuSubjects.length = 0;
+    renderPanel();
+    expect(assistantMenuSubjects.at(-1)).toStrictEqual({
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 0,
+      terminalId: "term-1",
+      agentId: "claude",
+    });
+
+    selectLane(1);
+    expect(assistantMenuSubjects.at(-1)).toMatchObject({
+      projectId: "proj-1",
+      slot: 1,
+      terminalId: "term-2",
+    });
+  });
+
+  it("holds back a lane's reserved terminal id until the terminal exists (#18138)", () => {
+    setupTwoLanes();
+    delete panelStoreState.panelsById["term-2"];
+    assistantMenuSubjects.length = 0;
+    renderPanel();
+    selectLane(1);
+    expect(assistantMenuSubjects.at(-1)).toMatchObject({ slot: 1, terminalId: undefined });
+  });
 
   it("gives each session its own composer across a switch and back (#16571)", async () => {
     setupTwoLanes();

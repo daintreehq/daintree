@@ -37,10 +37,11 @@ describe("ContextMenuContributionSchema file match", () => {
     ["extensions", ["json"]],
     ["paths", ["a/**"]],
   ])("rejects %s on a non-file location", (key, value) => {
-    expect(
-      ContextMenuContributionSchema.safeParse({ ...base, location: "worktree", [key]: value })
-        .success
-    ).toBe(false);
+    for (const location of ["worktree", "assistant"]) {
+      expect(
+        ContextMenuContributionSchema.safeParse({ ...base, location, [key]: value }).success
+      ).toBe(false);
+    }
   });
 
   it("rejects extensions on a folder item", () => {

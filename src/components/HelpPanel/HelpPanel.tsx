@@ -1361,7 +1361,9 @@ export function HelpPanel({
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
           workspaceId={activeWorkspaceId}
-          activeTerminalId={terminalId}
+          // A launch reserves the id before the terminal exists; plugins get it
+          // once there is one to act on.
+          activeTerminalId={terminal ? terminalId : null}
         />
       )}
 

@@ -16,7 +16,7 @@ export type AssistantPluginMenuSubject =
       projectId: string;
       /** The lane's zero-based slot, stable across relaunches of that lane. */
       slot: number;
-      /** Absent while the lane has no terminal: paused, or still launching. */
+      /** Absent while the lane's terminal isn't up: paused, or still launching. */
       terminalId?: string;
       agentId?: string;
     }
@@ -30,38 +30,62 @@ export type AssistantPluginMenuSubject =
 
 const SECTION_COMPONENTS = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator };
 
-function subjectIdentity(subject: AssistantPluginMenuSubject): string {
-  return subject.assistantScope === "global"
-    ? `global:${subject.terminalId}:${subject.incarnation}`
-    : `project:${subject.projectId}:${subject.slot}:${subject.terminalId ?? ""}`;
+/**
+ * Whether `current` is still the session the menu opened on. A lane whose
+ * terminal comes up while the menu is open is the same lane; a different lane, a
+ * relaunch in the same lane, or a new launch of the global run is not.
+ */
+function isSameSession(
+  opened: AssistantPluginMenuSubject | null,
+  current: AssistantPluginMenuSubject
+): boolean {
+  if (opened === null) return false;
+  if (opened.assistantScope === "global") {
+    return (
+      current.assistantScope === "global" &&
+      opened.terminalId === current.terminalId &&
+      opened.incarnation === current.incarnation
+    );
+  }
+  if (current.assistantScope !== "project") return false;
+  return (
+    opened.projectId === current.projectId &&
+    opened.slot === current.slot &&
+    (opened.terminalId === undefined || opened.terminalId === current.terminalId)
+  );
 }
 
 /**
  * Plugin `assistant` context-menu items for an Assistant panel menu (#18138), as
- * a trailing section with its own leading separator. Mount it inside the menu's
- * content, so it lives only while the menu is open.
+ * a trailing section with its own leading separator.
  *
- * The session is the one the menu opened on: if the lane or run it names is
+ * Mount it unconditionally inside the menu's content, passing `null` while there
+ * is no session to offer: it then lives exactly as long as one opening, and the
+ * session it mounts with is the one the menu opened on. If that lane or run is
  * replaced while the menu is open, the rows go until the menu is opened again,
- * so a pick never lands on a successor the person didn't choose. Built-in rows
- * are unaffected.
+ * so a pick never lands on a successor the person didn't choose; a menu opened
+ * with no session offers none for the rest of that opening. Built-in rows are
+ * unaffected.
  *
  * With no plugin contributing an `assistant` item this renders nothing and
  * subscribes to nothing beyond the shared item store.
  */
-export function AssistantPluginMenuItems({ subject }: { subject: AssistantPluginMenuSubject }) {
+export function AssistantPluginMenuItems({
+  subject,
+}: {
+  subject: AssistantPluginMenuSubject | null;
+}) {
   const init = usePluginContextMenuItemsStore((s) => s.init);
   const hasAssistantItems = usePluginContextMenuItemsStore((s) =>
     s.entries.some((entry) => entry.item.location === "assistant")
   );
-  const identity = subjectIdentity(subject);
-  const [openedOn] = useState(identity);
+  const [openedOn] = useState(subject);
 
   useEffect(() => {
     init();
   }, [init]);
 
-  if (!hasAssistantItems || identity !== openedOn) return null;
+  if (!hasAssistantItems || subject === null || !isSameSession(openedOn, subject)) return null;
   return <AssistantPluginMenuRows subject={subject} />;
 }
 
