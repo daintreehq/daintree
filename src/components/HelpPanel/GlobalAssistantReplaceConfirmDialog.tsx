@@ -1,12 +1,11 @@
-import { useEffect } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { getAgentConfig } from "@/config/agents";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { notify } from "@/lib/notify";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
-import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { isProjectViewCached } from "@/lib/viewCacheState";
+import { useFocusStore } from "@/store/focusStore";
 import {
-  declineGlobalAssistantReplacement,
   takeGlobalAssistantReplacement,
   useGlobalAssistantReplaceConfirmStore,
 } from "@/store/globalAssistantReplaceConfirmStore";
@@ -32,6 +31,8 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
   const request = takeGlobalAssistantReplacement(requestId);
   if (!request || isProjectViewCached() || getViewHostId() !== null) return;
   suppressSidebarResizes();
+  // A panel tucked away by the focus gesture stays parked while that flag stands.
+  useFocusStore.getState().clearAssistantGesture();
   const panel = useHelpPanelStore.getState();
   panel.selectGlobal(null);
   panel.setOpen(true);
@@ -63,16 +64,6 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
  */
 export function GlobalAssistantReplaceConfirmDialog() {
   const current = useGlobalAssistantReplaceConfirmStore((state) => state.current);
-
-  // Put away with the question still open, it isn't asked: one answered on
-  // coming back would have sat unread past its cooldown.
-  useEffect(
-    () =>
-      subscribeProjectViewLifecycle((phase) => {
-        if (phase === "cached") declineGlobalAssistantReplacement();
-      }),
-    []
-  );
 
   if (current === null) {
     return (

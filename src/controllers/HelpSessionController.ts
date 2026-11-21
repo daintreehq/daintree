@@ -552,6 +552,23 @@ export class HelpSessionController {
     const prev = this._lastInputs;
     this._lastInputs = inputs;
 
+    // A session bound here by another launch (#18140) supersedes the one this
+    // lane last failed to start: its Retry, and the pin, hand-off and vacant
+    // start it would repeat, are dropped, so nothing can later be retried over
+    // that session or over the conversation it leaves when it hibernates.
+    if (
+      inputs.terminalId &&
+      inputs.terminalId !== prev?.terminalId &&
+      inputs.terminalId !== this._pendingNewTerminalId &&
+      !this._isLaunching
+    ) {
+      this._lastPinnedAgentId = null;
+      this._lastPinnedSeedPrompt = undefined;
+      this._lastVacantFresh = null;
+      this._lastResumeTarget = undefined;
+      if (this._snapshot.launchError) this._patch({ launchError: null });
+    }
+
     // Clear the version block when the preferred agent changes — the stale
     // block belongs to the previous agent and would otherwise paint over
     // the new agent's empty state. The launch-error banner is cleared for the

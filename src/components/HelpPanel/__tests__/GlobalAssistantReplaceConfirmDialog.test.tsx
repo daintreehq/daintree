@@ -32,6 +32,7 @@ import {
   useGlobalAssistantReplaceConfirmStore,
 } from "@/store/globalAssistantReplaceConfirmStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useFocusStore } from "@/store/focusStore";
 import { ClientAppError } from "@/utils/clientAppError";
 
 let replaceGlobalAssistant: Mock;
@@ -121,7 +122,26 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     expect(useHelpPanelStore.getState().isOpen).toBe(false);
   });
 
+  it("stops asking when its view is put away before the dialog has even loaded", () => {
+    const requestId = stage();
+    act(() => {
+      for (const listener of [...view.listeners]) listener("cached");
+    });
+
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+    expect(view.listeners.size).toBe(0);
+    void approveGlobalAssistantReplacement(requestId);
+    expect(replaceGlobalAssistant).not.toHaveBeenCalled();
+  });
+
+  it("stops watching the view once the request is answered", async () => {
+    await approveGlobalAssistantReplacement(stage());
+    expect(view.listeners.size).toBe(0);
+  });
+
   it("replaces the run once, as it was shown, and shows the global assistant", async () => {
+    // Tucked away by the focus gesture, the panel would stay parked.
+    useFocusStore.setState({ gestureAssistantHidden: true });
     const requestId = stage();
 
     await Promise.all([
@@ -137,6 +157,7 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     });
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
     expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: true, globalSelected: true });
+    expect(useFocusStore.getState().gestureAssistantHidden).toBe(false);
   });
 
   it("says why when main refuses it", async () => {

@@ -1076,6 +1076,29 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(relaunch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
   });
 
+  it("drops a failed hand-off's Retry once another launch binds a session into the tab", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl["_patch"]({ launchError: { kind: "spawn-failed", agentId: "codex" } as never });
+
+    // The lane's own reservation is not another launch's session.
+    ctrl["_pendingNewTerminalId"] = "terminal-own";
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-own" });
+    expect(ctrl.getSnapshot().launchError).not.toBeNull();
+    expect(ctrl["_lastVacantFresh"]).toBe("codex");
+    ctrl["_pendingNewTerminalId"] = null;
+
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-live" });
+
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(ctrl["_lastPinnedAgentId"]).toBeNull();
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+    expect(ctrl["_lastVacantFresh"]).toBeNull();
+  });
+
   it("never lets a vacant-only Retry end a session another launch bound into the tab since", () => {
     const ctrl = new HelpSessionController();
     ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });

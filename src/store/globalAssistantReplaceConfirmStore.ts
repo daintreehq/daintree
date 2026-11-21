@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { GlobalAssistantPhase } from "@shared/types/ipc/help";
+import { subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 /**
  * A plugin's hand-off to the global assistant, waiting for the person to
@@ -28,7 +29,19 @@ export const useGlobalAssistantReplaceConfirmStore = create<GlobalAssistantRepla
   () => ({ current: null, requestSeq: 0 })
 );
 
-/** Ask the person; false when a request is already waiting here. */
+let stopWatchingView: (() => void) | null = null;
+
+function settle(): void {
+  stopWatchingView?.();
+  stopWatchingView = null;
+  useGlobalAssistantReplaceConfirmStore.setState({ current: null });
+}
+
+/**
+ * Ask the person; false when a request is already waiting here. A view put
+ * away with the question open doesn't ask it, from the moment it is staged:
+ * answered on coming back, it would have sat unread past its cooldown.
+ */
 export function stageGlobalAssistantReplacement(
   request: Omit<PendingGlobalAssistantReplacement, "requestId">
 ): boolean {
@@ -37,6 +50,9 @@ export function stageGlobalAssistantReplacement(
   useGlobalAssistantReplaceConfirmStore.setState({
     current: { ...request, requestId: crypto.randomUUID() },
     requestSeq: requestSeq + 1,
+  });
+  stopWatchingView = subscribeProjectViewLifecycle((phase) => {
+    if (phase === "cached") settle();
   });
   return true;
 }
@@ -50,11 +66,11 @@ export function takeGlobalAssistantReplacement(
 ): PendingGlobalAssistantReplacement | null {
   const { current } = useGlobalAssistantReplaceConfirmStore.getState();
   if (current?.requestId !== requestId) return null;
-  useGlobalAssistantReplaceConfirmStore.setState({ current: null });
+  settle();
   return current;
 }
 
 /** Decline whatever waits, for when the dialog that would ask can't render. */
 export function declineGlobalAssistantReplacement(): void {
-  useGlobalAssistantReplaceConfirmStore.setState({ current: null });
+  settle();
 }

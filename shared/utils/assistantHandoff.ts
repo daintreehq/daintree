@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { dispatchCarriesOptionLikePrompt } from "./dispatchAgentLaunch.js";
+import { quoteLaunchPrompt } from "./launchPromptArg.js";
+import { agentCommandDialect } from "./shellEscape.js";
 
 /**
  * Longest hand-off, in characters. Continue Session's runs to about 11,500
@@ -30,14 +32,31 @@ export const AssistantHandoffPromptSchema = z
   .refine(isSendableHandoff, { message: "A hand-off can't hold control characters" });
 
 /**
- * A hand-off a run must start from: not blank, and never one a CLI would read
- * as an option rather than a first turn.
+ * About the most quoted hand-off a Windows launch carries. PowerShell takes the
+ * launch script as `-EncodedCommand`, UTF-16 in Base64, within a 32,767
+ * character command line that the rest of the script shares.
+ */
+const WINDOWS_HANDOFF_QUOTED_MAX = 7_000;
+
+/** Whether the launch command here can carry the hand-off at all. */
+export function handoffFitsLaunchCommand(text: string): boolean {
+  if (agentCommandDialect() !== "windows") return true;
+  const quoted = quoteLaunchPrompt(text);
+  // The script quotes the whole command line once more, doubling each `'`.
+  return quoted.length + (quoted.match(/'/g)?.length ?? 0) <= WINDOWS_HANDOFF_QUOTED_MAX;
+}
+
+/**
+ * A hand-off a run must start from: not blank, never one a CLI would read as
+ * an option rather than a first turn, and one the launch command can carry,
+ * since the global assistant's run is stopped before its successor starts.
  */
 export function isUsableHandoff(text: string): boolean {
   return (
     text.trim().length > 0 &&
     isSendableHandoff(text) &&
     text.length <= ASSISTANT_HANDOFF_MAX_LENGTH &&
-    !dispatchCarriesOptionLikePrompt({ prompt: text })
+    !dispatchCarriesOptionLikePrompt({ prompt: text }) &&
+    handoffFitsLaunchCommand(text)
   );
 }
