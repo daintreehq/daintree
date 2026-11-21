@@ -3,6 +3,8 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import { CanopyView } from "@/components/Canopy/CanopyView";
 import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
+import { DecisionsInboxHost } from "@/components/Decisions/DecisionsInboxHost";
+import type { InboxTerminal } from "@/components/Decisions/DecisionsInboxDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { installHostProjectsLoader } from "@/components/Hosts/installHostProjectsLoader";
 import { VoiceRecordingAnnouncer } from "@/components/Terminal/VoiceRecordingAnnouncer";
@@ -24,6 +26,14 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
 import { CanopyPluginSupport } from "./CanopyPluginSupport";
 import { returnToLastProjectWindow, startCanopyWindowKeys } from "./canopyWindowKeys";
+
+/** The inbox's Go to terminal: this computer's terminal, in the window that has its project. */
+function goToInboxTerminal({ terminalId, projectId }: InboxTerminal): void {
+  CANOPY_WINDOW_FRAME.goToRun?.({
+    place: { hostId: null, runId: terminalId, workspaceId: projectId },
+    newWindow: false,
+  });
+}
 
 /**
  * The Canopy window's whole renderer: the inbox and only what it reads, with
@@ -72,8 +82,10 @@ export function CanopyWindowRoot() {
           <CanopyView frame={CANOPY_WINDOW_FRAME} />
         </ErrorBoundary>
       </div>
-      {/* A run's notice opens the answers that need a person here, rather
+      {/* A run's notice opens the answers that need a person here, in the
+          inbox (#18048) or, for one it can't list, the attention list, rather
           than sending the user to find its pane's chip in a project window. */}
+      <DecisionsInboxHost navigateToTerminal={goToInboxTerminal} />
       <DecisionsAttentionHost />
       <DecisionQuestionHost />
       <Toaster standalone />

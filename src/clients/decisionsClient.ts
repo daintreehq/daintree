@@ -309,9 +309,9 @@ export const decisionsClient = {
   },
 
   /**
-   * Main asking this window to open one question in its question view: a
-   * click on the question's desktop notification (#17232), or on a
-   * follow-up's, which opens it at that follow-up (#17235).
+   * Main asking this window to open one question: a click on the question's
+   * desktop notification (#17232), on a follow-up's, which opens it at that
+   * follow-up (#17235), or on a stopped delivery's (#18048).
    */
   onOpenQuestion: (
     callback: (reference: DecisionQuestionReference, messageId: string | undefined) => void
@@ -319,13 +319,6 @@ export const decisionsClient = {
     window.electron.events.on("decisions:open-question", ({ reference, messageId }) =>
       callback(reference, messageId)
     ),
-
-  /**
-   * Main asking this window to open the list of answers needing attention at
-   * a pane's: a click on a stalled answer's desktop notification (#17235).
-   */
-  onOpenAttention: (callback: (terminalId: string) => void): (() => void) =>
-    window.electron.events.on("decisions:open-attention", ({ terminalId }) => callback(terminalId)),
 
   /**
    * A question by its reference, from any window on this computer, whatever

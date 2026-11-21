@@ -1460,8 +1460,9 @@ class AgentNotificationService {
    * to it (#17235): one native notification giving the reason in the words
    * the list of answers needing attention uses, under the same settings as a
    * question's own, naming the Host that asked when it isn't this computer.
-   * Never the question's words or the agent's plan. A click opens that list,
-   * or for a Host's question, which only its Host's list holds, the question.
+   * Never the question's words or the agent's plan. A click opens the
+   * question in the inbox (#18048), which resolves this computer's stopped
+   * delivery in place and reads a Host's through its Host.
    */
   notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
     const { reference, stall, standing, remoteHost } = question;
@@ -1490,10 +1491,7 @@ class AgentNotificationService {
         silent: true,
         category: "waiting",
         replaceKey: decisionQuestionReplaceKey(key),
-        onClick: () =>
-          remoteHost
-            ? notificationService.openDecisionQuestion(reference)
-            : notificationService.openDecisionAttention(reference),
+        onClick: () => notificationService.openDecisionQuestion(reference),
       }
     );
   }

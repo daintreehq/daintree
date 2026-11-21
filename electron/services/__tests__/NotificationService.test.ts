@@ -2108,7 +2108,6 @@ describe("NotificationService", () => {
       windowsWith([]);
 
       expect(notificationService.openDecisionQuestion(referenceIn(11))).toBe(false);
-      expect(notificationService.openDecisionAttention(referenceIn(11))).toBe(false);
     });
 
     it("opens it at a follow-up in its thread when one is named (#17235)", () => {
@@ -2124,30 +2123,6 @@ describe("NotificationService", () => {
           { name: "decisions:open-question", payload: { reference, messageId: "ask-1" } },
         ],
       ]);
-    });
-
-    it("opens the answers needing attention at the pane that asked, in the window a question would open in (#17235)", () => {
-      const other = createWindowMock(false, [11]);
-      const recent = createWindowMock(false, [21]);
-      windowsWith([other, recent], [recent, other]);
-      const reference = { ...referenceIn(11), terminalId: "term-asked" };
-
-      expect(notificationService.openDecisionAttention(reference)).toBe(true);
-
-      const attention = (ownerId: number) =>
-        ownerSend(ownerId).mock.calls.filter(
-          ([, event]) => (event as { name: string }).name === "decisions:open-attention"
-        );
-      // The window showing its project, though another was focused more recently.
-      expect(attention(11)).toEqual([
-        [
-          "events:push",
-          { name: "decisions:open-attention", payload: { terminalId: "term-asked" } },
-        ],
-      ]);
-      expect(attention(21)).toHaveLength(0);
-      expect(opened(11)).toHaveLength(0);
-      expect(other.focus).toHaveBeenCalled();
     });
   });
 

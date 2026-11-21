@@ -1280,10 +1280,11 @@ export function findAsked(
  * place, never one a shut group hides (#18023); else the question it was asked
  * to show (#18047), in any group, once it is listed; else the one it opened on
  * by itself while that is still listed; else the first of the pane that opened
- * the inbox, on the view's own machine (`viewHostId`), in any group; else the
- * first of the window's own project that needs the person (#18051); else the
- * first that still needs something (#18022). Null when nothing does: a Cleared
- * or History question opens only when it's picked or asked for.
+ * the inbox, on the view's own machine (`viewHostId`), in any group; else,
+ * for an opening that prefers it, the first stopped delivery (#18048); else
+ * the first of the window's own project that needs the person (#18051); else
+ * the first that still needs something (#18022). Null when nothing does: a
+ * Cleared or History question opens only when it's picked or asked for.
  */
 export function resolveSelection(
   groups: readonly InboxGroup[],
@@ -1292,7 +1293,8 @@ export function resolveSelection(
   viewHostId: string = LOCAL_HOST_ID,
   windowProject: WindowProject | null = null,
   open: ReadonlySet<InboxGroupId> = NONE_OPEN,
-  asked: InboxAsked | null = null
+  asked: InboxAsked | null = null,
+  prefer: "stopped" | null = null
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   let kept: DecisionQuestionListItem | undefined;
@@ -1318,6 +1320,10 @@ export function resolveSelection(
       (item) => item.reference.terminalId === openerTerminalId && askedOnHost(item, viewHostId)
     );
     if (own !== undefined) return own;
+  }
+  if (prefer === "stopped") {
+    const stopped = groups.find((group) => group.id === "attention")?.items[0];
+    if (stopped !== undefined) return stopped;
   }
   const waitingHere = groups
     .find((group) => group.id === "needs-you")

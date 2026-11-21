@@ -449,7 +449,89 @@ describe("TerminalDecisionsChip", () => {
     expect(paneClick).toHaveReturnedWith(true);
   });
 
-  it("hands focus to the attention dialog before Review answers closes the popover", async () => {
+  /** A question of this pane's, as the inbox's list holds it, its delivery stopped. */
+  function stalledItem(questionId: string, alias: number): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host_studio", projectId: "project-1", terminalId: "t1", questionId },
+      alias,
+      agentKind: "claude",
+      projectLabel: "Project",
+      worktreeId: "wt",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-20T13:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      replyRequest: null,
+      stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+    };
+  }
+
+  /** Presses Review answers, answering the questions in the order the popover listed them. */
+  async function reviewAnswers(calls: string[]): Promise<string[]> {
+    render(
+      <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
+        <TerminalDecisionsChip terminalId="t1" />
+      </OverlayFocusRestoreContext.Provider>
+    );
+    fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+    expect(calls).toEqual([]);
+    const shown = screen
+      .getAllByTestId("terminal-decisions-row")
+      .map((row) => row.getAttribute("data-question-id") ?? "");
+    fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
+    expect(calls).toEqual(["handoff"]);
+    expect(screen.queryByTestId("popover-content")).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return shown;
+  }
+
+  it("hands focus over, then opens the inbox at the pane's stopped question in the chip's order (#18048)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({
+        openQuestions: [],
+        needsAttention: [
+          {
+            questionId: "q44",
+            alias: 44,
+            deliveryStatus: "delivery-uncertain",
+            reason: "inject_ambiguous",
+          },
+          { questionId: "q43", alias: 43, deliveryStatus: "needs-attention", reason: "pane_gone" },
+        ],
+      })
+    );
+    // The inbox's list holds both, in the other order from the popover's.
+    const listedQ43 = stalledItem("q43", 43);
+    const listedQ44 = stalledItem("q44", 44);
+    listQuestions.mockResolvedValue({ revision: 1, questions: [listedQ44, listedQ43] });
+    const calls: string[] = [];
+    const attentionOpen = vi.fn();
+    const original = useDecisionsAttentionStore.getState().open;
+    useDecisionsAttentionStore.setState({ open: attentionOpen });
+    let shown: string[];
+    try {
+      shown = await reviewAnswers(calls);
+    } finally {
+      useDecisionsAttentionStore.setState({ open: original });
+    }
+
+    expect(shown).toEqual(["q43", "q44"]);
+    expect(attentionOpen).not.toHaveBeenCalled();
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q43" } },
+    });
+    expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(
+      listedQ43.reference
+    );
+  });
+
+  it("opens the attention list for a stopped delivery the inbox doesn't list (#18048)", async () => {
     getStatus.mockResolvedValue({ state: "connected", revision: 1 });
     getPaneState.mockResolvedValue(
       paneState({
@@ -458,25 +540,29 @@ describe("TerminalDecisionsChip", () => {
         ],
       })
     );
+    // Only another pane's stall is listed.
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        {
+          ...stalledItem("q50", 50),
+          reference: { ...stalledItem("q50", 50).reference, terminalId: "t2" },
+        },
+      ],
+    });
     const calls: string[] = [];
-    const policy = makePolicy(() => calls.push("handoff"));
     const original = useDecisionsAttentionStore.getState().open;
-    useDecisionsAttentionStore.setState({ open: (terminalId) => calls.push(`open ${terminalId}`) });
+    useDecisionsAttentionStore.setState({
+      open: (terminalId) => calls.push(`attention ${terminalId}`),
+    });
     try {
-      render(
-        <OverlayFocusRestoreContext.Provider value={policy}>
-          <TerminalDecisionsChip terminalId="t1" />
-        </OverlayFocusRestoreContext.Provider>
-      );
-      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      expect(calls).toEqual([]);
-      fireEvent.click(await screen.findByTestId("terminal-decisions-review"));
-
-      expect(calls).toEqual(["handoff", "open t1"]);
-      expect(screen.queryByTestId("popover-content")).toBeNull();
+      await reviewAnswers(calls);
     } finally {
       useDecisionsAttentionStore.setState({ open: original });
     }
+
+    expect(calls).toEqual(["handoff", "attention t1"]);
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
   });
 
   it("opens the inbox at this pane from the footer, handing it focus, with nothing needing attention (#17231)", async () => {

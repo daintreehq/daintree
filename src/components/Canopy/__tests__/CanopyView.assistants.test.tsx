@@ -1517,6 +1517,31 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     });
   });
 
+  it("dictates into nothing while a dialog over Canopy holds the keyboard, and says why (#18048)", async () => {
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const stream = terminalApis.filter((entry) => entry.runId === "waiting").at(-1)!;
+    await act(async () =>
+      stream.onStreamChange?.({ watchId: 7, ended: false, secretPrompt: false })
+    );
+    expect(resolveCanopyReplyDictation().ok).toBe(true);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const answer = document.createElement("textarea");
+    dialog.append(answer);
+    document.body.append(dialog);
+    try {
+      act(() => answer.focus());
+      expect(resolveCanopyReplyDictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("Close the dialog"),
+      });
+    } finally {
+      dialog.remove();
+    }
+    expect(resolveCanopyReplyDictation().ok).toBe(true);
+  });
+
   it("keeps Escape in its terminal for the agent, with Canopy left open", async () => {
     useCanopyStore.setState({ globalDocked: true });
     render(<CanopyView frame={frame} />);

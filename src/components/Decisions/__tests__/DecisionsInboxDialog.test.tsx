@@ -2624,6 +2624,47 @@ describe("DecisionsInboxDialog", () => {
       );
     });
 
+    it("goes through the window's own way to a terminal where it has one, as in the Canopy window (#18048)", async () => {
+      cleanup();
+      const navigateToTerminal = vi.fn();
+      render(
+        <TooltipProvider>
+          <DecisionsInboxDialog navigateToTerminal={navigateToTerminal} />
+        </TooltipProvider>
+      );
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
+      await waitFor(() =>
+        expect(navigateToTerminal).toHaveBeenCalledExactlyOnceWith({
+          terminalId: "t9",
+          projectId: "project-b",
+        })
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("hands focus to the element its opener named once the opening control has gone (#18048)", async () => {
+      const card = document.createElement("button");
+      card.id = "canopy-card-t1";
+      const review = document.createElement("button");
+      document.body.append(card, review);
+      try {
+        review.focus();
+        act(() => useDecisionsInboxStore.getState().open({ returnFocusTo: "canopy-card-t1" }));
+        await screen.findByTestId("decisions-inbox-dialog");
+        // A Canopy run's Review answers leaves with its last stopped delivery.
+        review.remove();
+        act(() => useDecisionsInboxStore.getState().close());
+        await waitFor(() => expect(document.activeElement).toBe(card));
+      } finally {
+        card.remove();
+        review.remove();
+      }
+    });
+
     it("looks again before switching, and stays when the terminal has gone", async () => {
       getAllTerminals.mockResolvedValue([
         terminal({ id: "t9", projectId: "project-b", hasPty: true }),
@@ -3679,6 +3720,123 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
         "Clear Needs you in all projects"
       );
+    });
+
+    it("widens to every project for a question asked for outside this project's list, once per ask (#18048)", async () => {
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+
+      // A stopped delivery's notification for Beta's question, while narrowed to Alpha.
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await waitFor(() => expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true"));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 6"));
+
+      // Narrowed again by the person, it stays narrowed for that ask.
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+      await act(async () => {});
+      expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      expect(rows().map(aliasOf)).not.toContain("q-6");
+    });
+
+    it("keeps a narrowing made after a question asked for while every project showed (#18048)", async () => {
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
+
+      fireEvent.click(scopeSegment("project"));
+      await act(async () => {});
+      expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      expect(rows().map(aliasOf)).not.toContain("q-6");
+    });
+
+    it("keeps a row picked while a question asked for from outside the narrowed list wasn't listed yet (#18048)", async () => {
+      listQuestions.mockResolvedValue({
+        ...MIXED,
+        questions: MIXED.questions.filter((q) => q !== BETA_WAITING),
+      });
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await act(async () => {});
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+
+      push({ ...MIXED, revision: 2 });
+      await act(async () => {});
+      expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+    });
+
+    it("widens all the same once the row picked meanwhile has left the narrowed list (#18048)", async () => {
+      listQuestions.mockResolvedValue({
+        ...MIXED,
+        questions: MIXED.questions.filter((q) => q !== BETA_WAITING),
+      });
+      open();
+      await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+      fireEvent.click(scopeSegment("project"));
+      await waitFor(() =>
+        expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true")
+      );
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: BETA_WAITING.reference.terminalId,
+            questionId: BETA_WAITING.reference.questionId,
+            reference: BETA_WAITING.reference,
+          },
+        })
+      );
+      await act(async () => {});
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+
+      // The update that lists Beta's question also takes the picked one away.
+      push({
+        ...MIXED,
+        revision: 2,
+        questions: MIXED.questions.filter((q) => q !== ALPHA_WAITING),
+      });
+      await waitFor(() => expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true"));
+      await waitFor(() => expect(rowNamed("q-6").getAttribute("aria-current")).toBe("true"));
     });
 
     it("narrows to this project and back, choosing afresh when the question shown isn't this project's", async () => {

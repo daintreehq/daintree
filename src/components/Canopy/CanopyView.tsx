@@ -530,6 +530,17 @@ const DOCKED_GLOBAL_DICTATION: CanopyReplyDictation = {
   message: "Dictation goes to an agent's reply. Click the reply to dictate into it.",
 };
 
+const DIALOG_DICTATION: CanopyReplyDictation = {
+  ok: false,
+  message: "Dictation goes to an agent's reply. Close the dialog to dictate into it.",
+};
+
+/** A dialog over Canopy holds the keyboard, as the Decisions inbox does (#18048); one Canopy sits in doesn't. */
+function dialogOverCanopy(): boolean {
+  const dialog = document.activeElement?.closest('[role="dialog"], [role="alertdialog"]');
+  return dialog != null && dialog.querySelector("[data-canopy-standalone]") === null;
+}
+
 function CanopyInbox({
   hostId,
   hostRow,
@@ -841,6 +852,8 @@ function CanopyInbox({
       // Typing to the docked global assistant: a dictation there must not
       // land in the agent's reply beside it.
       if (document.activeElement?.closest("[data-canopy-global]")) return DOCKED_GLOBAL_DICTATION;
+      // Typing in a dialog over Canopy (an answer in the Decisions inbox): the words aren't the reply's.
+      if (dialogOverCanopy()) return DIALOG_DICTATION;
       return (
         (selectedAssistant === null && focusedItem !== null
           ? detailRef.current?.dictation()

@@ -29,10 +29,28 @@ export interface DecisionsInboxRequest {
   /** The question asked for, shown ahead of the pane's first. */
   question?: DecisionsInboxQuestion | null;
   /**
+   * The id of the element the close returns to once the control that opened
+   * the inbox has gone: a Canopy card's, whose Review answers leaves with its
+   * last stopped delivery (#18048). Null for a pane's chip, found by `terminalId`.
+   */
+  returnFocusTo?: string | null;
+  /**
+   * Opened on its first stopped delivery when it lists one, rather than on
+   * what waits on the person (#18048): Settings' row, which says both.
+   */
+  prefer?: "stopped" | null;
+  /**
    * Rises with every question asked for, also while the inbox stays open, so
    * each one is shown even when it's asked for twice.
    */
   ask?: number;
+}
+
+export interface DecisionsInboxOpenOptions {
+  terminalId?: string | null;
+  question?: DecisionsInboxQuestion;
+  returnFocusTo?: string;
+  prefer?: "stopped";
 }
 
 interface DecisionsInboxState {
@@ -43,15 +61,16 @@ interface DecisionsInboxState {
    * already open, it shows that question in the same opening, keeping the
    * list and where the close returns.
    */
-  open: (options?: { terminalId?: string | null; question?: DecisionsInboxQuestion }) => void;
+  open: (options?: DecisionsInboxOpenOptions) => void;
   close: () => void;
 }
 
 /**
  * The Decisions inbox (#17231), one per view: opened from a pane's Decisions
- * dropdown and question rows, from Settings, from a question's notification
- * and from the next-question action. Ids only: the questions' words are read
- * on demand by the inbox and never kept here.
+ * dropdown and question rows, from Settings, from a question's or stopped
+ * delivery's notification, from the next-question action, and from Review
+ * answers on a pane's chip or a Canopy run (#18048). Ids only: the
+ * questions' words are read on demand by the inbox and never kept here.
  */
 export const useDecisionsInboxStore = create<DecisionsInboxState>()((set) => ({
   isOpen: false,
@@ -71,6 +90,8 @@ export const useDecisionsInboxStore = create<DecisionsInboxState>()((set) => ({
           openedAt: Date.now(),
           question,
           ask,
+          returnFocusTo: options?.returnFocusTo ?? null,
+          prefer: options?.prefer ?? null,
         },
       };
     }),

@@ -813,22 +813,27 @@ test("an answer given while Daintree is closed is there when it opens again", as
   ctx = await launchApp({ userDataDir, env: fakeAgentEnv(binDir) });
   page = ctx.window;
   // The run that asked is gone and this fake Claude has no session to resume,
-  // so the answer is listed for the person rather than typed anywhere else.
+  // so the answer is listed for the person rather than typed anywhere else:
+  // Settings counts it, and opens the inbox at it once Settings has gone (#18048).
   await openDecisions();
   const panel = page.locator(DIALOG);
-  await expect(panel.locator("#decisions-questions-attention")).toContainText(/1 answer/, {
+  await expect(panel.locator("#decisions-questions-inbox")).toContainText(/1 delivery stopped/, {
     timeout: 90_000,
   });
-  await panel.getByTestId("decisions-attention-review").click();
-  await expect(page.getByRole("dialog").getByText(question)).toBeVisible({ timeout: 30_000 });
+  await panel.getByTestId("decisions-inbox-open").click();
+  await expect(panel).toHaveCount(0, { timeout: 10_000 });
+  const inbox = page.getByTestId("decisions-inbox-dialog");
+  // The detail, not only its row: the inbox opened at the stopped question.
+  await expect(
+    inbox.getByTestId("decision-question-content").getByText(question, { exact: true })
+  ).toBeVisible({ timeout: 30_000 });
   await test.info().attach("attention", {
     body: await page.screenshot(),
     contentType: "image/png",
   });
   void id;
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("decisions-attention-dialog")).toHaveCount(0);
-  await closeSettings();
+  await expect(inbox).toHaveCount(0);
 });
 
 /** Who holds the relay's port, for a failure message. */

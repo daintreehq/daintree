@@ -6,7 +6,6 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -37,6 +36,7 @@ import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSen
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import { openPaneQuestion } from "@/components/Decisions/openPaneQuestion";
+import { openStoppedAnswers } from "@/components/Decisions/openStoppedAnswers";
 import { useDecisionsClock } from "@/components/Decisions/useDecisionsClock";
 import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
@@ -167,7 +167,7 @@ function ReviewAnswersButton({ onReview }: { onReview: () => void }) {
       variant="outline"
       size="xs"
       onClick={() => {
-        // The attention dialog takes focus; the popover mustn't take it back.
+        // The inbox, or the attention list, takes focus; the popover mustn't take it back.
         focusRestore?.expectHandoff();
         onReview();
       }}
@@ -329,7 +329,6 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const headingId = useId();
   const sharedStatusId = useId();
   const [open, setOpen] = useState(false);
-  const openAttention = useDecisionsAttentionStore((s) => s.open);
   // A question steps down as its deadline passes, popover open or not (#18053);
   // closed, only a deadline passing is waited for, never the minutes ticking down.
   const deadlines = state?.openQuestions.map((question) => question.expiresAt) ?? [];
@@ -568,14 +567,23 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                   openDecisionsInbox({ terminalId }, { quiet: false }).catch(() => {});
                 }}
               />
-              {/* The answers that need a person are acted on in the list, which
-              also holds those whose pane is gone. It reads this computer's deliveries
-              only; a Remote Host keeps its own panes'. */}
+              {/* The answers that need a person are acted on in the inbox, at the
+              pane's first stopped delivery (#18048), or in the attention list for one
+              the inbox can't list. Both read this computer's deliveries only; a Remote
+              Host keeps its own panes'. */}
               {attention && !isRemoteWindow() && (
                 <ReviewAnswersButton
                   onReview={() => {
                     setOpen(false);
-                    openAttention(terminalId);
+                    void openStoppedAnswers(
+                      {
+                        terminalId,
+                        questionIds: items
+                          .filter((item) => ATTENTION_KINDS.has(item.kind))
+                          .map((item) => item.questionId),
+                      },
+                      { fromPane: true }
+                    );
                   }}
                 />
               )}
