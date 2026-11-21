@@ -38,6 +38,7 @@ function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
     focusedWindows: vi.fn(() => []),
     keepsConversation: vi.fn(() => false),
     savePinnedAgent: vi.fn(() => {}),
+    coordinates: vi.fn(() => true),
     ...overrides,
   };
   return { deps, calls };
@@ -352,5 +353,53 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     await b.replace({ agentId: "antigravity", prompt: "Carry on" }, { generation, phase });
     expect(b.getState()).toMatchObject({ phase: "running", agentId: "antigravity" });
     expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith("antigravity");
+  });
+
+  it("says whether it coordinates, and is settled only with nothing starting or stopping (#18143)", async () => {
+    let leads = true;
+    const { deps } = makeDeps("first", { coordinates: vi.fn(() => leads) });
+    const service = new GlobalAssistantService(deps, { slot: 0 });
+    expect(service.getState().coordinating).toBe(true);
+    leads = false;
+    expect(service.getState().coordinating).toBe(false);
+
+    const spawned = deferred<boolean>();
+    deps.spawn.mockImplementationOnce(() => spawned.promise);
+    expect(service.isSettled()).toBe(true);
+    const launch = service.ensureSession();
+    expect(service.isSettled()).toBe(false);
+    spawned.resolve(true);
+    await launch;
+    expect(service.isSettled()).toBe(true);
+
+    const stopping = service.discard();
+    expect(service.isSettled()).toBe(false);
+    await stopping;
+    expect(service.isSettled()).toBe(true);
+  });
+
+  it("never reads free while a hand-off replaces a launch still starting (#18143)", async () => {
+    const { deps } = makeDeps("first");
+    const spawned = deferred<boolean>();
+    deps.spawn.mockImplementationOnce(() => spawned.promise);
+    const service = new GlobalAssistantService(deps, { slot: 0 });
+    const launch = service.ensureSession().catch(() => null);
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(1));
+    const occupied: boolean[] = [];
+    service.onChange((state) => occupied.push(state.occupied));
+
+    const replaced = service.replace(
+      { agentId: "codex", prompt: "Carry on" },
+      { generation: service.getState().generation, phase: "launching" }
+    );
+    // The old launch is torn down once the agent is checked; only then does its spawn finish.
+    await vi.waitFor(() => expect(occupied.length).toBeGreaterThan(0));
+    spawned.resolve(true);
+    await replaced;
+    await launch;
+
+    expect(occupied.length).toBeGreaterThan(0);
+    expect(occupied.every(Boolean)).toBe(true);
+    expect(service.getState()).toMatchObject({ phase: "running", agentId: "codex" });
   });
 });

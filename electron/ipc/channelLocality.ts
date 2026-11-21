@@ -622,6 +622,7 @@ export const CHANNEL_LOCALITY = {
   "help:global-assistant-state": "host",
   "help:global-assistant-list": "host",
   "help:global-assistant-start-new": "host",
+  "help:global-assistant-set-coordinator": "host",
   "help:global-assistant-attach": "host",
   "help:global-assistant-detach": "host",
   "help:global-assistant-claim-input": "host",

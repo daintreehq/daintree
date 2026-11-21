@@ -1457,6 +1457,31 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global");
     });
 
+    it("lists the session that coordinates, and none while only the other runs (#18143)", async () => {
+      addGlobal({ generation: 7 });
+      addLane(1, "t-global-2", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session-2",
+        attached: false,
+        generation: 4,
+      });
+      let coordinator = 1;
+      control = new AssistantTerminalControl({
+        ...deps,
+        globalCoordinatorSlot: async () => coordinator,
+      });
+
+      expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global-2");
+      coordinator = 0;
+      expect((await control.list(LOCAL)).global?.terminalId).toBe("t-global");
+
+      lanes.splice(
+        lanes.findIndex((lane) => lane.running.terminalId === "t-global"),
+        1
+      );
+      expect((await control.list(LOCAL)).global).toBeNull();
+    });
+
     it("lists none while no global runs, or before its run has a generation", async () => {
       expect((await control.list(LOCAL)).global).toBeNull();
       addGlobal();

@@ -3,15 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const writes = vi.hoisted(() => ({ fail: false }));
+const writes = vi.hoisted(() => ({ fail: false, count: 0 }));
 vi.mock("../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/fs.js")>();
   return {
     ...actual,
-    resilientAtomicWriteFile: (...args: Parameters<typeof actual.resilientAtomicWriteFile>) =>
-      writes.fail
+    resilientAtomicWriteFile: (...args: Parameters<typeof actual.resilientAtomicWriteFile>) => {
+      writes.count += 1;
+      return writes.fail
         ? Promise.reject(new Error("disk full"))
-        : actual.resilientAtomicWriteFile(...args),
+        : actual.resilientAtomicWriteFile(...args);
+    },
   };
 });
 
@@ -341,6 +343,86 @@ describe("PendingHelpHibernationStore", () => {
     const fresh = new PendingHelpHibernationStore(filePath);
     await fresh.load();
     expect(fresh.get(slotKey("proj-1", 0))?.conversationOwnershipId).toBe("owner-1");
+  });
+
+  describe("the lane that coordinates (#18143)", () => {
+    const entry = (agentSessionId: string, conversationOwnershipId: string) => ({
+      agentId: "claude",
+      agentSessionId,
+      cwd: "/sessions/global",
+      capturedAt: Date.now(),
+      conversationOwnershipId,
+    });
+
+    it("writes two lanes' entries and the coordinator in one write, kept across a reload", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("global", 0), entry("conv-a", "held"));
+      await store.set(slotKey("global", 1), entry("conv-b", "theirs"));
+      await store.commit({ coordinator: { projectId: "elsewhere", slot: 0 } });
+      const before = writes.count;
+
+      await store.commit({
+        entries: {
+          [slotKey("global", 0)]: entry("conv-a", "theirs"),
+          [slotKey("global", 1)]: entry("conv-b", "held"),
+        },
+        coordinator: { projectId: "global", slot: 1 },
+      });
+
+      expect(writes.count - before).toBe(1);
+      const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
+        coordinators?: Record<string, number>;
+      };
+      expect(onDisk.coordinators).toEqual({ elsewhere: 0, global: 1 });
+      const fresh = new PendingHelpHibernationStore(filePath);
+      await fresh.load();
+      expect(fresh.getCoordinator("global")).toBe(1);
+      expect(fresh.getCoordinator("elsewhere")).toBe(0);
+      expect(fresh.get(slotKey("global", 1))).toMatchObject({
+        agentSessionId: "conv-b",
+        conversationOwnershipId: "held",
+      });
+      expect(fresh.get(slotKey("global", 0))).toMatchObject({
+        agentSessionId: "conv-a",
+        conversationOwnershipId: "theirs",
+      });
+    });
+
+    it("keeps the coordinator through a later write that names none, and with no lane kept", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.commit({ coordinator: { projectId: "global", slot: 1 } });
+      await store.set(slotKey("proj-1", 0), entry("conv-p", "p"));
+      await store.clear(slotKey("proj-1", 0));
+
+      const fresh = new PendingHelpHibernationStore(filePath);
+      await fresh.load();
+      expect(fresh.getCoordinator("global")).toBe(1);
+      expect(fresh.getCoordinator("proj-1")).toBeNull();
+      expect(fresh.get(slotKey("proj-1", 0))).toBeNull();
+    });
+
+    it("drops a coordinator it can't read and keeps the rest", async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 2,
+          entries: { [slotKey("global", 0)]: entry("conv-a", "held") },
+          coordinators: { global: "1", other: -1, half: 1.5, ok: 1, first: 0 },
+        })
+      );
+
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+
+      expect(store.getCoordinator("global")).toBeNull();
+      expect(store.getCoordinator("other")).toBeNull();
+      expect(store.getCoordinator("half")).toBeNull();
+      expect(store.getCoordinator("ok")).toBe(1);
+      expect(store.getCoordinator("first")).toBe(0);
+      expect(store.get(slotKey("global", 0))?.agentSessionId).toBe("conv-a");
+    });
   });
 
   it("keeps a lane whose ownership id is unreadable, without the id (#17919)", async () => {

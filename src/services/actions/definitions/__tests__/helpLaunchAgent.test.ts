@@ -1991,7 +1991,7 @@ describe("help.newSessionWithAgent (#13442)", () => {
 
 describe("help.replaceGlobalAssistant (#18140)", () => {
   let action: AnyActionDefinition;
-  let getGlobalAssistantState: ReturnType<typeof vi.fn>;
+  let listGlobalAssistantSessions: ReturnType<typeof vi.fn>;
   let canRunGlobalAssistant: ReturnType<typeof vi.fn>;
   let replaceGlobalAssistant: ReturnType<typeof vi.fn>;
   const handoff = { agentId: "codex", prompt: "Continue from the hand-off" };
@@ -2004,18 +2004,24 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
       availability: allAvailability(),
       isInitialized: true,
     });
-    getGlobalAssistantState = vi.fn(async () => ({
-      phase: "running",
-      generation: 4,
-      agentId: "claude",
-      terminalId: "term-global",
-    }));
+    listGlobalAssistantSessions = vi.fn(async () => [
+      {
+        slot: 0,
+        coordinating: true,
+        occupied: true,
+        phase: "running",
+        generation: 4,
+        agentId: "claude",
+        terminalId: "term-global",
+      },
+      { slot: 1, coordinating: false, occupied: false, phase: "absent", generation: 0 },
+    ]);
     canRunGlobalAssistant = vi.fn(async () => true);
     replaceGlobalAssistant = vi.fn();
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getGlobalAssistantState, canRunGlobalAssistant, replaceGlobalAssistant },
+          help: { listGlobalAssistantSessions, canRunGlobalAssistant, replaceGlobalAssistant },
         },
       },
       writable: true,
@@ -2053,6 +2059,29 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     expect(replaceGlobalAssistant).not.toHaveBeenCalled();
   });
 
+  it("asks about the session that coordinates, named beside the other (#18143)", async () => {
+    listGlobalAssistantSessions.mockResolvedValueOnce([
+      { slot: 0, coordinating: false, occupied: true, phase: "running", generation: 4 },
+      {
+        slot: 1,
+        coordinating: true,
+        occupied: true,
+        phase: "running",
+        generation: 9,
+        agentId: "antigravity",
+      },
+    ]);
+
+    expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "awaiting-confirmation" });
+
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toMatchObject({
+      slot: 1,
+      expected: { generation: 9, phase: "running" },
+      currentAgentId: "antigravity",
+      namesSession: true,
+    });
+  });
+
   it("names a project plugin it has no name for by its manifest id, never its instance key", async () => {
     await action.run(handoff, {
       dispatchSource: "plugin",
@@ -2084,13 +2113,13 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
 
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
-    expect(getGlobalAssistantState).not.toHaveBeenCalled();
+    expect(listGlobalAssistantSessions).not.toHaveBeenCalled();
   });
 
   it("isn't asked when the view is put away while the run is read", async () => {
-    getGlobalAssistantState.mockImplementationOnce(async () => {
+    listGlobalAssistantSessions.mockImplementationOnce(async () => {
       mockViewCached.mockReturnValue(true);
-      return { phase: "absent", generation: 0, agentId: null, terminalId: null };
+      return [{ slot: 0, coordinating: true, occupied: false, phase: "absent", generation: 0 }];
     });
 
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
@@ -2117,10 +2146,10 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
   });
 
   it("isn't asked when the global assistant can't be read", async () => {
-    getGlobalAssistantState.mockRejectedValueOnce(new Error("ipc down"));
+    listGlobalAssistantSessions.mockRejectedValueOnce(new Error("ipc down"));
 
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
-    expect(getGlobalAssistantState).toHaveBeenCalledTimes(1);
+    expect(listGlobalAssistantSessions).toHaveBeenCalledTimes(1);
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
   });
 
@@ -2130,7 +2159,7 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
 
     expect(await action.run(handoff, fromPlugin)).toEqual({ outcome: "unavailable" });
     expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
-    expect(getGlobalAssistantState).not.toHaveBeenCalled();
+    expect(listGlobalAssistantSessions).not.toHaveBeenCalled();
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
   });
 });

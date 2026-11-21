@@ -105,6 +105,31 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     expect(screen.getByRole("button", { name: "Start global assistant" })).toBeTruthy();
   });
 
+  it("names and replaces the session that coordinated when it was asked (#18143)", async () => {
+    expect(
+      stageGlobalAssistantReplacement({
+        agentId: "codex",
+        prompt: "Continue from the hand-off:\n- tests pass",
+        expected: { generation: 7, phase: "running" },
+        currentAgentId: "claude",
+        pluginName: "Hand-off",
+        namesSession: true,
+        slot: 1,
+      })
+    ).toBe(true);
+    render(<GlobalAssistantReplaceConfirmDialog />);
+    expect(await screen.findByText("Replace global assistant session 2?")).toBeTruthy();
+
+    await approveGlobalAssistantReplacement(
+      useGlobalAssistantReplaceConfirmStore.getState().current!.requestId
+    );
+
+    expect(replaceGlobalAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ expected: { generation: 7, phase: "running" }, slot: 1 })
+    );
+    expect(useHelpPanelStore.getState()).toMatchObject({ globalSelected: true, globalSlot: 1 });
+  });
+
   it("stops asking once its view is put away, and an answer from one put away does nothing", async () => {
     stage();
     render(<GlobalAssistantReplaceConfirmDialog />);
@@ -154,6 +179,7 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
       agentId: "codex",
       prompt: "Continue from the hand-off:\n- tests pass",
       expected: { generation: 4, phase: "running" },
+      slot: 0,
     });
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
     expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: true, globalSelected: true });

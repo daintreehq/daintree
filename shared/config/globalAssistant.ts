@@ -230,3 +230,33 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 export function globalAssistantMayRelay(tool: string): boolean {
   return GLOBAL_ALLOWED_TOOLS.has(tool);
 }
+
+/**
+ * What a global assistant session that isn't coordinating may still run
+ * through `host.call` (#18143): reads that start, address, type to and wait
+ * on nothing, so it can see the work another session now leads without
+ * advancing any of it. Owned forms are left out even where they only read,
+ * since what they reach is the coordinator's. An allow-list, like
+ * {@link GLOBAL_ALLOWED_TOOLS}: a tool added later is refused here until placed.
+ */
+export const GLOBAL_STANDBY_TOOLS: ReadonlySet<string> = new Set([
+  "actions.list",
+  "actions.search",
+  "actions.getSchema",
+  "mcp.surface",
+  "workspace.list",
+  "worktree.list",
+  "worktree.getCurrent",
+  "assistant.list",
+  "terminal.list",
+  "terminal.getStatus",
+  "terminal.getOutput",
+  // A throwaway run's own reads, still held to the runs this session started.
+  "throwaway.status",
+  "throwaway.output",
+]);
+
+/** Whether a global assistant session that isn't coordinating may run `tool` through `host.call`. */
+export function globalStandbyMayRelay(tool: string): boolean {
+  return GLOBAL_STANDBY_TOOLS.has(tool);
+}

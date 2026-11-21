@@ -21,6 +21,7 @@ export const HELP_METHOD_CHANNELS = {
   getGlobalAssistantState: "help:global-assistant-state",
   listGlobalAssistantSessions: "help:global-assistant-list",
   startNewGlobalAssistant: "help:global-assistant-start-new",
+  setGlobalAssistantCoordinator: "help:global-assistant-set-coordinator",
   attachGlobalAssistant: "help:global-assistant-attach",
   detachGlobalAssistant: "help:global-assistant-detach",
   claimGlobalAssistantInput: "help:global-assistant-claim-input",

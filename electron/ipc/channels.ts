@@ -696,6 +696,7 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_STATE: "help:global-assistant-state",
   HELP_GLOBAL_ASSISTANT_LIST: "help:global-assistant-list",
   HELP_GLOBAL_ASSISTANT_START_NEW: "help:global-assistant-start-new",
+  HELP_GLOBAL_ASSISTANT_SET_COORDINATOR: "help:global-assistant-set-coordinator",
   HELP_GLOBAL_ASSISTANT_ATTACH: "help:global-assistant-attach",
   HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
   HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",

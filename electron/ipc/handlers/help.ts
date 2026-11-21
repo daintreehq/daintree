@@ -780,6 +780,11 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleStartNewGlobalAssistant,
       { withContext: true }
     ),
+    setGlobalAssistantCoordinator: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantCoordinator,
+      globalAssistant.handleSetGlobalAssistantCoordinator,
+      { withContext: true }
+    ),
     attachGlobalAssistant: op(
       HELP_METHOD_CHANNELS.attachGlobalAssistant,
       globalAssistant.handleAttachGlobalAssistant,
