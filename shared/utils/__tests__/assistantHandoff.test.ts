@@ -5,8 +5,8 @@ import {
   handoffFitsLaunchCommand,
   isSendableHandoff,
   isUsableHandoff,
-} from "../assistantHandoff";
-import { setAgentCommandDialectResolver } from "../shellEscape";
+} from "../assistantHandoff.js";
+import { setAgentCommandDialectResolver } from "../shellEscape.js";
 
 afterEach(() => setAgentCommandDialectResolver(null));
 
