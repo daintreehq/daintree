@@ -9,6 +9,7 @@ import {
   draftPayload,
   draftUntil,
   msUntilChange,
+  otherMode,
   readOnlyText,
   sameDraft,
   saveNotice,
@@ -104,6 +105,12 @@ function useInvolvementRead(
   return { load: shown?.load ?? LOADING, at: shown?.at ?? 0, reload };
 }
 
+/** The field each kind of draft issue belongs to. */
+const ISSUE_FIELD = {
+  count: '[data-testid="decisions-involvement-consult-count"]',
+  until: '[data-testid="decisions-involvement-until"]',
+} as const;
+
 interface Edit {
   opening: number;
   /** The revision the person reviewed: a change replaces exactly it, whatever is read meanwhile. */
@@ -113,6 +120,11 @@ interface Edit {
   initial: InvolvementDraft;
   /** No preference was in force: saving the suggested one as it stands is still a change. */
   first: boolean;
+  /**
+   * The temporary mode was set aside because the usual mode became it; changing the usual mode
+   * back brings it back, end and all, so trying the other choice costs nothing.
+   */
+  parked?: boolean;
 }
 
 /** The focusable surface of the dialog holding the section: `AppDialog` names its backdrop and focuses the surface inside. */
@@ -314,10 +326,27 @@ export function useInvolvementPreference({
 
   const change = (next: Partial<InvolvementDraft>) => {
     if (edit === null || busy) return;
-    setEditing({ ...edit, draft: { ...edit.draft, ...next } });
+    // The temporary mode is always the other one, so it follows the usual mode. A usual mode that
+    // becomes the temporary one sets it aside, so what agents are told now doesn't flip; changing the
+    // usual mode back restores it. Choosing For a while directly ends any setting aside.
+    let parked = next.temporary === undefined ? edit.parked === true : false;
+    const follow: Partial<InvolvementDraft> = {};
+    if (next.normalMode !== undefined && next.normalMode !== edit.draft.normalMode) {
+      follow.temporaryMode = otherMode(next.normalMode);
+      if (edit.draft.temporary && next.normalMode === edit.draft.temporaryMode) {
+        follow.temporary = false;
+        parked = true;
+      } else if (parked) {
+        follow.temporary = true;
+        parked = false;
+      }
+    }
+    setEditing({ ...edit, parked, draft: { ...edit.draft, ...next, ...follow } });
   };
 
   const cancel = () => {
+    // A change on its way can't be called back, so the form stays until it settles.
+    if (busy) return;
     setEditing(null);
     setHandoff((n) => n + 1);
   };
@@ -326,8 +355,12 @@ export function useInvolvementPreference({
     if (edit === null || busy || !canEdit || locked) return;
     // Checked again at the moment of saving: an end that has passed since the last read shows now.
     const checkedAt = Date.now();
-    if (draftIssue(edit.draft, checkedAt) !== null) {
+    const issue = draftIssue(edit.draft, checkedAt);
+    if (issue !== null) {
       setFlippedAt(checkedAt);
+      // The keyboard goes to the field that says why, rather than staying on a Save that did nothing.
+      // Found by its field, not its error: an end that passed just now has no error rendered yet.
+      formRef.current?.querySelector<HTMLElement>(ISSUE_FIELD[issue.field])?.focus();
       return;
     }
     const sent = edit;
@@ -336,7 +369,7 @@ export function useInvolvementPreference({
     setInFlight({ opening: sent.opening, sent });
     // Settled as a value: a call that fails may still have reached the relay before something here failed.
     const result = await decisionsClient
-      .setInvolvement(draftPayload(sent.draft, sent.revision))
+      .setInvolvement(draftPayload(sent.draft, sent.revision, sent.initial.consultCount))
       .then(
         (value) => value,
         () => null

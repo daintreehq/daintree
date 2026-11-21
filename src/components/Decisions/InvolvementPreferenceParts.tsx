@@ -1,4 +1,6 @@
 import { FactRun } from "@/components/ui/FactSeparator";
+import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import type { DecisionsInvolvementMode } from "@shared/types/decisionsInvolvement";
 import {
@@ -27,10 +29,13 @@ export function InvolvementValue({
   read,
   now,
   full,
+  count = true,
 }: {
   read: InvolvementRead;
   now: number;
   full: boolean;
+  /** Says how many other agents a recommendation in force consults; off where a detail line says it. */
+  count?: boolean;
 }) {
   const { preference } = read;
   if (preference.status === "unavailable") {
@@ -42,14 +47,27 @@ export function InvolvementValue({
   }
   const force = inForce(preference, now);
   return (
-    <span className="font-medium text-text-primary" data-testid="decisions-involvement-mode">
+    <span
+      // Unconfirmed, agents fall back to their usual behaviour: the mode steps down rather than reads as in force.
+      className={cn("font-medium", preference.stale ? "text-text-secondary" : "text-text-primary")}
+      data-testid="decisions-involvement-mode"
+    >
+      {preference.stale && <span className="font-normal">Last known: </span>}
       {MODE_LABEL[force.mode]}
       {force.until !== null && (
         <span className="font-normal text-text-secondary">
           {" "}
           until <time dateTime={force.until}>{formatUntil(force.until, now)}</time>
-          {full && `, ${thenText(preference)}`}
         </span>
+      )}
+      {/* After the end, so "until" reads as the mode's, not the count's. */}
+      {count && force.mode === "recommend" && (
+        <span className="font-normal text-text-secondary">
+          , consulting {pluralize(preference.consultCount, "other agent")}
+        </span>
+      )}
+      {force.until !== null && full && (
+        <span className="font-normal text-text-secondary">, {thenText(preference)}</span>
       )}
     </span>
   );
@@ -78,7 +96,9 @@ export function InvolvementFacts({ read, now }: { read: InvolvementRead; now: nu
         key="confirmed"
         timestamp={preference.lastSyncedAt}
         now={now}
-        prefix="Confirmed by this computer "
+        prefix={
+          preference.stale ? "Last confirmed by this computer " : "Confirmed by this computer "
+        }
         verbose
       />
     );

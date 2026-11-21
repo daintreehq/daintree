@@ -971,7 +971,7 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
     await waitFor(() =>
       expect(screen.getByTestId("decisions-involvement-mode").textContent).toBe(
-        "Bring a recommendation"
+        "Bring a recommendation, consulting 2 other agents"
       )
     );
     expect(screen.getByTestId("decisions-involvement-change")).not.toBeNull();
@@ -5948,7 +5948,7 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
       await waitFor(() =>
         expect(screen.getByTestId("decisions-involvement-mode").textContent).toBe(
-          "Bring a recommendation"
+          "Bring a recommendation, consulting 2 other agents"
         )
       );
       const involvementReads = getInvolvement.mock.calls.length;
