@@ -125,6 +125,22 @@ describe("terminal.copyClean (#18132)", () => {
     expect(copyCleanSelection).toHaveBeenCalledWith("dragged text", "clean:dragged text", null);
   });
 
+  it("copies nothing from an xterm its frame's panel doesn't own (Dev Preview's output)", async () => {
+    const output = mountPane("preview");
+    const previewOwn = mountPane(null);
+    seed(
+      { preview: "preview text", focused: "focused text" },
+      { preview: { id: "preview" }, focused: { id: "focused", kind: "terminal" } },
+      "focused",
+      { preview: previewOwn.element }
+    );
+    output.textarea.focus();
+
+    await copyClean().run(undefined, keybinding);
+
+    expect(copyCleanSelection).not.toHaveBeenCalled();
+  });
+
   it("copies nothing from a terminal outside any panel (the Assistant's)", async () => {
     const assistant = mountPane(null);
     seed({ focused: "focused text" }, { focused: { id: "focused", kind: "terminal" } }, "focused");

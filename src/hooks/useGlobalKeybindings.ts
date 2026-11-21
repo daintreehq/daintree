@@ -33,6 +33,7 @@ import {
 } from "@/services/terminal/undoCloseKey";
 
 const COPY_CLEAN_ACTION_ID = "terminal.copyClean";
+const MODIFIER_KEY_NAMES = new Set(["Meta", "Control", "Alt", "AltGraph", "Shift"]);
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
 // through: stopping it, and stopping it with a send.
@@ -105,7 +106,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         }
         return;
       }
-      heldRepeatSwallowCode = null;
+      // A modifier pressed again while the key is still down (Shift let go and
+      // retaken) is no new press of it; nor is leaving the window, which is
+      // why a blur leaves this alone. Only a repeat of the same key reads it.
+      if (!MODIFIER_KEY_NAMES.has(e.key)) heldRepeatSwallowCode = null;
 
       // A shortcut recorder owns every key, including the one it is recording.
       if (keybindingService.isCapturingShortcut()) return;
@@ -523,7 +527,6 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
     };
 
     const handleBlur = () => {
-      heldRepeatSwallowCode = null;
       keybindingService.clearPendingChord();
     };
     const handleVisibilityChange = () => {

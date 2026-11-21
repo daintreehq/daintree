@@ -98,7 +98,9 @@ describe("the Copy clean text shortcut (#18132)", () => {
     };
     try {
       await service.setOverride("terminal.copyClean", ["Ctrl+Shift+Alt+C"]);
-      expect(service.resolveKeybinding(ctrlShiftAltC()).match?.actionId).toBe("terminal.copyClean");
+      const result = service.resolveKeybinding(ctrlShiftAltC());
+      expect(result.match?.actionId).toBe("terminal.copyClean");
+      expect(result.shouldConsume).toBe(true);
     } finally {
       win.electron = previous;
     }

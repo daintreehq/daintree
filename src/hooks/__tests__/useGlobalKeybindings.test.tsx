@@ -3015,6 +3015,36 @@ describe("useGlobalKeybindings — Copy clean text held in a terminal", () => {
     xterm.remove();
   });
 
+  it("keeps swallowing the repeats through a modifier pressed again and a trip out of the window", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Shift",
+          code: "ShiftLeft",
+          ctrlKey: true,
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      window.dispatchEvent(new Event("blur"));
+    });
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    xterm.remove();
+  });
+
   it("leaves the repeats of other bindings alone", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
       match: { actionId: "terminal.new" },

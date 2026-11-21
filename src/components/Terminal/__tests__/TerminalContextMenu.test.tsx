@@ -887,7 +887,7 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
     expect(dispatch).toHaveBeenCalledWith(
       "terminal.copyClean",
       { terminalId: "panel-1" },
-      expect.anything()
+      { source: "context-menu" }
     );
     expect(dispatch).not.toHaveBeenCalledWith(
       "terminal.copy",
