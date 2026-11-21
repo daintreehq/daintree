@@ -1051,6 +1051,9 @@ export interface GeneratedElectronAPI {
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;
+    setGlobalAssistantCoordinator(
+      ...args: IpcInvokeMap["help:global-assistant-set-coordinator"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-set-coordinator"]["result"]>;
     setGlobalAssistantInputEligible(
       ...args: IpcInvokeMap["help:global-assistant-input-eligible"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-input-eligible"]["result"]>;

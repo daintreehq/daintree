@@ -381,6 +381,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help:global-assistant-state": "free",
   "help:global-assistant-list": "free",
   "help:global-assistant-start-new": "free",
+  "help:global-assistant-set-coordinator": "free",
   "help:global-assistant-attach": "free",
   "help:global-assistant-detach": "free",
   "help:global-assistant-claim-input": "free",

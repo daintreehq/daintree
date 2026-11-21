@@ -22,7 +22,8 @@ export function globalSessionTabId(idBase: string, slot: GlobalAssistantSlot | s
  * Which of the machine's global assistant sessions the pane shows (#18142).
  * Each is named by its number, which every window shares, then its agent. The
  * first session is always offered, running or not; the second only while it
- * exists or is the one on screen.
+ * exists or is the one on screen. With both open, the one that coordinates
+ * says so (#18143); choosing a tab only chooses what is shown.
  */
 export function GlobalSessionTabs({
   idBase,
@@ -36,6 +37,7 @@ export function GlobalSessionTabs({
   shownSlot: GlobalAssistantSlot;
   onSelect: (slot: GlobalAssistantSlot) => void;
 }) {
+  const both = sessions.filter((session) => session.occupied).length > 1;
   const tabs: UnderlineTabItem[] = sessions
     .filter(
       (session) =>
@@ -43,15 +45,21 @@ export function GlobalSessionTabs({
     )
     .map((session) => {
       const agentId = session.agentId;
+      const coordinates = both && session.coordinating;
       return {
         id: String(session.slot),
         label: `Session ${globalAssistantSessionNumber(session.slot)}`,
         ...(agentId ? { renderIcon: () => <TabAgentMark agentId={agentId} /> } : {}),
-        ...(agentId
+        ...(agentId || coordinates
           ? {
               trailing: (
                 <span className="text-xs font-normal text-text-secondary">
-                  {getAgentConfig(agentId)?.name ?? agentId}
+                  {agentId ? (getAgentConfig(agentId)?.name ?? agentId) : null}
+                  {coordinates && (
+                    <span data-testid={`help-global-coordinating-${session.slot}`}>
+                      {agentId ? " · " : ""}Coordinating
+                    </span>
+                  )}
                 </span>
               ),
             }

@@ -122,6 +122,8 @@ export interface GlobalAssistantReplacement {
   agentId: string;
   prompt: string;
   expected: { generation: number; phase: GlobalAssistantPhase };
+  /** The session it replaces, which must still coordinate (#18143); the first when absent. */
+  slot?: GlobalAssistantSlot;
 }
 
 /**

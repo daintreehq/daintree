@@ -2620,6 +2620,10 @@ export interface GeneratedIpcInvokeMap {
     args: [expectedGeneration?: number | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
+  "help:global-assistant-set-coordinator": {
+    args: [slot: number];
+    result: import("./help.js").GlobalAssistantView[];
+  };
   "help:global-assistant-start-new": {
     args: [agentId: string];
     result: import("./help.js").GlobalAssistantView;

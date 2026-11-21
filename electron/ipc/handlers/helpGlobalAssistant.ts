@@ -18,8 +18,11 @@ import { events } from "../../services/events.js";
 import type { GlobalAssistantService } from "../../services/GlobalAssistantService.js";
 import {
   getGlobalAssistantService,
+  globalAssistantCoordinatorSlot,
+  handGlobalAssistantCoordination,
   joinNewGlobalAssistantLaunch,
   startNewGlobalAssistantSession,
+  stopGlobalAssistantSession,
   whenGlobalAssistantSessionsReadable,
 } from "../../services/globalAssistant.js";
 import {
@@ -370,6 +373,7 @@ const GlobalAssistantReplacementSchema = z.object({
     generation: z.number().int().nonnegative(),
     phase: z.enum(["absent", "launching", "running"]),
   }),
+  slot: z.union([z.literal(0), z.literal(1)]).optional(),
 });
 
 /**
@@ -387,10 +391,16 @@ export async function handleReplaceGlobalAssistant(
     throw new AppError({ code: "VALIDATION", message: "Invalid global assistant replacement." });
   }
   const { agentId, prompt, expected } = parsed.data;
-  // The first session's, until choosing the one that coordinates lands (#18137).
-  const instance = service(GLOBAL_ASSISTANT_SLOT);
+  // The session that coordinated when the person was asked (#18143): one
+  // handed coordination over since is no longer the one they were shown.
+  const at = parsed.data.slot ?? GLOBAL_ASSISTANT_SLOT;
+  const instance = service(at);
   try {
-    await instance.replace({ agentId, prompt }, expected);
+    await instance.replace(
+      { agentId, prompt },
+      expected,
+      () => globalAssistantCoordinatorSlot() === at
+    );
   } catch (err) {
     if (err instanceof AppError && err.code === "STALE_GENERATION") {
       throw new AppError({
@@ -424,12 +434,16 @@ export async function handleDiscardGlobalAssistant(
   expectedRunning?: boolean
 ): Promise<GlobalAssistantView> {
   requireWindow(ctx);
-  const instance = service(requireSlot(slot));
-  requireGeneration(instance, expectedGeneration);
-  if (expectedRunning !== undefined) {
-    if (typeof expectedRunning !== "boolean") {
-      throw new AppError({ code: "VALIDATION", message: "Invalid expected phase" });
-    }
+  const at = requireSlot(slot);
+  const instance = service(at);
+  if (expectedRunning !== undefined && typeof expectedRunning !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "Invalid expected phase" });
+  }
+  // Checked again just before the stop: a coordinator's stop first loads what
+  // hands its work over, and the session may move on meanwhile.
+  await stopGlobalAssistantSession(at, () => {
+    requireGeneration(instance, expectedGeneration);
+    if (expectedRunning === undefined) return;
     const phase = instance.getState().phase;
     if ((phase === "running") !== expectedRunning || phase === "launching") {
       throw new AppError({
@@ -438,9 +452,25 @@ export async function handleDiscardGlobalAssistant(
         userMessage: "The global assistant changed since you asked. Nothing was stopped.",
       });
     }
-  }
-  await instance.discard();
+  });
   return globalAssistantView(instance);
+}
+
+/**
+ * Hand coordination to the session at `slot`, as the person asked in this
+ * window (#18143). Answers with both sessions, each saying whether it
+ * coordinates now.
+ */
+export async function handleSetGlobalAssistantCoordinator(
+  ctx: IpcContext,
+  slot: number
+): Promise<GlobalAssistantView[]> {
+  requireWindow(ctx);
+  if (!isGlobalAssistantSlot(slot)) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant session." });
+  }
+  await handGlobalAssistantCoordination(slot);
+  return GLOBAL_ASSISTANT_SLOTS.map((at) => globalAssistantView(service(at)));
 }
 
 /**

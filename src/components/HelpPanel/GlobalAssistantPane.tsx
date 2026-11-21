@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
+import { ArrowLeftRight, CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -50,7 +50,18 @@ function subscribeViewCache(onChange: () => void): () => void {
 }
 
 /** What stopping a session does, for its confirmation: a second session closes with it. */
-function discardConsequence(slot: GlobalAssistantSlot, running: boolean): string {
+function discardConsequence(
+  slot: GlobalAssistantSlot,
+  running: boolean,
+  /** The session that takes over coordination when this one stops (#18143). */
+  handsTo: GlobalAssistantSlot | null
+): string {
+  if (handsTo !== null) {
+    const stops = running
+      ? "Its agent stops in every window and the session closes with its conversation"
+      : "The session closes in every window and its conversation is forgotten";
+    return `${stops}. Session ${globalAssistantSessionNumber(handsTo)} takes over coordination and the workers this one launched`;
+  }
   if (slot !== GLOBAL_ASSISTANT_SLOT) {
     return running
       ? "Its agent stops in every window and the session closes with its conversation"
@@ -135,8 +146,18 @@ export function GlobalAssistantPane({
   const active = isOpen && isVisible && !viewCached && !boundElsewhere;
   // Attached behind Canopy or an ended run, the pane can't type, so input
   // nobody holds passes it over.
-  const { view, attachmentId, error, start, claimInput, restart, discard, cancelLaunch, startNew } =
-    useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown), false, slot);
+  const {
+    view,
+    attachmentId,
+    error,
+    start,
+    claimInput,
+    restart,
+    discard,
+    cancelLaunch,
+    startNew,
+    handCoordination,
+  } = useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown), false, slot);
   const sessions = useGlobalAssistantSessions(active);
   const occupiedCount = sessions?.filter((session) => session.occupied).length ?? 0;
   const atLimit = occupiedCount >= GLOBAL_ASSISTANT_SESSION_LIMIT;
@@ -289,6 +310,28 @@ export function GlobalAssistantPane({
     }
   };
 
+  // With both sessions open, coordination can go to the one that hasn't it
+  // (#18143). Named by the session it goes to, from either session's menu.
+  const otherSession = sessions?.find((session) => session.slot !== slot) ?? null;
+  const coordinationTarget =
+    view?.occupied && otherSession?.occupied && !boundElsewhere
+      ? view.coordinating
+        ? otherSession.slot
+        : otherSession.coordinating
+          ? slot
+          : null
+      : null;
+  const [handingOver, setHandingOver] = useState(false);
+  const handleHandCoordination = async (to: GlobalAssistantSlot) => {
+    if (handingOver) return;
+    setHandingOver(true);
+    try {
+      await handCoordination(to);
+    } finally {
+      setHandingOver(false);
+    }
+  };
+
   const confirmingHere = pendingConfirm !== null && pendingConfirm.slot === slot;
   const confirmName = several ? `global assistant session ${sessionNumber}` : "global assistant";
   const stopLabel = several ? `Stop session ${sessionNumber}` : "Stop global assistant";
@@ -348,6 +391,19 @@ export function GlobalAssistantPane({
                     >
                       <Eraser className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Clear conversation
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {coordinationTarget !== null && (
+                  <>
+                    <DropdownMenuItem
+                      disabled={handingOver}
+                      onSelect={() => void handleHandCoordination(coordinationTarget)}
+                      data-testid="help-global-hand-coordination"
+                    >
+                      <ArrowLeftRight className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      {`Hand coordination to session ${globalAssistantSessionNumber(coordinationTarget)}`}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -542,7 +598,11 @@ export function GlobalAssistantPane({
         }
         description={
           pendingConfirm?.kind === "discard"
-            ? discardConsequence(pendingConfirm.slot, pendingConfirm.running)
+            ? discardConsequence(
+                pendingConfirm.slot,
+                pendingConfirm.running,
+                view?.coordinating && otherSession?.occupied ? otherSession.slot : null
+              )
             : "Its agent stops in every window and a new conversation starts"
         }
         confirmLabel={pendingConfirm?.kind === "discard" ? stopLabel : "Clear conversation"}

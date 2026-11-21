@@ -568,7 +568,9 @@ export class GlobalAssistantService {
    */
   async replace(
     choice: GlobalAssistantChoice,
-    expected: { generation: number; phase: GlobalAssistantPhase }
+    expected: { generation: number; phase: GlobalAssistantPhase },
+    /** Whether it is still the session the person was shown, read after the agent check. */
+    stillShown: () => boolean = () => true
   ): Promise<GlobalAssistantState> {
     if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
     const usable = await this.canRun(choice.agentId);
@@ -582,7 +584,8 @@ export class GlobalAssistantService {
     if (
       state.generation !== expected.generation ||
       state.phase !== expected.phase ||
-      this.holds > 0
+      this.holds > 0 ||
+      !stillShown()
     ) {
       throw refuse("STALE_GENERATION", "The global assistant changed since this was asked.");
     }
