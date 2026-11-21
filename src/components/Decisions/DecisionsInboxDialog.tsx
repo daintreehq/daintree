@@ -251,8 +251,8 @@ interface InboxActed {
   key: string;
   /** The group it was acted on in: still listed there, it hasn't moved yet. */
   from: "needs-you" | "cleared";
-  /** Its place in that group then, so a move on from Cleared takes the one closing up over it. */
-  place: number;
+  /** Those listed after it in that group then, so a move on from Cleared takes the one that followed it. */
+  following: string[];
   /** What it asked as the person acted: a new ask while it waits is no longer theirs to move on from. */
   ask: string;
   /** Its answer record, where an answer or a dismissal from here stands. */
@@ -1783,16 +1783,16 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
     const id = actedCount.current;
     const key = referenceKey(item.reference);
     const from = inboxGroupOf(item, nowMs) === "cleared" ? "cleared" : "needs-you";
-    const place =
-      groups
-        .find((group) => group.id === from)
-        ?.items.findIndex((candidate) => referenceKey(candidate.reference) === key) ?? -1;
+    const peers = (groups.find((group) => group.id === from)?.items ?? []).map((candidate) =>
+      referenceKey(candidate.reference)
+    );
+    const following = peers.slice(peers.indexOf(key) + 1);
     setActed({
       seq: request.seq,
       id,
       key,
       from,
-      place,
+      following,
       ask: askKey(item),
       record: answerKey(item.reference),
       label: aliasLabel(item.alias),
@@ -2342,7 +2342,7 @@ export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialo
         groups,
         acted.key,
         acted.from === "cleared" && openGroups.has("cleared") ? "cleared" : "needs-you",
-        acted.place
+        acted.following
       );
       const after = next === null ? waitingLine : null;
       setArrival({
