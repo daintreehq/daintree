@@ -212,6 +212,28 @@ describe("global assistant IPC handlers", () => {
       );
     });
 
+    it("tells the person how to recover when the new agent doesn't start", async () => {
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn: async () => false,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), replacement(0, "absent"))
+      ).rejects.toMatchObject({
+        code: "INTERNAL",
+        userMessage:
+          "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    });
+
     it("answers whether an agent could replace the run, for a window only", async () => {
       expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "codex")).toBe(true);
       expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "")).toBe(false);

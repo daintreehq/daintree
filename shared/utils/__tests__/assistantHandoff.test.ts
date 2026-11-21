@@ -34,10 +34,13 @@ describe("assistant hand-offs (#18140)", () => {
     expect(handoffFitsLaunchCommand(long)).toBe(true);
 
     setAgentCommandDialectResolver(() => "windows");
-    expect(handoffFitsLaunchCommand("word ".repeat(1_000))).toBe(true);
+    expect(handoffFitsLaunchCommand("a".repeat(7_500))).toBe(true);
     expect(handoffFitsLaunchCommand(long)).toBe(false);
     expect(isUsableHandoff(long)).toBe(false);
-    // Quoting doubles each apostrophe, twice over, so fewer of them fit.
-    expect(handoffFitsLaunchCommand("'".repeat(2_000))).toBe(false);
+    // The CLI's native argument escapes each `"`, and the script doubles each
+    // `'`, so a hand-off full of either fits in fewer characters.
+    expect(handoffFitsLaunchCommand(`x${'"'.repeat(6_500)}x`)).toBe(false);
+    expect(handoffFitsLaunchCommand(`x${"'".repeat(5_000)}x`)).toBe(false);
+    expect(handoffFitsLaunchCommand(`x${"'".repeat(4_000)}x`)).toBe(true);
   });
 });

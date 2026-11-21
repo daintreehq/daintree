@@ -562,11 +562,7 @@ export class HelpSessionController {
       inputs.terminalId !== this._pendingNewTerminalId &&
       !this._isLaunching
     ) {
-      this._lastPinnedAgentId = null;
-      this._lastPinnedSeedPrompt = undefined;
-      this._lastVacantFresh = null;
-      this._lastResumeTarget = undefined;
-      if (this._snapshot.launchError) this._patch({ launchError: null });
+      this._dropSupersededLaunch();
     }
 
     // Clear the version block when the preferred agent changes — the stale
@@ -658,6 +654,22 @@ export class HelpSessionController {
         ? { pinAgent: true, ...this._pinnedSeed(agentId) }
         : {}),
     });
+  }
+
+  /**
+   * Another launch's session holds the lane now: what this lane last failed to
+   * start — its Retry, its version gate and pending recheck, and the pin,
+   * hand-off and vacant start they would repeat — no longer applies.
+   */
+  private _dropSupersededLaunch(): void {
+    this._lastPinnedAgentId = null;
+    this._lastPinnedSeedPrompt = undefined;
+    this._lastVacantFresh = null;
+    this._lastResumeTarget = undefined;
+    if (this._snapshot.launchError || this._snapshot.assistantVersionTooOld) {
+      this._versionGate.clearCooldownTimer();
+      this._patch({ launchError: null, assistantVersionTooOld: null, isCheckingVersion: false });
+    }
   }
 
   private _pinnedSeed(agentId: string): { seedPrompt?: string } {
@@ -1745,6 +1757,13 @@ export class HelpSessionController {
       if (!outcome.ok) {
         if (reservedId) {
           this._pendingNewTerminalId = null;
+          // Another launch bound its session here while this one waited, which
+          // is why main refused it (#18140): that session stays, and this
+          // launch offers no Retry over it.
+          if (this._slotState().terminalId !== reservedId) {
+            this._dropSupersededLaunch();
+            return;
+          }
           useHelpPanelStore.getState().clearTerminal(this.slot);
         } else {
           this._hasAutoLaunched = false;

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { dispatchCarriesOptionLikePrompt } from "./dispatchAgentLaunch.js";
-import { quoteLaunchPrompt } from "./launchPromptArg.js";
 import { agentCommandDialect } from "./shellEscape.js";
 
 /**
@@ -32,18 +31,23 @@ export const AssistantHandoffPromptSchema = z
   .refine(isSendableHandoff, { message: "A hand-off can't hold control characters" });
 
 /**
- * About the most quoted hand-off a Windows launch carries. PowerShell takes the
- * launch script as `-EncodedCommand`, UTF-16 in Base64, within a 32,767
- * character command line that the rest of the script shares.
+ * About the most of a Windows launch script a hand-off may take. PowerShell
+ * runs the script as `-EncodedCommand`, UTF-16 in Base64, within a 32,767
+ * character command line: some 12,000 characters of script, the rest of which
+ * names the CLI, its flags and its environment.
  */
-const WINDOWS_HANDOFF_QUOTED_MAX = 7_000;
+const WINDOWS_HANDOFF_SCRIPT_BUDGET = 9_000;
 
 /** Whether the launch command here can carry the hand-off at all. */
 export function handoffFitsLaunchCommand(text: string): boolean {
   if (agentCommandDialect() !== "windows") return true;
-  const quoted = quoteLaunchPrompt(text);
-  // The script quotes the whole command line once more, doubling each `'`.
-  return quoted.length + (quoted.match(/'/g)?.length ?? 0) <= WINDOWS_HANDOFF_QUOTED_MAX;
+  const arg = text.trim().replace(/\r\n/g, "\n");
+  // The CLI gets it as one native argument, as `serializeWindowsArgv` writes it
+  // (electron/utils/windowsAgentLaunch.ts), and the script then quotes that
+  // command line for PowerShell, doubling every single quote.
+  const native = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`;
+  const scripted = native.length + (native.match(/['\u2018-\u201b]/g)?.length ?? 0);
+  return scripted <= WINDOWS_HANDOFF_SCRIPT_BUDGET;
 }
 
 /**

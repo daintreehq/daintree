@@ -47,12 +47,15 @@ export function stageGlobalAssistantReplacement(
 ): boolean {
   const { current, requestSeq } = useGlobalAssistantReplaceConfirmStore.getState();
   if (current !== null) return false;
-  useGlobalAssistantReplaceConfirmStore.setState({
-    current: { ...request, requestId: crypto.randomUUID() },
-    requestSeq: requestSeq + 1,
-  });
+  const requestId = crypto.randomUUID();
+  // Watching before it's published, so a settle during publishing finds it.
+  stopWatchingView?.();
   stopWatchingView = subscribeProjectViewLifecycle((phase) => {
-    if (phase === "cached") settle();
+    if (phase === "cached") takeGlobalAssistantReplacement(requestId);
+  });
+  useGlobalAssistantReplaceConfirmStore.setState({
+    current: { ...request, requestId },
+    requestSeq: requestSeq + 1,
   });
   return true;
 }

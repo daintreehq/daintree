@@ -158,6 +158,9 @@ describe("GlobalAssistantReplaceConfirmDialog (#18140)", () => {
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
     expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: true, globalSelected: true });
     expect(useFocusStore.getState().gestureAssistantHidden).toBe(false);
+    // Shown without taking the keyboard from where the dialog returns it.
+    const { focusRequest, globalFocusHandledThrough } = useHelpPanelStore.getState();
+    expect(globalFocusHandledThrough).toBe(focusRequest);
   });
 
   it("says why when main refuses it", async () => {

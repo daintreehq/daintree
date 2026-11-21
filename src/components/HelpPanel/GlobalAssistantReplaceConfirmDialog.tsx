@@ -36,6 +36,8 @@ export async function approveGlobalAssistantReplacement(requestId: string): Prom
   const panel = useHelpPanelStore.getState();
   panel.selectGlobal(null);
   panel.setOpen(true);
+  // Nothing here asked for focus, so a pane mounting now has none to serve.
+  useHelpPanelStore.setState((s) => ({ globalFocusHandledThrough: s.focusRequest }));
   try {
     await window.electron.help.replaceGlobalAssistant({
       agentId: request.agentId,

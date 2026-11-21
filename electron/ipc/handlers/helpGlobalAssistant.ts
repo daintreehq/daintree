@@ -313,6 +313,14 @@ export async function handleReplaceGlobalAssistant(
         userMessage: "The global assistant changed since you were asked. Nothing was replaced.",
       });
     }
+    if (err instanceof AppError && err.code === "INTERNAL") {
+      throw new AppError({
+        code: "INTERNAL",
+        message: err.message,
+        userMessage:
+          "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    }
     throw err;
   }
   return globalAssistantView(instance);

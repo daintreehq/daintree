@@ -1099,6 +1099,58 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(ctrl["_lastVacantFresh"]).toBeNull();
   });
 
+  it("drops a superseded hand-off's version gate, which would hide the new session's Resume", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_patch"]({
+      assistantVersionTooOld: {
+        agentId: "codex",
+        agentName: "Codex",
+        installedVersion: "0.1.0",
+        requiredVersion: "0.2.0",
+      } as never,
+      isCheckingVersion: true,
+    });
+
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false, terminalId: "terminal-live" });
+
+    expect(ctrl.getSnapshot()).toMatchObject({
+      assistantVersionTooOld: null,
+      isCheckingVersion: false,
+    });
+  });
+
+  it("leaves a session bound while its own reserved launch waited, and offers no Retry over it", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    helpPanelState.setTerminal = vi.fn((_slot: number, terminalId: string) => {
+      helpPanelState.terminalId = terminalId;
+    });
+    // Another launch wins the slot on main while this one provisions.
+    window.electron.help.provisionSession = vi.fn(async () => {
+      helpPanelState.terminalId = "terminal-live";
+      return null;
+    }) as never;
+
+    ctrl.launch({
+      agentId: "codex",
+      replaceExisting: true,
+      requestedId: "terminal-reserved",
+      vacantOnly: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+    await vi.waitFor(() => expect(window.electron.help.provisionSession).toHaveBeenCalled());
+    await vi.waitFor(() => expect(ctrl["_isLaunching"]).toBe(false));
+
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(helpPanelState.terminalId).toBe("terminal-live");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+    expect(ctrl["_lastVacantFresh"]).toBeNull();
+  });
+
   it("never lets a vacant-only Retry end a session another launch bound into the tab since", () => {
     const ctrl = new HelpSessionController();
     ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
