@@ -514,6 +514,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalInputActions --
   "terminal.copy",
+  "terminal.copyClean",
   "terminal.paste",
   "terminal.copyLink",
   "terminal.contextMenu",
@@ -672,6 +673,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // not by reading it out of an action or the clipboard.
   "terminal.getOutput",
   "terminal.copy",
+  "terminal.copyClean",
   "terminal.injectOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.placeOwned",

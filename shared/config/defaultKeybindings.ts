@@ -496,6 +496,19 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    // Terminal.app's Copy Plain Text (⌥⇧⌘C), and one modifier out from the
+    // terminal's own Ctrl+Shift+C on Linux; Cmd+Shift+C is worktree.copyTree.
+    // Only from a focused terminal: elsewhere the focused panel's selection is
+    // one the user has stopped looking at.
+    actionId: "terminal.copyClean",
+    combo: "Cmd+Shift+Alt+C",
+    scope: "global",
+    priority: 0,
+    description: "Copy selection as clean text",
+    category: "Terminal",
+    when: "terminalFocused",
+  },
+  {
     actionId: "terminal.armDefault",
     combo: "Cmd+Shift+B",
     scope: "global",
@@ -1379,6 +1392,21 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Unbound on Windows, where Ctrl+Alt is AltGr: AltGr+C and AltGr+Shift+C type
+// ć/Ć or č/Č on Polish, Latvian and similar layouts. The row stays so the
+// action can still be bound there.
+const WINDOWS_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "terminal.copyClean",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Copy selection as clean text",
+    category: "Terminal",
+    when: "terminalFocused",
+  },
+];
+
 // Replacements, not additions: each entry displaces the core row with the same
 // actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
 // is taken by agent.focusNextWorking once Cmd folds to Ctrl.
@@ -1496,7 +1524,7 @@ export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): Ke
   const replacements = isLinux
     ? // Linux first: the first match wins, and Linux overrides the shared dictation key.
       [...LINUX_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS]
-    : NON_MAC_REPLACEMENT_KEYBINDINGS;
+    : [...WINDOWS_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS];
   const replaced = bindings.map(
     (binding) =>
       replacements.find((r) => r.actionId === binding.actionId && r.scope === binding.scope) ??

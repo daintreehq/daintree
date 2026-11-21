@@ -270,6 +270,11 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 
+// The clean-copy action reads the store by its own path.
+vi.mock("@/store/panelStore", async () => ({
+  usePanelStore: (await import("@/store")).usePanelStore,
+}));
+
 // The real choices come from the agent's saved presets; these tests only ask
 // where the submenu lands when there are some.
 vi.mock("@/components/Terminal/restartOnPresetChoices", async (importOriginal) => ({
@@ -297,6 +302,12 @@ import {
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { registerTerminalInputActions } from "@/services/actions/definitions/terminalInputActions";
+import type {
+  ActionCallbacks,
+  ActionRegistry,
+  AnyActionDefinition,
+} from "@/services/actions/actionTypes";
 
 const agentPanel = {
   id: "panel-1",
@@ -787,9 +798,20 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
 describe("TerminalContextMenu — clean copy (#15525)", () => {
   const writeText = vi.fn<(text: string) => Promise<void>>();
 
+  // The row dispatches `terminal.copyClean`, the action its shortcut runs too
+  // (#18132), so the copy these tests read is the real action's.
+  const copyClean = (() => {
+    const actions: ActionRegistry = new Map();
+    registerTerminalInputActions(actions, {} as ActionCallbacks);
+    return actions.get("terminal.copyClean")!() as AnyActionDefinition;
+  })();
+
   beforeEach(() => {
     writeText.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    dispatch.mockImplementation(async (id, args) =>
+      id === "terminal.copyClean" ? copyClean.run(args, {} as never) : undefined
+    );
   });
 
   afterEach(() => {

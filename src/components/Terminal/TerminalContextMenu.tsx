@@ -933,6 +933,7 @@ function TerminalContextMenuBody({
               hoveredFileScope={hoveredFileScope}
               selectionFilePath={selectionFilePath}
               onSendToAgent={handleSendToAgent}
+              copyCleanKeybinding="terminal.copyClean"
               onOpenInFileBrowser={handleOpenInFileBrowser}
               onAction={handleAction}
             />
