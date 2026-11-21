@@ -49,8 +49,8 @@ function destinationOf(state: EditorState, link: SyntaxNode): SyntaxNode | null 
   return null;
 }
 
-function isLinkOrImage(node: SyntaxNode | null): node is SyntaxNode {
-  return node?.name === "Link" || node?.name === "Image";
+function isLinkOrImage(node: SyntaxNode): boolean {
+  return node.name === "Link" || node.name === "Image";
 }
 
 /**
@@ -62,7 +62,7 @@ function isLinkOrImage(node: SyntaxNode | null): node is SyntaxNode {
  */
 export function urlNodeHref(state: EditorState, url: SyntaxNode): string | null {
   const parent = url.parent;
-  if (isLinkOrImage(parent)) {
+  if (parent && isLinkOrImage(parent)) {
     const destination = destinationOf(state, parent);
     return destination ? decodeDestination(state.sliceDoc(destination.from, destination.to)) : null;
   }
