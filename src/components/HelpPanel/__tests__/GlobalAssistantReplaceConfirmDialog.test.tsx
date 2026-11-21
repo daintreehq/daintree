@@ -6,7 +6,8 @@ import type { GlobalAssistantPhase } from "@shared/types/ipc/help";
 
 const notify = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify }));
-vi.mock("@/config/agents", () => ({
+vi.mock("@/config/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/config/agents")>()),
   getAgentConfig: (id: string) => ({ name: id === "codex" ? "Codex" : "Claude Code" }),
 }));
 
