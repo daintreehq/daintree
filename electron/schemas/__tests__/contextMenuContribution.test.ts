@@ -69,7 +69,7 @@ describe("ContextMenuContributionSchema file match", () => {
 
 describe("ContextMenuContributionSchema availability", () => {
   it("accepts an availability id on every location", () => {
-    for (const location of ["worktree", "terminal", "file", "browser", "project"]) {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
       expect(
         ContextMenuContributionSchema.safeParse({
           ...base,

@@ -11,7 +11,7 @@ import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsSt
 /**
  * The assistant session a plugin `assistant` item was opened on, as its action
  * receives it. `slot` and `incarnation` are numbers, which a `when` clause has no
- * type for, so they reach the action only.
+ * type for, so they reach the action and an availability check only.
  */
 export type AssistantPluginMenuSubject =
   | {
