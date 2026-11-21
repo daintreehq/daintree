@@ -1360,6 +1360,8 @@ export function HelpPanel({
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
+          workspaceId={activeWorkspaceId}
+          activeTerminalId={terminalId}
         />
       )}
 

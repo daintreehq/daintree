@@ -22,6 +22,7 @@ import { pluralize } from "@/lib/pluralize";
 import type { AgentState } from "@/types";
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+import { AssistantPluginMenuItems } from "@/components/Plugin/AssistantPluginMenuItems";
 import {
   NewSessionWithAgentLabel,
   SessionCeilingReason,
@@ -202,6 +203,13 @@ interface HelpSessionTabsProps {
   onOpenSessionWithAgent?: (agentId: string) => void;
   /** Shared base for this strip's ids — see {@link helpSessionTabId}. */
   idBase: string;
+  /**
+   * The project or scratch workspace the lanes belong to. Plugin `assistant` menu
+   * items are offered only with one, since it is half of what names the lane.
+   */
+  workspaceId?: string | null;
+  /** The selected lane's terminal, when it has one. */
+  activeTerminalId?: string | null;
 }
 
 /**
@@ -253,6 +261,8 @@ export function HelpSessionTabs({
   canOpenSessionWithAgent = canOpenSession,
   onOpenSessionWithAgent,
   idBase,
+  workspaceId,
+  activeTerminalId,
 }: HelpSessionTabsProps) {
   // The panel hides on Escape through the escape stack, which the keybinding layer
   // pops at window capture, before Radix sees the key. An open menu registers above
@@ -501,6 +511,19 @@ export function HelpSessionTabs({
                 {atLimit && !canOpenSessionWithAgent && <SessionCeilingReason open={tabs.length} />}
               </DropdownMenuItem>
             ))}
+          {/* Plugin rows act on the selected lane, so they close the ways to another
+              one and stay clear of Clear and Close, which end the menu. */}
+          {workspaceId && (
+            <AssistantPluginMenuItems
+              subject={{
+                assistantScope: "project",
+                projectId: workspaceId,
+                slot: activeTab.slot,
+                terminalId: activeTerminalId ?? undefined,
+                agentId: activeTab.agentId ?? undefined,
+              }}
+            />
+          )}
           <DropdownMenuSeparator />
           {/* Hidden rather than disabled where the lane has nothing to restart, as the
               header's overflow item is. */}

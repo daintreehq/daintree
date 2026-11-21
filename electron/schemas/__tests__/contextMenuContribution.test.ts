@@ -5,7 +5,7 @@ const base = { actionId: "acme.plugin.action", label: "Do it" };
 
 describe("ContextMenuContributionSchema location", () => {
   it("accepts every live location", () => {
-    for (const location of ["worktree", "terminal", "file", "browser", "project"]) {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
       expect(ContextMenuContributionSchema.safeParse({ ...base, location }).success).toBe(true);
     }
   });
