@@ -96,6 +96,12 @@ export interface GlobalAssistantState {
   occupied: boolean;
   /** The agent a person started it on, kept until it is stopped; null when it runs as the default. */
   pinnedAgentId: string | null;
+  /**
+   * Whether it is the session that coordinates (#18143): the only one whose
+   * `host.call` acts on workers. A lone session always is; with two, the one
+   * the person chose.
+   */
+  coordinating: boolean;
   /** Bumps with every run, so a panel can tell a new session from the one it showed. */
   generation: number;
   agentId: string | null;

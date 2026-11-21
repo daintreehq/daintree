@@ -7,6 +7,8 @@ import {
   GLOBAL_ASSISTANT_SLOT,
   GLOBAL_ASSISTANT_SESSION_AGENT_IDS,
   GLOBAL_ASSISTANT_SLOTS,
+  globalAssistantSessionNumber,
+  isGlobalAssistantSlot,
   type GlobalAssistantSlot,
 } from "../../shared/config/globalAssistant.js";
 import { getAgentConfig } from "../../shared/config/agentRegistry.js";
@@ -104,6 +106,7 @@ export function liveGlobalAssistantDeps(
     },
     keepsConversation: () => loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) != null,
     savePinnedAgent: (agentId) => writePinnedAgent(slot, agentId),
+    coordinates: () => globalAssistantCoordinatorSlot() === slot,
     spawn: async (spec) => {
       const [{ spawnAndConfirm }, { spawnHostAssistantLive }, { liveAssistantLaunchDeps }, pty] =
         await Promise.all([launch(), import("./viewless/index.js"), launch(), ptyClient()]);
@@ -209,6 +212,7 @@ export function getGlobalAssistantService(
   fenceInputOnOwnerChange(service, () =>
     import("../window/serviceRefs.js").then(({ getPtyClient }) => getPtyClient())
   );
+  service.onChange(() => settleCoordinator());
   // A session told before the pointers were in may have said it keeps nothing:
   // it says its state again once they are, however late.
   void help()
@@ -326,6 +330,169 @@ export function joinNewGlobalAssistantLaunch(
   return Promise.reject(
     new AppError({ code: "CANCELLED", message: "That global assistant launch has ended." })
   );
+}
+
+/** The session every window was last told coordinates, so a change reaches both states. */
+let toldCoordinator: GlobalAssistantSlot | null = null;
+
+/** Whether the session counts toward the limit, read without creating it. */
+function slotOccupied(slot: GlobalAssistantSlot): boolean {
+  const service = instances.get(slot);
+  if (service) return service.isOccupied();
+  return (
+    readPinnedAgent(slot) !== null ||
+    loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) != null
+  );
+}
+
+/**
+ * The session that coordinates (#18143): the only one whose `host.call` acts
+ * on workers. A lone session always does; with two, the one the person chose,
+ * the first when no choice was ever kept. Nothing but the person's handover
+ * or a stop of the coordinator changes it.
+ */
+export function globalAssistantCoordinatorSlot(): GlobalAssistantSlot {
+  const occupied = GLOBAL_ASSISTANT_SLOTS.filter(slotOccupied);
+  if (occupied.length === 1) return occupied[0]!;
+  const chosen = loadedHelp?.getLaneCoordinator(GLOBAL_ASSISTANT_ID);
+  return isGlobalAssistantSlot(chosen) ? chosen : GLOBAL_ASSISTANT_SLOT;
+}
+
+/**
+ * A lone session is kept as the coordinator, so a second one started later
+ * never takes it, and both states say so whenever the coordinator changes.
+ * Kept only once the pointers are in: before then a kept session reads free.
+ */
+function settleCoordinator(): void {
+  const help = loadedHelp;
+  if (!shuttingDown && help !== null) {
+    const occupied = GLOBAL_ASSISTANT_SLOTS.filter(slotOccupied);
+    if (occupied.length === 1) {
+      help.setLaneCoordinator(GLOBAL_ASSISTANT_ID, occupied[0]!).catch((err: unknown) => {
+        console.warn("[GlobalAssistant] Keeping the coordinating session failed:", err);
+      });
+    }
+  }
+  const coordinator = globalAssistantCoordinatorSlot();
+  if (coordinator === toldCoordinator) return;
+  toldCoordinator = coordinator;
+  for (const service of peekGlobalAssistantServices()) service.refresh();
+}
+
+const sessionName = (slot: GlobalAssistantSlot) =>
+  `Session ${globalAssistantSessionNumber(slot)}`;
+
+type McpServer = Pick<
+  import("./McpServerService.js").McpServerService,
+  "handOverGlobalAssistantWork"
+>;
+
+/** Loaded before a handover, so the work moves in the same turn as the choice. */
+function loadMcpServer(): Promise<McpServer | null> {
+  return import("./McpServerService.js").then(
+    (m) => m.mcpServerService,
+    (err: unknown) => {
+      console.warn("[GlobalAssistant] The MCP server didn't load for a handover:", err);
+      return null;
+    }
+  );
+}
+
+const startingRefusal = () =>
+  new AppError({
+    code: "VALIDATION",
+    message: "A global assistant session is starting or stopping.",
+    userMessage: "A global assistant session is starting or stopping. Try again once it settles.",
+  });
+
+/**
+ * Move coordination from `source` to `target` with the work it held (#18143):
+ * the ownership its conversation holds, its prompts still waiting on busy
+ * workers here, and the terminals the person handed it. Synchronous up to the
+ * write, so no call admitted after it finds the old coordinator. Refused,
+ * with nothing moved, while a launch holds `target`'s conversation.
+ */
+function moveCoordination(
+  help: HelpSessionService,
+  mcp: McpServer | null,
+  source: GlobalAssistantService,
+  target: GlobalAssistantService
+): Promise<void> {
+  const outgoing = source.getRunningSession();
+  const written = help.handOverLaneCoordination(GLOBAL_ASSISTANT_ID, source.slot, target.slot);
+  if (written === null) throw startingRefusal();
+  settleCoordinator();
+  if (outgoing !== null && mcp !== null) {
+    try {
+      mcp.handOverGlobalAssistantWork(outgoing.sessionId, target.getRunningSession());
+    } catch (err) {
+      console.warn("[GlobalAssistant] Handing the coordinator's terminals over failed:", err);
+    }
+  }
+  return written;
+}
+
+/**
+ * Hand coordination to the session at `slot`, as the person asked (#18143).
+ * The session handing it over keeps its conversation and can read, but acts
+ * on no worker until coordination comes back to it.
+ */
+export async function handGlobalAssistantCoordination(slot: GlobalAssistantSlot): Promise<void> {
+  if (shuttingDown) throw shuttingDownError();
+  if (!(await whenGlobalAssistantSessionsReadable())) throw stillStarting();
+  const mcp = await loadMcpServer();
+  if (shuttingDown) throw shuttingDownError();
+  const help = loadedHelp;
+  if (!help) throw stillStarting();
+  const from = globalAssistantCoordinatorSlot();
+  if (from === slot) return;
+  const source = getGlobalAssistantService(from);
+  const target = getGlobalAssistantService(slot);
+  if (!target.isOccupied()) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "That global assistant session isn't open.",
+      userMessage: `${sessionName(slot)} isn't open. Start it to hand coordination to it.`,
+    });
+  }
+  if (!source.isSettled() || !target.isSettled()) throw startingRefusal();
+  await moveCoordination(help, mcp, source, target);
+}
+
+/**
+ * Stop the session at `slot` and forget its conversation. When it coordinates
+ * and the other session stays, coordination and the work it held go to that
+ * one first, in the same turn (#18143), so nothing it launched is forgotten
+ * with it. `check` runs just before, once nothing is awaited between it and
+ * the stop, and refuses by throwing.
+ */
+export async function stopGlobalAssistantSession(
+  slot: GlobalAssistantSlot,
+  check: (service: GlobalAssistantService) => void = () => {}
+): Promise<void> {
+  const service = getGlobalAssistantService(slot);
+  const other = getGlobalAssistantService(slot === 0 ? 1 : 0);
+  const mcp = other.isOccupied() ? await loadMcpServer() : null;
+  check(service);
+  const help = loadedHelp;
+  if (
+    shuttingDown ||
+    help === null ||
+    !other.isOccupied() ||
+    globalAssistantCoordinatorSlot() !== slot
+  ) {
+    return service.discard();
+  }
+  if (!other.isSettled()) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "The other global assistant session is starting.",
+      userMessage: `${sessionName(other.slot)} is starting. Stop this session once it has, so it can take over the workers.`,
+    });
+  }
+  const moved = moveCoordination(help, mcp, service, other);
+  const stopped = service.discard();
+  await Promise.all([moved, stopped]);
 }
 
 async function liveAgentUsable(agentId: string): Promise<boolean> {

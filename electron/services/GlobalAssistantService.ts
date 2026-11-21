@@ -95,6 +95,8 @@ export interface GlobalAssistantDeps {
   keepsConversation?(): boolean;
   /** Keep the agent chosen for the session across restarts, or forget it with null. */
   savePinnedAgent?(agentId: string | null): void;
+  /** Whether it is the session that coordinates (#18143). Absent, it always is. */
+  coordinates?(): boolean;
 }
 
 export interface GlobalAssistantOptions {
@@ -188,6 +190,7 @@ export class GlobalAssistantService {
       phase: this.run ? "running" : this.launchInFlight() ? "launching" : "absent",
       occupied: this.isOccupied(),
       pinnedAgentId: this.pinnedAgentId,
+      coordinating: this.coordinates(),
       generation: this.generation,
       agentId: this.run?.agentId ?? this.starting?.agentId ?? this.pinnedAgentId ?? null,
       terminalId: this.run?.terminalId ?? null,
@@ -227,6 +230,23 @@ export class GlobalAssistantService {
       return this.deps.keepsConversation?.() === true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Whether nothing is starting, clearing or stopping it (#18143): only then
+   * can coordination move to or from it, since a launch or teardown under way
+   * settles which conversation, and so whose work, the session holds.
+   */
+  isSettled(): boolean {
+    return !this.launchInFlight() && this.starting === null && this.holds === 0;
+  }
+
+  private coordinates(): boolean {
+    try {
+      return this.deps.coordinates?.() ?? true;
+    } catch {
+      return true;
     }
   }
 

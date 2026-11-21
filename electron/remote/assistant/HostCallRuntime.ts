@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
+  GLOBAL_STANDBY_TOOLS,
   globalAssistantMayRelay,
+  globalAssistantSessionNumber,
+  globalStandbyMayRelay,
   isGlobalAssistantId,
+  isGlobalAssistantSlot,
 } from "../../../shared/config/globalAssistant.js";
 import {
   ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
@@ -212,6 +216,12 @@ export interface OpenRun {
    * what the run makes there under it, so the conversation resumed keeps it.
    */
   conversationOwnershipId?: string;
+  /**
+   * A global assistant session that isn't coordinating (#18143): its calls
+   * are held to the standby reads and carry no conversation, so no host binds
+   * it to one while it can't act.
+   */
+  standby?: true;
 }
 
 export interface HostCallRuntimeDeps {
@@ -694,6 +704,13 @@ const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
   "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, applies an update Claude Code offers with `terminal.applyClaudeUpdateOwned`, and restarts or deletes only what it launched there. Ask the user to do it.";
+/** Why a global assistant session that isn't coordinating was refused (#18143). */
+function notCoordinatingDetail(slot: number): string {
+  const name = isGlobalAssistantSlot(slot)
+    ? `Global assistant session ${globalAssistantSessionNumber(slot)}`
+    : "This global assistant session";
+  return `${name} isn't coordinating, so it acts on no worker: the other session leads the work, and holds what this one launched before. Nothing was sent. It can still read with ${[...GLOBAL_STANDBY_TOOLS].join(", ")}. The person can hand coordination to it from the Assistant panel.`;
+}
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -1892,6 +1909,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
+      // Before anything is noted, pinned or sent, resends and throwaways included.
+      if (caller.standby === true && !globalStandbyMayRelay(args.tool)) {
+        return {
+          ...this.outcomeWith("policy_rejected", notCoordinatingDetail(caller.slot)),
+          callId: args.callId ?? null,
+          result: null,
+        };
+      }
       const projectId = args.projectId;
       if (args.throwaway === true || projectId === undefined) {
         return this.callThrowaway(helpSessionId, caller, args, context);

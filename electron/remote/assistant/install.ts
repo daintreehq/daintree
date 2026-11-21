@@ -8,7 +8,10 @@ import {
   loadedHelpSessionService,
   whenHelpSessionServiceLoads,
 } from "../../services/helpSessionRuntime.js";
-import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
+import {
+  globalAssistantCoordinatorSlot,
+  peekGlobalAssistantService,
+} from "../../services/globalAssistant.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import {
   GLOBAL_ASSISTANT_SLOT,
@@ -180,7 +183,13 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   }
   const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
   if (launchGeneration === null) return null;
-  const conversationOwnershipId = helpSessions.getConversationOwnershipId(running.sessionId);
+  // A global session that isn't coordinating names no conversation (#18143):
+  // the one it ran under while it coordinated is the coordinator's now.
+  const standby =
+    isGlobalAssistantId(lane.projectId) && globalAssistantCoordinatorSlot() !== lane.slot;
+  const conversationOwnershipId = standby
+    ? null
+    : helpSessions.getConversationOwnershipId(running.sessionId);
   return {
     projectId: lane.projectId,
     slot: lane.slot,
@@ -188,6 +197,7 @@ function localRunOf(helpSessionId: string): OpenRun | null {
     terminalId: running.terminalId,
     launchGeneration,
     ...(conversationOwnershipId !== null ? { conversationOwnershipId } : {}),
+    ...(standby ? { standby: true as const } : {}),
   };
 }
 
