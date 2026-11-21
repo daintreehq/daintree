@@ -28,6 +28,7 @@ import { HelpLaunchingState } from "./HelpLaunchingState";
 import { refocusStartAfterCancel } from "./refocusStartAfterCancel";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
+import { AssistantPluginMenuItems } from "@/components/Plugin/AssistantPluginMenuItems";
 
 function subscribeViewCache(onChange: () => void): () => void {
   return subscribeProjectViewLifecycle(() => onChange());
@@ -250,6 +251,21 @@ export function GlobalAssistantPane({
                   <CircleHelp className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Open docs
                 </DropdownMenuItem>
+                {/* Only for the run on screen: never one this pane isn't attached
+                    to, or the successor behind an ended run. Always mounted, so it
+                    holds the run the menu opened on through a restart's gap. */}
+                <AssistantPluginMenuItems
+                  subject={
+                    active && shown
+                      ? {
+                          assistantScope: "global",
+                          terminalId: shown.terminalId,
+                          incarnation: shown.incarnation,
+                          agentId: agentId ?? undefined,
+                        }
+                      : null
+                  }
+                />
                 {controllable && (
                   <>
                     <DropdownMenuSeparator />

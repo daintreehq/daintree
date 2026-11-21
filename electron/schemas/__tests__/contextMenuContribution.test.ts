@@ -5,7 +5,7 @@ const base = { actionId: "acme.plugin.action", label: "Do it" };
 
 describe("ContextMenuContributionSchema location", () => {
   it("accepts every live location", () => {
-    for (const location of ["worktree", "terminal", "file", "browser", "project"]) {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
       expect(ContextMenuContributionSchema.safeParse({ ...base, location }).success).toBe(true);
     }
   });
@@ -37,10 +37,11 @@ describe("ContextMenuContributionSchema file match", () => {
     ["extensions", ["json"]],
     ["paths", ["a/**"]],
   ])("rejects %s on a non-file location", (key, value) => {
-    expect(
-      ContextMenuContributionSchema.safeParse({ ...base, location: "worktree", [key]: value })
-        .success
-    ).toBe(false);
+    for (const location of ["worktree", "assistant"]) {
+      expect(
+        ContextMenuContributionSchema.safeParse({ ...base, location, [key]: value }).success
+      ).toBe(false);
+    }
   });
 
   it("rejects extensions on a folder item", () => {

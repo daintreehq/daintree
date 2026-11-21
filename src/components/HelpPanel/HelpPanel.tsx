@@ -1360,6 +1360,10 @@ export function HelpPanel({
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
+          workspaceId={activeWorkspaceId}
+          // A launch reserves the id, then commits a spawning placeholder, before
+          // the PTY exists; plugins get it once there is one to act on.
+          activeTerminalId={terminalSpawnStatus === "ready" ? terminalId : null}
         />
       )}
 

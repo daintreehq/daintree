@@ -1091,7 +1091,8 @@
                   "terminal",
                   "file",
                   "browser",
-                  "project"
+                  "project",
+                  "assistant"
                 ]
               },
               "label": {

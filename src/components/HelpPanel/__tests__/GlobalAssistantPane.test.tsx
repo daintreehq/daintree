@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -32,6 +32,9 @@ const stream = vi.hoisted(() => ({
   state: { watchId: 1 as number | null, ended: false, secretPrompt: false },
 }));
 
+const dispatchAction = vi.hoisted(() => vi.fn(() => Promise.resolve({ ok: true })));
+
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchAction } }));
 vi.mock("@/clients/agentDefaultsClient", () => ({ agentDefaultsClient: { set: vi.fn() } }));
 vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => host.id }));
 vi.mock("@/store/canopyStore", () => ({
@@ -95,6 +98,8 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
 
 const { GlobalAssistantPane } = await import("../GlobalAssistantPane");
 const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+const { usePluginContextMenuItemsStore, _resetPluginContextMenuItemsStoreForTest } =
+  await import("@/store/pluginContextMenuItemsStore");
 
 const subject = {
   hostId: "local",
@@ -1171,6 +1176,141 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(failureBanner()!.textContent).toContain("Your message is still in the box.");
       expect(failureBanner()!.textContent).not.toContain("press Enter");
       expect(failureBanner()!.textContent).not.toContain("take input");
+    });
+  });
+
+  describe("plugin assistant items (#18138)", () => {
+    const contributions = [
+      {
+        pluginId: "acme",
+        item: {
+          actionId: "acme.worker",
+          label: "Continue in another agent…",
+          location: "terminal" as const,
+        },
+      },
+      {
+        pluginId: "acme",
+        item: {
+          actionId: "acme.lane",
+          label: "Lane only",
+          location: "assistant" as const,
+          when: "assistantScope == 'project'",
+        },
+      },
+      {
+        pluginId: "acme",
+        item: {
+          actionId: "acme.global",
+          label: "Hand this run on…",
+          location: "assistant" as const,
+          when: "assistantScope == 'global'",
+        },
+      },
+    ];
+
+    const openMenu = async () => {
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+      return screen.findByRole("menu");
+    };
+    const rows = (menu: HTMLElement) =>
+      Array.from(menu.querySelectorAll('[role="menuitem"]')).map((row) => row.textContent);
+    const structure = (menu: HTMLElement) =>
+      Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]')).map((el) =>
+        el.getAttribute("role") === "separator" ? "—" : el.textContent
+      );
+    const closeMenu = async (menu: HTMLElement) => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open docs" }));
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    };
+
+    beforeEach(() => {
+      _resetPluginContextMenuItemsStoreForTest();
+      usePluginContextMenuItemsStore.setState({ entries: contributions });
+      dispatchAction.mockClear();
+    });
+
+    afterEach(() => {
+      _resetPluginContextMenuItemsStoreForTest();
+    });
+
+    it("puts the global run's items between Open docs and Stop, for the run on screen", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      const menu = await openMenu();
+      expect(structure(menu)).toEqual([
+        "Clear conversation",
+        "—",
+        "Open docs",
+        "—",
+        "Hand this run on…",
+        "—",
+        "Stop global assistant",
+      ]);
+
+      fireEvent.click(screen.getByRole("menuitem", { name: "Hand this run on…" }));
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "acme.global",
+        { assistantScope: "global", terminalId: "g1", incarnation: 2, agentId: "claude" },
+        { source: "menu" }
+      );
+    });
+
+    it("keeps an open menu on its run through a restart, and offers the new run once reopened", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      const menu = await openMenu();
+      expect(rows(menu)).toContain("Hand this run on…");
+
+      // A restart from another window: a gap with no run, then its successor.
+      push(running({ subject: null, inputOwner: "a1", inputEpoch: 3 }));
+      expect(rows(menu)).not.toContain("Hand this run on…");
+      push(running({ subject: { ...subject, incarnation: 3 }, inputOwner: "a1", inputEpoch: 3 }));
+      expect(rows(menu)).not.toContain("Hand this run on…");
+
+      await closeMenu(menu);
+      fireEvent.click(
+        within(await openMenu()).getByRole("menuitem", { name: "Hand this run on…" })
+      );
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "acme.global",
+        { assistantScope: "global", terminalId: "g1", incarnation: 3, agentId: "claude" },
+        { source: "menu" }
+      );
+    });
+
+    it("offers none once the pane is hidden, though it still holds the run it saw", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      const { rerenderVisible } = renderPane();
+      await flush();
+      rerenderVisible(false);
+      await flush();
+      expect(rows(await openMenu())).toEqual([
+        "Clear conversation",
+        "Open docs",
+        "Stop global assistant",
+      ]);
+    });
+
+    it("offers none for a successor hidden behind an ended run", async () => {
+      useHelpPanelStore.setState({ globalTarget: { ...subject, incarnation: 1 } });
+      installHelp(running({ inputOwner: "b1", inputEpoch: 4 }));
+      renderPane();
+      await flush();
+      expect(rows(await openMenu())).toEqual(["Open docs"]);
+    });
+
+    it("offers none for a run whose terminal couldn't be brought back", async () => {
+      installHelp(running({ subject: null, inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      expect(rows(await openMenu())).toEqual([
+        "Clear conversation",
+        "Open docs",
+        "Stop global assistant",
+      ]);
     });
   });
 });

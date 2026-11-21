@@ -3908,7 +3908,7 @@ interface PluginPanelActivity {
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
-type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
+type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "agent:launch-preset", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "host:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;

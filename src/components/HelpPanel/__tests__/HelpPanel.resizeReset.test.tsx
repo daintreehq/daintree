@@ -159,6 +159,9 @@ vi.mock("@/services/TerminalInstanceService", () => {
   };
 });
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
+vi.mock("@/components/Plugin/AssistantPluginMenuItems", () => ({
+  AssistantPluginMenuItems: () => null,
+}));
 vi.mock("@shared/config/agentIds", () => ({
   BUILT_IN_AGENT_IDS: ["claude", "codex", "claude-code"] as const,
   isBuiltInAgentId: (v: unknown): v is string =>

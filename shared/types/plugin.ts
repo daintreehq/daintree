@@ -983,8 +983,11 @@ export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
 // was silently dead. Only `worktree` / `terminal` / `file` / `browser` /
-// `project` have live consumers (`project` is the toolbar project pill).
-export type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
+// `project` / `assistant` have live consumers (`project` is the toolbar project
+// pill; `assistant` is the Assistant panel's session menus, kept apart from
+// `terminal` so an item written for worker panes never lands on an assistant).
+export type ContextMenuLocation =
+  "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
