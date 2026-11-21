@@ -14,6 +14,7 @@ import { MarkdownViewer } from "../MarkdownViewer";
 installAppPluginKitHost();
 
 const PATHS = { filePath: "/repo/docs/spec.md", rootPath: "/repo" };
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
 
 async function mountSource(content: string) {
   const utils = render(<MarkdownViewer {...PATHS} content={content} viewMode="source" />);
@@ -60,13 +61,15 @@ beforeEach(() => {
   // coordinates, so give it a stable one rather than whatever zero rects yield.
   vi.spyOn(EditorView.prototype, "posAndSideAtCoords").mockReturnValue({ pos: 0, assoc: 1 });
   // A press inside a selection measures it to tell a drag-and-drop from a click.
-  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  delete (Range.prototype as Partial<Range>).getClientRects;
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
 });
 
 describe("MarkdownViewer Source links", () => {

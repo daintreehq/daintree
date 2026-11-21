@@ -766,6 +766,8 @@ export default tseslint.config(
       "src/components/FileViewer/codeMirrorLanguages.ts",
       "src/components/FileViewer/editorSearchTheme.ts",
       "src/components/FileViewer/editorSearchPanel.ts",
+      "src/components/FileViewer/sourceLinks.ts",
+      "src/components/Markdown/markdownLinkTarget.ts",
       "src/components/Demo/DemoCursor.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
