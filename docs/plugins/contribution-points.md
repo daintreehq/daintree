@@ -1110,13 +1110,21 @@ An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides
 `when` decides whether an item applies to what was right-clicked. When it applies but can't run right now (a pane whose session file isn't known yet, an agent your plugin doesn't support), hiding it leaves the person wondering where it went. Set `availability` on the item instead, and answer for it at runtime: the item stays visible but disabled, with your reason beside it, the way Daintree's own **New session** row reads at the session ceiling.
 
 ```json
-{
-  "actionId": "acme.continue.continue",
-  "location": "terminal",
-  "label": "Continue in another agent…",
-  "when": "panelKind == 'terminal'",
-  "availability": "continue"
-}
+[
+  {
+    "actionId": "acme.continue.continue",
+    "location": "terminal",
+    "label": "Continue in another agent…",
+    "when": "panelKind == 'terminal'",
+    "availability": "continue"
+  },
+  {
+    "actionId": "acme.continue.continue",
+    "location": "assistant",
+    "label": "Continue in another agent…",
+    "availability": "continue"
+  }
+]
 ```
 
 ```ts
@@ -1127,8 +1135,11 @@ import {
 
 await host.registerHandler(CONTEXT_MENU_AVAILABILITY_CHANNEL, async (_ctx, payload: unknown) => {
   const request = payload as ContextMenuAvailabilityRequest;
-  if (request.availability !== "continue" || !request.panelId) return null;
-  const found = await host.dispatch("terminal.sessionFile.get", { terminalId: request.panelId });
+  if (request.availability !== "continue") return null;
+  // A worker pane names its terminal as the panel; an assistant session names it directly.
+  const terminalId = request.panelId ?? request.terminalId;
+  if (!terminalId) return "Session hasn't started yet";
+  const found = await host.dispatch("terminal.sessionFile.get", { terminalId });
   if (!found.ok) return "Couldn't find this session";
   const file = found.result as { status: string; reason?: string };
   if (file.status === "observed") return null;
@@ -1138,7 +1149,7 @@ await host.registerHandler(CONTEXT_MENU_AVAILABILITY_CHANNEL, async (_ctx, paylo
 });
 ```
 
-Each time a menu shows the item (as the menu or its **Extensions** submenu opens), Daintree invokes your plugin's `CONTEXT_MENU_AVAILABILITY_CHANNEL` handler with a `ContextMenuAvailabilityRequest`: the item's `availability` id, its `location`, and the ids that name what was right-clicked — `panelId` and `panelKind` on `terminal` and `browser`, `worktreeId` on `worktree` (and on a `terminal` whose panel has one), `projectId` on `project`, and `isDirectory` on `file`, with `relativePath` when the row is inside a worktree. A browser page's URL, a file's absolute path and its worktree root are not sent; they arrive with the dispatch, when the person picks the item. One handler answers for every item that sets `availability`, so branch on the id. The handler receives the request as its second argument, typed `unknown` by the untyped `registerHandler` overload; register it with a [channel schema](./host-api.md#registerhandler-and-broadcasttorenderer) instead to have it parsed.
+Each time a menu shows the item (as the menu or its **Extensions** submenu opens), Daintree invokes your plugin's `CONTEXT_MENU_AVAILABILITY_CHANNEL` handler with a `ContextMenuAvailabilityRequest`: the item's `availability` id, its `location`, and the ids that name what was right-clicked — `panelId` and `panelKind` on `terminal` and `browser`, `worktreeId` on `worktree` (and on a `terminal` whose panel has one), `projectId` on `project`, `isDirectory` on `file`, with `relativePath` when the row is inside a worktree, and on `assistant` the session's identifying fields as the action receives them (`assistantScope`, `projectId`, `slot`, `terminalId`, `incarnation`, `agentId`, each when the session has it). A browser page's URL, a file's absolute path and its worktree root are not sent; they arrive with the dispatch, when the person picks the item. One handler answers for every item that sets `availability`, so branch on the id. The handler receives the request as its second argument, typed `unknown` by the untyped `registerHandler` overload; register it with a [channel schema](./host-api.md#registerhandler-and-broadcasttorenderer) instead to have it parsed.
 
 Return `null` when the item can run, or a short reason when it can't: one line, at most `CONTEXT_MENU_AVAILABILITY_REASON_MAX` (120) characters, sentence case with no full stop. The reason is shown beside the dimmed label and read out to screen readers, which skip disabled rows. The item can't be picked while Daintree waits or when you name a reason; it shows "Checking…" if your answer takes longer than a moment.
 

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenuItem,
+  DropdownMenuMeta,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
@@ -28,7 +32,11 @@ export type AssistantPluginMenuSubject =
       agentId?: string;
     };
 
-const SECTION_COMPONENTS = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator };
+const SECTION_COMPONENTS = {
+  Item: DropdownMenuItem,
+  Separator: DropdownMenuSeparator,
+  Meta: DropdownMenuMeta,
+};
 
 /**
  * Whether `current` is still the session the menu opened on: the same lane with

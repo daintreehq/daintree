@@ -21,7 +21,10 @@ const STRING_SUBJECT_KEYS = [
   "worktreeId",
   "projectId",
   "relativePath",
+  "terminalId",
+  "agentId",
 ] as const;
+const NUMBER_SUBJECT_KEYS = ["slot", "incarnation"] as const;
 
 /**
  * The request a plugin's availability handler is asked, built from the args the
@@ -40,9 +43,15 @@ export function contextMenuAvailabilityRequest(
     const value = dispatchArgs?.[key];
     if (typeof value === "string" && value.length > 0) request[key] = value;
   }
+  for (const key of NUMBER_SUBJECT_KEYS) {
+    const value = dispatchArgs?.[key];
+    if (typeof value === "number" && Number.isFinite(value)) request[key] = value;
+  }
   if (typeof dispatchArgs?.isDirectory === "boolean") {
     request.isDirectory = dispatchArgs.isDirectory;
   }
+  const scope = dispatchArgs?.assistantScope;
+  if (scope === "project" || scope === "global") request.assistantScope = scope;
   return request;
 }
 

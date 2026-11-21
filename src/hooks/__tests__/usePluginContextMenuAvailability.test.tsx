@@ -121,6 +121,39 @@ describe("contextMenuAvailabilityRequest", () => {
     });
   });
 
+  it("names an assistant session by the fields its action receives", () => {
+    expect(
+      contextMenuAvailabilityRequest("continue", "assistant", {
+        assistantScope: "project",
+        projectId: "proj-1",
+        slot: 0,
+        terminalId: "t-1",
+        agentId: "claude",
+      })
+    ).toEqual({
+      availability: "continue",
+      location: "assistant",
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 0,
+      terminalId: "t-1",
+      agentId: "claude",
+    });
+    expect(
+      contextMenuAvailabilityRequest("continue", "assistant", {
+        assistantScope: "global",
+        terminalId: "t-9",
+        incarnation: 2,
+      })
+    ).toEqual({
+      availability: "continue",
+      location: "assistant",
+      assistantScope: "global",
+      terminalId: "t-9",
+      incarnation: 2,
+    });
+  });
+
   it("drops subject fields of the wrong type or empty", () => {
     expect(
       contextMenuAvailabilityRequest("x", "terminal", {
@@ -128,6 +161,9 @@ describe("contextMenuAvailabilityRequest", () => {
         panelKind: 3,
         worktreeId: { id: "wt" },
         isDirectory: "yes",
+        assistantScope: "elsewhere",
+        slot: Number.NaN,
+        incarnation: "2",
       })
     ).toEqual({ availability: "x", location: "terminal" });
   });

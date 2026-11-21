@@ -4039,12 +4039,22 @@ interface ContextMenuAvailabilityRequest {
     panelKind?: string;
     /** `terminal` (when the panel has one) and `worktree`: the worktree. */
     worktreeId?: string;
-    /** `project`: the project. */
+    /** `project`, and `assistant` on a project session: the project. */
     projectId?: string;
     /** `file`: the row's path relative to its worktree root, when it is inside one. */
     relativePath?: string;
     /** `file`: whether the row is a folder. */
     isDirectory?: boolean;
+    /** `assistant`: a project assistant session or the global assistant. */
+    assistantScope?: "project" | "global";
+    /** `assistant`: the session's terminal, when it is up. */
+    terminalId?: string;
+    /** `assistant`: the agent the session runs, when known. */
+    agentId?: string;
+    /** `assistant`, project sessions: the lane's zero-based slot. */
+    slot?: number;
+    /** `assistant`, global: which launch of that terminal. */
+    incarnation?: number;
 }
 /**
  * View contribution location.
