@@ -513,8 +513,9 @@ export class GlobalAssistantService {
    */
   discard(): Promise<void> {
     if (this.closed) return this.teardown("discard");
-    this.setPinnedAgent(null);
+    // Held first, so no state says it is free while the stop is still going.
     this.holds += 1;
+    this.setPinnedAgent(null);
     return this.teardown("discard").finally(() => {
       this.holds -= 1;
       this.emit();
