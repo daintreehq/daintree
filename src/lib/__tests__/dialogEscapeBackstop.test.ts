@@ -79,15 +79,18 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
   });
 
-  it("does not count a showing tooltip that Escape cannot close (a pinned hint)", () => {
-    addTooltip("instant-open", false);
-    fireEscape();
-    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
-  });
+  it.each(["delayed-open", "instant-open"])(
+    "does not count a %s tooltip that Escape cannot close (a pinned hint)",
+    (dataState) => {
+      addTooltip(dataState, false);
+      fireEscape();
+      expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+    }
+  );
 
   // With an aria-label, Radix puts the role on a hidden child and leaves
   // data-state on the content.
-  it("counts a showing tooltip whose role sits on a hidden child", () => {
+  it("counts a marked tooltip whose role sits on a child element, not on the content", () => {
     const el = addTooltip("delayed-open");
     el.removeAttribute("role");
     const label = document.createElement("span");

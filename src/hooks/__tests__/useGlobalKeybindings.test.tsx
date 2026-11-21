@@ -2497,7 +2497,7 @@ describe("useGlobalKeybindings — layers open inside the plugin manager (#16942
     return control;
   }
 
-  it("lets an open tooltip close itself before the manager", () => {
+  it("forwards Escape past the manager while a closable tooltip is open", () => {
     const closeManager = vi.fn();
     registerEscape(closeManager);
     render(<Host />);

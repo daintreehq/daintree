@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement, createRef, type ComponentType, type ReactNode } from "react";
+import { createElement, createRef, useState, type ComponentType, type ReactNode } from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { VirtuosoMockContext } from "react-virtuoso";
@@ -368,8 +368,35 @@ describe("HoverCard", () => {
         children: createElement("button", { type: "button" }, "Trigger"),
       })
     );
-    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    const card = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(card.getAttribute("data-state")).toMatch(/-open$/);
     expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).toBeNull();
+  });
+
+  it("counts a controlled card whose plugin handles the close, and closes it on Escape", async () => {
+    const onOpenChange = vi.fn();
+    function Owner() {
+      const [open, setOpen] = useState(true);
+      return createElement(kit.HoverCard, {
+        open,
+        onOpenChange: (next: boolean) => {
+          onOpenChange(next);
+          setOpen(next);
+        },
+        content: createElement("p", null, "Controlled"),
+        children: createElement("button", { type: "button" }, "Owner"),
+      });
+    }
+    mount(createElement(Owner));
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText("Controlled")).toBeNull();
   });
 
   it("stays open when controlled, on the host's hover-card width", () => {

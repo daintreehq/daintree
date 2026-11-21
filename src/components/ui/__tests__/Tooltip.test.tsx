@@ -666,15 +666,17 @@ describe("TooltipContent — counts as an Escape layer only when Escape can clos
         <TooltipContent>content</TooltipContent>
       </Tooltip>
     );
-    return contentSpy.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+    const props: unknown = contentSpy.mock.calls.at(-1)?.[0];
+    return props;
   }
 
   it("marks an uncontrolled tooltip", () => {
-    expect(renderContent({ defaultOpen: true })?.[ESCAPE_TOOLTIP_LAYER_ATTR]).toBe("");
+    expect(renderContent({ defaultOpen: true })).toHaveProperty(ESCAPE_TOOLTIP_LAYER_ATTR, "");
   });
 
-  it("marks a controlled tooltip whose owner handles the close", () => {
-    expect(renderContent({ open: true, onOpenChange: () => {} })?.[ESCAPE_TOOLTIP_LAYER_ATTR]).toBe(
+  it("marks a controlled tooltip with an onOpenChange callback", () => {
+    expect(renderContent({ open: true, onOpenChange: () => {} })).toHaveProperty(
+      ESCAPE_TOOLTIP_LAYER_ATTR,
       ""
     );
   });

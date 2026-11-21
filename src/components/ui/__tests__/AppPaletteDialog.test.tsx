@@ -235,6 +235,7 @@ describe("AppPaletteDialog Escape over an open tooltip", () => {
     pressEscape();
 
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("escape");
   });
 });
 

@@ -1593,6 +1593,7 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
 
 describe("AppDialog Escape over an open tooltip", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     mockPrevOpen = false;
     _resetForTests();
     _resetBackstopForTests();
@@ -1604,16 +1605,17 @@ describe("AppDialog Escape over an open tooltip", () => {
     _resetBackstopForTests();
   });
 
-  function pressEscape() {
+  function pressEscape(): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     act(() => {
-      (document.activeElement ?? document.body).dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
-      );
+      (document.activeElement ?? document.body).dispatchEvent(event);
     });
+    return event;
   }
 
-  // A keyboard-opened row caption (TruncatedTooltip in a Settings tab): Radix
-  // dismisses it on Escape, and the dialog must not close on the same keypress.
+  // A row caption showing while the row has focus (TruncatedTooltip in a
+  // Settings tab): Radix dismisses it on Escape, and the dialog must not close
+  // on the same keypress.
   it("dismisses only the tooltip, then closes on the next Escape", async () => {
     const onClose = vi.fn();
     render(
@@ -1645,7 +1647,7 @@ describe("AppDialog Escape over an open tooltip", () => {
   // it as the layer taking Escape would leave the dialog unclosable.
   it("closes over a pinned tooltip that Escape cannot dismiss", async () => {
     const onClose = vi.fn();
-    render(
+    const ui = (isOpen: boolean) => (
       <>
         <Tooltip open>
           <TooltipTrigger asChild>
@@ -1653,16 +1655,20 @@ describe("AppDialog Escape over an open tooltip", () => {
           </TooltipTrigger>
           <TooltipContent>Invalid regular expression</TooltipContent>
         </Tooltip>
-        <AppDialog isOpen onClose={onClose}>
+        <AppDialog isOpen={isOpen} onClose={onClose}>
           <button type="button">Confirm</button>
         </AppDialog>
       </>
     );
+    const { rerender } = render(ui(false));
     await screen.findByRole("tooltip", { hidden: true });
+    rerender(ui(true));
     screen.getByText("Confirm").focus();
 
-    pressEscape();
+    const event = pressEscape();
 
+    // Radix's layer for the hint took the keypress and its dismiss went nowhere.
+    expect(event.defaultPrevented).toBe(true);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("tooltip", { hidden: true }).getAttribute("data-state")).toMatch(
       /-open$/
