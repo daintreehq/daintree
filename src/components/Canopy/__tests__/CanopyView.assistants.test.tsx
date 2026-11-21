@@ -1408,6 +1408,28 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     expect(document.activeElement).toBe(composer);
   });
 
+  it("shows a selected row whose run is no session's now as ended, attaching to nothing (#18142)", async () => {
+    // A second session's row the directory still lists after that session stopped.
+    directory.entries = [
+      assistant(0),
+      assistant(0, { subject: GLOBAL_SUBJECT }),
+      assistant(0, {
+        subject: { ...GLOBAL_SUBJECT, terminalId: "g-2", incarnation: 1 },
+        label: "Second session",
+      }),
+    ];
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const attachesBefore = electronHelp().attachGlobalAssistant.mock.calls.length;
+    const row = assistantRows().find((each) => each.textContent?.includes("Second session"))!;
+    await act(async () => fireEvent.click(row));
+    await settle();
+    const pane = document.querySelector("[data-testid=canopy-global-assistant]")!;
+    expect(pane.textContent).toContain("This global assistant session has ended");
+    expect(pane.querySelector("[data-testid=canopy-global-start]")).toBeNull();
+    expect(electronHelp().attachGlobalAssistant.mock.calls.length).toBe(attachesBefore);
+  });
+
   it("shows one pane for the global assistant's own row, without reopening its stream", async () => {
     useCanopyStore.setState({ globalDocked: true });
     render(<CanopyView frame={frame} />);

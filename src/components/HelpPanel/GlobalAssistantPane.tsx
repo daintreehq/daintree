@@ -179,7 +179,9 @@ export function GlobalAssistantPane({
 
   // A second session stopped (here or in another window) is gone: the pane
   // goes back to the first rather than offering to start one nobody chose.
-  const vacated = slot !== GLOBAL_ASSISTANT_SLOT && view !== null && !view.occupied;
+  // Read off this attachment's own news, never a state cached from before it.
+  const vacated =
+    slot !== GLOBAL_ASSISTANT_SLOT && attachmentId !== null && view !== null && !view.occupied;
   useEffect(() => {
     if (vacated) useHelpPanelStore.getState().selectGlobal(null, GLOBAL_ASSISTANT_SLOT);
   }, [vacated]);
@@ -268,10 +270,19 @@ export function GlobalAssistantPane({
     if (newPending) return;
     setNewPending(true);
     try {
+      // Shown only if the panel still shows what it did when New was pressed:
+      // a person who moved on meanwhile stays where they went.
+      const asked = useHelpPanelStore.getState();
       await startNew(agentId, (claimed) => {
-        // Shown only if the panel still shows Global: a person who moved on meanwhile stays put.
         const panel = useHelpPanelStore.getState();
-        if (panel.globalSelected) panel.selectGlobal(null, claimed);
+        if (
+          panel.isOpen === asked.isOpen &&
+          panel.globalSelected &&
+          panel.globalSlot === asked.globalSlot &&
+          panel.globalTarget === asked.globalTarget
+        ) {
+          panel.selectGlobal(null, claimed);
+        }
       });
     } finally {
       setNewPending(false);

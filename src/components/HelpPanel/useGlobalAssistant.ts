@@ -142,8 +142,9 @@ export function useGlobalAssistant(
     lenderRef.current = null;
     // Subscribed before attaching: the attach answer is newer than any change
     // sent before it, and every change after it arrives here.
+    // Every session's news is kept, each apart, so none is stale once shown.
     const off = help.onGlobalAssistantChanged((state) => {
-      if (!disposed && state.slot === slot) setView(state);
+      if (!disposed) setView(state);
     });
     help.attachGlobalAssistant(asked, slot).then(
       (attachment) => {

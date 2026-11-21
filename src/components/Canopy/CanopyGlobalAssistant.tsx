@@ -10,10 +10,7 @@ import { refocusStartAfterCancel } from "@/components/HelpPanel/refocusStartAfte
 import { useAssistantSendFailure } from "@/components/HelpPanel/useAssistantSendFailure";
 import { useGlobalAssistant } from "@/components/HelpPanel/useGlobalAssistant";
 import { useGlobalAssistantSessions } from "@/components/HelpPanel/useGlobalAssistantSessions";
-import {
-  GLOBAL_ASSISTANT_SLOT,
-  type GlobalAssistantSlot,
-} from "@shared/config/globalAssistantSessions";
+import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
 import { useGlobalAssistantIdentity } from "@/store/assistantIdentityStore";
 import { displayIdentityLabel } from "@shared/utils/displayIdentity";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -73,24 +70,20 @@ export function CanopyGlobalAssistant({
   // Listened to while docked as well, so picking the row never waits on a read
   // and the stream already open for the same session is kept.
   const sessions = useGlobalAssistantSessions(shown);
-  const rowTerminal = followsRow ? (item?.subject.terminalId ?? null) : null;
+  const row = followsRow ? (item?.subject ?? null) : null;
+  // A selected row shows only the session running its exact run: never the
+  // other session, nor a successor in the same one, under it.
   const rowSlot =
-    rowTerminal === null
+    row === null
       ? undefined
       : sessions?.find(
-          (session) => session.phase === "running" && session.subject?.terminalId === rowTerminal
+          (session) =>
+            session.phase === "running" &&
+            session.subject?.terminalId === row.terminalId &&
+            session.subject.incarnation === row.incarnation
         )?.slot;
-  // A selected row keeps the session it was found in once its run is gone,
-  // rather than showing the other session under it.
-  const [kept, setKept] = useState<{ terminalId: string; slot: GlobalAssistantSlot } | null>(null);
-  if (rowTerminal !== null && rowSlot !== undefined && kept?.terminalId !== rowTerminal) {
-    setKept({ terminalId: rowTerminal, slot: rowSlot });
-  }
-  const keptSlot = kept !== null && kept.terminalId === rowTerminal ? kept.slot : undefined;
-  const slot = rowSlot ?? keptSlot ?? GLOBAL_ASSISTANT_SLOT;
-  // A selected row attaches only to the session found running it: never to the
-  // other one while it is still being looked up, or once it is known to be gone.
-  const resolved = rowTerminal === null || rowSlot !== undefined || keptSlot !== undefined;
+  const slot = rowSlot ?? GLOBAL_ASSISTANT_SLOT;
+  const resolved = row === null || rowSlot !== undefined;
   const { view, attachmentId, error, start, claimInput, cancelLaunch } = useGlobalAssistant(
     shown && resolved,
     undefined,

@@ -203,24 +203,24 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     });
   });
 
-  it("frees the session once its stop has finished, and not before", async () => {
+  it("forgets its agent at once on a stop, and is free only once the stop has finished", async () => {
     const forgotten = deferred<void>();
     const { b, second } = twoSessions();
     second.deps.discardResume.mockImplementation(() => forgotten.promise);
     await b.startOn("codex");
 
     const stopped = b.discard();
+    expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith(null);
     await vi.waitFor(() => expect(second.deps.discardResume).toHaveBeenCalled());
-    expect(b.getState()).toMatchObject({ phase: "absent", occupied: true });
-    expect(second.deps.savePinnedAgent).not.toHaveBeenCalledWith(null);
+    expect(b.getState()).toMatchObject({ phase: "absent", occupied: true, pinnedAgentId: null });
+    await expect(b.startOn("antigravity")).rejects.toMatchObject({ code: "VALIDATION" });
 
     forgotten.resolve();
     await stopped;
-    expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith(null);
     expect(b.getState()).toMatchObject({ occupied: false, pinnedAgentId: null });
   });
 
-  it("keeps its agent when it is started again while its stop winds down", async () => {
+  it("starts nothing on a stopped second session's agent while its stop winds down", async () => {
     const forgotten = deferred<void>();
     const { b, second } = twoSessions();
     second.deps.discardResume.mockImplementation(() => forgotten.promise);
@@ -230,8 +230,8 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     const again = b.ensureSession();
     forgotten.resolve();
     await stopped;
-    await expect(again).resolves.toMatchObject({ phase: "running", agentId: "codex" });
-    expect(b.getState().pinnedAgentId).toBe("codex");
+    await expect(again).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(b.getState()).toMatchObject({ phase: "absent", occupied: false });
   });
 
   it("stays taken while a clear winds down, so nothing else lands in it", async () => {
@@ -329,21 +329,28 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     expect(deps.savePinnedAgent).toHaveBeenCalledWith("codex");
   });
 
-  it("frees a stopped session whose start queued behind the stop never came to run", async () => {
+  it("hands off nothing into a session being cleared", async () => {
     const forgotten = deferred<void>();
-    const { b, second } = twoSessions();
-    second.deps.discardResume.mockImplementation(() => forgotten.promise);
-    await b.startOn("codex");
+    const { a, first } = twoSessions();
+    first.deps.discardResume.mockImplementation(() => forgotten.promise);
+    await a.ensureSession();
+    const cleared = a.restart();
+    await vi.waitFor(() => expect(first.deps.discardResume).toHaveBeenCalled());
+    const { generation, phase } = a.getState();
 
-    const stopped = b.discard();
-    second.deps.spawn.mockResolvedValueOnce(false);
-    const queued = b.ensureSession();
+    await expect(
+      a.replace({ agentId: "codex", prompt: "Carry on" }, { generation, phase })
+    ).rejects.toMatchObject({ code: "STALE_GENERATION" });
     forgotten.resolve();
-    await stopped;
-    // Still starting when the stop finished: the agent waits on it.
-    expect(second.deps.savePinnedAgent).not.toHaveBeenCalledWith(null);
-    await expect(queued).rejects.toMatchObject({ code: "INTERNAL" });
-    await vi.waitFor(() => expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith(null));
-    expect(b.getState()).toMatchObject({ occupied: false, pinnedAgentId: null });
+    await expect(cleared).resolves.toMatchObject({ phase: "running", agentId: "claude" });
+  });
+
+  it("re-pins a chosen session to the agent a hand-off moves it to, once it runs", async () => {
+    const { b, second } = twoSessions();
+    await b.startOn("codex");
+    const { generation, phase } = b.getState();
+    await b.replace({ agentId: "antigravity", prompt: "Carry on" }, { generation, phase });
+    expect(b.getState()).toMatchObject({ phase: "running", agentId: "antigravity" });
+    expect(second.deps.savePinnedAgent).toHaveBeenLastCalledWith("antigravity");
   });
 });

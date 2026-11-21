@@ -507,25 +507,16 @@ export class GlobalAssistantService {
 
   /**
    * End the run and forget its conversation; nothing starts it again until
-   * asked. Once that is done the agent chosen for it goes too, which frees
-   * the session: never before, so nothing takes it while it winds down, and
-   * not if it was started again meanwhile.
+   * asked. The agent chosen for it goes with it at once; the session stays
+   * taken until the stop has finished, so nothing new lands in it meanwhile,
+   * and only then is it free.
    */
   discard(): Promise<void> {
     if (this.closed) return this.teardown("discard");
+    this.setPinnedAgent(null);
     this.holds += 1;
-    const work = this.teardown("discard");
-    // Quitting meanwhile still frees it: the conversation went, so the choice goes too.
-    const release = () => {
-      if (this.run !== null || this.launchInFlight() || this.pinnedAgentId === null) return;
-      this.setPinnedAgent(null);
-    };
-    return work.finally(() => {
+    return this.teardown("discard").finally(() => {
       this.holds -= 1;
-      // A start queued behind the stop keeps the agent only if it comes to run.
-      const successor = this.launchInFlight() ? this.launch : null;
-      if (successor) void successor.then(release, release);
-      else release();
       this.emit();
     });
   }
@@ -566,7 +557,12 @@ export class GlobalAssistantService {
       throw refuse("UNSUPPORTED", `${choice.agentId} can't run the global assistant here.`);
     }
     const state = this.getState();
-    if (state.generation !== expected.generation || state.phase !== expected.phase) {
+    // One being cleared or stopped is not the one the person was shown either.
+    if (
+      state.generation !== expected.generation ||
+      state.phase !== expected.phase ||
+      this.holds > 0
+    ) {
       throw refuse("STALE_GENERATION", "The global assistant changed since this was asked.");
     }
     // Not awaited: the successor waits on the teardown itself before it provisions.

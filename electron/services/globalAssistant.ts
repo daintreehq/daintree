@@ -64,8 +64,11 @@ export function liveGlobalAssistantDeps(
             const newEnough = (id: string) => deps.meetsVersionFloor?.(id) ?? Promise.resolve(true);
             return (await firstUsableDefault(await deps.launchableAgents(), newEnough)) ?? null;
           }
-        : async () =>
-            (await help()).peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot)?.agentId ?? null,
+        : async () => {
+            const service = await help();
+            if (!(await service.whenPendingHibernationStoreWired())) throw stillStarting();
+            return service.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot)?.agentId ?? null;
+          },
     // As a start with no view takes an agent named for it.
     canRun: (agentId) => liveAgentUsable(agentId),
     provision: async (agentId) => {
@@ -95,6 +98,8 @@ export function liveGlobalAssistantDeps(
     },
     discardResume: async () => {
       const service = await help();
+      // Forgotten once the pointers are in: one cleared before would come back with them.
+      await service.whenPendingHibernationStoreWired();
       await service.discardConversation(GLOBAL_ASSISTANT_ID, slot);
     },
     keepsConversation: () => loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) != null,
@@ -204,10 +209,14 @@ export function getGlobalAssistantService(
   fenceInputOnOwnerChange(service, () =>
     import("../window/serviceRefs.js").then(({ getPtyClient }) => getPtyClient())
   );
-  // A session told before the pointers were in may have said it keeps nothing.
-  void whenGlobalAssistantSessionsReadable().then((readable) => {
-    if (readable) service.refresh();
-  });
+  // A session told before the pointers were in may have said it keeps nothing:
+  // it says its state again once they are, however late.
+  void help()
+    .then((helpSessions) => helpSessions.pendingHibernationStoreReady())
+    .then(
+      () => service.refresh(),
+      () => {}
+    );
   return service;
 }
 

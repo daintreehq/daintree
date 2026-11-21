@@ -1547,6 +1547,28 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(help.ensureGlobalAssistant).toHaveBeenCalledWith(1, 3);
     });
 
+    it("keeps the session a closed panel remembers when a new session is claimed late", async () => {
+      installHelp(running());
+      let claim!: (view: GlobalAssistantView) => void;
+      help.startNewGlobalAssistant.mockImplementation(
+        () =>
+          new Promise<GlobalAssistantView>((resolve) => {
+            claim = resolve;
+          })
+      );
+      help.ensureGlobalAssistant.mockResolvedValue(second());
+      renderPane(true, ["codex"]);
+      await flush();
+      openMenu();
+      fireEvent.click(await screen.findByTestId("help-global-new-codex"));
+      await flush();
+
+      act(() => useHelpPanelStore.getState().setOpen(false));
+      await act(async () => claim(second({ phase: "launching", subject: null })));
+      await flush();
+      expect(useHelpPanelStore.getState()).toMatchObject({ isOpen: false, globalSlot: 0 });
+    });
+
     it("offers no new session in a window bound to another host", async () => {
       host.id = "studio-02";
       installHelp(running());

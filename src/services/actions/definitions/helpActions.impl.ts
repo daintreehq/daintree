@@ -639,12 +639,19 @@ async function requestGlobalAssistantReplacement(
     ? (usePluginRuntimeStore.getState().pluginMetaById.get(caller)?.displayName ??
       pluginManifestIdFromInstanceKey(caller))
     : "A plugin";
+  // A hand-off replaces the first session (#18142): named as such once a second exists.
+  const namesSession = await Promise.resolve()
+    .then(() => window.electron.help.listGlobalAssistantSessions())
+    .then((sessions) => sessions.some((session) => session.slot !== 0 && session.occupied))
+    .catch(() => false);
+  if (unseen()) return unavailable;
   const staged = stageGlobalAssistantReplacement({
     agentId: args.agentId,
     prompt: args.prompt,
     expected: { generation: state.generation, phase: state.phase },
     currentAgentId: state.agentId,
     pluginName,
+    namesSession,
   });
   return staged ? { outcome: "awaiting-confirmation" } : unavailable;
 }
