@@ -465,7 +465,8 @@ export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
  * it start afresh over a conversation past sessions keeps (#16495).
  */
 async function startHelpSessionWithAgent(
-  agentId: string
+  agentId: string,
+  prompt?: string
 ): Promise<{ outcome: HelpNewSessionOutcome }> {
   const projectState = useProjectStore.getState();
   const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
@@ -571,10 +572,11 @@ async function startHelpSessionWithAgent(
     // Queued before a new tab appears, or its first input sync would auto-launch
     // the default into it. Pinned so a failed launch waits on Retry for this
     // agent rather than being replaced by the default's.
+    const seed = prompt?.trim() ? { seedPrompt: prompt } : {};
     controller.launchWhenReady(
       free
-        ? { agentId, replaceExisting: true, pinAgent: true }
-        : { ...freshSessionLaunch(agentId), pinAgent: true }
+        ? { agentId, replaceExisting: true, pinAgent: true, ...seed }
+        : { ...freshSessionLaunch(agentId), pinAgent: true, ...seed }
     );
     if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
     revealHelpLane(target.slot);
@@ -1008,8 +1010,10 @@ export const helpActionRuns = {
     if (!launch) throw new Error("help.launchAgent needs the snapshot taken at dispatch.");
     return launchHelpAgent(readArgs<HelpLaunchArgs | undefined>(args), launch);
   },
-  "help.newSessionWithAgent": async (args) =>
-    startHelpSessionWithAgent(readArgs<{ agentId: string }>(args).agentId),
+  "help.newSessionWithAgent": async (args) => {
+    const { agentId, prompt } = readArgs<{ agentId: string; prompt?: string }>(args);
+    return startHelpSessionWithAgent(agentId, prompt);
+  },
   "help.resumePastSession": async (args) => {
     const picked = readArgs<
       { agentId: "claude" | "codex"; sessionId: string; slot?: number } | undefined

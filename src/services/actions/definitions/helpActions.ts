@@ -184,7 +184,14 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     mcpVisibility: "hidden",
     palette: { mode: "hidden" },
     keywords: ["assistant", "session", "agent", "claude", "codex"],
-    argsSchema: z.object({ agentId: z.string().min(1) }),
+    argsSchema: z.object({
+      agentId: z.string().min(1),
+      // A hand-off to continue from (#18140), as `agent.launch` takes one.
+      prompt: z
+        .string()
+        .optional()
+        .describe("First turn, submitted once the agent starts. Omit to leave it waiting."),
+    }),
     run: (args, ctx) => runHelpAction("help.newSessionWithAgent", args, ctx, callbacks),
   }));
 

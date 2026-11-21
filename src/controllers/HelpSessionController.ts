@@ -439,6 +439,11 @@ export class HelpSessionController {
   /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
   private _lastPinnedAgentId: string | null = null;
   /**
+   * The pinned launch's hand-off (#18140), which Retry and a passed version
+   * recheck carry again: relaunching without it would start a blank session.
+   */
+  private _lastPinnedSeedPrompt: string | undefined = undefined;
+  /**
    * The agent of the latest launch when it was a vacant-only fresh start
    * (#16495), which Retry and a passed version recheck repeat as one: a plain
    * relaunch would resume the conversation it was meant to leave alone, or take
@@ -459,8 +464,14 @@ export class HelpSessionController {
       const pinned = this._lastPinnedAgentId;
       const fresh = this._lastVacantFresh;
       if (fresh) this._relaunchVacantFresh(fresh);
-      else if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
-      else this._maybeAutoLaunch(inputs);
+      else if (pinned) {
+        this.launch({
+          agentId: pinned,
+          replaceExisting: true,
+          pinAgent: true,
+          ...this._pinnedSeed(pinned),
+        });
+      } else this._maybeAutoLaunch(inputs);
     },
   });
 
@@ -615,7 +626,7 @@ export class HelpSessionController {
     this.launch(
       resumeTarget
         ? { agentId, replaceExisting: true, resumeTarget }
-        : { agentId, ...(pinAgent ? { pinAgent } : {}) }
+        : { agentId, ...(pinAgent ? { pinAgent, ...this._pinnedSeed(agentId) } : {}) }
     );
   }
 
@@ -626,8 +637,15 @@ export class HelpSessionController {
       requestedId: `terminal-${crypto.randomUUID()}`,
       checkVersion: true,
       vacantOnly: true,
-      ...(this._lastPinnedAgentId === agentId ? { pinAgent: true } : {}),
+      ...(this._lastPinnedAgentId === agentId
+        ? { pinAgent: true, ...this._pinnedSeed(agentId) }
+        : {}),
     });
+  }
+
+  private _pinnedSeed(agentId: string): { seedPrompt?: string } {
+    const seedPrompt = this._lastPinnedSeedPrompt;
+    return this._lastPinnedAgentId === agentId && seedPrompt ? { seedPrompt } : {};
   }
 
   /**
@@ -984,6 +1002,7 @@ export class HelpSessionController {
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
     this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
+    this._lastPinnedSeedPrompt = options.pinAgent ? options.seedPrompt : undefined;
     this._lastVacantFresh =
       options.vacantOnly === true && options.requestedId !== undefined ? launchAgentId : null;
 
@@ -1787,6 +1806,7 @@ export class HelpSessionController {
             unreleasedHibernation = null;
             this._lastResumeTarget = undefined;
             this._lastPinnedAgentId = null;
+            this._lastPinnedSeedPrompt = undefined;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             // A picked conversation needs no cleanup on main: its spawn carries
             // `agentSessionId`, which main records as the lane's pointer in
@@ -1949,6 +1969,7 @@ export class HelpSessionController {
       }
       reached = true;
       this._lastPinnedAgentId = null;
+      this._lastPinnedSeedPrompt = undefined;
       this._patch({ phase: "live" });
       window.electron.help.markTerminal(finalTerminalId).catch((err) => {
         logError("Failed to mark help terminal", err);

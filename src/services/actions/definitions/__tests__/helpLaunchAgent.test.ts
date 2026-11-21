@@ -1794,6 +1794,53 @@ describe("help.newSessionWithAgent (#13442)", () => {
     expect(after.sessions[0]?.terminalId).toBe("term-0");
   });
 
+  it("gives the picked agent a hand-off as its first message (#18140)", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await action.run({ agentId: "codex", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "started",
+    });
+
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+      seedPrompt: "Continue from here",
+    });
+  });
+
+  it("starts over a kept conversation with the hand-off too (#18140)", async () => {
+    bindLane(0, "term-0", "claude");
+    for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "claude";
+
+    expect(await action.run({ agentId: "claude", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "started",
+    });
+
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ vacantOnly: true, seedPrompt: "Continue from here" })
+    );
+  });
+
+  it("still refuses a hand-off once every tab holds a session (#18140)", async () => {
+    for (const slot of ASSISTANT_SLOTS) bindLane(slot, `term-${slot}`, "claude");
+
+    expect(await action.run({ agentId: "codex", prompt: "Continue from here" }, {})).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("treats a blank hand-off as none, leaving the agent waiting", async () => {
+    await action.run({ agentId: "codex", prompt: "   " }, {});
+
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+    });
+  });
+
   it("fills the empty tab in front rather than opening another", async () => {
     expect(await run("codex")).toEqual({ outcome: "started" });
 

@@ -925,6 +925,46 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(launch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
   });
 
+  it("carries a pinned launch's hand-off into its retry and version recheck (#18140)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const recorded = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+
+    ctrl.retryLaunch("codex");
+    expect(recorded).toHaveBeenLastCalledWith({
+      agentId: "codex",
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+
+    ctrl["_versionGate"]["host"].maybeAutoLaunch(readyInputs);
+    expect(recorded).toHaveBeenLastCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
+
+    ctrl["_lastVacantFresh"] = "codex";
+    ctrl.retryLaunch("codex");
+    expect(recorded).toHaveBeenLastCalledWith(
+      expect.objectContaining({ vacantOnly: true, pinAgent: true, seedPrompt: "hand-off" })
+    );
+  });
+
+  it("never hands one agent's hand-off to a retry on another", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+    ctrl["_lastPinnedSeedPrompt"] = "hand-off";
+
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({ agentId: "claude" });
+  });
+
   it("wakes a hibernated lane on the agent that held it, not the default (#13442)", () => {
     const ctrl = new HelpSessionController();
     const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
