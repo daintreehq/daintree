@@ -4,8 +4,6 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 
 const EMAIL = /^[^\s/:@]+@[^\s/:@]+$/;
-// CommonMark: an autolink with a scheme is a URI, any other is an email address.
-const AUTOLINK_SCHEME = /^[a-z][a-z\d+.-]{1,31}:/i;
 // CommonMark decodes backslash escapes and entity references in a destination
 // in one pass, so an escaped `\&amp;` stays literal.
 const DESTINATION_ESCAPE =
@@ -73,7 +71,9 @@ export function urlNodeHref(state: EditorState, url: SyntaxNode): string | null 
   }
   const text = state.sliceDoc(url.from, url.to);
   if (parent?.name === "LinkReference") return decodeDestination(text);
-  if (parent?.name === "Autolink") return AUTOLINK_SCHEME.test(text) ? text : `mailto:${text}`;
+  // An autolink with a scheme is a URI, left for the policy to judge (the
+  // grammar takes schemes longer than CommonMark's); any other is an address.
+  if (parent?.name === "Autolink") return text.includes(":") ? text : `mailto:${text}`;
   if (/^www\./i.test(text)) return `http://${text}`;
   if (EMAIL.test(text)) return `mailto:${text}`;
   return text;

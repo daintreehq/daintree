@@ -27,14 +27,18 @@ interface Press {
   x: number;
   y: number;
   moved: boolean;
-  /** Released on the same link, under the pointer as it is then. */
-  releasedOnLink: boolean;
 }
 
 function urlNodeAt(view: EditorView, pos: number): SyntaxNode | null {
   let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, 1);
   while (node && node.name !== "URL") node = node.parent;
   return node;
+}
+
+// A second press of a double-click selects a word; Shift and Alt extend or
+// draw a selection.
+function isPlainPress(event: MouseEvent): boolean {
+  return event.button === 0 && event.detail <= 1 && !event.shiftKey && !event.altKey;
 }
 
 function linkUnder(view: EditorView, target: EventTarget | null): SyntaxNode | null {
@@ -47,8 +51,13 @@ function linkUnder(view: EditorView, target: EventTarget | null): SyntaxNode | n
 /**
  * Plain-click links for the read-only Source view of a Markdown file. Only
  * the link's own text is a target, never the caret's nearest position, so a
- * click beside a link stays a click. A press that moves, extends with Shift,
- * or leaves a selection is selecting text and never follows.
+ * click beside a link stays a click. A press that moves or extends with Shift
+ * is selecting text and never follows.
+ *
+ * A link follows on its release, not on `click`: CodeMirror's handling of the
+ * press can redraw the link (clearing a find match does), and Chromium sends
+ * no click once the node pressed is gone. The release is hit-tested afresh,
+ * so it finds the redrawn link and notices a pointer that slid off its edge.
  */
 export function sourceLinks(policy: SourceLinkPolicy): Extension {
   const plugin = ViewPlugin.fromClass(
@@ -107,13 +116,15 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
         }
       };
 
-      // Hit-tested afresh at release, so it sees a link a press redrew (clearing
-      // a find match does) and a pointer that slid off the link's edge.
       onRelease = (event: MouseEvent) => {
         const press = this.press;
-        if (press)
-          press.releasedOnLink = linkUnder(this.view, event.target)?.from === press.linkFrom;
+        this.press = null;
         this.stopTracking();
+        if (!press || press.moved || !isPlainPress(event)) return;
+        const link = linkUnder(this.view, event.target);
+        if (!link || link.from !== press.linkFrom) return;
+        const href = urlNodeHref(this.view.state, link);
+        if (href !== null && policy.canFollow(href)) policy.follow(href);
       };
 
       stopTracking() {
@@ -124,35 +135,12 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
       begin(event: MouseEvent) {
         this.stopTracking();
         this.press = null;
-        if (event.button !== 0 || event.detail > 1 || event.shiftKey || event.altKey) return;
+        if (!isPlainPress(event)) return;
         const link = linkUnder(this.view, event.target);
         if (!link) return;
-        this.press = {
-          linkFrom: link.from,
-          x: event.clientX,
-          y: event.clientY,
-          moved: false,
-          releasedOnLink: false,
-        };
+        this.press = { linkFrom: link.from, x: event.clientX, y: event.clientY, moved: false };
         this.doc.addEventListener("mousemove", this.onMove, true);
         this.doc.addEventListener("mouseup", this.onRelease, true);
-      }
-
-      finish(event: MouseEvent): boolean {
-        const press = this.press;
-        this.press = null;
-        if (!press || press.moved || !press.releasedOnLink) return false;
-        if (event.button !== 0 || event.detail > 1 || event.shiftKey || event.altKey) return false;
-        if (!this.view.state.selection.main.empty) return false;
-        // The press and release, not the click's target, say which link: when
-        // the press redrew the link, Chromium aims the click at the line.
-        const link = urlNodeAt(this.view, press.linkFrom);
-        if (!link || link.from !== press.linkFrom) return false;
-        const href = urlNodeHref(this.view.state, link);
-        if (href === null || !policy.canFollow(href)) return false;
-        event.preventDefault();
-        policy.follow(href);
-        return true;
       }
 
       destroy() {
@@ -165,11 +153,6 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
       eventObservers: {
         mousedown(event) {
           this.begin(event);
-        },
-      },
-      eventHandlers: {
-        click(event) {
-          return this.finish(event);
         },
       },
     }

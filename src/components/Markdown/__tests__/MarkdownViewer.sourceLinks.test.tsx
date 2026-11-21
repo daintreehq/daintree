@@ -107,34 +107,34 @@ describe("MarkdownViewer Source links", () => {
     mouse(link, "mousedown");
     mouse(document, "mousemove", { clientX: 60, buttons: 1 });
     mouse(document, "mousemove", { clientX: 10, buttons: 1 });
-    mouse(document, "mouseup");
+    mouse(link, "mouseup");
     mouse(link, "click");
 
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("does not follow a click that leaves a selection, extends one, or repeats", async () => {
+  it("does not follow a Shift-press, an Alt-press, or the second press of a double-click", async () => {
     const { view } = await mountSource("Read https://bare.dev today.\n");
     const link = linkWithText(view, "https://bare.dev");
 
-    mouse(link, "mousedown");
-    mouse(link, "mouseup");
-    view.dispatch({ selection: { anchor: 5, head: 12 } });
-    mouse(link, "click");
-
     clickLink(link, { shiftKey: true });
+    clickLink(link, { altKey: true });
     clickLink(link, { detail: 2 });
+    expect(dispatchMock).not.toHaveBeenCalled();
 
+    // Released as the second press of a double-click, even after a plain press.
+    mouse(link, "mousedown");
+    mouse(link, "mouseup", { detail: 2 });
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("does not follow a press that starts off the link and is released on it", async () => {
     const { view, container } = await mountSource("Read https://bare.dev today.\n");
-    const line = container.querySelector<HTMLElement>(".cm-line")!;
+    const link = linkWithText(view, "https://bare.dev");
 
-    mouse(line, "mousedown");
-    mouse(document, "mouseup");
-    mouse(linkWithText(view, "https://bare.dev"), "click");
+    mouse(container.querySelector<HTMLElement>(".cm-line")!, "mousedown");
+    mouse(link, "mouseup");
+    mouse(link, "click");
 
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -145,22 +145,21 @@ describe("MarkdownViewer Source links", () => {
 
     mouse(link, "mousedown");
     mouse(document, "mousemove", { clientX: 60, buttons: 1 });
-    mouse(document, "mouseup");
-    mouse(link, "click");
-    clickLink(link);
+    mouse(link, "mouseup");
+    expect(dispatchMock).not.toHaveBeenCalled();
 
+    clickLink(link);
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 
-  // Clearing a find match on the press can redraw the link, and Chromium then
-  // aims the click at the line around it.
-  it("follows the pressed link when the click lands on the line around it", async () => {
-    const { view, container } = await mountSource("Read https://bare.dev today.\n");
-
+  // CodeMirror's handling of a press can redraw the link (clearing a find
+  // match does), and Chromium then sends no click at all.
+  it("follows on the release, whether or not a click arrives", async () => {
+    const { view } = await mountSource("Read https://bare.dev today.\n");
     const link = linkWithText(view, "https://bare.dev");
+
     mouse(link, "mousedown");
     mouse(link, "mouseup");
-    mouse(container.querySelector<HTMLElement>(".cm-line")!, "click");
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "browser.openExternal",
@@ -176,6 +175,15 @@ describe("MarkdownViewer Source links", () => {
     mouse(linkWithText(view, "https://bare.dev"), "mousedown");
     mouse(line, "mouseup", { clientX: 12 });
     mouse(line, "click", { clientX: 12 });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not follow a press released on a different link", async () => {
+    const { view } = await mountSource("https://one.dev https://two.dev\n");
+
+    mouse(linkWithText(view, "https://one.dev"), "mousedown");
+    mouse(linkWithText(view, "https://two.dev"), "mouseup");
 
     expect(dispatchMock).not.toHaveBeenCalled();
   });

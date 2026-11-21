@@ -56,9 +56,12 @@ describe("urlNodeHref", () => {
   });
 
   it("reads an autolink without a scheme as an email address, whatever it looks like", () => {
-    expect(hrefs("<www.person@example.com> <a/b@example.com>\n")).toEqual([
+    expect(
+      hrefs("<www.person@example.com> <a/b@example.com> <abcdefghijklmnopqrstuvwxyzabcdefg:foo>\n")
+    ).toEqual([
       "mailto:www.person@example.com",
       "mailto:a/b@example.com",
+      "abcdefghijklmnopqrstuvwxyzabcdefg:foo",
     ]);
   });
 
