@@ -987,12 +987,7 @@ export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // pill; `assistant` is the Assistant panel's session menus, kept apart from
 // `terminal` so an item written for worker panes never lands on an assistant).
 export type ContextMenuLocation =
-  | "worktree"
-  | "terminal"
-  | "file"
-  | "browser"
-  | "project"
-  | "assistant";
+  "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",

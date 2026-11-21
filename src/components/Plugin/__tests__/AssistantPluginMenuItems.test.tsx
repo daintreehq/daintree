@@ -12,7 +12,10 @@ import {
   _resetPluginContextMenuItemsStoreForTest,
   usePluginContextMenuItemsStore,
 } from "@/store/pluginContextMenuItemsStore";
-import { AssistantPluginMenuItems, type AssistantPluginMenuSubject } from "../AssistantPluginMenuItems";
+import {
+  AssistantPluginMenuItems,
+  type AssistantPluginMenuSubject,
+} from "../AssistantPluginMenuItems";
 
 const dispatchMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ ok: true })));
 vi.mock("@/services/ActionService", () => ({
