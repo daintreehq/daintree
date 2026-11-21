@@ -438,6 +438,34 @@ describe("ResourceOwnershipLedger", () => {
       expect(ledger.creatorOf("terminal", "terminal-1")).toBeUndefined();
     });
 
+    it("gives a global session taking coordination the work by the id handed to it (#18143)", () => {
+      const ledger = new ResourceOwnershipLedger();
+      const work = relayConversationKey("local", "work");
+      // The coordinator's call, under the conversation that holds the work.
+      ledger.bindPrincipal("relay-a", "relay-p-a");
+      ledger.attachConversation("relay-p-a", work);
+      ledger.record(ledger.ownerOf("relay-a"), [T1]);
+      // The other session, while it didn't coordinate, named no conversation.
+      ledger.bindPrincipal("relay-b", "relay-p-b");
+      expect(ledger.owns(ledger.ownerOf("relay-b"), "terminal", "terminal-1")).toBe(false);
+
+      // Handed over: its calls now carry the work's id.
+      ledger.attachConversation("relay-p-b", work);
+      expect(ledger.owns(ledger.ownerOf("relay-b"), "terminal", "terminal-1")).toBe(true);
+      // A launch the old coordinator sent before the handover lands with the work.
+      ledger.record(ledger.ownerOf("relay-a"), [{ kind: "terminal", id: "late" }]);
+      expect(ledger.owns(ledger.ownerOf("relay-b"), "terminal", "late")).toBe(true);
+
+      // Its run ending keeps the work for the new coordinator, and its next run holds none.
+      ledger.revokePrincipal("relay-p-a");
+      ledger.bindPrincipal("relay-a2", "relay-p-a2");
+      expect(ledger.list(ledger.ownerOf("relay-a2"))).toEqual([]);
+      expect(ledger.list(ledger.ownerOf("relay-b")).map((record) => record.id)).toEqual([
+        "terminal-1",
+        "late",
+      ]);
+    });
+
     it("holds what a principal makes after it moves to another conversation under itself", () => {
       const ledger = resumed();
       ledger.attachConversation("help-a", helpConversationKey("conv-2"));
