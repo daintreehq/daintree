@@ -51,7 +51,7 @@ function mouse(target: EventTarget, type: string, init: MouseEventInit = {}): Mo
 /** A press and release in place, as a reader clicking a link makes it. */
 function clickLink(target: HTMLElement, init: MouseEventInit = {}): MouseEvent {
   mouse(target, "mousedown", init);
-  mouse(target.ownerDocument, "mouseup", init);
+  mouse(target, "mouseup", init);
   return mouse(target, "click", init);
 }
 
@@ -118,7 +118,7 @@ describe("MarkdownViewer Source links", () => {
     const link = linkWithText(view, "https://bare.dev");
 
     mouse(link, "mousedown");
-    mouse(document, "mouseup");
+    mouse(link, "mouseup");
     view.dispatch({ selection: { anchor: 5, head: 12 } });
     mouse(link, "click");
 
@@ -157,8 +157,9 @@ describe("MarkdownViewer Source links", () => {
   it("follows the pressed link when the click lands on the line around it", async () => {
     const { view, container } = await mountSource("Read https://bare.dev today.\n");
 
-    mouse(linkWithText(view, "https://bare.dev"), "mousedown");
-    mouse(document, "mouseup");
+    const link = linkWithText(view, "https://bare.dev");
+    mouse(link, "mousedown");
+    mouse(link, "mouseup");
     mouse(container.querySelector<HTMLElement>(".cm-line")!, "click");
 
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -166,6 +167,17 @@ describe("MarkdownViewer Source links", () => {
       { url: "https://bare.dev" },
       { source: "user" }
     );
+  });
+
+  it("does not follow a press released just off the link", async () => {
+    const { view, container } = await mountSource("Read https://bare.dev today.\n");
+    const line = container.querySelector<HTMLElement>(".cm-line")!;
+
+    mouse(linkWithText(view, "https://bare.dev"), "mousedown");
+    mouse(line, "mouseup", { clientX: 12 });
+    mouse(line, "click", { clientX: 12 });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("sends a URL written in a link's text where the link goes", async () => {

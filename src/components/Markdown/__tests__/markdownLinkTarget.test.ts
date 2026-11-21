@@ -55,10 +55,17 @@ describe("urlNodeHref", () => {
     ]);
   });
 
+  it("reads an autolink without a scheme as an email address, whatever it looks like", () => {
+    expect(hrefs("<www.person@example.com> <a/b@example.com>\n")).toEqual([
+      "mailto:www.person@example.com",
+      "mailto:a/b@example.com",
+    ]);
+  });
+
   it("drops a destination's angle brackets and decodes its escapes and entities, as CommonMark does", () => {
     expect(
       hrefs(
-        '[a](<./my doc.md>) [b](a\\_b\\(1\\).md "title") [c](x.md#h) [d](https://x.dev/?a=1&amp;b=2) [e](&#35;setup) [f](&#x41;.md) [g](\\&amp;) [h](&bogus;)\n'
+        '[a](<./my doc.md>) [b](a\\_b\\(1\\).md "title") [c](x.md#h) [d](https://x.dev/?a=1&amp;b=2) [e](&#35;setup) [f](&#x41;.md) [g](\\&amp;) [h](&bogus;) [i](a&#xD800;&#0;.png)\n'
       )
     ).toEqual([
       "./my doc.md",
@@ -69,6 +76,7 @@ describe("urlNodeHref", () => {
       "A.md",
       "&amp;",
       "&bogus;",
+      "a\uFFFD\uFFFD.png",
     ]);
   });
 

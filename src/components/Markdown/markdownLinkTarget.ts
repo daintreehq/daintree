@@ -4,6 +4,8 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 
 const EMAIL = /^[^\s/:@]+@[^\s/:@]+$/;
+// CommonMark: an autolink with a scheme is a URI, any other is an email address.
+const AUTOLINK_SCHEME = /^[a-z][a-z\d+.-]{1,31}:/i;
 // CommonMark decodes backslash escapes and entity references in a destination
 // in one pass, so an escaped `\&amp;` stays literal.
 const DESTINATION_ESCAPE =
@@ -12,7 +14,10 @@ const DESTINATION_ESCAPE =
 let entityDecoder: HTMLTextAreaElement | null = null;
 
 function codePoint(value: number): string {
-  return value === 0 || value > 0x10ffff ? "�" : String.fromCodePoint(value);
+  // CommonMark's replacements; a lone surrogate would also break the viewer's
+  // URL encoding of the path.
+  const invalid = value === 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff);
+  return invalid ? "�" : String.fromCodePoint(value);
 }
 
 function namedEntity(match: string): string {
@@ -68,6 +73,7 @@ export function urlNodeHref(state: EditorState, url: SyntaxNode): string | null 
   }
   const text = state.sliceDoc(url.from, url.to);
   if (parent?.name === "LinkReference") return decodeDestination(text);
+  if (parent?.name === "Autolink") return AUTOLINK_SCHEME.test(text) ? text : `mailto:${text}`;
   if (/^www\./i.test(text)) return `http://${text}`;
   if (EMAIL.test(text)) return `mailto:${text}`;
   return text;
