@@ -95,7 +95,7 @@ describe("MarkdownViewer Source links", () => {
 
   it("marks only links that go somewhere, so the rest keep the text cursor", async () => {
     const { view } = await mountSource(
-      "[out](../../outside.md) [frag](#setup) [js](javascript:alert(1)) [ok](./ok.md)\n"
+      "[out](../../outside.md) [frag](#setup) [js](javascript:alert(1)) [x](x:notes.md) [ok](./ok.md)\n"
     );
     expect(links(view).map((el) => el.textContent)).toEqual(["./ok.md"]);
   });
@@ -139,13 +139,44 @@ describe("MarkdownViewer Source links", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("follows again after a gesture it ignored", async () => {
+  it("follows again after a drag it ignored", async () => {
     const { view } = await mountSource("Read https://bare.dev today.\n");
     const link = linkWithText(view, "https://bare.dev");
 
-    clickLink(link, { shiftKey: true });
+    mouse(link, "mousedown");
+    mouse(document, "mousemove", { clientX: 60, buttons: 1 });
+    mouse(document, "mouseup");
+    mouse(link, "click");
     clickLink(link);
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Clearing a find match on the press can redraw the link, and Chromium then
+  // aims the click at the line around it.
+  it("follows the pressed link when the click lands on the line around it", async () => {
+    const { view, container } = await mountSource("Read https://bare.dev today.\n");
+
+    mouse(linkWithText(view, "https://bare.dev"), "mousedown");
+    mouse(document, "mouseup");
+    mouse(container.querySelector<HTMLElement>(".cm-line")!, "click");
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "browser.openExternal",
+      { url: "https://bare.dev" },
+      { source: "user" }
+    );
+  });
+
+  it("sends a URL written in a link's text where the link goes", async () => {
+    const { view } = await mountSource("[https://x.dev](./guide.md)\n");
+
+    clickLink(linkWithText(view, "https://x.dev"));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.view",
+      { path: "/repo/docs/guide.md", rootPath: "/repo", confineToRoot: true },
+      { source: "user" }
+    );
   });
 });

@@ -13,8 +13,8 @@ export function resolveAgainstFile(filePath: string, target: string): string {
 
 export const HTTPish = /^(https?|mailto):/i;
 
-// A URL scheme, as opposed to a Windows drive letter (`C:\…`), which is a path.
-const OTHER_SCHEME = /^[a-z][a-z\d+.-]+:/i;
+// A URL scheme, as opposed to a Windows drive path (`C:\…`, `C:/…`), which is a path.
+const OTHER_SCHEME = /^(?![a-z]:[\\/])[a-z][a-z\d+.-]*:/i;
 
 export type MarkdownLinkTarget =
   { kind: "external"; url: string } | { kind: "file"; path: string; rootPath: string };
@@ -41,7 +41,16 @@ export function resolveMarkdownLink(
   // and only open files the document's own root contains.
   const pathPart = href.split(/[?#]/, 1)[0];
   if (!pathPart) return null;
-  const absolute = resolveAgainstFile(filePath, pathPart);
+  // `my%20notes.md` names `my notes.md`, as it would in a browser. A malformed
+  // escape is read as written. Decoding comes before the root check, so an
+  // encoded `..%2F` is held to the root like a plain one.
+  let decoded = pathPart;
+  try {
+    decoded = decodeURIComponent(pathPart);
+  } catch {
+    // Keep the raw path.
+  }
+  const absolute = resolveAgainstFile(filePath, decoded);
   if (!isPathInside(absolute, rootPath)) return null;
   return { kind: "file", path: absolute, rootPath };
 }

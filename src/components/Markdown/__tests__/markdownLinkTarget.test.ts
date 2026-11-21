@@ -1,20 +1,33 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { urlNodeHref } from "../markdownLinkTarget";
+import { linkTargetAt, urlNodeHref } from "../markdownLinkTarget";
 
-function hrefs(doc: string): string[] {
+function stateOf(doc: string): EditorState {
   const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
-  const tree = ensureSyntaxTree(state, doc.length, 5000)!;
-  const found: string[] = [];
-  tree.iterate({
+  ensureSyntaxTree(state, doc.length, 5000);
+  return state;
+}
+
+function hrefs(doc: string): (string | null)[] {
+  const state = stateOf(doc);
+  const found: (string | null)[] = [];
+  ensureSyntaxTree(state, doc.length, 5000)!.iterate({
     enter: (node) => {
       if (node.name === "URL") found.push(urlNodeHref(state, node.node));
     },
   });
   return found;
 }
+
+let view: EditorView | null = null;
+afterEach(() => {
+  view?.destroy();
+  view = null;
+});
 
 describe("urlNodeHref", () => {
   it("reads bare URLs, autolinks and link destinations as the rendered document links them", () => {
@@ -33,15 +46,48 @@ describe("urlNodeHref", () => {
     ]);
   });
 
-  it("drops a destination's angle brackets and backslash escapes, and keeps its fragment", () => {
-    expect(hrefs('[a](<./my doc.md>) [b](a\\_b.md "title") [c](x.md#h)\n')).toEqual([
-      "./my doc.md",
-      "a_b.md",
-      "x.md#h",
+  it("gives a www. host its scheme whatever its path or port holds, and keeps a scheme's own", () => {
+    expect(hrefs("www.x.dev/a@b www.x.dev:8080/a <https://x.dev/@me> <mailto:a@b.dev>\n")).toEqual([
+      "http://www.x.dev/a@b",
+      "http://www.x.dev:8080/a",
+      "https://x.dev/@me",
+      "mailto:a@b.dev",
     ]);
   });
 
-  it("reads a link reference definition's destination", () => {
+  it("drops a destination's angle brackets and decodes its escapes and entities, as CommonMark does", () => {
+    expect(
+      hrefs(
+        '[a](<./my doc.md>) [b](a\\_b\\(1\\).md "title") [c](x.md#h) [d](https://x.dev/?a=1&amp;b=2) [e](&#35;setup) [f](&#x41;.md) [g](\\&amp;) [h](&bogus;)\n'
+      )
+    ).toEqual([
+      "./my doc.md",
+      "a_b(1).md",
+      "x.md#h",
+      "https://x.dev/?a=1&b=2",
+      "#setup",
+      "A.md",
+      "&amp;",
+      "&bogus;",
+    ]);
+  });
+
+  it("sends a URL written in a link's text where the link goes, and nowhere for a reference link", () => {
+    expect(
+      hrefs('[https://x.dev](./guide.md "t") [see https://y.dev][r]\n\n[r]: ./r.md\n')
+    ).toEqual(["./guide.md", "./guide.md", null, "./r.md"]);
+  });
+
+  it("reads a link reference definition's destination without adding a scheme", () => {
     expect(hrefs("[ref]: www.not-bare.dev\n")).toEqual(["www.not-bare.dev"]);
+  });
+});
+
+describe("linkTargetAt", () => {
+  it("follows a link's destination from a URL written in its text", () => {
+    const doc = "[https://x.dev](./guide.md)\n";
+    view = new EditorView({ state: stateOf(doc), parent: document.body });
+    expect(linkTargetAt(view, 3)).toBe("./guide.md");
+    expect(linkTargetAt(view, doc.indexOf("guide"))).toBe("./guide.md");
   });
 });

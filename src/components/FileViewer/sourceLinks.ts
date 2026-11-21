@@ -82,7 +82,9 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
             enter: (node) => {
               if (node.name !== "URL") return;
               // A link straddling two visible ranges is met twice.
-              if (node.from >= last && policy.canFollow(urlNodeHref(state, node.node))) {
+              if (node.from < last) return false;
+              const href = urlNodeHref(state, node.node);
+              if (href !== null && policy.canFollow(href)) {
                 builder.add(node.from, node.to, linkMark);
                 last = node.to;
               }
@@ -123,10 +125,13 @@ export function sourceLinks(policy: SourceLinkPolicy): Extension {
         if (!press || press.moved) return false;
         if (event.button !== 0 || event.detail > 1 || event.shiftKey || event.altKey) return false;
         if (!this.view.state.selection.main.empty) return false;
-        const link = linkUnder(this.view, event.target);
+        // The press, not the click's target, says which link: clearing a find
+        // match on the press can redraw the link, and Chromium then aims the
+        // click at the line around it.
+        const link = urlNodeAt(this.view, press.linkFrom);
         if (!link || link.from !== press.linkFrom) return false;
         const href = urlNodeHref(this.view.state, link);
-        if (!policy.canFollow(href)) return false;
+        if (href === null || !policy.canFollow(href)) return false;
         event.preventDefault();
         policy.follow(href);
         return true;

@@ -133,7 +133,7 @@ export const CODEMIRROR_LANGUAGES: readonly LanguageDescription[] = [
   }),
   /*@__PURE__*/ LanguageDescription.of({
     name: "Markdown",
-    extensions: ["md", "markdown", "mkd"],
+    extensions: ["md", "markdown", "mdx", "mkd"],
     load() {
       return loadMarkdownSupport();
     },
