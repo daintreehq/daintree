@@ -4,6 +4,14 @@ import { HOST_THROWAWAY_WORKSPACE_ID } from "../../../shared/config/hostThrowawa
 import type { AgentSessionFileResult } from "../../../shared/types/agentSessionFile.js";
 import { locateAgentSessionFile, type AgentSessionFileDeps } from "../AgentSessionFileService.js";
 
+const globalRun = vi.hoisted(() => ({
+  current: null as { sessionId: string; terminalId: string } | null,
+}));
+
+vi.mock("../globalAssistant.js", () => ({
+  peekGlobalAssistantService: () => ({ getRunningSession: () => globalRun.current }),
+}));
+
 const PROJECT = "project-a";
 const TERMINAL = "term-1";
 const CLAUDE_SESSION = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
@@ -478,6 +486,23 @@ describe("locateAgentSessionFile — assistants (#18139)", () => {
       expectNothingLookedAt(d);
     }
   );
+
+  it("reads the confirmed global run from main's global assistant service", async () => {
+    const { globalAssistantTerminalId: _injected, ...live } = deps(
+      codexAssistant(GLOBAL_ASSISTANT_ID)
+    );
+    globalRun.current = { sessionId: "help-1", terminalId: TERMINAL };
+    try {
+      await expect(locateAgentSessionFile(TERMINAL, HERE, live)).resolves.toEqual(OBSERVED_CODEX);
+      globalRun.current = { sessionId: "help-2", terminalId: "term-other" };
+      await expect(locateAgentSessionFile(TERMINAL, HERE, live)).resolves.toEqual({
+        status: "unknown",
+        reason: "terminal-unavailable",
+      });
+    } finally {
+      globalRun.current = null;
+    }
+  });
 
   it("never asks main for the global run when the record isn't in the global workspace", async () => {
     const d = deps(codexAssistant(HERE));
