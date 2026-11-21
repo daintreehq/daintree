@@ -5368,7 +5368,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Copy the current terminal selection without wrapping, padding or decoration; a Claude Code reply as the agent wrote it",
+    "description": "Copy the terminal selection as clean text, without wrapping or padding",
     "examples": undefined,
     "id": "terminal.copyClean",
     "keywords": [

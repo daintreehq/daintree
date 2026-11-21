@@ -32,6 +32,8 @@ import {
   undoCloseTakesKey,
 } from "@/services/terminal/undoCloseKey";
 
+const COPY_CLEAN_ACTION_ID = "terminal.copyClean";
+
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
 // through: stopping it, and stopping it with a send.
 const DICTATION_KEYS = ["voiceInput.toggle", "voiceInput.stopAndSend"] as const;
@@ -87,21 +89,23 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       matchesTriggerCombo(e, "nav.focusRegion.next") ||
       matchesTriggerCombo(e, "nav.focusRegion.prev");
 
-    // The physical key whose press reopened a panel, while it is held.
-    let heldUndoCloseCode: string | null = null;
+    // The physical key whose press reopened a panel or copied clean text, while
+    // it is held.
+    let heldRepeatSwallowCode: string | null = null;
 
     const handler = (e: KeyboardEvent) => {
       // Skip repeat events. Held down, the undo-close key reopens once: its
       // repeats are swallowed too, or each would reach the field or the Edit
-      // menu's Undo behind the panel it reopened.
+      // menu's Undo behind the panel it reopened. Copy clean text's likewise:
+      // xterm would send each one as Alt+Ctrl+C, an interrupt.
       if (e.repeat) {
-        if (heldUndoCloseCode !== null && e.code === heldUndoCloseCode) {
+        if (heldRepeatSwallowCode !== null && e.code === heldRepeatSwallowCode) {
           e.preventDefault();
           e.stopPropagation();
         }
         return;
       }
-      heldUndoCloseCode = null;
+      heldRepeatSwallowCode = null;
 
       // A shortcut recorder owns every key, including the one it is recording.
       if (keybindingService.isCapturingShortcut()) return;
@@ -438,8 +442,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       if (result.shouldConsume) {
         e.preventDefault();
         e.stopPropagation();
+        if (result.match?.actionId === COPY_CLEAN_ACTION_ID) heldRepeatSwallowCode = e.code;
         if (result.match?.actionId === UNDO_CLOSE_ACTION_ID) {
-          heldUndoCloseCode = e.code;
+          heldRepeatSwallowCode = e.code;
           noteUndoCloseKeyPress(isTextUndoKey(e));
         }
 
@@ -518,7 +523,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
     };
 
     const handleBlur = () => {
-      heldUndoCloseCode = null;
+      heldRepeatSwallowCode = null;
       keybindingService.clearPendingChord();
     };
     const handleVisibilityChange = () => {

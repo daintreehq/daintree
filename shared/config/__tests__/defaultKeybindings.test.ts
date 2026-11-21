@@ -142,25 +142,30 @@ describe("buildDefaultKeybindings", () => {
   });
 
   // Ctrl+Alt is AltGr on Windows, where AltGr+C types ć or č (#18132).
-  it("binds Copy clean text from a focused terminal on macOS and Linux, and leaves Windows unbound", () => {
+  it("binds Copy clean text on macOS and Linux, and leaves the row unbound on Windows", () => {
     expect(globalCombo(mac, "terminal.copyClean")).toEqual(["Cmd+Shift+Alt+C"]);
     expect(globalCombo(linux, "terminal.copyClean").map(foldCmd)).toEqual(["Ctrl+Shift+Alt+C"]);
+    // Kept as a row, so Settings can still bind it there.
     expect(globalCombo(windows, "terminal.copyClean")).toEqual([""]);
-    for (const table of [mac, windows, linux]) {
-      expect(table.find((b) => b.actionId === "terminal.copyClean")?.when).toBe("terminalFocused");
-    }
   });
 
   it("keeps Copy clean text clear of every other default and the terminal's own copy key", () => {
+    // Modifier order, Cmd-vs-Ctrl spelling and letter case can't hide a collision.
+    const step = (combo: string) => {
+      const parts = foldCmd(combo).split("+");
+      const key = parts.pop()!.toLowerCase();
+      return [...parts.sort(), key].join("+");
+    };
     for (const table of [mac, linux]) {
       const [copyClean] = table.filter((b) => b.actionId === "terminal.copyClean");
+      const mine = step(copyClean!.combo);
       const collisions = table.filter((b) => {
         if (b === copyClean || !b.combo) return false;
         const [first] = b.combo.split(" ");
-        return foldCmd(first!) === foldCmd(copyClean!.combo);
+        return step(first!) === mine;
       });
       expect(collisions.map((b) => b.actionId)).toEqual([]);
-      expect(foldCmd(copyClean!.combo)).not.toBe("Ctrl+Shift+C");
+      expect(mine).not.toBe(step("Ctrl+Shift+C"));
     }
   });
 

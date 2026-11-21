@@ -22,12 +22,18 @@ vi.mock("@/components/ui/context-menu", () => {
     children,
     onSelect,
     disabled,
+    keybinding,
   }: {
     children?: React.ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
+    keybinding?: string;
   }) => (
-    <button aria-disabled={disabled || undefined} onClick={() => onSelect?.()}>
+    <button
+      aria-disabled={disabled || undefined}
+      data-keybinding={keybinding}
+      onClick={() => onSelect?.()}
+    >
       {children}
     </button>
   );
@@ -900,6 +906,11 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
       expect.anything()
     );
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("shows the shortcut its action is bound to (#18132)", () => {
+    openMenu({ hovered: null });
+    expect(cleanRow().getAttribute("data-keybinding")).toBe("terminal.copyClean");
   });
 
   it("is disabled with Copy when nothing is selected", () => {

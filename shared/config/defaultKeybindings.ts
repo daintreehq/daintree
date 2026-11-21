@@ -498,15 +498,12 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   {
     // Terminal.app's Copy Plain Text (⌥⇧⌘C), and one modifier out from the
     // terminal's own Ctrl+Shift+C on Linux; Cmd+Shift+C is worktree.copyTree.
-    // Only from a focused terminal: elsewhere the focused panel's selection is
-    // one the user has stopped looking at.
     actionId: "terminal.copyClean",
     combo: "Cmd+Shift+Alt+C",
     scope: "global",
     priority: 0,
     description: "Copy selection as clean text",
     category: "Terminal",
-    when: "terminalFocused",
   },
   {
     actionId: "terminal.armDefault",
@@ -1403,7 +1400,6 @@ const WINDOWS_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Copy selection as clean text",
     category: "Terminal",
-    when: "terminalFocused",
   },
 ];
 

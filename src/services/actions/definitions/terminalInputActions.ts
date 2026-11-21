@@ -35,6 +35,22 @@ import { notify } from "@/lib/notify";
 const NO_FOCUSED_PANEL = "No panel is focused";
 
 /**
+ * The panel whose terminal holds the keyboard, for a shortcut typed into one:
+ * a force-selection drag focuses a pane's xterm without making it the focused
+ * panel, and the Assistant's terminal belongs to no panel at all, so the store's
+ * `focusedId` would copy some other pane's selection. `null` for a terminal
+ * outside any panel; `undefined` when no terminal has the keyboard (a chord's
+ * HUD, the composer), which leaves the focused panel to answer.
+ */
+function keyboardTerminalId(): string | null | undefined {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  if (!active?.closest(".xterm")) return undefined;
+  const id = active.closest("[data-panel-id]")?.getAttribute("data-panel-id");
+  if (!id) return null;
+  return peekTerminalService()?.get(id)?.terminal?.element?.contains(active) ? id : null;
+}
+
+/**
  * What an interrupt request can honestly report (#12338).
  *
  * Every field describes the moment before the write, because that is the last
@@ -215,8 +231,7 @@ export function registerTerminalInputActions(
     defineAction({
       id: "terminal.copyClean",
       title: "Copy clean text",
-      description:
-        "Copy the current terminal selection without wrapping, padding or decoration; a Claude Code reply as the agent wrote it",
+      description: "Copy the terminal selection as clean text, without wrapping or padding",
       category: "terminal",
       kind: "command",
       danger: "safe",
@@ -231,7 +246,9 @@ export function registerTerminalInputActions(
         const terminalId = args?.terminalId;
         requireExplicitTerminalIdForAgentDispatch("terminal.copyClean", terminalId, ctx);
         const state = usePanelStore.getState();
-        const targetId = terminalId ?? state.focusedId;
+        const typedInto = ctx.dispatchSource === "keybinding" ? keyboardTerminalId() : undefined;
+        if (!terminalId && typedInto === null) return;
+        const targetId = terminalId ?? typedInto ?? state.focusedId;
         if (!targetId) return;
         const managed = peekTerminalService()?.get(targetId);
         if (!managed?.terminal) return;
