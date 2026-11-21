@@ -6,7 +6,6 @@ import {
   Folders,
   GitBranch,
   GitPullRequest,
-  MessageSquareMore,
   PanelLeft,
   Plus,
   Search,
@@ -63,8 +62,8 @@ export const TOOLBAR_AGENTS = ["claude", "codex", "antigravity"] as const;
  */
 export const ANCHOR = {
   launcher: { x: 51, y: 14 },
-  "forge-issues": { x: 443, y: 14 },
-  "copy-context": { x: 523, y: 14 },
+  "forge-issues": { x: 465, y: 14 },
+  "copy-context": { x: 545, y: 14 },
 } as const satisfies Record<string, { x: number; y: number }>;
 
 export type AppRegion = "toolbar" | "sidebar" | "grid" | "dock" | "right";
@@ -316,9 +315,6 @@ export function MockApp({
         <Divider />
         <ToolbarButton anchor="assistant">
           {AssistantIcon && <AssistantIcon className="size-3" />}
-        </ToolbarButton>
-        <ToolbarButton anchor="portal">
-          <MessageSquareMore aria-hidden="true" />
         </ToolbarButton>
       </div>
 

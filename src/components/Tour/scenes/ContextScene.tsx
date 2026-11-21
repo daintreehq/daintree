@@ -16,44 +16,47 @@ import { useCue } from "@daintreehq/tour/react";
 
 const COPY = ANCHOR["copy-context"];
 const COPY_BUTTON = { anchor: "copy-context" };
-const PORTAL = { anchor: "portal" };
 // Copy context is a menu; its first item copies the whole worktree.
 const MENU = { width: 176, x: COPY.x - 166, y: COPY.y + 14 };
 const COPY_FULL = { anchor: "menu-0", dx: -28, dy: -3 };
+// Wherever the person pastes it: an unbranded chat window over Daintree.
+const CHAT = { x: 170, y: 60, width: 300, height: 220 };
+const COMPOSER = { anchor: "chat-composer" };
 
 export const CURSOR: readonly CursorStep[] = [
   { cue: "copy", at: COPY_BUTTON },
   { cue: "copy", offset: 0.5, at: COPY_BUTTON, click: true },
   { cue: "copy", offset: 1.0, at: COPY_FULL },
   { cue: "copy", offset: 1.5, at: COPY_FULL, click: true },
-  { cue: "portal", at: PORTAL },
-  { cue: "portal", offset: 0.5, at: PORTAL, click: true },
+  { cue: "switch", offset: 0.6, at: COMPOSER },
+  { cue: "paste", at: COMPOSER, click: true },
 ];
 
-/** The Portal: web chats in a side panel, the pasted worktree waiting as an attachment. */
-function PortalPanel({ pasted }: { pasted: boolean }) {
+/** Another app's chat window, the pasted worktree waiting in its composer as an attachment. */
+function ChatWindow({ open, pasted }: { open: boolean; pasted: boolean }) {
   return (
-    <div className="flex size-full flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border-subtle px-1.5 text-3xs">
-        {["Claude", "ChatGPT", "Gemini"].map((site, i) => (
-          <span
-            key={site}
-            className={cn(
-              "rounded-sm px-1.5 py-0.5",
-              i === 0 ? "bg-overlay-selected text-text-primary" : "text-text-secondary"
-            )}
-          >
-            {site}
-          </span>
+    <div
+      className={cn(
+        "absolute z-20 flex flex-col overflow-hidden rounded-lg border border-border-strong bg-surface-dialog shadow-[var(--theme-shadow-ambient)]",
+        reveal(open)
+      )}
+      style={{ left: CHAT.x, top: CHAT.y, width: CHAT.width, height: CHAT.height }}
+    >
+      <div className="relative flex h-6 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
+        {[0, 1, 2].map((dot) => (
+          <span key={dot} className="size-1.5 rounded-full bg-overlay-strong" />
         ))}
+        <span className="absolute inset-x-0 text-center text-3xs text-text-secondary">
+          New chat
+        </span>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-2">
-        <span className="h-2 w-20 rounded-full bg-overlay-strong" />
-        <span className="h-1.5 w-28 rounded-full bg-overlay-medium" />
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 p-2">
+        <span className="h-2 w-24 rounded-full bg-overlay-strong" />
+        <span className="h-1.5 w-36 rounded-full bg-overlay-medium" />
       </div>
-      <div className="shrink-0 p-1.5">
+      <div className="shrink-0 p-2">
         <div
-          data-tour-anchor="portal-composer"
+          data-tour-anchor="chat-composer"
           className="flex flex-col gap-1.5 rounded-md border border-border-subtle bg-surface-input p-1.5"
         >
           <span
@@ -79,8 +82,7 @@ export function ContextScene() {
   const copyCue = useCue("copy");
   const menuOpen = useCue("copy", 0.6);
   const copied = useCue("copy", 1.6);
-  const portalCue = useCue("portal");
-  const portalOpen = useCue("portal", 0.6);
+  const switchCue = useCue("switch");
   const pasted = useCue("paste", 0.3);
   const shortcuts = useTourShortcuts();
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
@@ -88,7 +90,7 @@ export function ContextScene() {
   return (
     <MockApp
       branch="add-search"
-      focus={portalOpen ? ["right"] : ["toolbar"]}
+      focus={switchCue ? [] : ["toolbar"]}
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
@@ -103,7 +105,7 @@ export function ContextScene() {
           </MockPane>
         </MockGrid>
       }
-      rightPanel={portalOpen ? <PortalPanel pasted={pasted} /> : undefined}
+      overlay={<ChatWindow open={switchCue} pasted={pasted} />}
     >
       <MockMenu
         visible={menuOpen && !copied}
@@ -122,7 +124,7 @@ export function ContextScene() {
         ]}
       />
       <MockTooltip
-        visible={copied && !portalCue}
+        visible={copied && !switchCue}
         x={COPY.x + 10}
         y={COPY.y + 14}
         align="right"
@@ -130,18 +132,10 @@ export function ContextScene() {
         detail="Copied 42 files (186 KB) to clipboard"
       />
       <MockSpotlight
-        targets={
-          pasted
-            ? ["portal-composer"]
-            : portalCue
-              ? ["portal"]
-              : menuOpen
-                ? ["menu-0"]
-                : ["copy-context"]
-        }
-        visible={(copyCue && !copied) || (portalCue && !portalOpen) || pasted}
+        targets={pasted ? ["chat-composer"] : menuOpen ? ["menu-0"] : ["copy-context"]}
+        visible={(copyCue && !copied) || pasted}
       />
-      <MockCursor {...cursor} visible={cursor.visible && !portalOpen} />
+      <MockCursor {...cursor} />
     </MockApp>
   );
 }

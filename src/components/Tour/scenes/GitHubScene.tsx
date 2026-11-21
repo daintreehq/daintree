@@ -30,10 +30,10 @@ import {
 import { useCue } from "@daintreehq/tour/react";
 
 const ISSUES = ANCHOR["forge-issues"];
-const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
+const LIST = { x: ISSUES.x - 153, y: ISSUES.y + 14, width: 216 };
 // Clicking an issue opens it on the forge; a worktree comes from the row's
 // actions menu. #51 is the second row; the menu opens under its button.
-const ISSUE_MENU = { x: 487, y: 91 };
+const ISSUE_MENU = { x: LIST.x + LIST.width - 19, y: 91 };
 const ROW_MENU = { x: ISSUE_MENU.x - 132, y: ISSUE_MENU.y + 10, width: 140 };
 const CREATE_ITEM = { anchor: "issue-actions-0", dx: -20 };
 
