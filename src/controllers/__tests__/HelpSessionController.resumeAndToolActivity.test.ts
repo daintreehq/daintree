@@ -1053,6 +1053,24 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  it("lets a hand-off go with the next launch, even one pinned to the same agent (#18140)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_executeLaunch"] = vi.fn().mockResolvedValue(undefined);
+
+    ctrl.launch({ agentId: "codex", replaceExisting: true, pinAgent: true, seedPrompt: "hand-off" });
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBe("hand-off");
+
+    // A second conversation on the same agent, started without one.
+    ctrl["_isLaunching"] = false;
+    ctrl.launch({ agentId: "codex", replaceExisting: true, pinAgent: true });
+    expect(ctrl["_lastPinnedSeedPrompt"]).toBeUndefined();
+
+    const relaunch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl.retryLaunch("codex");
+    expect(relaunch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
+  });
+
   it("launches immediately when the lane is already ready", () => {
     const ctrl = new HelpSessionController();
     const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
