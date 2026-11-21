@@ -589,9 +589,16 @@ export class GlobalAssistantService {
     ) {
       throw refuse("STALE_GENERATION", "The global assistant changed since this was asked.");
     }
-    // Not awaited: the successor waits on the teardown itself before it provisions.
-    this.teardown("restart").catch(() => {});
-    return this.admit(true, choice);
+    // Held from teardown to the successor's claim, so the session never reads
+    // free in between and the other one never becomes the lone coordinator.
+    this.holds += 1;
+    try {
+      // Not awaited: the successor waits on the teardown itself before it provisions.
+      this.teardown("restart").catch(() => {});
+      return this.admit(true, choice);
+    } finally {
+      this.holds -= 1;
+    }
   }
 
   /** Whether `agentId`, named for a run, could run it here now; a failed check says no. */

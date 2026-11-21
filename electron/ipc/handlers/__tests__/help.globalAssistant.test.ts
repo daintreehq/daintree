@@ -215,6 +215,37 @@ describe("global assistant IPC handlers", () => {
       expect(views.map((view) => view.slot)).toEqual([0, 1]);
     });
 
+    it("stops nothing once the session it was told takes over no longer would", async () => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+
+      // Told session 2 takes over, but it isn't open (another window stopped it).
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      secondService = makeService(1, "codex");
+      // Open, but coordination already moved to it.
+      registry.coordinator = 1;
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      registry.coordinator = 0;
+      const stopped = await handlers.handleDiscardGlobalAssistant(
+        ctx(10, 1),
+        first.generation,
+        0,
+        true,
+        1
+      );
+      expect(stopped.phase).toBe("absent");
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), undefined, 0, undefined, 0)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    });
+
     it("refuses a call from no window, or naming no session", async () => {
       await expect(
         handlers.handleSetGlobalAssistantCoordinator(ctx(10, null), 1)

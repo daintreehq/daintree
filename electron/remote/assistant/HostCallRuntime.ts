@@ -1074,6 +1074,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * its end reaches them: a held message is never typed after it.
    */
   private readonly heldSendHosts = new Map<string, Set<HostId>>();
+  /**
+   * Each global session's acting calls in flight, stopped together when
+   * coordination leaves it (#18143). Made at its first such call and dropped
+   * once used, so a session given coordination back starts with a new one.
+   */
+  private readonly standDowns = new Map<string, AbortController>();
   private disposed = false;
   /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
   private readonly sampleWaits = new Set<() => void>();
@@ -1842,6 +1848,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   endHelpSession(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
+    this.standDowns.delete(helpSessionId);
     const session = this.throwawaySessions.get(helpSessionId);
     this.throwawaySessions.delete(helpSessionId);
     const held = this.heldSendHosts.get(helpSessionId);
@@ -1854,6 +1861,27 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
     }
+  }
+
+  /**
+   * Coordination left this global session (#18143): its acting calls still in
+   * flight are cancelled, as its own cancel would, so none that hasn't gone
+   * out is sent, and a host stops what it can of one that has. What one
+   * already did stays done, and a launch that lands late is the work's.
+   */
+  standDown(helpSessionId: string): void {
+    const controller = this.standDowns.get(helpSessionId);
+    this.standDowns.delete(helpSessionId);
+    controller?.abort();
+  }
+
+  private withStandDown(helpSessionId: string, signal: AbortSignal | undefined): AbortSignal {
+    let controller = this.standDowns.get(helpSessionId);
+    if (controller === undefined) {
+      controller = new AbortController();
+      this.standDowns.set(helpSessionId, controller);
+    }
+    return signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
   }
 
   /**
@@ -1874,6 +1902,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const read of this.launchedAgentReads.values()) read.end?.();
     this.launchedAgentReads.clear();
     this.heldSendHosts.clear();
+    this.standDowns.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1958,13 +1987,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (isGlobalAssistantId(caller.projectId) && !globalAssistantMayRelay(args.tool)) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
+      // A global session's acting call also stops when coordination leaves it (#18143).
+      const signal =
+        isGlobalAssistantId(caller.projectId) && !globalStandbyMayRelay(args.tool)
+          ? this.withStandDown(helpSessionId, context.signal)
+          : context.signal;
       const toolArgs = args.args ?? {};
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {
         return { ...this.outcomeWith("too_large", CALL_TOO_LARGE_DETAIL), ...unsent };
       }
       // Cancelled before it went out (#17985): nothing is sent or kept. A first
       // send never ran; a resend learns nothing of the call it resends.
-      if (context.signal?.aborted) {
+      if (signal?.aborted) {
         return resend
           ? { ...this.outcomeWith("ambiguous", CALL_RESEND_CANCELLED_DETAIL), ...sent }
           : { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
@@ -2024,9 +2058,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       // and nothing of it a host dispatches here later runs.
       const inFlight = this.callsInFlight.get(callId);
       const cancel: RelayCallCancel | undefined =
-        context.signal !== undefined
+        signal !== undefined
           ? {
-              signal: context.signal,
+              signal,
               onCancel: () => {
                 if (inFlight !== undefined) inFlight.cancelled = true;
                 remember(this.cancelledCalls, callKey, true, MAX_CANCELLED_CALLS);

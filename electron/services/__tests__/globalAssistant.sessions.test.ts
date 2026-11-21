@@ -24,6 +24,8 @@ const help = vi.hoisted(() => ({
   coordinator: null as number | null,
   /** Holds every spawn until released, so a launch can be caught in flight. */
   spawnGate: null as Promise<void> | null,
+  /** Why the next handover is refused, as the help service would say it. */
+  refuseHandOver: null as "starting" | "unheld" | null,
 }));
 /** What each handover gave the MCP server to move, outgoing run first. */
 const work = vi.hoisted(() => ({
@@ -76,9 +78,10 @@ vi.mock("../HelpSessionService.js", () => ({
       if (help.wired) help.coordinator = slot;
     },
     handOverLaneCoordination: (_projectId: string, from: number, to: number) => {
+      if (help.refuseHandOver !== null) return { refused: help.refuseHandOver };
       help.pointer.push(`handover-${from}-${to}`);
       help.coordinator = to;
-      return Promise.resolve();
+      return { written: Promise.resolve() };
     },
   },
 }));
@@ -118,6 +121,7 @@ beforeEach(async () => {
   help.revoked = [];
   help.coordinator = null;
   help.spawnGate = null;
+  help.refuseHandOver = null;
   work.moved = [];
   vi.resetModules();
   registry = await import("../globalAssistant.js");
@@ -311,14 +315,26 @@ describe("global assistant sessions (#18142)", () => {
 
     it("hands coordination over as asked, with the work its run held, and leaves both runs be", async () => {
       const [first, second] = await twoRunning();
-      const told: boolean[] = [];
-      first.onChange((state) => told.push(state.coordinating));
+      const told: Array<[number, boolean]> = [];
+      first.onChange((state) => told.push([0, state.coordinating]));
+      second.onChange((state) => told.push([1, state.coordinating]));
+      const stoodDown: string[] = [];
+      registry.onGlobalAssistantStandDown((sessionId) => stoodDown.push(sessionId));
       const outgoing = first.getRunningSession()!.sessionId;
+      const runs = [first.getRunningSession(), second.getRunningSession()];
 
       await registry.handGlobalAssistantCoordination(1);
 
       expect(coordinating()).toEqual([false, true]);
-      expect(told.at(-1)).toBe(false);
+      // Both windows' states hear it.
+      expect(told).toEqual(
+        expect.arrayContaining([
+          [0, false],
+          [1, true],
+        ])
+      );
+      expect(stoodDown).toEqual([outgoing]);
+      expect([first.getRunningSession(), second.getRunningSession()]).toEqual(runs);
       expect(help.pointer).toContain("handover-0-1");
       expect(work.moved).toEqual([{ from: outgoing, to: second.getRunningSession() }]);
       expect(first.getState().phase).toBe("running");
@@ -382,6 +398,37 @@ describe("global assistant sessions (#18142)", () => {
 
       expect(help.pointer.some((entry) => entry.startsWith("handover"))).toBe(false);
       expect(help.pointer).toContain("discard-1");
+      expect(work.moved).toEqual([]);
+      expect(coordinating()).toEqual([true, false]);
+    });
+
+    it("hands a second session's coordination back to the first when it stops", async () => {
+      const [first, second] = await twoRunning();
+      await registry.handGlobalAssistantCoordination(1);
+      const outgoing = second.getRunningSession()!.sessionId;
+
+      await registry.stopGlobalAssistantSession(1);
+
+      expect(help.pointer.indexOf("handover-1-0")).toBeLessThan(help.pointer.indexOf("discard-1"));
+      expect(work.moved.at(-1)).toEqual({ from: outgoing, to: first.getRunningSession() });
+      expect(coordinating()).toEqual([true, false]);
+    });
+
+    it("stops nothing when the session staying has no conversation to take the work into", async () => {
+      const [first] = await twoRunning();
+      help.refuseHandOver = "unheld";
+
+      await expect(registry.stopGlobalAssistantSession(0)).rejects.toMatchObject({
+        code: "VALIDATION",
+        userMessage: expect.stringContaining("Session 2 hasn't started a conversation yet"),
+      });
+      await expect(registry.handGlobalAssistantCoordination(1)).rejects.toMatchObject({
+        userMessage: expect.stringContaining("Start it, then hand coordination to it"),
+      });
+
+      expect(first.getState().phase).toBe("running");
+      expect(help.pointer).not.toContain("discard-0");
+      expect(work.moved).toEqual([]);
       expect(coordinating()).toEqual([true, false]);
     });
 

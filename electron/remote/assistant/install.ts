@@ -10,6 +10,7 @@ import {
 } from "../../services/helpSessionRuntime.js";
 import {
   globalAssistantCoordinatorSlot,
+  onGlobalAssistantStandDown,
   peekGlobalAssistantService,
 } from "../../services/globalAssistant.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
@@ -474,11 +475,14 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       runtime.endHelpSession(sessionId);
     });
   });
+  // Coordination left a global session (#18143): what it still had in flight stops.
+  const offStandDown = onGlobalAssistantStandDown((sessionId) => runtime.standDown(sessionId));
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
   return () => {
     cancelSessionWatch();
     offSessionEnded?.();
+    offStandDown();
     unregisterCallRelay();
     unregisterRuntime();
     runtime.dispose();

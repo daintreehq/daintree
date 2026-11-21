@@ -404,31 +404,56 @@ const startingRefusal = () =>
     userMessage: "A global assistant session is starting or stopping. Try again once it settles.",
   });
 
+/** Told the run of a session coordination just left, so what it still had in flight stops. */
+const standDownListeners = new Set<(sessionId: string) => void>();
+
+/**
+ * Hear each run that stops coordinating (#18143), the moment it does. The
+ * host-control runtime cancels the acting calls it still has in flight, so
+ * none lands after the other session has taken over.
+ */
+export function onGlobalAssistantStandDown(listener: (sessionId: string) => void): () => void {
+  standDownListeners.add(listener);
+  return () => standDownListeners.delete(listener);
+}
+
 /**
  * Move coordination from `source` to `target` with the work it held (#18143):
  * the ownership its conversation holds, its prompts still waiting on busy
- * workers here, and the terminals the person handed it. Synchronous up to the
- * write, so no call admitted after it finds the old coordinator. Refused,
- * with nothing moved, while a launch holds `target`'s conversation.
+ * workers here, the terminals the person handed it, and its acting calls
+ * still in flight, which are cancelled. Synchronous up to the write, so no
+ * call admitted after it finds the old coordinator. Refused, with nothing
+ * moved, while a launch holds `target`'s conversation, or while `target` has
+ * no conversation to take the work into (`unheld` names what to say then).
  */
 function moveCoordination(
   help: HelpSessionService,
   mcp: McpServer | null,
   source: GlobalAssistantService,
-  target: GlobalAssistantService
+  target: GlobalAssistantService,
+  unheld: () => AppError
 ): Promise<void> {
   const outgoing = source.getRunningSession();
-  const written = help.handOverLaneCoordination(GLOBAL_ASSISTANT_ID, source.slot, target.slot);
-  if (written === null) throw startingRefusal();
+  const handover = help.handOverLaneCoordination(GLOBAL_ASSISTANT_ID, source.slot, target.slot);
+  if ("refused" in handover) {
+    throw handover.refused === "unheld" ? unheld() : startingRefusal();
+  }
   settleCoordinator();
-  if (outgoing !== null && mcp !== null) {
+  if (outgoing !== null) {
+    for (const listener of [...standDownListeners]) {
+      try {
+        listener(outgoing.sessionId);
+      } catch (err) {
+        console.warn("[GlobalAssistant] A stand-down listener threw:", err);
+      }
+    }
     try {
-      mcp.handOverGlobalAssistantWork(outgoing.sessionId, target.getRunningSession());
+      mcp?.handOverGlobalAssistantWork(outgoing.sessionId, target.getRunningSession());
     } catch (err) {
       console.warn("[GlobalAssistant] Handing the coordinator's terminals over failed:", err);
     }
   }
-  return written;
+  return handover.written;
 }
 
 /**
@@ -455,7 +480,18 @@ export async function handGlobalAssistantCoordination(slot: GlobalAssistantSlot)
     });
   }
   if (!source.isSettled() || !target.isSettled()) throw startingRefusal();
-  await moveCoordination(help, mcp, source, target);
+  await moveCoordination(
+    help,
+    mcp,
+    source,
+    target,
+    () =>
+      new AppError({
+        code: "VALIDATION",
+        message: "That global assistant session has no conversation to take the work into.",
+        userMessage: `${sessionName(slot)} hasn't started a conversation yet. Start it, then hand coordination to it.`,
+      })
+  );
 }
 
 /**
@@ -471,6 +507,9 @@ export async function stopGlobalAssistantSession(
 ): Promise<void> {
   const service = getGlobalAssistantService(slot);
   const other = getGlobalAssistantService(slot === 0 ? 1 : 0);
+  // Asked before the pointers were in, a kept session beside it would read
+  // free, and the stop would forget work it should hand over.
+  await whenGlobalAssistantSessionsReadable();
   const mcp = other.isOccupied() ? await loadMcpServer() : null;
   check(service);
   const help = loadedHelp;
@@ -489,7 +528,18 @@ export async function stopGlobalAssistantSession(
       userMessage: `${sessionName(other.slot)} is starting. Stop this session once it has, so it can take over the workers.`,
     });
   }
-  const moved = moveCoordination(help, mcp, service, other);
+  const moved = moveCoordination(
+    help,
+    mcp,
+    service,
+    other,
+    () =>
+      new AppError({
+        code: "VALIDATION",
+        message: "The other global assistant session has no conversation to take the work into.",
+        userMessage: `${sessionName(other.slot)} hasn't started a conversation yet. Start it before stopping this session, so it can take over the workers.`,
+      })
+  );
   const stopped = service.discard();
   await Promise.all([moved, stopped]);
 }

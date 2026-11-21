@@ -177,6 +177,8 @@ export function GlobalAssistantPane({
     slot: GlobalAssistantSlot;
     generation: number;
     running: boolean;
+    /** The session a stop of the coordinator hands coordination to, as the person is told (#18143). */
+    handsTo?: GlobalAssistantSlot | null;
   } | null>(null);
   // The session and generation a Start was pressed at. A Cancel moves the generation
   // on, so Start is offered again at once, before the stopped launch has wound down.
@@ -314,7 +316,7 @@ export function GlobalAssistantPane({
   // (#18143). Named by the session it goes to, from either session's menu.
   const otherSession = sessions?.find((session) => session.slot !== slot) ?? null;
   const coordinationTarget =
-    view?.occupied && otherSession?.occupied && !boundElsewhere
+    view?.occupied && otherSession?.occupied && !boundElsewhere && !targetEnded
       ? view.coordinating
         ? otherSession.slot
         : otherSession.coordinating
@@ -463,6 +465,8 @@ export function GlobalAssistantPane({
                           slot,
                           generation,
                           running: controllable,
+                          handsTo:
+                            view?.coordinating && otherSession?.occupied ? otherSession.slot : null,
                         })
                       }
                       data-testid="help-global-stop"
@@ -601,7 +605,7 @@ export function GlobalAssistantPane({
             ? discardConsequence(
                 pendingConfirm.slot,
                 pendingConfirm.running,
-                view?.coordinating && otherSession?.occupied ? otherSession.slot : null
+                pendingConfirm.handsTo ?? null
               )
             : "Its agent stops in every window and a new conversation starts"
         }
@@ -614,7 +618,7 @@ export function GlobalAssistantPane({
           // Acting on the run on screen: whatever replaces it is the one to follow.
           useHelpPanelStore.getState().selectGlobal(null, pending.slot);
           void (pending.kind === "discard"
-            ? discard(pending.generation, pending.running)
+            ? discard(pending.generation, pending.running, pending.handsTo)
             : restart(pending.generation));
         }}
         onClose={() => setPendingConfirm(null)}

@@ -23,9 +23,14 @@ export interface GlobalAssistantHandle {
   restart: (generation: number) => Promise<boolean>;
   /**
    * End the session the person confirmed and forget its conversation.
-   * `running` is whether it ran when they were asked.
+   * `running` is whether it ran when they were asked; `handsTo`, the session
+   * they were told takes over coordination (#18143).
    */
-  discard: (generation: number, running?: boolean) => Promise<boolean>;
+  discard: (
+    generation: number,
+    running?: boolean,
+    handsTo?: GlobalAssistantSlot | null
+  ) => Promise<boolean>;
   /** Stop the launch the person watched start; the conversation it was picking up is kept. */
   cancelLaunch: (generation: number) => Promise<boolean>;
   /**
@@ -252,9 +257,12 @@ export function useGlobalAssistant(
   );
 
   const discard = useCallback(
-    (generation: number, running?: boolean) =>
+    (generation: number, running?: boolean, handsTo?: GlobalAssistantSlot | null) =>
       run(
-        () => window.electron.help.discardGlobalAssistant(generation, slot, running),
+        () =>
+          handsTo === undefined || handsTo === null
+            ? window.electron.help.discardGlobalAssistant(generation, slot, running)
+            : window.electron.help.discardGlobalAssistant(generation, slot, running, handsTo),
         "Daintree couldn't end the global assistant."
       ),
     [run, slot]

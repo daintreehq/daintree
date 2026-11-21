@@ -425,13 +425,16 @@ export async function handleReplaceGlobalAssistant(
 /**
  * `expectedRunning` says whether the session was running when the person was
  * asked: a session started since (same generation, no longer idle), or one
- * that stopped since, is not the one they agreed to stop.
+ * that stopped since, is not the one they agreed to stop. `expectedHandsTo`
+ * is the session they were told takes over coordination and the workers
+ * (#18143): one that no longer would is not what they agreed to either.
  */
 export async function handleDiscardGlobalAssistant(
   ctx: IpcContext,
   expectedGeneration?: number,
   slot?: number,
-  expectedRunning?: boolean
+  expectedRunning?: boolean,
+  expectedHandsTo?: number
 ): Promise<GlobalAssistantView> {
   requireWindow(ctx);
   const at = requireSlot(slot);
@@ -439,19 +442,32 @@ export async function handleDiscardGlobalAssistant(
   if (expectedRunning !== undefined && typeof expectedRunning !== "boolean") {
     throw new AppError({ code: "VALIDATION", message: "Invalid expected phase" });
   }
+  if (
+    expectedHandsTo !== undefined &&
+    (!isGlobalAssistantSlot(expectedHandsTo) || expectedHandsTo === at)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant session." });
+  }
   // Checked again just before the stop: a coordinator's stop first loads what
   // hands its work over, and the session may move on meanwhile.
+  const changed = () =>
+    new AppError({
+      code: "STALE_GENERATION",
+      message: "The global assistant changed since this was asked",
+      userMessage: "The global assistant changed since you asked. Nothing was stopped.",
+    });
   await stopGlobalAssistantSession(at, () => {
     requireGeneration(instance, expectedGeneration);
+    if (
+      expectedHandsTo !== undefined &&
+      isGlobalAssistantSlot(expectedHandsTo) &&
+      (globalAssistantCoordinatorSlot() !== at || !service(expectedHandsTo).isOccupied())
+    ) {
+      throw changed();
+    }
     if (expectedRunning === undefined) return;
     const phase = instance.getState().phase;
-    if ((phase === "running") !== expectedRunning || phase === "launching") {
-      throw new AppError({
-        code: "STALE_GENERATION",
-        message: "The global assistant changed since this was asked",
-        userMessage: "The global assistant changed since you asked. Nothing was stopped.",
-      });
-    }
+    if ((phase === "running") !== expectedRunning || phase === "launching") throw changed();
   });
   return globalAssistantView(instance);
 }

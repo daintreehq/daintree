@@ -311,6 +311,9 @@ export interface ConversationOwnershipListener {
   forget(conversationOwnershipId: string): void;
 }
 
+/** How a handover of coordination between lanes went (#18143): written, or refused with why. */
+export type LaneHandover = { written: Promise<void> } | { refused: "starting" | "unheld" };
+
 /** A conversation a lane ran, by what its resume would name and the ownership id it was given. */
 interface LaneConversation {
   agentId: string;
@@ -2423,25 +2426,27 @@ export class HelpSessionService {
    * lanes' pointers, every session record of each, and the choice are written
    * in one snapshot, so a crash keeps all of it or none.
    *
-   * Everything but the write happens before this returns. Null, with nothing
-   * changed, when the pointers aren't wired or a launch holds `to`'s pointer:
-   * that launch could start `to` afresh and park the work as a conversation
-   * it left. One holding `from`'s picks up whatever `from` then points at. A
-   * `to` with no conversation to hold the work takes coordination with
-   * nothing handed to it.
+   * Everything but the write happens before this returns. Refused, with
+   * nothing changed, when the pointers aren't wired or a launch holds `to`'s
+   * pointer (`starting`): that launch could start `to` afresh and park the
+   * work as a conversation it left. One holding `from`'s picks up whatever
+   * `from` then points at. Refused too while `from` holds work and `to` has
+   * neither a run nor a kept conversation to take it into (`unheld`), so the
+   * work is never left with a lane that no longer coordinates.
    */
-  handOverLaneCoordination(projectId: string, from: number, to: number): Promise<void> | null {
+  handOverLaneCoordination(projectId: string, from: number, to: number): LaneHandover {
     const store = this.pendingHibernationStore;
-    if (!store || from === to) return null;
+    if (!store || from === to) return { refused: "starting" };
     const fromKey = assistantSlotKey(projectId, from);
     const toKey = assistantSlotKey(projectId, to);
-    if (this.claimsBySlotKey.has(toKey)) return null;
+    if (this.claimsBySlotKey.has(toKey)) return { refused: "starting" };
     const held = this.laneOwnershipId(projectId, from);
     const theirs = this.laneOwnershipId(projectId, to);
     const toRuns = this.liveLaneRecord(projectId, to);
     const coordinator = { projectId, slot: to };
-    if (held === undefined || (theirs === undefined && toRuns === null && !store.get(toKey))) {
-      return store.commit({ coordinator });
+    if (held === undefined) return { written: store.commit({ coordinator }) };
+    if (theirs === undefined && toRuns === null && !store.get(toKey)) {
+      return { refused: "unheld" };
     }
     const given = theirs ?? randomUUID();
     for (const record of this.sessionsById.values()) {
@@ -2462,7 +2467,7 @@ export class HelpSessionService {
     }
     const toEntry = store.get(toKey);
     if (toEntry) entries[toKey] = { ...toEntry, conversationOwnershipId: held };
-    return store.commit({ entries, coordinator });
+    return { written: store.commit({ entries, coordinator }) };
   }
 
   /** The ownership id a lane's work is held under now: its live run's, else its pointer's. */

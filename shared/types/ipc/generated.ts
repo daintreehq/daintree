@@ -2593,6 +2593,7 @@ export interface GeneratedIpcInvokeMap {
       expectedGeneration?: number | undefined,
       slot?: number | undefined,
       expectedRunning?: boolean | undefined,
+      expectedHandsTo?: number | undefined,
     ];
     result: import("./help.js").GlobalAssistantView;
   };

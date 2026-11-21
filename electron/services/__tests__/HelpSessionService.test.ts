@@ -4123,25 +4123,27 @@ describe("HelpSessionService", () => {
 
         describe("handing coordination between lanes (#18143)", () => {
           let coordinators: Map<string, number>;
+          let commit: ReturnType<typeof vi.fn>;
 
           beforeEach(() => {
             coordinators = new Map();
+            commit = vi.fn(
+              (change: {
+                entries?: Record<string, Entry>;
+                coordinator?: { projectId: string; slot: number };
+              }) => {
+                for (const [key, entry] of Object.entries(change.entries ?? {})) {
+                  backing.set(key, entry);
+                }
+                if (change.coordinator) {
+                  coordinators.set(change.coordinator.projectId, change.coordinator.slot);
+                }
+                return Promise.resolve();
+              }
+            );
             Object.assign(hibernationStore, {
               getCoordinator: vi.fn((projectId: string) => coordinators.get(projectId) ?? null),
-              commit: vi.fn(
-                (change: {
-                  entries?: Record<string, Entry>;
-                  coordinator?: { projectId: string; slot: number };
-                }) => {
-                  for (const [key, entry] of Object.entries(change.entries ?? {})) {
-                    backing.set(key, entry);
-                  }
-                  if (change.coordinator) {
-                    coordinators.set(change.coordinator.projectId, change.coordinator.slot);
-                  }
-                  return Promise.resolve();
-                }
-              ),
+              commit,
             });
           });
 
@@ -4153,6 +4155,12 @@ describe("HelpSessionService", () => {
             return result;
           }
 
+          function handOver(from: number, to: number): Promise<void> {
+            const handover = service.handOverLaneCoordination("proj-1", from, to);
+            if (!("written" in handover)) throw new Error(`refused: ${handover.refused}`);
+            return handover.written;
+          }
+
           it("moves the work's id to the lane taking over and gives the other its id, in one write", async () => {
             const a = await launchSlot(0, "term-a", "conv-a");
             const b = await launchSlot(1, "term-b", "conv-b");
@@ -4160,15 +4168,14 @@ describe("HelpSessionService", () => {
             const theirs = ownershipOfLane(1);
             expect(held).not.toBe(theirs);
 
-            const written = service.handOverLaneCoordination("proj-1", 0, 1);
+            const written = handOver(0, 1);
 
-            expect(written).not.toBeNull();
             // Every call either run makes from here on already names the moved id.
             expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
             expect(service.getConversationOwnershipId(a.sessionId)).toBe(theirs);
             expect(service.getLaneCoordinator("proj-1")).toBe(1);
             await written;
-            expect(hibernationStore.commit).toHaveBeenCalledTimes(1);
+            expect(commit).toHaveBeenCalledTimes(1);
             expect(ownershipOfLane(1)).toBe(held);
             expect(ownershipOfLane(0)).toBe(theirs);
             // Each lane still points at its own conversation.
@@ -4182,7 +4189,7 @@ describe("HelpSessionService", () => {
             const b = await launchSlot(1, "term-b", "conv-b");
             const held = ownershipOfLane(0);
 
-            await service.handOverLaneCoordination("proj-1", 0, 1);
+            await handOver(0, 1);
             await service.discardConversation("proj-1", 0);
 
             expect(listener.forget).not.toHaveBeenCalledWith(held);
@@ -4197,10 +4204,14 @@ describe("HelpSessionService", () => {
             await launchSlot(1, "term-b", "conv-b");
             const held = ownershipOfLane(0);
 
-            await service.handOverLaneCoordination("proj-1", 0, 1);
-            await service.handOverLaneCoordination("proj-1", 1, 0);
+            const theirs = ownershipOfLane(1);
+            await handOver(0, 1);
+            expect(ownershipOfLane(1)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            await handOver(1, 0);
 
             expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(ownershipOfLane(1)).toBe(theirs);
             expect(ownershipOfLane(0)).toBe(held);
             expect(service.getLaneCoordinator("proj-1")).toBe(0);
           });
@@ -4213,7 +4224,7 @@ describe("HelpSessionService", () => {
             if (!b) throw new Error("expected provision");
             expect(service.markTerminalForToken(b.token, "term-b")).toBe(true);
 
-            await service.handOverLaneCoordination("proj-1", 0, 1);
+            await handOver(0, 1);
 
             expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
             const given = service.getConversationOwnershipId(a.sessionId);
@@ -4229,12 +4240,43 @@ describe("HelpSessionService", () => {
             await service.revokeSession(b.sessionId);
             await service.takePendingHibernation("proj-1", 1, 11);
 
-            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toBeNull();
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({
+              refused: "starting",
+            });
 
             expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
             expect(ownershipOfLane(0)).toBe(held);
             expect(service.getLaneCoordinator("proj-1")).toBeNull();
-            expect(hibernationStore.commit).not.toHaveBeenCalled();
+            expect(commit).not.toHaveBeenCalled();
+          });
+
+          it("refuses a lane with nothing to take the work into while the other holds some", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({ refused: "unheld" });
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(commit).not.toHaveBeenCalled();
+
+            // With no work to hand, coordination alone moves.
+            const handover = service.handOverLaneCoordination("proj-1", 1, 0);
+            expect(handover).toHaveProperty("written");
+            expect(service.getLaneCoordinator("proj-1")).toBe(0);
+          });
+
+          it("moves a kept lane's id through its pointer, which its next resume picks up", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+            await service.revokeSession(a.sessionId);
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const theirs = ownershipOfLane(1);
+
+            await handOver(0, 1);
+
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            const resumed = await launchSlot(0, "term-a2", "conv-a");
+            expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(theirs);
           });
         });
       });

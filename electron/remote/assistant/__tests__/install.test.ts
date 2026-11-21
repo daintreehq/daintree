@@ -99,9 +99,16 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 const globalAssistant = vi.hoisted(() => ({
   /** The views showing it, the one holding its input first. Null: no service. */
   views: null as number[] | null,
+  /** The session that coordinates (#18143). */
+  coordinator: 0,
+  standDown: new Set<(sessionId: string) => void>(),
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
-  globalAssistantCoordinatorSlot: () => 0,
+  globalAssistantCoordinatorSlot: () => globalAssistant.coordinator,
+  onGlobalAssistantStandDown: (listener: (sessionId: string) => void) => {
+    globalAssistant.standDown.add(listener);
+    return () => globalAssistant.standDown.delete(listener);
+  },
   peekGlobalAssistantService: () =>
     globalAssistant.views && {
       presenterWebContentsId: (canAsk: (id: number) => boolean = () => true) =>
@@ -422,6 +429,61 @@ describe("installHostControl (#13493)", () => {
     expect(allowed).toMatchObject({ ok: true, value: { outcome: "ok" } });
 
     off();
+  });
+
+  it("lets only the global session that coordinates act, under the work's conversation (#18143)", async () => {
+    globalAssistant.coordinator = 0;
+    const off = installHostControl({ observeHosts: () => [], isHostControlEnabled: () => false });
+    for (const [slot, sessionId, conversation] of [
+      [0, "global-a", "work"],
+      [1, "global-b", "other"],
+    ] as const) {
+      running.set(`${GLOBAL_ASSISTANT_ID}:${slot}`, {
+        sessionId,
+        terminalId: `t-${sessionId}`,
+        projectViewWebContentsId: 0,
+      });
+      generations.set(`t-${sessionId}`, 1);
+      conversations.set(sessionId, conversation);
+    }
+    const runtime = hostControl.runtime as HostCallRuntime;
+    const call = (sessionId: string, tool: string) =>
+      runtime.call(
+        sessionId,
+        { hostId: "local", projectId: "proj-1", tool, args: { terminalId: "w", command: "go" } },
+        { tier: "full" }
+      );
+    const opened = () =>
+      mcp.opened.map((open) => [open.caller.helpSessionId, open.caller.conversationId]);
+
+    expect(await call("global-b", "terminal.list")).toMatchObject({ value: { outcome: "ok" } });
+    expect(await call("global-b", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "policy_rejected", detail: expect.stringContaining("isn't coordinating") },
+    });
+    expect(await call("global-a", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "ok" },
+    });
+    expect(opened()).toEqual([
+      ["global-b", undefined],
+      ["global-a", "work"],
+    ]);
+
+    // Handed over: the work's id moved with coordination.
+    globalAssistant.coordinator = 1;
+    conversations.set("global-a", "other");
+    conversations.set("global-b", "work");
+    expect(await call("global-a", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "policy_rejected" },
+    });
+    expect(await call("global-b", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "ok" },
+    });
+    expect(opened().at(-1)).toEqual(["global-b", "work"]);
+
+    // A stand-down reaches the runtime until the install is torn down.
+    expect(globalAssistant.standDown.size).toBe(1);
+    off();
+    expect(globalAssistant.standDown.size).toBe(0);
   });
 
   describe("asking the person for the global assistant", () => {

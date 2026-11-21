@@ -39,6 +39,7 @@ describe("TerminalAdoptionLedger (#12490)", () => {
       recipient: "global-assistant",
       now: 1_000,
     });
+    adoption.adopt({ terminalId: "terminal-3", orchestratorPaneId: "pane-a", principalId: "a" });
     adoption.adopt({ terminalId: "terminal-2", orchestratorPaneId: "pane-c", principalId: "c" });
     adoption.onChange(changes);
 
@@ -54,6 +55,7 @@ describe("TerminalAdoptionLedger (#12490)", () => {
       recipient: "global-assistant",
       adoptedAt: 1_000,
     });
+    expect(adoption.get(principalOwnerKey("b"), "terminal-3")?.orchestratorPaneId).toBe("pane-b");
     expect(adoption.get(principalOwnerKey("c"), "terminal-2")?.orchestratorPaneId).toBe("pane-c");
     // The old principal's revocation no longer reaches what moved.
     adoption.revokePrincipal("a");

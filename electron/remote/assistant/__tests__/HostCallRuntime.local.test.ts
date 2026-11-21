@@ -712,6 +712,43 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         expect(opened[1]!.calls.map((call) => call.tool)).toEqual(["terminal.sendCommandOwned"]);
       });
 
+      it("cancels the acting calls a session still has in flight once coordination leaves it", async () => {
+        const pending: Array<() => void> = [];
+        answer = () =>
+          new Promise((resolve) => pending.push(() => resolve({ content: [], isError: false })));
+        const acting = runtime.call("lead", SEND, { tier: "full" });
+        const reading = runtime.call("lead", LIST, { tier: "full" });
+        await vi.waitFor(() => expect(opened.flatMap((session) => session.calls)).toHaveLength(2));
+        const signalFor = (tool: string) => {
+          for (const session of opened) {
+            const at = session.calls.findIndex((call) => call.tool === tool);
+            if (at >= 0) return session.signals[at];
+          }
+          throw new Error(`no ${tool} call`);
+        };
+
+        runtime.standDown("lead");
+
+        expect(signalFor("terminal.sendCommandOwned")?.aborted).toBe(true);
+        expect(signalFor("terminal.list")?.aborted).toBe(false);
+        for (const release of pending.splice(0)) release();
+        await Promise.all([acting, reading]);
+
+        // Given coordination back, its next acting call runs unstopped.
+        const again = runtime.call(
+          "lead",
+          { ...SEND, args: { terminalId: "worker-2", command: "go" } },
+          {
+            tier: "full",
+          }
+        );
+        await vi.waitFor(() => expect(opened.flatMap((session) => session.calls)).toHaveLength(3));
+        const last = opened.flatMap((session) => session.signals).at(-1);
+        expect(last?.aborted).toBe(false);
+        for (const release of pending.splice(0)) release();
+        await again;
+      });
+
       it("lets it read a throwaway run's status, which isn't refused as not coordinating", async () => {
         const settled = await runtime.call(
           "standby",

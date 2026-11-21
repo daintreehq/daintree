@@ -377,4 +377,27 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
     await stopping;
     expect(service.isSettled()).toBe(true);
   });
+
+  it("never reads free while a hand-off replaces a launch still starting (#18143)", async () => {
+    const { deps } = makeDeps("first");
+    const spawned = deferred<boolean>();
+    deps.spawn.mockImplementationOnce(() => spawned.promise);
+    const service = new GlobalAssistantService(deps, { slot: 0 });
+    const launch = service.ensureSession().catch(() => null);
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(1));
+    const occupied: boolean[] = [];
+    service.onChange((state) => occupied.push(state.occupied));
+
+    const replaced = service.replace(
+      { agentId: "codex", prompt: "Carry on" },
+      { generation: service.getState().generation, phase: "launching" }
+    );
+    spawned.resolve(true);
+    await replaced;
+    await launch;
+
+    expect(occupied.length).toBeGreaterThan(0);
+    expect(occupied.every(Boolean)).toBe(true);
+    expect(service.getState()).toMatchObject({ phase: "running", agentId: "codex" });
+  });
 });

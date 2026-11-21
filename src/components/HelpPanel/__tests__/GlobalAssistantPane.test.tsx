@@ -1486,6 +1486,11 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect((await screen.findByRole("alertdialog")).textContent).toContain(
         "Session 2 takes over coordination and the workers this one launched"
       );
+      help.discardGlobalAssistant.mockResolvedValue(running({ phase: "absent", occupied: false }));
+      fireEvent.click(await screen.findByRole("button", { name: "Stop session 1" }));
+      await flush();
+      // Main is told which session the person was promised takes over.
+      expect(help.discardGlobalAssistant).toHaveBeenCalledWith(1, 0, true, 1);
     });
 
     it("goes back to the first session once the second is stopped anywhere", async () => {

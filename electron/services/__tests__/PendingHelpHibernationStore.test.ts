@@ -377,8 +377,14 @@ describe("PendingHelpHibernationStore", () => {
       const fresh = new PendingHelpHibernationStore(filePath);
       await fresh.load();
       expect(fresh.getCoordinator("global")).toBe(1);
-      expect(fresh.get(slotKey("global", 1))?.conversationOwnershipId).toBe("held");
-      expect(fresh.get(slotKey("global", 0))?.conversationOwnershipId).toBe("theirs");
+      expect(fresh.get(slotKey("global", 1))).toMatchObject({
+        agentSessionId: "conv-b",
+        conversationOwnershipId: "held",
+      });
+      expect(fresh.get(slotKey("global", 0))).toMatchObject({
+        agentSessionId: "conv-a",
+        conversationOwnershipId: "theirs",
+      });
     });
 
     it("keeps the coordinator through a later write that names none, and with no lane kept", async () => {
@@ -392,6 +398,7 @@ describe("PendingHelpHibernationStore", () => {
       await fresh.load();
       expect(fresh.getCoordinator("global")).toBe(1);
       expect(fresh.getCoordinator("proj-1")).toBeNull();
+      expect(fresh.get(slotKey("proj-1", 0))).toBeNull();
     });
 
     it("drops a coordinator it can't read and keeps the rest", async () => {
@@ -400,7 +407,7 @@ describe("PendingHelpHibernationStore", () => {
         JSON.stringify({
           version: 2,
           entries: { [slotKey("global", 0)]: entry("conv-a", "held") },
-          coordinators: { global: "1", other: -1, ok: 1 },
+          coordinators: { global: "1", other: -1, half: 1.5, ok: 1, first: 0 },
         })
       );
 
@@ -409,7 +416,9 @@ describe("PendingHelpHibernationStore", () => {
 
       expect(store.getCoordinator("global")).toBeNull();
       expect(store.getCoordinator("other")).toBeNull();
+      expect(store.getCoordinator("half")).toBeNull();
       expect(store.getCoordinator("ok")).toBe(1);
+      expect(store.getCoordinator("first")).toBe(0);
       expect(store.get(slotKey("global", 0))?.agentSessionId).toBe("conv-a");
     });
   });
