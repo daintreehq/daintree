@@ -9,8 +9,8 @@ import {
   docUtf8Bytes,
   externalChange,
   followHeadingLink,
-  linkTargetAt,
 } from "../markdownEditorExtensions";
+import { linkTargetAt } from "@/components/Markdown/markdownLinkTarget";
 
 // Counts whole-document passes of the fragment resolver's pipeline: its heading
 // ids step runs once per parse, whatever the caller kept from an earlier one.
