@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "../utils/errorTypes.js";
-import type {
-  GlobalAssistantPhase,
-  GlobalAssistantState,
-} from "../../shared/types/ipc/help.js";
+import type { GlobalAssistantPhase, GlobalAssistantState } from "../../shared/types/ipc/help.js";
 
 /**
  * The installation's one global Daintree Assistant (#14159).

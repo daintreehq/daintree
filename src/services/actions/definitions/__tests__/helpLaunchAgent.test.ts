@@ -2045,7 +2045,10 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
   });
 
   it("names a project plugin it has no name for by its manifest id, never its instance key", async () => {
-    await action.run(handoff, { dispatchSource: "plugin", callerPluginId: "project__p1__acme.handoff" });
+    await action.run(handoff, {
+      dispatchSource: "plugin",
+      callerPluginId: "project__p1__acme.handoff",
+    });
 
     expect(useGlobalAssistantReplaceConfirmStore.getState().current?.pluginName).toBe(
       "acme.handoff"

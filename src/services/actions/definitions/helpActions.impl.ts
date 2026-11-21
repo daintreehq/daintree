@@ -617,7 +617,9 @@ async function requestGlobalAssistantReplacement(
   const { availability, isInitialized } = useCliAvailabilityStore.getState();
   if (
     !getAssistantWiredAgentIds().includes(args.agentId) ||
-    (isInitialized && isBuiltInAgentId(args.agentId) && !isAgentLaunchable(availability[args.agentId]))
+    (isInitialized &&
+      isBuiltInAgentId(args.agentId) &&
+      !isAgentLaunchable(availability[args.agentId]))
   ) {
     return unavailable;
   }

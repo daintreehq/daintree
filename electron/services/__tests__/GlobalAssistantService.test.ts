@@ -523,7 +523,10 @@ describe("GlobalAssistantService", () => {
       const before = await service.ensureSession();
       deps.takeResume.mockClear();
 
-      const after = await service.replace(choice, { generation: before.generation, phase: "running" });
+      const after = await service.replace(choice, {
+        generation: before.generation,
+        phase: "running",
+      });
 
       expect(after).toMatchObject({ phase: "running", agentId: "codex" });
       expect(after.terminalId).not.toBe(before.terminalId);

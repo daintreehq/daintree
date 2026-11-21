@@ -7,7 +7,10 @@ import type {
   GlobalAssistantView,
   WindowGlobalAssistantPanel,
 } from "../../../shared/types/ipc/help.js";
-import { AssistantHandoffPromptSchema, isUsableHandoff } from "../../../shared/utils/assistantHandoff.js";
+import {
+  AssistantHandoffPromptSchema,
+  isUsableHandoff,
+} from "../../../shared/utils/assistantHandoff.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
 import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";

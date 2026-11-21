@@ -253,9 +253,7 @@ describe("an assistant's hand-off from a plugin (#18140)", () => {
           prompt: "Pick up where the last session stopped:\n- tests pass\n- docs next",
         })
       ).toBe("safe");
-      expect(resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex" })).toBe(
-        "safe"
-      );
+      expect(resolveEffectiveActionDanger(id, "safe", "plugin", { agentId: "codex" })).toBe("safe");
       expect(
         resolveEffectiveActionDanger(id, "safe", "user", { agentId: "codex", prompt: "-x" })
       ).toBe("safe");

@@ -1058,7 +1058,12 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
     ctrl["_executeLaunch"] = vi.fn().mockResolvedValue(undefined);
 
-    ctrl.launch({ agentId: "codex", replaceExisting: true, pinAgent: true, seedPrompt: "hand-off" });
+    ctrl.launch({
+      agentId: "codex",
+      replaceExisting: true,
+      pinAgent: true,
+      seedPrompt: "hand-off",
+    });
     expect(ctrl["_lastPinnedSeedPrompt"]).toBe("hand-off");
 
     // A second conversation on the same agent, started without one.
