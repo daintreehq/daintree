@@ -392,6 +392,8 @@ describe("GlobalAssistantService — a session started on a chosen agent (#18142
       { agentId: "codex", prompt: "Carry on" },
       { generation: service.getState().generation, phase: "launching" }
     );
+    // The old launch is torn down once the agent is checked; only then does its spawn finish.
+    await vi.waitFor(() => expect(occupied.length).toBeGreaterThan(0));
     spawned.resolve(true);
     await replaced;
     await launch;
