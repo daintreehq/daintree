@@ -38,6 +38,17 @@ export const ESCAPE_BACKSTOP_DIALOG_ATTR = "data-escape-backstop-dialog";
  */
 export const ESCAPE_RADIX_LAYER_ATTR = "data-escape-radix-layer";
 
+/**
+ * Stamped by `TooltipContent` on a tooltip that Escape can close, which is the
+ * only way a tooltip counts as an open Radix layer. Role alone can't say so:
+ * Radix moves `role="tooltip"` onto a hidden child when the content has an
+ * `aria-label` (Plugin Kit hover cards), and a tooltip whose owner pins `open`
+ * with no `onOpenChange` (the terminal find bar's invalid-regex hint) ignores
+ * the dismiss, so counting it would leave a dialog opened over it deaf to
+ * Escape for as long as the hint stands.
+ */
+export const ESCAPE_TOOLTIP_LAYER_ATTR = "data-escape-tooltip-layer";
+
 const stack: Array<() => void> = [];
 
 export function registerDialogEscapeBackstop(handler: () => void): () => void {
@@ -107,12 +118,15 @@ if (typeof window !== "undefined") {
  * Dialogs are matched separately (`role="dialog"` without `aria-modal`) —
  * modal Dialogs are AppDialog/AppPaletteDialog and live in the backstop stack,
  * not the Radix-layer category. An aria-modal popover dialog counts only when
- * it opts in via ESCAPE_RADIX_LAYER_ATTR.
+ * it opts in via ESCAPE_RADIX_LAYER_ATTR, and a tooltip only when it carries
+ * ESCAPE_TOOLTIP_LAYER_ATTR. Radix Tooltip never writes `open`: a showing one is
+ * `delayed-open` or `instant-open`, and `closed` while Presence plays its exit.
  */
 export const OPEN_ESCAPE_LAYER_SELECTOR =
   '[role="listbox"][data-state="open"], ' +
   '[role="menu"][data-state="open"], ' +
-  '[role="tooltip"][data-state="open"], ' +
+  `[${ESCAPE_TOOLTIP_LAYER_ATTR}][data-state="delayed-open"], ` +
+  `[${ESCAPE_TOOLTIP_LAYER_ATTR}][data-state="instant-open"], ` +
   '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
   `[${ESCAPE_RADIX_LAYER_ATTR}][role="dialog"][data-state="open"]`;
 

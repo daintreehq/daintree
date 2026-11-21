@@ -9,6 +9,7 @@ import {
   markEscapeYieldedToDialog,
   escapeWasYieldedToDialog,
   ESCAPE_RADIX_LAYER_ATTR,
+  ESCAPE_TOOLTIP_LAYER_ATTR,
   _resetForTests,
 } from "../dialogEscapeBackstop";
 
@@ -54,8 +55,47 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
   });
 
-  it("records radixLayerOpenAtCapture=true for an open tooltip", () => {
-    addRadixLayer("tooltip");
+  /** A tooltip as TooltipContent renders it when Escape can close it. */
+  function addTooltip(dataState: string, closable = true): HTMLElement {
+    const el = addRadixLayer("tooltip", dataState);
+    if (closable) el.setAttribute(ESCAPE_TOOLTIP_LAYER_ATTR, "");
+    return el;
+  }
+
+  // Radix Tooltip never writes `open`: its content carries `delayed-open` or
+  // `instant-open` while showing and `closed` while Presence plays the exit.
+  it.each(["delayed-open", "instant-open"])(
+    "records radixLayerOpenAtCapture=true for a tooltip in data-state=%s",
+    (dataState) => {
+      addTooltip(dataState);
+      fireEscape();
+      expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
+    }
+  );
+
+  it("treats a closing tooltip (data-state=closed) as not open", () => {
+    addTooltip("closed");
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
+  it.each(["delayed-open", "instant-open"])(
+    "does not count a %s tooltip that Escape cannot close (a pinned hint)",
+    (dataState) => {
+      addTooltip(dataState, false);
+      fireEscape();
+      expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+    }
+  );
+
+  // With an aria-label, Radix puts the role on a hidden child and leaves
+  // data-state on the content.
+  it("counts a marked tooltip whose role sits on a child element, not on the content", () => {
+    const el = addTooltip("delayed-open");
+    el.removeAttribute("role");
+    const label = document.createElement("span");
+    label.setAttribute("role", "tooltip");
+    el.appendChild(label);
     fireEscape();
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
   });
