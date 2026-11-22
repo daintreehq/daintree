@@ -1503,6 +1503,59 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        worktree: {
+          description:
+            "Closing an agent you didn't launch: its worktree as git showed it when the user was asked.",
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "not-applicable",
+                },
+              },
+              required: ["kind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "unreadable",
+                },
+              },
+              required: ["kind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "observed",
+                },
+                unpushedCommits: {
+                  description:
+                    "Commits on no remote-tracking ref as of the last fetch; null: no commit yet.",
+                  type: ["number", "null"],
+                },
+                changedEntries: {
+                  type: "number",
+                  description: "Changed, staged, conflicted or untracked entries, each path once.",
+                },
+                hiddenFromStatus: {
+                  type: "number",
+                  description:
+                    "Tracked files git takes on trust (assume-unchanged or skip-worktree).",
+                },
+              },
+              required: ["kind", "unpushedCommits", "changedEntries", "hiddenFromStatus"],
+              additionalProperties: false,
+            },
+          ],
+        },
       },
       required: ["closedIds"],
       additionalProperties: false,
