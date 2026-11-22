@@ -607,7 +607,7 @@ export type GlobalAssistantReplaceOutcome = "awaiting-confirmation" | "unavailab
  * host, for an agent that can't run the assistant, and while one waits here.
  */
 async function requestGlobalAssistantReplacement(
-  args: { agentId: string; prompt: string },
+  args: { agentId: string; prompt: string; terminalId?: string },
   ctx: ActionContext
 ): Promise<{ outcome: GlobalAssistantReplaceOutcome }> {
   const unavailable = { outcome: "unavailable" as const };
@@ -636,6 +636,9 @@ async function requestGlobalAssistantReplacement(
   // A hand-off replaces the session that coordinates (#18143).
   const state = sessions.find((session) => session.coordinating) ?? sessions[0];
   if (state === undefined) return unavailable;
+  // Only the coordinating session is replaced, so a hand-off read from the
+  // other one would put its conversation in the wrong session's place.
+  if (args.terminalId !== undefined && state.terminalId !== args.terminalId) return unavailable;
   if (unseen()) return unavailable;
   const caller = ctx.callerPluginId;
   const pluginName = caller
@@ -1086,7 +1089,10 @@ export const helpActionRuns = {
     return startHelpSessionWithAgent(agentId, prompt);
   },
   "help.replaceGlobalAssistant": async (args, ctx) =>
-    requestGlobalAssistantReplacement(readArgs<{ agentId: string; prompt: string }>(args), ctx),
+    requestGlobalAssistantReplacement(
+      readArgs<{ agentId: string; prompt: string; terminalId?: string }>(args),
+      ctx
+    ),
   "help.resumePastSession": async (args) => {
     const picked = readArgs<
       { agentId: "claude" | "codex"; sessionId: string; slot?: number } | undefined

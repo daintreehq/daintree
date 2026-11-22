@@ -216,6 +216,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       prompt: AssistantHandoffPromptSchema.refine((text) => text.trim().length > 0, {
         message: "A hand-off can't be blank",
       }).describe("First turn of the new conversation."),
+      // A plugin acting on one session's menu names it, so a hand-off built from
+      // that session never replaces the other one (#18136).
+      terminalId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "The session the hand-off was built from. Nothing is asked unless it is the session that coordinates."
+        ),
     }),
     resultSchema: z.object({ outcome: z.enum(["awaiting-confirmation", "unavailable"]) }),
     run: (args, ctx) => runHelpAction("help.replaceGlobalAssistant", args, ctx, callbacks),

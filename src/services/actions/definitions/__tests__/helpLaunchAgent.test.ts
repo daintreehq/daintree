@@ -2082,6 +2082,43 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     });
   });
 
+  it("asks about the session a plugin names only when it is the one that coordinates (#18136)", async () => {
+    const twoSessions = [
+      {
+        slot: 0,
+        coordinating: true,
+        occupied: true,
+        phase: "running",
+        generation: 4,
+        agentId: "claude",
+        terminalId: "term-global",
+      },
+      {
+        slot: 1,
+        coordinating: false,
+        occupied: true,
+        phase: "running",
+        generation: 2,
+        agentId: "codex",
+        terminalId: "term-global-2",
+      },
+    ];
+    listGlobalAssistantSessions.mockResolvedValue(twoSessions);
+
+    expect(await action.run({ ...handoff, terminalId: "term-global-2" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+
+    expect(await action.run({ ...handoff, terminalId: "term-global" }, fromPlugin)).toEqual({
+      outcome: "awaiting-confirmation",
+    });
+    expect(useGlobalAssistantReplaceConfirmStore.getState().current).toMatchObject({
+      slot: 0,
+      expected: { generation: 4, phase: "running" },
+    });
+  });
+
   it("names a project plugin it has no name for by its manifest id, never its instance key", async () => {
     await action.run(handoff, {
       dispatchSource: "plugin",
