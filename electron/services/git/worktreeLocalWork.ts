@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
@@ -121,12 +121,17 @@ export async function readWorktreesLocalWork(
     // A linked worktree's administrative directory names the checkout it
     // belongs to. A copy left at the panel's old path after a move still finds
     // the same repository through its `.git` file, but not this backlink.
-    const backlink = (await readFile(path.join(location.gitDir, "gitdir"), "utf8")).replace(
-      /\r?\n$/,
-      ""
-    );
+    // Only a small regular file is read: a FIFO there would hold the open forever.
+    const backlinkPath = path.join(location.gitDir, "gitdir");
+    const backlinkStat = await stat(backlinkPath);
+    if (!backlinkStat.isFile() || backlinkStat.size > SMALL_MAX_BYTES) {
+      return { kind: "unreadable" };
+    }
+    const backlink = (await readFile(backlinkPath, "utf8")).replace(/\r?\n$/, "");
     const registered = await realpath(path.dirname(path.resolve(location.gitDir, backlink)));
-    if (!sameDir(registered, ownTop)) return { kind: "unreadable" };
+    // Both sides are the filesystem's own spelling, so they compare exactly: two
+    // directories that differ only by case or normalization stay apart.
+    if (registered !== ownTop) return { kind: "unreadable" };
     const observed = await readGit(worktree, signal);
     return {
       kind: "observed",
