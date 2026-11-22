@@ -1,4 +1,5 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
@@ -55,6 +56,29 @@ async function gitLocation(dir: string, signal: AbortSignal): Promise<GitLocatio
     lines.slice(0, 3).map((line) => realpath(path.resolve(dir, line)))
   );
   return { top: top!, gitDir: gitDir!, commonDir: commonDir! };
+}
+
+/**
+ * A linked worktree's `gitdir` backlink, or null when it isn't a small regular
+ * file. Opened once without blocking and checked through that handle, so a
+ * FIFO, or a file swapped in after a check, can neither hold the open nor
+ * overrun the cap.
+ */
+async function readBacklink(file: string): Promise<string | null> {
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > SMALL_MAX_BYTES) return null;
+    const buffer = Buffer.alloc(SMALL_MAX_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > SMALL_MAX_BYTES) return null;
+    return buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .replace(/\r?\n$/, "");
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -121,13 +145,8 @@ export async function readWorktreesLocalWork(
     // A linked worktree's administrative directory names the checkout it
     // belongs to. A copy left at the panel's old path after a move still finds
     // the same repository through its `.git` file, but not this backlink.
-    // Only a small regular file is read: a FIFO there would hold the open forever.
-    const backlinkPath = path.join(location.gitDir, "gitdir");
-    const backlinkStat = await stat(backlinkPath);
-    if (!backlinkStat.isFile() || backlinkStat.size > SMALL_MAX_BYTES) {
-      return { kind: "unreadable" };
-    }
-    const backlink = (await readFile(backlinkPath, "utf8")).replace(/\r?\n$/, "");
+    const backlink = await readBacklink(path.join(location.gitDir, "gitdir"));
+    if (backlink === null) return { kind: "unreadable" };
     const registered = await realpath(path.dirname(path.resolve(location.gitDir, backlink)));
     // Both sides are the filesystem's own spelling, so they compare exactly: two
     // directories that differ only by case or normalization stay apart.
