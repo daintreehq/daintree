@@ -116,6 +116,8 @@ export interface FakeAgentOptions {
    * Address an instance with the `paneId` argument of the helpers below.
    */
   perPane?: boolean;
+  /** Draw Claude's empty input row on idle for tests of guarded input delivery. */
+  drawIdlePrompt?: boolean;
   /**
    * Which CLI to impersonate. `codex` installs a `codex` binary that answers
    * `--version` in Codex's format, paints Codex's banner, `esc to interrupt`
@@ -144,6 +146,7 @@ interface FakeAgentProgramConfig {
   version: string;
   streamLinesPerSec: number;
   perPane: boolean;
+  drawIdlePrompt: boolean;
   controlChannel: boolean;
   queryOnFocus: boolean;
   rawInput: boolean;
@@ -312,8 +315,17 @@ function fakeAgentProgram(
       clearInterval(workingTimer);
       workingTimer = null;
     }
-    if (isCodex) write("\r\u001b[2K\r\n" + CODEX_PROMPT + "\r\n\r\n  100% context left\r\n");
-    else write(OSC_IDLE);
+    if (isCodex) {
+      write("\r\u001b[2K\r\n" + CODEX_PROMPT + "\r\n\r\n  100% context left\r\n");
+    } else {
+      if (config.drawIdlePrompt) {
+        // Windows' process census can lose track of the Node-hosted fake.
+        // Claude's footer keeps its idle screen identifiable during that gap.
+        const rule = "─".repeat(48);
+        write("\r\n" + rule + "\r\n❯ \r\n" + rule + "\r\n  ? for shortcuts\r\n");
+      }
+      write(OSC_IDLE);
+    }
   };
 
   // Background chatter for switch benchmarks: a real agent keeps painting
@@ -545,6 +557,7 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
     version: options.version ?? FAKE_AGENT_DEFAULT_VERSION,
     streamLinesPerSec: Math.max(0, Math.floor(options.streamLinesPerSec ?? 0)),
     perPane: options.perPane === true,
+    drawIdlePrompt: options.drawIdlePrompt === true,
     controlChannel: options.controlChannel === true,
     queryOnFocus: options.queryOnFocus === true,
     rawInput: options.rawInput === true,

@@ -326,6 +326,9 @@ function InvolvementEditor({
         )}
       </fieldset>
       <div className="col-start-2 mt-1 flex items-center gap-2">
+        <Button type="button" variant="outline" size="xs" disabled={saving} onClick={onCancel}>
+          Cancel
+        </Button>
         <Button
           ref={saveRef}
           type="submit"
@@ -337,9 +340,6 @@ function InvolvementEditor({
           data-testid="decisions-involvement-save"
         >
           Save
-        </Button>
-        <Button type="button" variant="outline" size="xs" disabled={saving} onClick={onCancel}>
-          Cancel
         </Button>
       </div>
     </form>

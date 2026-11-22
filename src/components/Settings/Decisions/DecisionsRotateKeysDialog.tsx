@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { DecisionsDevice } from "@shared/types/decisions";
 import { deviceRoleLabel } from "./devicesCopy";
 import { hostOf } from "./relayCheckCopy";
@@ -80,8 +81,8 @@ function RecipientPreview({
       <ul className="space-y-0.5 text-xs text-text-primary">
         {recipients.map((device) => (
           <li key={device.deviceId}>
-            {device.label}{" "}
-            <span className="text-text-secondary">· {deviceRoleLabel(device.role)}</span>
+            {device.label} <FactSeparator />{" "}
+            <span className="text-text-secondary">{deviceRoleLabel(device.role)}</span>
           </li>
         ))}
       </ul>

@@ -273,7 +273,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     const b = createFixtureRepo({ name: "notify-elsewhere", withFeatureBranch: true });
     cleanups = [a.cleanup, b.cleanup];
     repoB = b.dir;
-    binDir = installFakeAgent(a.dir, { perPane: true });
+    binDir = installFakeAgent(a.dir, { perPane: true, drawIdlePrompt: true });
 
     ctx = await launchApp({
       env: { ...fakeAgentEnv(binDir), DAINTREE_E2E_TRASH_TTL_MS: String(TRASH_TTL_MS) },

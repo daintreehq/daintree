@@ -275,7 +275,7 @@ export function AttentionActionRow({
                           )}
                           {/* The section label shows the project; a row heard alone still names it. */}
                           {destination.projectName !== null && (
-                            <span className="sr-only">{` · ${destination.projectName}`}</span>
+                            <span className="sr-only">{`, ${destination.projectName}`}</span>
                           )}
                         </span>
                       </DropdownMenuItem>

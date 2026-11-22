@@ -236,7 +236,8 @@ async function rightClickPane(page: Page, panel: Locator): Promise<void> {
   const screen = panel.locator(SEL.terminal.xtermRows);
   const box = await screen.boundingBox();
   if (!box) throw new Error("terminal screen has no bounding box");
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+  // Leave room for the Session submenu on narrow runner displays.
+  await page.mouse.click(box.x + box.width / 4, box.y + box.height / 2, { button: "right" });
   await expect(page.locator(SEL.contextMenu.content)).toBeVisible({ timeout: T_SHORT });
 }
 

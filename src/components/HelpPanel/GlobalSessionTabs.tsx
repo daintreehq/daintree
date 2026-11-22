@@ -1,3 +1,4 @@
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { UnderlineTabs, type UnderlineTabItem } from "@/components/ui/UnderlineTabs";
 import { getAgentConfig } from "@/config/agents";
 import {
@@ -57,7 +58,13 @@ export function GlobalSessionTabs({
                   {agentId ? (getAgentConfig(agentId)?.name ?? agentId) : null}
                   {coordinates && (
                     <span data-testid={`help-global-coordinating-${session.slot}`}>
-                      {agentId ? " · " : ""}Coordinating
+                      {agentId && (
+                        <>
+                          {" "}
+                          <FactSeparator />{" "}
+                        </>
+                      )}
+                      Coordinating
                     </span>
                   )}
                 </span>

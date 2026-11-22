@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { RotateCcw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -338,12 +338,7 @@ export function HostAttentionActions({ attention, fallbackFocus }: HostAttention
           onClick={busy === "resume" ? undefined : attention.resume}
           data-testid="decisions-host-resume"
         >
-          <SpinningIcon
-            icon={RotateCcw}
-            active={busy === "resume"}
-            wrapperClassName="[animation-direction:reverse]"
-            aria-hidden="true"
-          />
+          <SpinningIcon icon={RotateCw} active={busy === "resume"} aria-hidden="true" />
           Try resume
         </Button>
       )}
