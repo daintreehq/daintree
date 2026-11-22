@@ -621,7 +621,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // that a Claude Code pane drew its "Update installed" footer without reading
   // the screen. The result schema is closed, so the field must be advertised;
   // its one description was cut to a clause first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_500;
+  // 63_500 → 63_900 for #18151, measured at 63_870 B (+457 over develop's
+  // 63_413): `worktree` on the close result, what git showed of a finished
+  // agent's worktree when the user was asked about closing it, so the
+  // assistant can report unpushed commits and uncommitted paths. The result
+  // schema is closed, so the field must be advertised; it went from a
+  // three-way union with per-field descriptions to one flat object with a
+  // single description first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_900;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1086,7 +1093,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // whether `/restart` went in, why not, and Claude's refusal line as drawn;
   // its descriptions were trimmed first. In-app only, so the external ceiling
   // does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 201_300;
+  // 201_300 → 202_700 for #18151, measured at 202_585 B (+1_371 over develop's
+  // 201_214): the same `worktree` the external half above pays for, on each of
+  // the three tools that answer with the close result (`terminal.close`,
+  // `terminal.closeOwned` and `terminal.closeAll`).
+  const MAX_COHORT_PAYLOAD_BYTES = 202_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

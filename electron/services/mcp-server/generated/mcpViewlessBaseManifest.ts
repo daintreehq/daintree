@@ -2730,56 +2730,25 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         worktree: {
           description:
-            "Closing an agent you didn't launch: its worktree as git showed it when the user was asked.",
-          oneOf: [
-            {
-              type: "object",
-              properties: {
-                kind: {
-                  type: "string",
-                  const: "not-applicable",
-                },
-              },
-              required: ["kind"],
-              additionalProperties: false,
+            "Agent you didn't launch: its worktree when asked. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths.",
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["not-applicable", "unreadable", "observed"],
             },
-            {
-              type: "object",
-              properties: {
-                kind: {
-                  type: "string",
-                  const: "unreadable",
-                },
-              },
-              required: ["kind"],
-              additionalProperties: false,
+            unpushedCommits: {
+              type: ["number", "null"],
             },
-            {
-              type: "object",
-              properties: {
-                kind: {
-                  type: "string",
-                  const: "observed",
-                },
-                unpushedCommits: {
-                  description:
-                    "Commits on no remote-tracking ref as of the last fetch; null: no commit yet.",
-                  type: ["number", "null"],
-                },
-                changedEntries: {
-                  type: "number",
-                  description: "Changed, staged, conflicted or untracked entries, each path once.",
-                },
-                hiddenFromStatus: {
-                  type: "number",
-                  description:
-                    "Tracked files git takes on trust (assume-unchanged or skip-worktree).",
-                },
-              },
-              required: ["kind", "unpushedCommits", "changedEntries", "hiddenFromStatus"],
-              additionalProperties: false,
+            changedEntries: {
+              type: "number",
             },
-          ],
+            hiddenFromStatus: {
+              type: "number",
+            },
+          },
+          required: ["kind"],
+          additionalProperties: false,
         },
       },
       required: ["closedIds"],
