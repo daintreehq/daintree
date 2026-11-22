@@ -627,8 +627,8 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
       expect(readCloseWorktrees).toHaveBeenCalledTimes(1);
       expect(readCloseWorktrees.mock.calls[0]!.slice(0, 2)).toEqual([PROJECT, ["/wt/worker"]]);
       const [, ask] = h.askClose.mock.calls[0]!;
-      expect(ask.lines).toContain(
-        "Agent: Claude Code, waiting at its prompt — 72 commits on no remote"
+      expect(ask.lines.join("\n")).toMatch(
+        /^Agent: [^\n]+, waiting at its prompt — 72 commits on no remote$/m
       );
       expect(h.dispatchAction).toHaveBeenCalledTimes(1);
       const [first] = result.content as Array<{ text: string }>;

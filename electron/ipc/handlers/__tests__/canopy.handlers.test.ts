@@ -11,7 +11,13 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const state = vi.hoisted(() => ({
-  runs: [] as Array<{ runId: string; spawnedAt: number; workspaceId?: string; cwd?: string }>,
+  runs: [] as Array<{
+    runId: string;
+    spawnedAt: number;
+    workspaceId?: string;
+    cwd?: string;
+    worktreeId?: string;
+  }>,
   views: [] as Array<{ send: (channel: string, payload: unknown) => void }>,
   record: null as {
     spawnedAt: number;
