@@ -94,13 +94,53 @@ describe("readWorktreesLocalWork", () => {
   });
 
   it("never passes over another repository's checkout as the project's main one", async () => {
+    const nested = path.join(repo, "nested");
+    fs.mkdirSync(nested, { recursive: true });
     const work = await readWorktreesLocalWork([
       { projectPath: repo, worktreeId: other },
       { projectPath: null, worktreeId: repo },
       { projectPath: repo, worktreeId: path.join(root, "gone") },
+      // A directory git answers for from the checkout that contains it.
+      { projectPath: repo, worktreeId: nested },
     ]);
 
-    expect(work).toEqual([{ kind: "unreadable" }, { kind: "unreadable" }, { kind: "unreadable" }]);
+    expect(work).toEqual([
+      { kind: "unreadable" },
+      { kind: "unreadable" },
+      { kind: "unreadable" },
+      { kind: "unreadable" },
+    ]);
+  });
+
+  it("reads a copy left at a moved worktree's old path as unreadable, and the moved one as itself", async () => {
+    const before = linkedWorktree("before-move");
+    const after = path.join(root, "after-move");
+    const pointer = fs.readFileSync(path.join(before, ".git"), "utf8");
+    git(repo, "worktree", "move", before, after);
+    commit(after, "c.txt", "c\n");
+    // A clean backup restored where the panel still says it is.
+    fs.mkdirSync(before);
+    fs.writeFileSync(path.join(before, ".git"), pointer);
+    fs.writeFileSync(path.join(before, "a.txt"), "a\n");
+
+    const work = await readWorktreesLocalWork([
+      { projectPath: repo, worktreeId: before },
+      { projectPath: repo, worktreeId: after },
+    ]);
+
+    expect(work).toEqual([
+      { kind: "unreadable" },
+      { kind: "observed", unpushedCommits: 1, changedEntries: 0, hiddenFromStatus: 0 },
+    ]);
+  });
+
+  it("carries a tracked file git takes on trust", async () => {
+    const assumed = linkedWorktree("assumed-local");
+    git(assumed, "update-index", "--assume-unchanged", "a.txt");
+
+    expect(await readWorktreesLocalWork([{ projectPath: repo, worktreeId: assumed }])).toEqual([
+      { kind: "observed", unpushedCommits: 0, changedEntries: 0, hiddenFromStatus: 1 },
+    ]);
   });
 
   it("reads a worktree several panels share once", async () => {
@@ -109,15 +149,19 @@ describe("readWorktreesLocalWork", () => {
 
     const work = await readWorktreesLocalWork(
       [
+        { projectPath: repo, worktreeId: repo },
         { projectPath: repo, worktreeId: shared },
         { projectPath: repo, worktreeId: shared },
       ],
       { readGit }
     );
 
+    // The main checkout is never handed to the observation, only the shared tree, once.
     expect(readGit).toHaveBeenCalledTimes(1);
-    expect(work[0]).toEqual(work[1]);
-    expect(work[0]!.kind).toBe("observed");
+    expect(readGit.mock.calls[0]![0]).toBe(shared);
+    expect(work[0]).toEqual({ kind: "not-applicable" });
+    expect(work[1]).toEqual(work[2]);
+    expect(work[1]!.kind).toBe("observed");
   });
 
   it("reads what hasn't answered by the deadline as unreadable, and stops its git", async () => {
@@ -140,5 +184,27 @@ describe("readWorktreesLocalWork", () => {
 
     expect(work).toEqual([{ kind: "unreadable" }]);
     expect(stopped).toBe(true);
+  });
+
+  it("keeps what answered by the deadline, even when another read never returns", async () => {
+    const fast = linkedWorktree("fast");
+    const stuck = linkedWorktree("stuck");
+    // Deaf to the abort, as a call stuck on a dead network volume is.
+    const readGit = vi.fn((dir: string, signal?: AbortSignal) =>
+      dir === stuck ? new Promise<never>(() => {}) : readWorktreeGitObservation(dir, signal)
+    );
+
+    const work = await readWorktreesLocalWork(
+      [
+        { projectPath: repo, worktreeId: stuck },
+        { projectPath: repo, worktreeId: fast },
+      ],
+      { readGit, deadlineMs: 2_000 }
+    );
+
+    expect(work).toEqual([
+      { kind: "unreadable" },
+      { kind: "observed", unpushedCommits: 0, changedEntries: 0, hiddenFromStatus: 0 },
+    ]);
   });
 });

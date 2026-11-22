@@ -51,11 +51,16 @@ function reviewNote(review: Review | null, runId: string): string | null {
   if (review === null) return null;
   const hold = review.holds.get(runId);
   const worktree = review.worktrees.get(runId);
+  const terminal =
+    hold !== undefined && !isWorktreeHold(hold)
+      ? BULK_TRASH_HOLD_LABEL[hold]
+      : review.unchecked.has(runId)
+        ? "Its input couldn't be checked"
+        : null;
   const parts = [
-    ...(hold !== undefined && !isWorktreeHold(hold) ? [BULK_TRASH_HOLD_LABEL[hold]] : []),
+    ...(terminal !== null ? [terminal] : []),
     ...(worktree !== undefined ? worktreeLocalWorkFacts(worktree) : []),
   ];
-  if (parts.length === 0 && review.unchecked.has(runId)) return "Its input couldn't be checked";
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 

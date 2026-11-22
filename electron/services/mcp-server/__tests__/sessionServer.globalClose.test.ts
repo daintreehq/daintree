@@ -649,6 +649,8 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
 
       const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
 
+      // Asked first, so the refusal is the move's and not an earlier miss.
+      expect(h.askClose).toHaveBeenCalledTimes(1);
       expect(toolErrorPayload(result).code).toBe(RESOURCE_NOT_OWNED_CODE);
       expect(h.dispatchAction).not.toHaveBeenCalled();
     });
@@ -669,11 +671,14 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
       );
 
       expect(readCloseWorktrees).toHaveBeenCalledTimes(1);
-      expect(readCloseWorktrees.mock.calls[0]![1]).toEqual(["/wt/dirty", "/wt/clean"]);
+      expect(readCloseWorktrees.mock.calls[0]!.slice(0, 2)).toEqual([
+        PROJECT,
+        ["/wt/dirty", "/wt/clean"],
+      ]);
       const [, ask] = h.askClose.mock.calls[0]!;
       const workerLine = ask.lines.find((line) => line.includes(WORKER))!;
       const otherLine = ask.lines.find((line) => line.includes(OTHER))!;
-      expect(workerLine).toMatch(/waiting at its prompt — 3 files changed or untracked$/);
+      expect(workerLine).toMatch(/waiting at its prompt — 3 changed or untracked paths$/);
       expect(otherLine).toMatch(/finished its task$/);
       const { results } = batchAnswer(result) as unknown as {
         results: Array<{ target: string; ok: boolean; result?: { worktree?: unknown } }>;
@@ -699,6 +704,8 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
       const [, ask] = h.askClose.mock.calls[0]!;
       expect(ask.lines.join("\n")).toContain("— Worktree state unreadable");
       expect(h.dispatchAction).toHaveBeenCalledTimes(1);
+      const [first] = result.content as Array<{ text: string }>;
+      expect(JSON.parse(first!.text)).toMatchObject({ worktree: { kind: "unreadable" } });
     });
 
     it("reads nothing for a panel in no worktree", async () => {
@@ -706,8 +713,10 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
       const h = harness({ readCloseWorktrees });
       const server = await serve(h.deps);
 
-      await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+      const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
 
+      expect(result.isError).toBeFalsy();
+      expect(h.dispatchAction).toHaveBeenCalledTimes(1);
       expect(readCloseWorktrees).not.toHaveBeenCalled();
       const [, ask] = h.askClose.mock.calls[0]!;
       expect(ask.lines.join("\n")).not.toContain("—");

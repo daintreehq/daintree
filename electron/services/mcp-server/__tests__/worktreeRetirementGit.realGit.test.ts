@@ -124,6 +124,18 @@ describe("readWorktreeGitObservation", () => {
       // The untracked directory is one entry, however many files it holds.
       untracked: 1,
       conflicted: 0,
+      changedEntries: 4,
+    });
+  });
+
+  it("counts a path git lists twice once", async () => {
+    const dir = linkedWorktree("uncached");
+    git(dir, "rm", "-q", "--cached", "a.txt");
+
+    expect(await readWorktreeGitObservation(dir)).toMatchObject({
+      staged: 1,
+      untracked: 1,
+      changedEntries: 1,
     });
   });
 

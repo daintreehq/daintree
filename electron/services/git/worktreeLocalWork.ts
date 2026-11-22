@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
@@ -118,6 +118,15 @@ export async function readWorktreesLocalWork(
     if (!sameDir(location.top, ownTop)) return { kind: "unreadable" };
     if (repo === null || !sameDir(location.commonDir, repo)) return { kind: "unreadable" };
     if (sameDir(location.gitDir, location.commonDir)) return { kind: "not-applicable" };
+    // A linked worktree's administrative directory names the checkout it
+    // belongs to. A copy left at the panel's old path after a move still finds
+    // the same repository through its `.git` file, but not this backlink.
+    const backlink = (await readFile(path.join(location.gitDir, "gitdir"), "utf8")).replace(
+      /\r?\n$/,
+      ""
+    );
+    const registered = await realpath(path.dirname(path.resolve(location.gitDir, backlink)));
+    if (!sameDir(registered, ownTop)) return { kind: "unreadable" };
     const observed = await readGit(worktree, signal);
     return {
       kind: "observed",
@@ -140,6 +149,21 @@ export async function readWorktreesLocalWork(
       );
     }
   };
-  await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, queue.length) }, worker));
+  // The deadline answers for whatever is still out, even a filesystem call
+  // that never returns: what finished by then stands, the rest is unreadable.
+  let stop = () => {};
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve;
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", stop, { once: true });
+  });
+  try {
+    await Promise.race([
+      Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, queue.length) }, worker)),
+      stopped,
+    ]);
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
   return requests.map((request) => answers.get(keyOf(request)) ?? { kind: "unreadable" });
 }

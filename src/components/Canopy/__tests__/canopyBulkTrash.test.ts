@@ -66,6 +66,7 @@ describe("bulkTrashHold", () => {
     expect(bulkTrashHold(done, "empty", false, observed(2, 3))).toBe("unpushed");
     expect(bulkTrashHold(done, "empty", false, { kind: "unreadable" })).toBe("unreadable");
     expect(bulkTrashHold(done, "typed", false, observed(72))).toBe("typed");
+    expect(bulkTrashHold(done, "empty", true, observed(0, 3))).toBe("reply");
   });
 
   it("reads a run in a worktree that no host answered for as unreadable, and one in none as nothing to read", () => {
@@ -85,6 +86,10 @@ describe("bulkTrashHold", () => {
       hiddenFromStatus: 0,
     } as const;
     expect(bulkTrashWorktree(inTree, clean)).toBe(clean);
+    // Its host said it is the main checkout: nothing to hold it for.
+    expect(bulkTrashWorktree(inTree, { kind: "not-applicable" })).toEqual({
+      kind: "not-applicable",
+    });
   });
 
   it("never holds back for the agent's own suggestion, or for an input nobody could read", () => {

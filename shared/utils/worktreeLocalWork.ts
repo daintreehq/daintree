@@ -14,10 +14,9 @@ export function worktreeLocalWorkFacts(work: WorktreeLocalWork): string[] {
   else if (work.unpushedCommits > 0) {
     facts.push(`${pluralize(work.unpushedCommits, "commit")} on no remote`);
   }
+  // A path, not a file: an untracked directory is one entry however much it holds.
   if (work.changedEntries > 0) {
-    facts.push(
-      `${pluralize(work.changedEntries, "file changed or untracked", "files changed or untracked")}`
-    );
+    facts.push(pluralize(work.changedEntries, "changed or untracked path"));
   }
   if (work.hiddenFromStatus > 0) {
     facts.push(

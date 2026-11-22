@@ -491,11 +491,11 @@ describe("CanopyView bulk trash of search results", () => {
     expect(byId.get("unpushed")!.textContent).toContain("72 commits on no remote");
     expect(ticked(byId.get("dirty")!)).toBe(false);
     expect(byId.get("dirty")!.getAttribute("data-hold")).toBe("uncommitted");
-    expect(byId.get("dirty")!.textContent).toContain("3 files changed or untracked");
+    expect(byId.get("dirty")!.textContent).toContain("3 changed or untracked paths");
     // A typed draft is weighed first, but never hides what git counted.
     expect(byId.get("typed")!.getAttribute("data-hold")).toBe("typed");
     expect(byId.get("typed")!.textContent).toContain(
-      "Text typed in its terminal · 1 commit on no remote · 1 file changed or untracked"
+      "Text typed in its terminal · 1 commit on no remote · 1 changed or untracked path"
     );
     // No answer for a run in a worktree is never a pass.
     expect(ticked(byId.get("unread")!)).toBe(false);
@@ -507,16 +507,89 @@ describe("CanopyView bulk trash of search results", () => {
     expect(canopy.trashBatch.mock.calls[0]![0].map((target) => target.runId)).toEqual(["clean"]);
   });
 
-  it("starts a run in a worktree unticked when no host could read it, but not one in none", async () => {
-    const canopy = await open([run("inTree", { worktreeId: "/wt/a" }), run("loose")]);
-    canopy.readWorktrees.mockRejectedValue(new Error("unknown channel"));
+  it.each([
+    [
+      "rejects",
+      (canopy: ReturnType<typeof installElectron>) =>
+        canopy.readWorktrees.mockRejectedValue(new Error("unknown channel")),
+    ],
+    [
+      "throws",
+      (canopy: ReturnType<typeof installElectron>) =>
+        canopy.readWorktrees.mockImplementation(() => {
+          throw new Error("no preload");
+        }),
+    ],
+  ])(
+    "starts a run in a worktree unticked when the read %s, but not one in none",
+    async (_how, fail) => {
+      const canopy = await open([run("inTree", { worktreeId: "/wt/a" }), run("loose")]);
+      fail(canopy);
+      await search("review");
+      await openReview();
+      const byId = new Map(reviewRows().map((row) => [row.getAttribute("data-run-id"), row]));
+      expect(ticked(byId.get("inTree")!)).toBe(false);
+      expect(byId.get("inTree")!.getAttribute("data-hold")).toBe("unreadable");
+      expect(ticked(byId.get("loose")!)).toBe(true);
+      // The input lines still answered, so nothing is said of them.
+      expect(byId.get("loose")!.textContent).not.toContain("couldn't be checked");
+    }
+  );
+
+  it("still says an input couldn't be checked beside what git counted", async () => {
+    const canopy = await open([run("a", { worktreeId: "/wt/a" })]);
+    canopy.readInputLines.mockRejectedValue(new Error("unreachable"));
+    canopy.readWorktrees.mockImplementation(async (targets) =>
+      targets.map((target) => ({
+        runId: target.runId,
+        work: { kind: "observed", unpushedCommits: 2, changedEntries: 0, hiddenFromStatus: 0 },
+      }))
+    );
     await search("review");
     await openReview();
-    const byId = new Map(reviewRows().map((row) => [row.getAttribute("data-run-id"), row]));
-    expect(ticked(byId.get("inTree")!)).toBe(false);
-    expect(byId.get("inTree")!.getAttribute("data-hold")).toBe("unreadable");
-    expect(ticked(byId.get("loose")!)).toBe(true);
-    // The input lines still answered, so nothing is said of them.
-    expect(byId.get("loose")!.textContent).not.toContain("couldn't be checked");
+    const [row] = reviewRows();
+    expect(ticked(row!)).toBe(false);
+    expect(row!.textContent).toContain("Its input couldn't be checked · 2 commits on no remote");
+  });
+
+  it("decides nothing from an earlier opening's late answer", async () => {
+    let release: (readings: CanopyWorktreeReading[]) => void = () => {};
+    const canopy = await open([run("a", { worktreeId: "/wt/a" })]);
+    canopy.readWorktrees.mockImplementationOnce(
+      () =>
+        new Promise<CanopyWorktreeReading[]>((resolve) => {
+          release = resolve;
+        })
+    );
+    await search("review");
+    await act(async () => {
+      fireEvent.click(trashResultsButton()!);
+    });
+    // Closed while its read is out, then opened again.
+    await act(async () => {
+      fireEvent.click(dialogButton("Cancel"));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, DIALOG_CLOSED_MS));
+    });
+    canopy.readWorktrees.mockImplementation(async (targets) =>
+      targets.map((target) => ({
+        runId: target.runId,
+        work: { kind: "observed", unpushedCommits: 5, changedEntries: 0, hiddenFromStatus: 0 },
+      }))
+    );
+    await openReview();
+    await act(async () => {
+      release([
+        {
+          runId: "a",
+          work: { kind: "observed", unpushedCommits: 0, changedEntries: 0, hiddenFromStatus: 0 },
+        },
+      ]);
+    });
+    await frames();
+    const [row] = reviewRows();
+    expect(ticked(row!)).toBe(false);
+    expect(row!.textContent).toContain("5 commits on no remote");
   });
 });

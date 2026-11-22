@@ -9,12 +9,14 @@ describe("readRunWorktrees (#18151)", () => {
       [
         { runId: "a", spawnedAt: 1, workspaceId: "p1" },
         { runId: "b", spawnedAt: 2, workspaceId: "p2", worktreeId: "/elsewhere/b" },
+        { runId: "c", spawnedAt: 3, workspaceId: "p1", worktreeId: "/repo-wt/c" },
       ],
       [
         { runId: "a", spawnedAt: 1 },
         { runId: "a", spawnedAt: 1 },
         { runId: "b", spawnedAt: 2 },
         { runId: "b", spawnedAt: 99 },
+        { runId: "c", spawnedAt: 99 },
         { runId: "gone", spawnedAt: 1 },
       ],
       projectPathOf,
@@ -27,5 +29,6 @@ describe("readRunWorktrees (#18151)", () => {
       { runId: "b", work: { kind: "unreadable" } },
     ]);
     expect(readGit).not.toHaveBeenCalled();
+    expect(projectPathOf.mock.calls.map(([workspaceId]) => workspaceId)).toEqual(["p1", "p2"]);
   });
 });

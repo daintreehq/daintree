@@ -140,7 +140,9 @@ export async function readWorktreeStatusObservation(
     unstaged,
     untracked,
     conflicted,
-    changedEntries: status.records.length,
+    // A path git lists twice (`git rm --cached` leaves a staged delete and an
+    // untracked file) is still one path; latin1 keeps any filename's bytes apart.
+    changedEntries: new Set(status.records.map((record) => record.path.toString("latin1"))).size,
     hiddenFromStatus,
   };
 }

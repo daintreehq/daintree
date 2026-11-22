@@ -1670,12 +1670,15 @@ describe("canopy IPC", () => {
       state.runs = [
         { runId: "run-0", spawnedAt: 100, workspaceId: "project-1" },
         { runId: "run-1", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-1" },
+        { runId: "run-2", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-2" },
       ];
       const readings = answer<Array<{ runId: string; work: { kind: string } }>>(
         await invoke(CANOPY_METHOD_CHANNELS.readWorktrees, fakeSender(1), [
           { runId: "run-0", spawnedAt: 100 },
           { runId: "run-1", spawnedAt: 100 },
           { runId: "run-1", spawnedAt: 99 },
+          // Named only in an incarnation the fleet doesn't hold.
+          { runId: "run-2", spawnedAt: 99 },
           { runId: "elsewhere", spawnedAt: 100 },
         ])
       );

@@ -53,11 +53,13 @@ describe("the global close's worktree read (#18151)", () => {
         signal
       )
     ).toEqual(unreadable);
-    expect(await readGlobalCloseWorktrees(async () => [clean], "p", targets, signal)).toEqual([
+    const read = vi.fn(async () => [clean]);
+    expect(await readGlobalCloseWorktrees(read, "p", targets, signal)).toEqual([
       clean,
       { kind: "not-applicable" },
       { kind: "unreadable" },
     ]);
+    expect(read).toHaveBeenCalledWith("p", ["/wt/a", undefined, "/wt/b"], signal);
   });
 
   it("puts what only this machine holds on the panel's line, and nothing for a clean one", () => {
@@ -65,9 +67,12 @@ describe("the global close's worktree read (#18151)", () => {
       globalCloseQuestion("t-1", TARGET, worktree).lines[1];
     expect(line(clean)).not.toContain("—");
     expect(line({ ...clean, unpushedCommits: 72, changedEntries: 1 })).toMatch(
-      / — 72 commits on no remote, 1 file changed or untracked$/
+      / — 72 commits on no remote, 1 changed or untracked path$/
     );
     expect(line({ kind: "unreadable" })).toMatch(/ — Worktree state unreadable$/);
+    expect(line({ ...clean, unpushedCommits: null, hiddenFromStatus: 2 })).toMatch(
+      / — Branch has no commits yet, 2 tracked files git doesn't check$/
+    );
   });
 });
 
