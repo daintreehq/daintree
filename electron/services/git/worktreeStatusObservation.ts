@@ -20,6 +20,11 @@ export interface WorktreeStatusObservation {
   untracked: number;
   conflicted: number;
   /**
+   * Status entries, each path once however many of the counts above it is in:
+   * a staged file edited again is one entry, an untracked directory is one.
+   */
+  changedEntries: number;
+  /**
    * Tracked files status never checks: marked assume-unchanged, or
    * skip-worktree while present in the working tree. A sparse checkout's
    * absent skip-worktree files are not counted; there is nothing there to lose.
@@ -135,6 +140,7 @@ export async function readWorktreeStatusObservation(
     unstaged,
     untracked,
     conflicted,
+    changedEntries: status.records.length,
     hiddenFromStatus,
   };
 }

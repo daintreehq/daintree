@@ -153,6 +153,9 @@ export interface GeneratedElectronAPI {
     readInputLines(
       ...args: IpcInvokeMap["canopy:read-input-lines"]["args"]
     ): Promise<IpcInvokeMap["canopy:read-input-lines"]["result"]>;
+    readWorktrees(
+      ...args: IpcInvokeMap["canopy:read-worktrees"]["args"]
+    ): Promise<IpcInvokeMap["canopy:read-worktrees"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;

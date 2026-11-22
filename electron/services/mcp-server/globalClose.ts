@@ -1,7 +1,9 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { ActionError } from "../../../shared/types/actions.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import { pluralize } from "../../../shared/utils/pluralize.js";
+import { worktreeLocalWorkFacts } from "../../../shared/utils/worktreeLocalWork.js";
 import type { GlobalCloseTarget } from "../assistants/GlobalWorkerSteer.js";
 import type { ViewlessApprovalDecision } from "../viewless/index.js";
 import {
@@ -63,10 +65,74 @@ function agentName(target: GlobalCloseTarget): string {
 const TRASH_LINE =
   "A closed panel goes to the trash, where it stays briefly recoverable, unless it was launched to be discarded when its agent exits.";
 
+const NOT_READ: WorktreeLocalWork = { kind: "not-applicable" };
+
+/**
+ * What the question adds of a panel's worktree (#18151): each thing in it that
+ * exists only on this machine, or that git couldn't report. Nothing for a
+ * worktree that is clean and pushed, or a panel in none.
+ */
+function worktreeNote(worktree: WorktreeLocalWork): string {
+  const facts = worktreeLocalWorkFacts(worktree);
+  return facts.length > 0 ? ` — ${facts.join(", ")}` : "";
+}
+
+/**
+ * Read the worktrees of the panels a question is about, one answer per target
+ * in order. Never rejects: a reader that fails or is missing leaves each panel
+ * in a worktree unreadable, never clean.
+ */
+export async function readGlobalCloseWorktrees(
+  read:
+    | ((
+        projectId: string,
+        worktreeIds: ReadonlyArray<string | undefined>,
+        signal: AbortSignal
+      ) => Promise<WorktreeLocalWork[]>)
+    | undefined,
+  projectId: string,
+  targets: ReadonlyArray<Pick<GlobalCloseTarget, "worktreeId">>,
+  signal: AbortSignal
+): Promise<WorktreeLocalWork[]> {
+  const fallback = targets.map(({ worktreeId }): WorktreeLocalWork =>
+    worktreeId === undefined ? NOT_READ : { kind: "unreadable" }
+  );
+  if (read === undefined || targets.every(({ worktreeId }) => worktreeId === undefined)) {
+    return fallback;
+  }
+  try {
+    const answers = await read(
+      projectId,
+      targets.map(({ worktreeId }) => worktreeId),
+      signal
+    );
+    return fallback.map((fallen, index) => answers[index] ?? fallen);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * A successful close's answer with what the person was shown of the panel's
+ * worktree, so the calling assistant can report it. Anything else passes
+ * through untouched.
+ */
+export function withGlobalCloseWorktree<T extends { result?: unknown }>(
+  envelope: T,
+  worktree: WorktreeLocalWork
+): T {
+  const answer = envelope.result as { closedIds?: unknown } | null | undefined;
+  if (answer === null || typeof answer !== "object" || !Array.isArray(answer.closedIds)) {
+    return envelope;
+  }
+  return { ...envelope, result: { ...answer, worktree } } as T;
+}
+
 /** The question put to the person at the Shell about one close. */
 export function globalCloseQuestion(
   terminalId: string,
-  target: GlobalCloseTarget
+  target: GlobalCloseTarget,
+  worktree: WorktreeLocalWork = NOT_READ
 ): { subject: string; lines: string[] } {
   const agent = agentName(target);
   const subject = panelName(target, agent);
@@ -74,7 +140,7 @@ export function globalCloseQuestion(
     subject,
     lines: [
       `Panel: ${subject} (${shownId(terminalId)})`,
-      `Agent: ${agent}, ${stopOf(target)}`,
+      `Agent: ${agent}, ${stopOf(target)}${worktreeNote(worktree)}`,
       "Its input box holds nothing typed.",
       TRASH_LINE,
     ],
@@ -86,15 +152,19 @@ export function globalCloseQuestion(
  * it asks about, and how many of the call's own panels close with them.
  */
 export function globalCloseBatchQuestion(
-  targets: ReadonlyArray<{ terminalId: string; target: GlobalCloseTarget }>,
+  targets: ReadonlyArray<{
+    terminalId: string;
+    target: GlobalCloseTarget;
+    worktree?: WorktreeLocalWork;
+  }>,
   ownCount: number
 ): { subject: string; lines: string[] } {
   return {
     subject: pluralize(targets.length, "agent panel"),
     lines: [
-      ...targets.map(({ terminalId, target }) => {
+      ...targets.map(({ terminalId, target, worktree }) => {
         const agent = agentName(target);
-        return `${panelName(target, agent)} (${shownId(terminalId)}): ${agent}, ${stopOf(target)}`;
+        return `${panelName(target, agent)} (${shownId(terminalId)}): ${agent}, ${stopOf(target)}${worktreeNote(worktree ?? NOT_READ)}`;
       }),
       "None of their input boxes holds anything typed.",
       ...(ownCount > 0
@@ -131,7 +201,9 @@ export function sameGlobalCloseTarget(
     later.agentState === earlier.agentState &&
     later.waitingReason === earlier.waitingReason &&
     later.lastTypedInputAt === earlier.lastTypedInputAt &&
-    later.lastStateChange === earlier.lastStateChange
+    later.lastStateChange === earlier.lastStateChange &&
+    // The worktree the question reported on; its git counts may move meanwhile.
+    later.worktreeId === earlier.worktreeId
   );
 }
 
@@ -143,6 +215,8 @@ export interface GlobalCloseItem {
   target: GlobalCloseTarget;
   settlement: "approved" | "skipped";
   deadline: number;
+  /** What the question said of its worktree, returned with the close. */
+  worktree: WorktreeLocalWork;
 }
 
 /**

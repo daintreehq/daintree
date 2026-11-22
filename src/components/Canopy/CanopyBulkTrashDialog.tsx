@@ -8,17 +8,23 @@ import type {
   CanopyInputLineReading,
   CanopyRunTarget,
   CanopyTrashOutcome,
+  CanopyWorktreeReading,
 } from "@shared/types/ipc/canopy";
+import type { WorktreeLocalWork } from "@shared/types/worktreeLocalWork";
+import { worktreeLocalWorkFacts } from "@shared/utils/worktreeLocalWork";
 import { itemSubject, type CanopyItem } from "./canopyModel";
 import {
   BULK_TRASH_HOLD_LABEL,
   bulkTrashHold,
   bulkTrashTarget,
+  bulkTrashWorktree,
   inputLinesByRun,
+  isWorktreeHold,
+  worktreesByRun,
   type BulkTrashHold,
 } from "./canopyBulkTrash";
 
-/** How long the review waits on the hosts' input-line reads before it stops asking. */
+/** How long the review waits on the hosts' input-line and worktree reads before it stops asking. */
 export const BULK_TRASH_CHECK_MS = 5_000;
 
 /** One search result as the review opened on it. */
@@ -36,6 +42,21 @@ interface Review {
   holds: ReadonlyMap<string, BulkTrashHold>;
   /** Runs whose input line no host answered for. */
   unchecked: ReadonlySet<string>;
+  /** What each run's worktree was seen to hold, a run no host answered for as unreadable. */
+  worktrees: ReadonlyMap<string, WorktreeLocalWork>;
+}
+
+/** What a row says of its run before the trash: why it's held, then what git counted in its worktree. */
+function reviewNote(review: Review | null, runId: string): string | null {
+  if (review === null) return null;
+  const hold = review.holds.get(runId);
+  const worktree = review.worktrees.get(runId);
+  const parts = [
+    ...(hold !== undefined && !isWorktreeHold(hold) ? [BULK_TRASH_HOLD_LABEL[hold]] : []),
+    ...(worktree !== undefined ? worktreeLocalWorkFacts(worktree) : []),
+  ];
+  if (parts.length === 0 && review.unchecked.has(runId)) return "Its input couldn't be checked";
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 /**
@@ -51,6 +72,7 @@ export function CanopyBulkTrashDialog({
   entries,
   more,
   readInputLines,
+  readWorktrees,
   onTrash,
   restoreFocusTo,
 }: {
@@ -62,6 +84,7 @@ export function CanopyBulkTrashDialog({
   /** Results past the Trash's limit, left out of this review. */
   more: number;
   readInputLines: (targets: CanopyRunTarget[]) => Promise<CanopyInputLineReading[]>;
+  readWorktrees: (targets: CanopyRunTarget[]) => Promise<CanopyWorktreeReading[]>;
   onTrash: (items: readonly CanopyItem[]) => Promise<CanopyTrashOutcome[]>;
   restoreFocusTo?: () => HTMLElement | null;
 }) {
@@ -71,12 +94,12 @@ export function CanopyBulkTrashDialog({
   const [failures, setFailures] = useState<ReadonlyMap<string, string>>(new Map());
   // Each opening is a generation: an answer for an earlier one changes nothing.
   const generationRef = useRef(0);
-  const readEntries = useEffectEvent(() => ({ entries, readInputLines }));
+  const readEntries = useEffectEvent(() => ({ entries, readInputLines, readWorktrees }));
 
   useEffect(() => {
     if (!isOpen) return;
     const generation = ++generationRef.current;
-    const { entries: shown, readInputLines: read } = readEntries();
+    const { entries: shown, readInputLines: read, readWorktrees: readTrees } = readEntries();
     setPhase("checking");
     setReview(null);
     setTicked(new Set());
@@ -85,25 +108,33 @@ export function CanopyBulkTrashDialog({
     const timedOut = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), BULK_TRASH_CHECK_MS);
     });
-    void Promise.race([
-      read(shown.map(({ item }) => bulkTrashTarget(item))).catch(() => null),
-      timedOut,
-    ]).then((readings) => {
-      if (generationRef.current !== generation) return;
-      const lines = inputLinesByRun(readings ?? []);
-      const holds = new Map<string, BulkTrashHold>();
-      const unchecked = new Set<string>();
-      const ticks = new Set<string>();
-      for (const { item, replyDraft } of shown) {
-        if (!lines.has(item.runId)) unchecked.add(item.runId);
-        const hold = bulkTrashHold(item, lines.get(item.runId), replyDraft);
-        if (hold === null) ticks.add(item.runId);
-        else holds.set(item.runId, hold);
+    const targets = shown.map(({ item }) => bulkTrashTarget(item));
+    // Each read stops at the same moment, so a slow git read never costs the
+    // input lines that did answer, nor the other way round.
+    const bounded = <T,>(reading: Promise<T>) =>
+      Promise.race([reading.catch(() => null), timedOut]);
+    void Promise.all([bounded(read(targets)), bounded(readTrees(targets))]).then(
+      ([readings, trees]) => {
+        if (generationRef.current !== generation) return;
+        const lines = inputLinesByRun(readings ?? []);
+        const answered = worktreesByRun(trees ?? []);
+        const holds = new Map<string, BulkTrashHold>();
+        const unchecked = new Set<string>();
+        const worktrees = new Map<string, WorktreeLocalWork>();
+        const ticks = new Set<string>();
+        for (const { item, replyDraft } of shown) {
+          if (!lines.has(item.runId)) unchecked.add(item.runId);
+          const worktree = bulkTrashWorktree(item, answered.get(item.runId));
+          worktrees.set(item.runId, worktree);
+          const hold = bulkTrashHold(item, lines.get(item.runId), replyDraft, worktree);
+          if (hold === null) ticks.add(item.runId);
+          else holds.set(item.runId, hold);
+        }
+        setReview({ holds, unchecked, worktrees });
+        setTicked(ticks);
+        setPhase("review");
       }
-      setReview({ holds, unchecked });
-      setTicked(ticks);
-      setPhase("review");
-    });
+    );
     return () => {
       if (timer !== null) clearTimeout(timer);
       generationRef.current += 1;
@@ -167,8 +198,10 @@ export function CanopyBulkTrashDialog({
       <AppDialog.Body className="space-y-3">
         {phase !== "done" && (
           <AppDialog.Description>
-            Ticked agents move to the Trash, where Restore brings each one back. Agents seen
-            working, or with text typed or drafted, start unticked.
+            Ticked agents move to the Trash, where Restore brings each one back; their worktrees
+            stay. Agents seen working, with text typed or drafted, or whose worktree has commits on
+            no remote (as of the last fetch), uncommitted changes, or couldn't be read, start
+            unticked.
           </AppDialog.Description>
         )}
         {phase === "done" && (
@@ -202,11 +235,7 @@ export function CanopyBulkTrashDialog({
                   : failure !== undefined
                     ? `Not trashed: ${failure}`
                     : "Left out"
-                : hold !== undefined
-                  ? BULK_TRASH_HOLD_LABEL[hold]
-                  : review?.unchecked.has(item.runId)
-                    ? "Its input couldn't be checked"
-                    : null;
+                : reviewNote(review, item.runId);
             return (
               <li
                 key={item.runId}
@@ -245,7 +274,7 @@ export function CanopyBulkTrashDialog({
         )}
       </AppDialog.Body>
       <AppDialog.Footer
-        hint={phase === "checking" ? "Checking each terminal's input…" : undefined}
+        hint={phase === "checking" ? "Checking each terminal's input and worktree…" : undefined}
         secondaryAction={{
           label: phase === "done" ? "Close" : "Cancel",
           onClick: onClose,

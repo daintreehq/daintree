@@ -176,12 +176,15 @@ import {
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
 import type { GlobalCloseTarget, WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
+import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import {
   GLOBAL_CLOSE_REFUSAL_NOTE,
   GLOBAL_CLOSE_TOOL,
   globalCloseBatchQuestion,
   globalCloseExpired,
   globalCloseQuestion,
+  readGlobalCloseWorktrees,
+  withGlobalCloseWorktree,
   type GlobalCloseItem,
   sameGlobalCloseTarget,
   settleGlobalCloseAnswer,
@@ -1393,6 +1396,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     let globalCloseDeadline: number | undefined;
     // The run a global close was admitted on, for its ledger settlement.
     let globalCloseGeneration: number | undefined;
+    // What the question said of that run's worktree, returned with the close (#18151).
+    let globalCloseWorktree: WorktreeLocalWork | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1890,7 +1895,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const standing = assistantWriteRefusal(projectId);
       if (standing) return refuseWrite(standing);
       const first = asked?.target ?? (await steer.closeTarget(projectId, terminalId));
-      // Asked again now, whatever the read found: another machine may have
+      // What its worktree holds that exists only on this machine (#18151),
+      // read once for the question: a batch item carries its batch's read.
+      const worktree: WorktreeLocalWork | undefined =
+        asked?.worktree ??
+        (first === null
+          ? undefined
+          : (
+              await readGlobalCloseWorktrees(
+                deps.readCloseWorktrees,
+                projectId,
+                [first],
+                extra.signal
+              )
+            )[0]);
+      // Asked again now, whatever the reads found: another machine may have
       // taken the drive meanwhile, and nobody is asked about a close that
       // can't run.
       const standingNow = assistantWriteRefusal(projectId);
@@ -1904,7 +1923,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Announced before the wait, so the strip shows the call awaiting
         // an answer rather than nothing at all.
         emitToolCallStarted(true, true);
-        const question = globalCloseQuestion(terminalId, first);
+        const question = globalCloseQuestion(terminalId, first, worktree);
         const settled = settleGlobalCloseAnswer(
           await deps.relay!.askClose!(relayCallId!, {
             actionId: "terminal.close",
@@ -1944,6 +1963,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (Date.now() > answered.deadline) return refuseCall(globalCloseExpired(`'${terminalId}'`));
       globalCloseDeadline = answered.deadline;
       globalCloseGeneration = first.generation;
+      globalCloseWorktree = worktree;
       return undefined;
     };
 
@@ -2587,7 +2607,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             relayCallId !== undefined
               ? sessionStore.sessionWorkspaceMap.get(sessionId)
               : undefined;
-          const globalEligible: Array<{ terminalId: string; target: GlobalCloseTarget }> = [];
+          const globalEligible: Array<{
+            terminalId: string;
+            target: GlobalCloseTarget;
+            worktree: WorktreeLocalWork;
+          }> = [];
           let ownCloses = 0;
           if (globalBatchProject !== undefined) {
             const candidates: string[] = [];
@@ -2606,11 +2630,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               const standing = assistantWriteRefusal(globalBatchProject);
               if (standing) return refuseWrite(standing);
             }
+            const eligible: Array<{ terminalId: string; target: GlobalCloseTarget }> = [];
             for (const terminalId of candidates) {
               const target = await deps.globalSteer!.closeTarget(globalBatchProject, terminalId);
               if (target === null) globalCloseItems.set(terminalId, null);
-              else globalEligible.push({ terminalId, target });
+              else eligible.push({ terminalId, target });
             }
+            // Their worktrees, read together so a worktree several of them
+            // share is read once (#18151).
+            const worktrees = await readGlobalCloseWorktrees(
+              deps.readCloseWorktrees,
+              globalBatchProject,
+              eligible.map(({ target }) => target),
+              extra.signal
+            );
+            eligible.forEach((entry, index) =>
+              globalEligible.push({ ...entry, worktree: worktrees[index]! })
+            );
             // Asked again, whatever the reads found: the drive may have moved meanwhile.
             if (candidates.length > 0 || assistants > 0) {
               const standingNow = assistantWriteRefusal(globalBatchProject);
@@ -2648,11 +2684,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             }
             if (settled.kind === "approved") confirmationDecision = "approved";
             else dispatchAuthorization = "skip-preference";
-            for (const { terminalId, target } of globalEligible) {
+            for (const { terminalId, target, worktree } of globalEligible) {
               globalCloseItems.set(terminalId, {
                 target,
                 settlement: settled.kind,
                 deadline: settled.deadline,
+                worktree,
               });
             }
           }
@@ -4238,13 +4275,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
           // an assistant's, and each item of `terminal.closeMany`.
-          const envelope: DispatchEnvelope =
+          const withProcesses: DispatchEnvelope =
             readClosedPanelProcess !== undefined && CLOSE_TOOLS.has(actionId)
               ? {
                   ...dispatched,
                   result: await withClosedPanelProcesses(dispatched.result, readClosedPanelProcess),
                 }
               : dispatched;
+          // A global close says what its question said of the worktree (#18151).
+          const envelope: DispatchEnvelope =
+            globalCloseAdmitted && globalCloseWorktree !== undefined
+              ? {
+                  ...withProcesses,
+                  result: withGlobalCloseWorktree(withProcesses.result, globalCloseWorktree),
+                }
+              : withProcesses;
           // Narrow renderer-computed results against this session before
           // anything downstream reads them: the effective action surface for
           // the registry-enumerating tools (#11525), and the ownership ledger

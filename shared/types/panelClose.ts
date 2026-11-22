@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorktreeLocalWorkSchema } from "./worktreeLocalWork.js";
 
 /**
  * What the pty-host reported about a closed panel's process when the close
@@ -27,4 +28,7 @@ export const PanelCloseResultSchema = z.object({
     .array(ClosedPanelProcessSchema)
     .optional()
     .describe("Each closed panel's process after the close: closed is not stopped."),
+  worktree: WorktreeLocalWorkSchema.optional().describe(
+    "Closing an agent you didn't launch: its worktree as git showed it when the user was asked."
+  ),
 });
