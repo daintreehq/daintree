@@ -111,9 +111,14 @@ export function CanopyBulkTrashDialog({
     const targets = shown.map(({ item }) => bulkTrashTarget(item));
     // Each read stops at the same moment, so a slow git read never costs the
     // input lines that did answer, nor the other way round.
-    const bounded = <T,>(reading: Promise<T>) =>
-      Promise.race([reading.catch(() => null), timedOut]);
-    void Promise.all([bounded(read(targets)), bounded(readTrees(targets))]).then(
+    const bounded = <T,>(reading: () => Promise<T>) =>
+      Promise.race([
+        Promise.resolve()
+          .then(reading)
+          .catch(() => null),
+        timedOut,
+      ]);
+    void Promise.all([bounded(() => read(targets)), bounded(() => readTrees(targets))]).then(
       ([readings, trees]) => {
         if (generationRef.current !== generation) return;
         const lines = inputLinesByRun(readings ?? []);

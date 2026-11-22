@@ -85,6 +85,7 @@ function harness(
     answer?: ViewlessApprovalDecision;
     refuseWrite?:
       { code: string; message: string } | (() => { code: string; message: string } | null);
+    readCloseWorktrees?: SessionServerDeps["readCloseWorktrees"];
   } = {}
 ) {
   const records = new Map<string, WorkerSteerRecord>([
@@ -162,6 +163,9 @@ function harness(
     },
     globalSteer: steer,
     terminalGenerationOf: (id) => generations.get(id),
+    ...(options.readCloseWorktrees !== undefined
+      ? { readCloseWorktrees: options.readCloseWorktrees }
+      : {}),
   });
   return { deps, store, owner, records, screens, generations, askClose, dispatchAction };
 }
@@ -593,5 +597,120 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(deps.appendAuditRecord).toHaveBeenCalledWith(
       expect.objectContaining({ toolId: "terminal.closeMany", admission: "global-close" })
     );
+  });
+
+  describe("its worktree's local work (#18151)", () => {
+    const observed = (unpushedCommits: number, changedEntries: number) => ({
+      kind: "observed" as const,
+      unpushedCommits,
+      changedEntries,
+      hiddenFromStatus: 0,
+    });
+
+    it("says what only this machine holds in the panel's worktree, and returns it with the close", async () => {
+      const readCloseWorktrees = vi.fn(
+        async (_projectId: string, ids: ReadonlyArray<string | undefined>) =>
+          ids.map(() => observed(72, 0))
+      );
+      const h = harness({ readCloseWorktrees });
+      h.records.set(WORKER, atPrompt({ worktreeId: "/wt/worker" }));
+      h.askClose.mockImplementationOnce(async () => {
+        // A push while the question is out changes nothing about the answer.
+        readCloseWorktrees.mockImplementation(async (_p, ids) => ids.map(() => observed(0, 0)));
+        return APPROVED;
+      });
+      const server = await serve(h.deps);
+
+      const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+      expect(result.isError).toBeFalsy();
+      expect(readCloseWorktrees).toHaveBeenCalledTimes(1);
+      expect(readCloseWorktrees.mock.calls[0]!.slice(0, 2)).toEqual([PROJECT, ["/wt/worker"]]);
+      const [, ask] = h.askClose.mock.calls[0]!;
+      expect(ask.lines).toContain(
+        "Agent: Claude Code, waiting at its prompt — 72 commits on no remote"
+      );
+      expect(h.dispatchAction).toHaveBeenCalledTimes(1);
+      const [first] = result.content as Array<{ text: string }>;
+      expect(JSON.parse(first!.text)).toMatchObject({
+        closedIds: [WORKER],
+        worktree: observed(72, 0),
+      });
+    });
+
+    it("still refuses a panel moved to another worktree while asked", async () => {
+      const h = harness({ readCloseWorktrees: async (_p, ids) => ids.map(() => observed(0, 0)) });
+      h.records.set(WORKER, atPrompt({ worktreeId: "/wt/worker" }));
+      h.askClose.mockImplementationOnce(async () => {
+        h.records.set(WORKER, atPrompt({ worktreeId: "/wt/elsewhere" }));
+        return APPROVED;
+      });
+      const server = await serve(h.deps);
+
+      const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+      expect(toolErrorPayload(result).code).toBe(RESOURCE_NOT_OWNED_CODE);
+      expect(h.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("reads a batch's worktrees in one call and puts each panel's state on its line", async () => {
+      const readCloseWorktrees = vi.fn(
+        async (_projectId: string, ids: ReadonlyArray<string | undefined>) =>
+          ids.map((id) => (id === "/wt/dirty" ? observed(0, 3) : observed(0, 0)))
+      );
+      const h = harness({ readCloseWorktrees });
+      h.records.set(WORKER, atPrompt({ worktreeId: "/wt/dirty" }));
+      h.records.set(OTHER, atPrompt({ agentState: "completed", worktreeId: "/wt/clean" }));
+      const server = await serve(h.deps);
+
+      const result = await callTool(
+        server,
+        relayed("terminal.closeMany", { terminalIds: [WORKER, OTHER] })
+      );
+
+      expect(readCloseWorktrees).toHaveBeenCalledTimes(1);
+      expect(readCloseWorktrees.mock.calls[0]![1]).toEqual(["/wt/dirty", "/wt/clean"]);
+      const [, ask] = h.askClose.mock.calls[0]!;
+      const workerLine = ask.lines.find((line) => line.includes(WORKER))!;
+      const otherLine = ask.lines.find((line) => line.includes(OTHER))!;
+      expect(workerLine).toMatch(/waiting at its prompt — 3 files changed or untracked$/);
+      expect(otherLine).toMatch(/finished its task$/);
+      const { results } = batchAnswer(result) as unknown as {
+        results: Array<{ target: string; ok: boolean; result?: { worktree?: unknown } }>;
+      };
+      expect(results.map(({ target, result: answer }) => [target, answer?.worktree])).toEqual([
+        [WORKER, observed(0, 3)],
+        [OTHER, observed(0, 0)],
+      ]);
+    });
+
+    it("says a worktree it couldn't read is unreadable, never clean, and leaves the close to the person", async () => {
+      const h = harness({
+        readCloseWorktrees: async () => {
+          throw new Error("git went away");
+        },
+      });
+      h.records.set(WORKER, atPrompt({ worktreeId: "/wt/worker" }));
+      const server = await serve(h.deps);
+
+      const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+      expect(result.isError).toBeFalsy();
+      const [, ask] = h.askClose.mock.calls[0]!;
+      expect(ask.lines.join("\n")).toContain("— Worktree state unreadable");
+      expect(h.dispatchAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads nothing for a panel in no worktree", async () => {
+      const readCloseWorktrees = vi.fn(async () => []);
+      const h = harness({ readCloseWorktrees });
+      const server = await serve(h.deps);
+
+      await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+      expect(readCloseWorktrees).not.toHaveBeenCalled();
+      const [, ask] = h.askClose.mock.calls[0]!;
+      expect(ask.lines.join("\n")).not.toContain("—");
+    });
   });
 });

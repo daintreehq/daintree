@@ -10,6 +10,7 @@ import type {
   CanopySnapshot,
   CanopyTrashOutcome,
   CanopyUntrashOutcome,
+  CanopyWorktreeReading,
 } from "@shared/types/ipc/canopy";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
@@ -115,6 +116,9 @@ function installElectron() {
     ),
     readInputLines: vi.fn(async (targets: CanopyRunTarget[]): Promise<CanopyInputLineReading[]> =>
       targets.map((target) => ({ runId: target.runId, state: "empty" }))
+    ),
+    readWorktrees: vi.fn(async (targets: CanopyRunTarget[]): Promise<CanopyWorktreeReading[]> =>
+      targets.map((target) => ({ runId: target.runId, work: { kind: "not-applicable" } }))
     ),
     restoreTrashed: vi.fn(async (runId: string) => ({ runId })),
     removeTrashed: vi.fn(async () => {}),
@@ -441,5 +445,78 @@ describe("CanopyView bulk trash of search results", () => {
     const [row] = reviewRows();
     expect(ticked(row!)).toBe(true);
     expect(row!.textContent).toContain("Its input couldn't be checked");
+  });
+
+  it("starts runs whose worktree holds work only on this machine unticked, saying what git counted", async () => {
+    const canopy = await open([
+      run("clean", { worktreeId: "/wt/clean" }),
+      run("unpushed", { worktreeId: "/wt/unpushed" }),
+      run("dirty", { worktreeId: "/wt/dirty" }),
+      run("typed", { worktreeId: "/wt/typed" }),
+      run("unread", { worktreeId: "/wt/unread" }),
+    ]);
+    canopy.readInputLines.mockImplementation(async (targets) =>
+      targets.map((target) => ({
+        runId: target.runId,
+        state: target.runId === "typed" ? "typed" : "empty",
+      }))
+    );
+    canopy.readWorktrees.mockImplementation(async (targets) =>
+      targets.flatMap((target): CanopyWorktreeReading[] => {
+        const observed = (unpushedCommits: number, changedEntries: number) => ({
+          runId: target.runId,
+          work: { kind: "observed" as const, unpushedCommits, changedEntries, hiddenFromStatus: 0 },
+        });
+        switch (target.runId) {
+          case "clean":
+            return [observed(0, 0)];
+          case "unpushed":
+            return [observed(72, 0)];
+          case "dirty":
+            return [observed(0, 3)];
+          case "typed":
+            return [observed(1, 1)];
+          default:
+            return [];
+        }
+      })
+    );
+    await search("review");
+    await openReview();
+    const byId = new Map(reviewRows().map((row) => [row.getAttribute("data-run-id"), row]));
+    expect(ticked(byId.get("clean")!)).toBe(true);
+    expect(byId.get("clean")!.getAttribute("data-hold")).toBeNull();
+    expect(ticked(byId.get("unpushed")!)).toBe(false);
+    expect(byId.get("unpushed")!.getAttribute("data-hold")).toBe("unpushed");
+    expect(byId.get("unpushed")!.textContent).toContain("72 commits on no remote");
+    expect(ticked(byId.get("dirty")!)).toBe(false);
+    expect(byId.get("dirty")!.getAttribute("data-hold")).toBe("uncommitted");
+    expect(byId.get("dirty")!.textContent).toContain("3 files changed or untracked");
+    // A typed draft is weighed first, but never hides what git counted.
+    expect(byId.get("typed")!.getAttribute("data-hold")).toBe("typed");
+    expect(byId.get("typed")!.textContent).toContain(
+      "Text typed in its terminal · 1 commit on no remote · 1 file changed or untracked"
+    );
+    // No answer for a run in a worktree is never a pass.
+    expect(ticked(byId.get("unread")!)).toBe(false);
+    expect(byId.get("unread")!.getAttribute("data-hold")).toBe("unreadable");
+    expect(byId.get("unread")!.textContent).toContain("Worktree state unreadable");
+    await act(async () => {
+      fireEvent.click(dialogButton("Trash 1 agent"));
+    });
+    expect(canopy.trashBatch.mock.calls[0]![0].map((target) => target.runId)).toEqual(["clean"]);
+  });
+
+  it("starts a run in a worktree unticked when no host could read it, but not one in none", async () => {
+    const canopy = await open([run("inTree", { worktreeId: "/wt/a" }), run("loose")]);
+    canopy.readWorktrees.mockRejectedValue(new Error("unknown channel"));
+    await search("review");
+    await openReview();
+    const byId = new Map(reviewRows().map((row) => [row.getAttribute("data-run-id"), row]));
+    expect(ticked(byId.get("inTree")!)).toBe(false);
+    expect(byId.get("inTree")!.getAttribute("data-hold")).toBe("unreadable");
+    expect(ticked(byId.get("loose")!)).toBe(true);
+    // The input lines still answered, so nothing is said of them.
+    expect(byId.get("loose")!.textContent).not.toContain("couldn't be checked");
   });
 });

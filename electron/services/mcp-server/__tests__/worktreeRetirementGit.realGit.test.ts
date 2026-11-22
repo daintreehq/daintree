@@ -127,6 +127,23 @@ describe("readWorktreeGitObservation", () => {
     });
   });
 
+  it("counts a file staged and then edited again as one changed entry", async () => {
+    const dir = linkedWorktree("restaged");
+    fs.writeFileSync(path.join(dir, "a.txt"), "staged\n");
+    git(dir, "add", "a.txt");
+    fs.writeFileSync(path.join(dir, "a.txt"), "edited again\n");
+    fs.mkdirSync(path.join(dir, "scratch"));
+    fs.writeFileSync(path.join(dir, "scratch", "one.txt"), "1\n");
+    fs.writeFileSync(path.join(dir, "scratch", "two.txt"), "2\n");
+
+    expect(await readWorktreeGitObservation(dir)).toMatchObject({
+      staged: 1,
+      unstaged: 1,
+      untracked: 1,
+      changedEntries: 2,
+    });
+  });
+
   it("counts an edit hidden behind assume-unchanged, which status never reports", async () => {
     const dir = linkedWorktree("assumed");
     git(dir, "update-index", "--assume-unchanged", "a.txt");
