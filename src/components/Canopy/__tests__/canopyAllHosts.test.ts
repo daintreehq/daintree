@@ -44,6 +44,11 @@ const ownCalls = vi.hoisted(() => ({
   readInputLines: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
     Promise.resolve(targets.map((target) => ({ runId: target.runId, state: "typed" })))
   ),
+  readWorktrees: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
+    Promise.resolve(
+      targets.map((target) => ({ runId: target.runId, work: { kind: "unreadable" } }))
+    )
+  ),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
@@ -602,6 +607,20 @@ describe("createAllHostsRoute", () => {
     ]);
     expect(ownCalls.readInputLines).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1 }]);
     expect(readings).toEqual([{ runId: allHostsKey("own", "o1"), state: "typed" }]);
+  });
+
+  it("reads worktrees on each run's host, leaving a host that can't answer, or doesn't know how, unread", async () => {
+    invoke.mockRejectedValue(new Error("No handler registered for 'canopy:read-worktrees'"));
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const readings = await api.readWorktrees([
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2 },
+    ]);
+    expect(ownCalls.readWorktrees).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1 }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:read-worktrees", [
+      { runId: "r1", spawnedAt: 2 },
+    ]);
+    expect(readings).toEqual([{ runId: allHostsKey("own", "o1"), work: { kind: "unreadable" } }]);
   });
 
   it("refuses a run that isn't on a host shown", async () => {
