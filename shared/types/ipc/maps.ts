@@ -1864,6 +1864,8 @@ export interface IpcEventMap {
     actionsListWalk?: boolean;
     /** When this unconfirmed dispatch may run unasked (#17917); set only by main. */
     confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
+    /** This machine's global Assistant made the call through `host.call` (#18153); set only by main. */
+    callerOrigin?: "global-assistant";
   };
 
   /**

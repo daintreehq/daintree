@@ -227,6 +227,13 @@ export interface WorkspaceDispatchOptions {
    */
   actionsListWalk?: boolean;
   /**
+   * This machine's global Assistant made the call, through `host.call` into
+   * the bound project (#18153), so the view tells an action's handler so.
+   * Sent to a local view only, and set by main from the relay's own lane,
+   * never from a call's arguments.
+   */
+  callerOrigin?: "global-assistant";
+  /**
    * Another machine is timing this call and didn't say for how long (#14989):
    * a host too old to say, dispatching into the view this Shell drives it
    * from. Its view can't hold the call open past the plain deadline, which is

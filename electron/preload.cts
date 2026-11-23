@@ -3475,6 +3475,7 @@ function buildElectronApi(): ElectronAPI {
           dispatchDeadlineAt?: number;
           actionsListWalk?: boolean;
           confirmationCondition?: "next-own-fallback";
+          callerOrigin?: "global-assistant";
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

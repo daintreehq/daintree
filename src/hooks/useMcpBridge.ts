@@ -56,6 +56,7 @@ import type {
   HostApprovedPush,
   HostApprovedRecipeRun,
   HostApprovedTarget,
+  HostCallerOrigin,
 } from "@shared/types/actions";
 import type {
   McpApprovalScope,
@@ -1433,7 +1434,17 @@ export function useMcpBridge(): void {
         dispatchDeadlineAt: sentDeadlineAt,
         actionsListWalk,
         confirmationCondition,
+        callerOrigin,
       }) => {
+        // Who asked, for a plugin action's handler (#16751, #18153): the
+        // project's Assistant by its session, or this machine's global
+        // Assistant by main's own say on its `host.call`.
+        const hostCallerOrigin: HostCallerOrigin | undefined =
+          sessionOrigin === "help"
+            ? "assistant"
+            : callerOrigin === "global-assistant"
+              ? "global-assistant"
+              : undefined;
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
         // hold, and an approval runs on main's own say-so, never on this.
@@ -1577,7 +1588,7 @@ export function useMcpBridge(): void {
               source: "agent",
               ownFallbackStep: true,
               contextOverride: context,
-              ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" as const } : {}),
+              ...(hostCallerOrigin !== undefined ? { hostCallerOrigin } : {}),
               dispatchDeadlineAt,
             });
             if (disposed) return;
@@ -2089,7 +2100,7 @@ export function useMcpBridge(): void {
                 // handler (#16751). Only this callback's own approved dialog
                 // counts: a grant or Never ask arrives confirmed and shows no one
                 // anything.
-                ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" as const } : {}),
+                ...(hostCallerOrigin !== undefined ? { hostCallerOrigin } : {}),
                 ...(confirmationDecision === "approved" ? { hostPersonApproved: true } : {}),
                 // An approval's run budget replaces the deadline main first
                 // sent; a dispatch nobody was asked about keeps that one. An

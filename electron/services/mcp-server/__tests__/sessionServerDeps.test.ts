@@ -17,6 +17,7 @@ import {
 import { setMcpDriveTargetResolver, type McpDriveTarget } from "../driveTarget.js";
 import { SessionBindingError } from "../rendererBridge.js";
 import { helpNotifyKey } from "../terminalNotify.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 import type { AssistantControlBinding, McpSessionOrigin } from "../shared.js";
 import type { McpBearerIdentity } from "../../../../shared/types/ipc/mcpServer.js";
 import type { WindowRegistry } from "../../../window/WindowRegistry.js";
@@ -405,6 +406,71 @@ describe("createSessionServerDeps", () => {
       "call-2"
     );
     expect(remote.matchers()).toEqual([undefined]);
+  });
+
+  // #18153: only this machine's own global Assistant's call tells the view who
+  // asked, and a plugin's opted-in query never reads as one another machine's
+  // driving view could answer.
+  it("marks the local global Assistant's dispatches, and never counts a plugin action a read", async () => {
+    const REACH = "acme.stages.inspect";
+    const uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+    try {
+      const bound = (relay: Record<string, unknown>) => {
+        const deps = fakeSource();
+        const queries = [
+          { id: REACH, kind: "query", danger: "confirm" },
+          { id: "terminal.list", kind: "query", danger: "safe" },
+        ];
+        (deps as { getCachedManifest?: unknown }).getCachedManifest = vi.fn(() => queries);
+        const dispatchActionForWorkspace = vi.fn(async () => ({
+          result: { ok: true, result: null },
+        }));
+        (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+          dispatchActionForWorkspace;
+        const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+          sessionId: "s",
+          role: ROLE,
+          workspaceBinding: { workspaceId: WS_A },
+          relay: relay as never,
+        });
+        const options = () =>
+          dispatchActionForWorkspace.mock.calls.map(
+            (call) =>
+              (call as unknown[])[5] as
+                { callerOrigin?: string; relay?: { readOnly?: boolean } } | undefined
+          );
+        return { sessionDeps, options };
+      };
+      const caller = {
+        linkSessionId: "local",
+        senderId: "local",
+        helpSessionId: "help-1",
+        shellName: "Mac",
+      };
+
+      const globalLocal = bound({ ...caller, local: true, global: true });
+      await globalLocal.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-1");
+      await globalLocal.sessionDeps.dispatchAction("terminal.list", {}, false, undefined, "call-2");
+      const [plugin, read] = globalLocal.options();
+      expect(plugin?.callerOrigin).toBe("global-assistant");
+      expect(plugin?.relay?.readOnly).toBe(false);
+      expect(read?.callerOrigin).toBe("global-assistant");
+      expect(read?.relay?.readOnly).toBe(true);
+
+      for (const relay of [
+        { ...caller, global: true },
+        { ...caller, local: true },
+      ]) {
+        const other = bound(relay);
+        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
+        expect(other.options()[0]).not.toHaveProperty("callerOrigin");
+      }
+    } finally {
+      uninstall();
+    }
   });
 
   // #14551: only a relay caller its Shell's runtime named global is handed the

@@ -40,7 +40,7 @@ export function parsePluginActionContext(raw: unknown): PluginActionContext {
   if (typeof dispatchSource !== "string" || !ACTION_SOURCES.has(dispatchSource)) {
     throw new Error("Plugin action context has an invalid dispatchSource");
   }
-  if (origin !== undefined && origin !== "assistant") {
+  if (origin !== undefined && origin !== "assistant" && origin !== "global-assistant") {
     throw new Error("Plugin action context has an invalid origin");
   }
   if (approval !== undefined && approval !== "person") {

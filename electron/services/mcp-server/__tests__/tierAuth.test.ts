@@ -28,6 +28,7 @@ import {
   shouldExposeTool,
   isWithheldFromBoundSession,
   isWithheldFromRelaySession,
+  isWithheldFromRelayDiscovery,
   mayControlAssistants,
   UNBOUND_SESSION_SURFACE,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
@@ -1424,6 +1425,52 @@ describe("plugin actions opted into the project Assistant (#16751)", () => {
     // vanilla install allocates nothing per call.
     expect(getTierPermittedActionIds("core", true)).toBe(getTierPermittedActionIds("core", true));
     expect(getTierPermittedActionIds("core", true).has(REACH)).toBe(false);
+  });
+
+  // #18153: this machine's global Assistant, reaching the project through
+  // host.call, is the one external origin that reaches it.
+  const globalLocalRelay = {
+    ...UNBOUND_SESSION_SURFACE,
+    workspaceBound: true,
+    relay: true,
+    relayGlobal: true,
+    relayPluginReach: true,
+  };
+
+  it.each(["core", "full"] as const)(
+    "lists, admits and describes it for this machine's global Assistant at %s",
+    (tier) => {
+      expect(shouldExposeTool(entry(), tier, globalLocalRelay)).toBe(true);
+      expect(isWithheldFromRelayDiscovery(REACH, globalLocalRelay)).toBe(false);
+      expect(isTierPermitted(tier, REACH, false, true)).toBe(true);
+      expect(getReachableActionIds(tier, false, false, true).has(REACH)).toBe(true);
+      const policy = buildTargetPolicy(entry(), {
+        tier,
+        rendererOwnedOrigin: false,
+        relay: true,
+        relayGlobal: true,
+        relayPluginReach: true,
+        perToolGrantedActionIds: new Set<string>(),
+        nativeGrantedActionIds: new Set<string>(),
+      });
+      expect(policy).toMatchObject({ minimumTier: "core", authorizedBy: "tier" });
+    }
+  );
+
+  it("never widens the built-in surface for it", () => {
+    // Unscoped terminal input stays the renderer-owned origin's alone.
+    const builtIn = getTierPermittedActionIds("full", false);
+    const widened = getTierPermittedActionIds("full", false, true);
+    expect([...widened].filter((id) => !builtIn.has(id))).toEqual([REACH]);
+  });
+
+  it("keeps it from another machine's global Assistant, and from the external tier", () => {
+    const remoteGlobal = { ...globalLocalRelay, relayPluginReach: false };
+    expect(shouldExposeTool(entry(), "full", remoteGlobal)).toBe(false);
+    expect(isWithheldFromRelayDiscovery(REACH, remoteGlobal)).toBe(true);
+    expect(shouldExposeTool(entry(), "external", globalLocalRelay)).toBe(false);
+    // A built-in tool the global Assistant may not relay stays withheld.
+    expect(isWithheldFromRelayDiscovery("project.runCommand", globalLocalRelay)).toBe(true);
   });
 
   it("describes it at core, so actions.getSchema answers rather than failing closed", () => {

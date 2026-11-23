@@ -992,6 +992,7 @@ export function createRendererBridge(
       | "onDelegationApproved"
       | "actionsListWalk"
       | "confirmationCondition"
+      | "callerOrigin"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -1040,6 +1041,7 @@ export function createRendererBridge(
       | "onDelegationApproved"
       | "actionsListWalk"
       | "confirmationCondition"
+      | "callerOrigin"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1174,6 +1176,11 @@ export function createRendererBridge(
             // off each page.
             ...(approval?.actionsListWalk === true && actionId === "actions.list"
               ? { actionsListWalk: true }
+              : {}),
+            // This machine's global Assistant asked, through `host.call` (#18153).
+            // Local-only: it names an assistant of this machine's.
+            ...(approval?.callerOrigin === "global-assistant"
+              ? { callerOrigin: "global-assistant" as const }
               : {}),
           });
         } catch (err) {

@@ -192,6 +192,7 @@ describe("useMcpBridge", () => {
         delegationOffer?: { label: string; detail: string; switchesMode?: true };
         dispatchDeadlineAt?: number;
         actionsListWalk?: boolean;
+        callerOrigin?: "global-assistant";
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -1221,6 +1222,29 @@ describe("useMcpBridge", () => {
         );
       }
     );
+
+    // #18153: main says when this machine's global Assistant asked through
+    // host.call; the session itself is external, like any relay.
+    it("names the global Assistant to the action when main says it asked", async () => {
+      mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-global" } });
+
+      renderHook(() => useMcpBridge());
+
+      await dispatchHandler?.({
+        requestId: "req-global",
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+        sessionOrigin: "external",
+        callerOrigin: "global-assistant",
+      });
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.objectContaining({ source: "agent", hostCallerOrigin: "global-assistant" })
+      );
+    });
 
     it("falls back to 'mcp' when the dispatch carries no origin at all", async () => {
       mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));

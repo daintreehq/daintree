@@ -15,6 +15,7 @@ import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
 import { relayOwnershipPrincipal } from "../resourceOwnership.js";
 import type { HostCallContext } from "../hostControlTools.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 
 function entry(
   id: string,
@@ -1047,5 +1048,88 @@ describe("a relayed session for the calling Shell's global Assistant", () => {
       "project.runCheck",
     ]);
     expect(listed).toContain("project.runCommand");
+  });
+});
+
+// #18153: this machine's global Assistant reaches a project's plugin actions
+// that opted into `assistantReach`, through `host.call`; no other relay does.
+describe("plugin actions for this machine's global Assistant", () => {
+  const REACH = "acme.stages.resume";
+  const PLUGIN_MANIFEST = [
+    ...MANIFEST,
+    { ...entry(REACH, "command", "confirm"), pluginId: "acme.stages" },
+  ];
+  let uninstall: () => void = () => {};
+
+  afterEach(() => uninstall());
+
+  async function reached(
+    tier: "core" | "full",
+    caller: { global?: true; local?: true },
+    found: ActionManifestEntry[] = PLUGIN_MANIFEST
+  ) {
+    uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+    const dispatchAction = vi.fn(async (actionId: string) =>
+      actionId === "actions.search"
+        ? { result: { ok: true, result: { totalMatches: found.length, results: found } } }
+        : { result: { ok: true, result: { ran: true } } }
+    );
+    const relay = await relayed(tier, {
+      requestManifest: vi.fn().mockResolvedValue(PLUGIN_MANIFEST),
+      getCachedManifest: vi.fn(() => PLUGIN_MANIFEST),
+      dispatchAction,
+      relay: { shellName: "greg-mbp", ...caller, refuseWrite: vi.fn(() => null) },
+    });
+    const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+    const search = await relay.client.callTool({
+      name: "actions.search",
+      arguments: { query: "stages" },
+    });
+    const [first] = search.content as Array<{ text: string }>;
+    const searchedIds = (JSON.parse(first!.text) as { results: ActionManifestEntry[] }).results.map(
+      (hit) => hit.id
+    );
+    const called = await relay.client.callTool({ name: REACH, arguments: { stageId: "s1" } });
+    return { listed, searchedIds, called, dispatchAction };
+  }
+
+  it.each(["core", "full"] as const)(
+    "lists, finds and dispatches it unconfirmed, so the project's view asks, at %s",
+    async (tier) => {
+      const { listed, searchedIds, called, dispatchAction } = await reached(tier, {
+        global: true,
+        local: true,
+      });
+      expect(listed).toContain(REACH);
+      expect(searchedIds).toContain(REACH);
+      expect(called.isError).not.toBe(true);
+      expect(dispatchAction).toHaveBeenCalledWith(REACH, { stageId: "s1" }, false);
+    }
+  );
+
+  it.each([
+    ["another machine's global Assistant", { global: true as const }],
+    ["one of this machine's project assistants", { local: true as const }],
+    ["another machine's project assistant", {}],
+  ])("keeps it from %s", async (_label, caller) => {
+    const { listed, searchedIds, called, dispatchAction } = await reached("full", caller);
+    expect(listed).not.toContain(REACH);
+    expect(searchedIds).not.toContain(REACH);
+    expect(called.isError).toBe(true);
+    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(dispatchAction.mock.calls.map(([actionId]) => actionId)).not.toContain(REACH);
+  });
+
+  it("reaches nothing once the plugin stops naming it", async () => {
+    // `reached` installs the source before its first await; dropping it right
+    // after leaves the session to list, search and call with no plugin action live.
+    const pending = reached("full", { global: true, local: true });
+    uninstall();
+    const { listed, called } = await pending;
+    expect(listed).not.toContain(REACH);
+    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
   });
 });

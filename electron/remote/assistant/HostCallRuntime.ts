@@ -145,6 +145,7 @@ import { OWNED_RESOURCE_TOOLS } from "../../services/mcp-server/sessionCallOwner
 import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.js";
 import type { McpDelegationOffer } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
+import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
 
 const logger = createLogger("main:HostCallRuntime");
 
@@ -1983,8 +1984,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
       // The global assistant acts only on what it launched or was handed
-      // (#14161), on any host: anything not allowed is refused.
-      if (isGlobalAssistantId(caller.projectId) && !globalAssistantMayRelay(args.tool)) {
+      // (#14161), on any host: anything not allowed is refused. On this
+      // machine it also reaches the plugin actions that opted into
+      // `assistantReach` (#18153), as live as the project's own gate reads them.
+      if (
+        isGlobalAssistantId(caller.projectId) &&
+        !globalAssistantMayRelay(args.tool) &&
+        !(local && isPluginAssistantReachAction(args.tool))
+      ) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
       // A global session's acting call also stops when coordination leaves it (#18143).
