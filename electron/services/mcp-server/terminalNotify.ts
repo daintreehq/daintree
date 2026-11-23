@@ -612,11 +612,10 @@ interface PaneOwner {
   delivery: DeliveryState;
   /**
    * The line the host may still hold, until its outcome is known. `follows`:
-   * it went out behind a line whose turn was still to come (#16282), or one
-   * that failed, which a refusal of this one must not let a notice overtake;
-   * `answersMayFollow` is that line's own (#18157), kept for a refusal.
+   * the delivery it went out behind, a line whose turn was still to come
+   * (#16282) or one that failed, which a refusal of this one restores (#18157).
    */
-  inHost?: { token: string; follows?: true; answersMayFollow?: true };
+  inHost?: { token: string; follows?: DeliveryState };
   timer?: ReturnType<typeof setTimeout>;
   timerDueAt?: number;
   releaseTimer?: ReturnType<typeof setTimeout>;
@@ -2610,9 +2609,8 @@ export class TerminalNotifyService {
     owner.inHost = {
       token,
       ...(owner.delivery.status === "outstanding" || owner.delivery.status === "failed"
-        ? { follows: true }
+        ? { follows: { ...owner.delivery } }
         : {}),
-      ...(owner.delivery.answersMayFollow === true ? { answersMayFollow: true } : {}),
     };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
@@ -2747,22 +2745,33 @@ export class TerminalNotifyService {
       if (phase === "failed" || phase === "cancelled" || phase === "unknown") {
         const stoppedAt = phase === "cancelled" ? info?.submission?.cancelledAt : undefined;
         logger.warn("Notice line not written", { pane: owner.terminalId, phase, stoppedAt });
-        const follows = owner.inHost?.follows === true;
-        // Answers may follow a line that carried one and was held at its Enter,
-        // or one that followed such a line and was refused (#18157).
-        const answersMayFollow =
-          (stoppedAt === "enter" && this.carriesDecision(owner, token)) ||
-          (stoppedAt === "admission" && owner.inHost?.answersMayFollow === true);
+        const follows = owner.inHost?.follows;
+        // Answers may follow a line that carried one and was held at its Enter (#18157).
+        const answersMayFollow = stoppedAt === "enter" && this.carriesDecision(owner, token);
         owner.inHost = undefined;
         this.requeue(owner, token, stoppedAt);
         owner.droppedCount += dropped;
         // Refused before any of it was written (#18157): the composer is as
-        // it was, so what the line carried waits only on the pane's gate,
-        // unless it followed a line whose turn is still to come.
-        if (stoppedAt === "admission" && !follows && owner.delivery.token === token) {
-          const waiting = this.hasUndelivered(owner);
-          this.setDelivery(owner, { status: waiting ? "scheduled" : "idle" });
-          if (waiting) this.armRecheck(owner);
+        // it was, so what the line carried waits only on the pane's gate, or
+        // on the line it followed, whose wait is restored as it stood.
+        if (stoppedAt === "admission" && owner.delivery.token === token) {
+          if (follows !== undefined) {
+            // A turn that ended while this line was out ended the one it followed.
+            const turnEnded = owner.delivery.settledSinceDelivery === true;
+            owner.delivery = follows;
+            if (turnEnded) {
+              this.settleOutstanding(owner);
+              return;
+            }
+            if (follows.status === "outstanding" && follows.confirmed === true && follows.token) {
+              this.armRelease(owner, follows.token);
+            }
+            this.schedule(owner);
+          } else {
+            const waiting = this.hasUndelivered(owner);
+            this.setDelivery(owner, { status: waiting ? "scheduled" : "idle" });
+            if (waiting) this.armRecheck(owner);
+          }
           this.publish(owner);
           this.maybeDispose(owner);
           return;

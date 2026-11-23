@@ -45,6 +45,7 @@ const Q1 = "0190f0aa11112222333344445555aaaa";
 const Q2 = "0190f0aa11112222333344445555cccc";
 const I1 = "0190f0aa11112222333344445555bbbb";
 const I2 = "0190f0aa11112222333344445555dddd";
+const I3 = "0190f0aa11112222333344445555abab";
 
 const ORIGIN: QuestionOrigin = {
   host_id: HOST,
@@ -1167,6 +1168,12 @@ describe("DaintreeTerminalSink", () => {
       const h = setup();
       const first = await stopped(h, "enter");
       expect(first.value).toEqual({ outcome: "held", reason: ENTER_HELD });
+      // A screen that can't be read yet shows nothing of where the body went.
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "held",
+        reason: ENTER_HELD,
+      });
+      expect(h.client.submitted).toHaveLength(1);
 
       // The dialog took the body with it: the composer is empty and the answer
       // is nowhere on screen. No turn ended since.
@@ -1221,6 +1228,10 @@ describe("DaintreeTerminalSink", () => {
         outcome: "ambiguous",
         reason: "enter-held-unresolved",
       });
+      // The words are still there, so nothing else is typed on top of them either.
+      await expect(
+        h.sink.inject(TARGET, notice({ questionId: Q2, injectionId: I3 }), I3)
+      ).resolves.toEqual({ outcome: "held", reason: ENTER_HELD });
       expect(h.client.submitted).toHaveLength(1);
     });
 
@@ -1254,6 +1265,100 @@ describe("DaintreeTerminalSink", () => {
         reason: ENTER_HELD,
       });
       expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("types only the rest of a chunk whose staged answer the screen shows submitted", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, submittedPrompt(I1));
+
+      // The library builds the staged answer and a new one into one chunk.
+      const chunk = track(
+        h.sink.inject(TARGET, notice({ injectionId: I2 }, { questionId: Q2, injectionId: I3 }), I2)
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain(markerFor(I3));
+      expect(h.client.submitted[1].text).not.toContain(markerFor(I2));
+      expect(chunk.value).toMatchObject({ outcome: "delivered" });
+      expect((chunk.value as { proof: string }).proof).toMatch(
+        new RegExp(`^marker:${I1};pty_written:`)
+      );
+    });
+
+    it("leaves a chunk uncertain when only some of its staged answers show submitted", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "enter";
+      const first = track(
+        h.sink.inject(TARGET, notice({}, { questionId: Q2, injectionId: I2 }), I1)
+      );
+      await flushLine();
+      expect(first.value).toEqual({ outcome: "held", reason: ENTER_HELD });
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      h.client.screens.set(PANE, submittedPrompt(I1));
+
+      await expect(
+        h.sink.inject(TARGET, notice({ injectionId: I3 }, { questionId: Q2, injectionId: I2 }), I3)
+      ).resolves.toEqual({ outcome: "ambiguous", reason: "enter-held-partial" });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("takes no bare injection id for its marker", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, `injection_id: ${I1}\r\n${EMPTY_PROMPT}`);
+
+      const second = retry(h);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(second.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("still settles a staged answer once its run's session is learned", async () => {
+      const h = setup();
+      const sessionless = { ...ORIGIN, agent_session_id: null };
+      h.origins.set(Q1, sessionless);
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "enter";
+      const first = track(h.sink.inject(targetOf(sessionless), notice(), I1));
+      await flushLine();
+      expect(first.value).toEqual({ outcome: "held", reason: ENTER_HELD });
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+
+      h.origins.set(Q1, ORIGIN);
+      h.client.screens.set(PANE, submittedPrompt(I1));
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "delivered",
+        proof: `marker:${I1}`,
+      });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("leaves a held closure notice uncertain, as before", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "enter";
+      const closure = notice({
+        kind: "expired",
+        disposition: "fallback-due",
+        deadline: "2026-11-01T10:15:00.000Z",
+        revision: 0,
+      });
+      const result = track(h.sink.inject(TARGET, closure, I1));
+      await flushLine();
+      expect(result.value).toEqual({ outcome: "ambiguous", reason: ENTER_HELD });
+
+      // Its pane still waits on the composer the closure was left in.
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      h.client.screens.set(PANE, TYPED_PROMPT);
+      await expect(
+        h.sink.inject(TARGET, notice({ questionId: Q2, injectionId: I2 }), I2)
+      ).resolves.toEqual({ outcome: "held", reason: ENTER_HELD });
     });
 
     it("types afresh on another run, which never had the staged text", async () => {

@@ -3222,6 +3222,36 @@ describe("decision wakes (#16015)", () => {
       expect(h.client.submitted).toHaveLength(2);
     });
 
+    it("restores the written line an answer followed when the host refuses the answer", async () => {
+      const h = setup({ enabled: false });
+      const scope = h.service.openWakeScope();
+      const first = decisionWake("Daintree Decisions: first");
+      scope.enqueueWake(PANE, PROJECT, first.wake);
+      await flushWake();
+      expect(first.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      // An answer follows the written line, and the host refuses it at the lane.
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(next.outcomes[0]?.outcome).toEqual({ kind: "unavailable", reason: LINE_REFUSED });
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      // Another may still follow the written line, with no turn seen.
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      const third = decisionWake("Daintree Decisions: third");
+      third.wake.id = "dec-3";
+      scope.enqueueWake(PANE, PROJECT, third.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(3);
+      expect(h.client.submitted[2].text).toBe("Daintree Decisions: third");
+    });
+
     it("lets no answer follow a held line that carried none", async () => {
       const h = setup({ enabled: false });
       h.client.linePhase = "cancelled";
