@@ -101,6 +101,7 @@ function SetupStep({
 function PairingQr({ visible }: { visible: boolean }) {
   return (
     <div
+      data-tour-anchor="decisions-qr"
       className={cn(
         "absolute right-3 bottom-3 flex flex-col items-center gap-1 rounded-md border border-border-strong bg-surface-panel p-1.5",
         reveal(visible, "none")
@@ -315,6 +316,7 @@ export function DecisionsScene() {
   const relayed = useCue("enable", 1.55);
   const pairing = useCue("enable", 2.05);
   const paired = useCue("enable", 2.55);
+  const pairingQrShown = pairing && !paired;
   const asked = useCue("ask");
   // The agent finishes what didn't need the answer, then ends its turn at its prompt.
   const yielded = useCue("ask", 4.5);
@@ -353,7 +355,9 @@ export function DecisionsScene() {
                 : asked
                   ? ["codex-body"]
                   : settings && on
-                    ? ["decisions-setup"]
+                    ? pairingQrShown
+                      ? ["decisions-setup", "decisions-qr"]
+                      : ["decisions-setup"]
                     : [];
 
   return (
