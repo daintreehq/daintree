@@ -480,10 +480,9 @@ export class DaintreeTerminalSink implements TerminalSink {
    */
   private stage(target: TerminalTarget, blocks: readonly DecisionBlock[]): boolean {
     const at = this.now();
-    for (const map of [this.staged, this.proven]) {
-      for (const [key, entry] of map) {
-        if (at - entry.at >= STAGED_FORGET_MS) map.delete(key);
-      }
+    // Proven blocks are kept until their chunk settles, however long that takes.
+    for (const [key, entry] of this.staged) {
+      if (at - entry.at >= STAGED_FORGET_MS) this.staged.delete(key);
     }
     for (const [pane, entry] of this.drafted) {
       if (at - entry.at >= STAGED_FORGET_MS) this.drafted.delete(pane);
@@ -524,6 +523,22 @@ export class DaintreeTerminalSink implements TerminalSink {
     blocks: readonly DecisionBlock[]
   ): Promise<StagedSettlement> {
     const keys = blocks.map(blockKey);
+    const provenProof = () => {
+      const proven = keys.flatMap((key) => {
+        const entry = this.proven.get(key);
+        return entry === undefined ? [] : [entry];
+      });
+      if (proven.length === 0) return null;
+      return {
+        since: Math.min(...proven.map((entry) => entry.at)),
+        proof: `marker:${proven.map((entry) => entry.injectionId).join(",")}`,
+      };
+    };
+    // Every block already shown submitted: nothing is left to type or read.
+    const already = provenProof();
+    if (already !== null && keys.every((key) => this.proven.has(key))) {
+      return { kind: "result", result: { outcome: "delivered", proof: already.proof } };
+    }
     const staged = new Map<string, StagedBlock>();
     for (const key of keys) {
       const entry = this.staged.get(key);
@@ -545,7 +560,8 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     if (composer === "unknown") {
       const drafted = this.drafted.get(target.paneId);
-      if (now - Math.min(stagedSince, drafted?.at ?? Infinity) < STAGED_WAIT_MS) return held;
+      const since = Math.min(stagedSince, drafted?.at ?? Infinity, already?.since ?? Infinity);
+      if (now - since < STAGED_WAIT_MS) return held;
       this.drafted.delete(target.paneId);
       if (staged.size > 0) return uncertain("enter-held-unresolved");
     } else if (staged.size > 0) {
@@ -567,15 +583,11 @@ export class DaintreeTerminalSink implements TerminalSink {
     } else {
       this.drafted.delete(target.paneId);
     }
-    const proven = keys.flatMap((key) => {
-      const entry = this.proven.get(key);
-      return entry === undefined ? [] : [entry];
-    });
-    const proof =
-      proven.length === 0 ? null : `marker:${proven.map((entry) => entry.injectionId).join(",")}`;
+    const proof = provenProof()?.proof ?? null;
     const rest = blocks.filter((block) => !this.proven.has(blockKey(block)));
-    if (rest.length === 0)
-      return { kind: "result", result: { outcome: "delivered", proof: proof! } };
+    if (rest.length === 0 && proof !== null) {
+      return { kind: "result", result: { outcome: "delivered", proof } };
+    }
     return { kind: "type", blocks: rest, proof };
   }
 

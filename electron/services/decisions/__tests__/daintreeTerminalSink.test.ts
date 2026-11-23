@@ -1324,6 +1324,27 @@ describe("DaintreeTerminalSink", () => {
       }
     );
 
+    it("delivers a chunk left with only its proven answer, reading nothing", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, submittedPrompt(I1));
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      const withNew = track(
+        h.sink.inject(TARGET, notice({ injectionId: I2 }, { questionId: Q2, injectionId: I3 }), I2)
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(withNew.value).toMatchObject({ outcome: "held" });
+
+      // The other answer went elsewhere, and the screen can't be read now.
+      h.client.screens.delete(PANE);
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I3 }), I3)).resolves.toEqual({
+        outcome: "delivered",
+        proof: `marker:${I1}`,
+      });
+      expect(h.client.submitted).toHaveLength(2);
+    });
+
     it("leaves a chunk uncertain when only some of its staged answers show submitted", async () => {
       const h = setup();
       h.client.linePhase = "cancelled";
