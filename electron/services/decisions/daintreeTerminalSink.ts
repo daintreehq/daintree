@@ -156,6 +156,13 @@ export class DaintreeTerminalSink implements TerminalSink {
    * again, and that attempt reads the screen before anything is typed.
    */
   private readonly staged = new Map<string, StagedBlock>();
+  /**
+   * Runs whose composer an Enter-held line left text in, by pane (#18157):
+   * the engine lets answers follow that line, so every attempt into the run
+   * reads an empty composer off the screen before anything is typed, until
+   * one does.
+   */
+  private readonly drafted = new Map<string, { target: TerminalTarget; at: number }>();
 
   constructor(private readonly deps: DaintreeTerminalSinkDeps) {}
 
@@ -207,7 +214,7 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
-    if (this.hasStaged(keys, target)) {
+    if (this.mustReadComposer(keys, target)) {
       const settled = await this.settleStaged(target, askerKinds, blocks);
       if (settled !== null) return settled;
       // Read clear of the staged text: the attempt types afresh, unless one
@@ -356,12 +363,17 @@ export class DaintreeTerminalSink implements TerminalSink {
       : null;
   }
 
-  private hasStaged(keys: readonly string[], target: TerminalTarget): boolean {
-    let found = false;
+  /** Whether an attempt into `target` reads its composer first: staged text may be in it. */
+  private mustReadComposer(keys: readonly string[], target: TerminalTarget): boolean {
+    // Another run starts with its own composer: the text was never there.
+    const drafted = this.drafted.get(target.paneId);
+    if (drafted !== undefined && !sameTarget(drafted.target, target)) {
+      this.drafted.delete(target.paneId);
+    }
+    let found = this.drafted.has(target.paneId);
     for (const key of keys) {
       const staged = this.staged.get(key);
       if (staged === undefined) continue;
-      // Another run starts with its own composer: the text was never there.
       if (!sameTarget(staged.target, target)) this.staged.delete(key);
       else found = true;
     }
@@ -371,6 +383,7 @@ export class DaintreeTerminalSink implements TerminalSink {
   /** Remember blocks the host left in the composer, for the next attempt to look for. */
   private stage(target: TerminalTarget, blocks: readonly DecisionBlock[]): void {
     const at = this.now();
+    this.drafted.set(target.paneId, { target: { ...target }, at });
     for (const block of blocks) {
       const key = blockKey(block);
       this.staged.delete(key);
@@ -385,12 +398,13 @@ export class DaintreeTerminalSink implements TerminalSink {
 
   /**
    * What became of staged text, read off the run's screen before anything is
-   * typed again (#18157). Typed text in the composer, or a screen that can't
-   * be read, waits: nothing is typed on top of it. An empty composer with
-   * none of the staged markers on screen means the text was dropped, and
-   * null lets the attempt type it afresh. All of them there means it was
-   * submitted. A mix, or a wait past `STAGED_WAIT_MS`, can't be settled
-   * from the screen and is left uncertain.
+   * typed into it (#18157). Typed text in the composer, or a screen that
+   * can't be read, waits: nothing is typed on top of it. An empty composer
+   * with none of this chunk's staged markers on screen means its text was
+   * dropped, and null lets the attempt type it afresh. All of them there
+   * means it was submitted. A mix, or a wait past `STAGED_WAIT_MS`, can't be
+   * settled from the screen and is left uncertain; a chunk with nothing
+   * staged of its own then goes on its gate alone.
    */
   private async settleStaged(
     target: TerminalTarget,
@@ -407,11 +421,19 @@ export class DaintreeTerminalSink implements TerminalSink {
     };
     const screen = await this.readScreen(target, askerKinds);
     if (screen === null || screen === undefined || screen.composer !== "empty") {
-      const since = Math.min(...staged.map((entry) => entry.at));
+      const drafted = this.drafted.get(target.paneId);
+      const since = Math.min(
+        ...staged.map((entry) => entry.at),
+        ...(drafted !== undefined ? [drafted.at] : [])
+      );
       if (this.now() - since < STAGED_WAIT_MS) return { outcome: "held", reason: ENTER_HELD };
       unstage();
-      return { outcome: "ambiguous", reason: "enter-held-unresolved" };
+      if (drafted !== undefined && this.now() - drafted.at >= STAGED_WAIT_MS) {
+        this.drafted.delete(target.paneId);
+      }
+      return staged.length > 0 ? { outcome: "ambiguous", reason: "enter-held-unresolved" } : null;
     }
+    this.drafted.delete(target.paneId);
     const seen = staged.filter((entry) => screen.text.includes(entry.injectionId));
     unstage();
     if (seen.length === 0) return null;

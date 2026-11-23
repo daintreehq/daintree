@@ -787,6 +787,26 @@ describe("buildViewlessTerminalStatus submission correlation (#12337)", () => {
     });
   });
 
+  it("leaves out where a cancelled line stopped, which only main reads (#18157)", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: {
+        "t-1": { "tok-1": { token: "tok-1", phase: "cancelled", at: 4242, cancelledAt: "enter" } },
+      },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "cancelled",
+      at: 4242,
+    });
+  });
+
   it("forwards the output observation the pty-host derived (#12478)", async () => {
     const d = deps([record()], {
       owners,

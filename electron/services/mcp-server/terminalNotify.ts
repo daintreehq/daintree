@@ -586,6 +586,12 @@ interface DeliveryState {
   confirmed?: boolean;
   /** The pane finished a turn after the outstanding line was queued. */
   settledSinceDelivery?: boolean;
+  /**
+   * The failed line carried a Decisions answer and the host held its Enter
+   * (#18157): answers may follow it, as they follow a written line, since each
+   * one's sink reads the composer off the screen before it is typed.
+   */
+  answersMayFollow?: true;
 }
 
 interface PaneOwner {
@@ -606,10 +612,11 @@ interface PaneOwner {
   delivery: DeliveryState;
   /**
    * The line the host may still hold, until its outcome is known. `follows`:
-   * it went out behind a written line whose turn was still to come
-   * (#16282), which a refusal of this one must not let a notice overtake.
+   * it went out behind a line whose turn was still to come (#16282), or one
+   * that failed, which a refusal of this one must not let a notice overtake;
+   * `answersMayFollow` is that line's own (#18157), kept for a refusal.
    */
-  inHost?: { token: string; follows?: true };
+  inHost?: { token: string; follows?: true; answersMayFollow?: true };
   timer?: ReturnType<typeof setTimeout>;
   timerDueAt?: number;
   releaseTimer?: ReturnType<typeof setTimeout>;
@@ -1622,6 +1629,14 @@ export class TerminalNotifyService {
     }
   }
 
+  /** Whether the line `token` names carries a Decisions answer. */
+  private carriesDecision(owner: PaneOwner, token: string): boolean {
+    for (const entry of owner.wakes.values()) {
+      if (entry.token === token && entry.wake.kind === "decision") return true;
+    }
+    return false;
+  }
+
   /** End the wakes a line carried with `outcome`. */
   private finishWakes(
     owner: PaneOwner,
@@ -2345,7 +2360,7 @@ export class TerminalNotifyService {
   private schedule(owner: PaneOwner): void {
     if (owner.disposed) return;
     const status = owner.delivery.status;
-    if (status === "outstanding" && this.decisionsMayFollow(owner)) {
+    if ((status === "outstanding" || status === "failed") && this.decisionsMayFollow(owner)) {
       this.armTimer(owner, NOTIFY_COALESCE_MS);
       return;
     }
@@ -2390,7 +2405,7 @@ export class TerminalNotifyService {
     // every notice; only answers may follow it (#16282).
     const following = this.decisionsMayFollow(owner);
     const status = owner.delivery.status;
-    if ((status === "outstanding" && !following) || status === "failed") return;
+    if ((status === "outstanding" || status === "failed") && !following) return;
     if (!this.mayType(owner)) return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
@@ -2436,10 +2451,9 @@ export class TerminalNotifyService {
       owner.attempting = false;
     }
     if (owner.disposed || !this.mayType(owner)) return;
-    const followsLine = owner.delivery.status === "outstanding";
-    if ((followsLine && !this.decisionsMayFollow(owner)) || owner.delivery.status === "failed") {
-      return;
-    }
+    const followsLine =
+      owner.delivery.status === "outstanding" || owner.delivery.status === "failed";
+    if (followsLine && !this.decisionsMayFollow(owner)) return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
       this.setDelivery(owner, { status: "idle" });
@@ -2593,7 +2607,13 @@ export class TerminalNotifyService {
     const steer = wakes.find(({ wake }) => wake.kind === "steer")?.wake.steer;
     const composerSend = wakes.find(({ wake }) => wake.kind === "composer")?.wake.composer;
     const deliveredAt = this.now();
-    owner.inHost = { token, ...(owner.delivery.status === "outstanding" ? { follows: true } : {}) };
+    owner.inHost = {
+      token,
+      ...(owner.delivery.status === "outstanding" || owner.delivery.status === "failed"
+        ? { follows: true }
+        : {}),
+      ...(owner.delivery.answersMayFollow === true ? { answersMayFollow: true } : {}),
+    };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
     // A held prompt is never typed into a working pane, even one whose CLI
@@ -2665,7 +2685,11 @@ export class TerminalNotifyService {
    * is waiting: it may go now, since its own check is an empty composer.
    */
   private decisionsMayFollow(owner: PaneOwner): boolean {
-    if (owner.delivery.status !== "outstanding" || owner.delivery.confirmed !== true) return false;
+    const { status, confirmed, answersMayFollow } = owner.delivery;
+    const follows =
+      (status === "outstanding" && confirmed === true) ||
+      (status === "failed" && answersMayFollow === true);
+    if (!follows) return false;
     if (owner.inHost !== undefined) return false;
     for (const entry of owner.wakes.values()) {
       if (entry.wake.kind === "decision" && entry.token === undefined) return true;
@@ -2724,6 +2748,11 @@ export class TerminalNotifyService {
         const stoppedAt = phase === "cancelled" ? info?.submission?.cancelledAt : undefined;
         logger.warn("Notice line not written", { pane: owner.terminalId, phase, stoppedAt });
         const follows = owner.inHost?.follows === true;
+        // Answers may follow a line that carried one and was held at its Enter,
+        // or one that followed such a line and was refused (#18157).
+        const answersMayFollow =
+          (stoppedAt === "enter" && this.carriesDecision(owner, token)) ||
+          (stoppedAt === "admission" && owner.inHost?.answersMayFollow === true);
         owner.inHost = undefined;
         this.requeue(owner, token, stoppedAt);
         owner.droppedCount += dropped;
@@ -2743,6 +2772,7 @@ export class TerminalNotifyService {
         if (owner.delivery.token === token) {
           const turnEnded = owner.delivery.settledSinceDelivery === true;
           this.failDelivery(owner, phase === "failed" ? "unknown" : phase);
+          if (answersMayFollow) owner.delivery.answersMayFollow = true;
           // …unless the pane already finished a turn since the line was queued:
           // the composer was submitted, which is what a failed line waits for.
           if (turnEnded) this.settleOutstanding(owner);

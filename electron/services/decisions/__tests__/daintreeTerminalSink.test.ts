@@ -21,16 +21,23 @@ import {
   NOTIFY_SETTLE_GRACE_MS,
 } from "../../../../shared/types/terminalNotify.js";
 import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
-import type { TerminalSubmissionPhase } from "../../../../shared/types/terminalSubmission.js";
+import type {
+  TerminalSubmissionPhase,
+  TerminalSubmissionStop,
+} from "../../../../shared/types/terminalSubmission.js";
 import {
   DECISION_FOLLOWUP_START,
   parseAnswerNotice,
   parseDecisionNotice,
   renderDecisionSection,
 } from "../answerNotice.js";
-import { LANE_WAKE_RECHECK_MS } from "../../mcp-server/terminalNotify.js";
+import { ENTER_HELD, LANE_WAKE_RECHECK_MS, LINE_REFUSED } from "../../mcp-server/terminalNotify.js";
 import { DECISION_CLOSURE_PENDING_MS } from "../decisionWake.js";
-import { DaintreeTerminalSink, type DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
+import {
+  DaintreeTerminalSink,
+  STAGED_WAIT_MS,
+  type DecisionSinkPtyClient,
+} from "../daintreeTerminalSink.js";
 
 const HOST = "host-own-01";
 const PANE = "pane-1";
@@ -66,6 +73,8 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   generations = new Map<string, number>();
   submitted: Submitted[] = [];
   linePhase: TerminalSubmissionPhase = "pty_written";
+  /** Where a `cancelled` line stopped, as the host records it (#18157). */
+  lineStop: TerminalSubmissionStop | undefined = undefined;
   screens = new Map<string, string>();
   strictReadFails = false;
 
@@ -76,7 +85,12 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
     if (submissionToken === undefined) return { ...info };
     return {
       ...info,
-      submission: { token: submissionToken, phase: this.linePhase, at: Date.now() },
+      submission: {
+        token: submissionToken,
+        phase: this.linePhase,
+        at: Date.now(),
+        ...(this.lineStop !== undefined ? { cancelledAt: this.lineStop } : {}),
+      },
     };
   }
 
@@ -1107,6 +1121,158 @@ describe("DaintreeTerminalSink", () => {
       if ("fallbackDue" in overrides) {
         expect(h.client.submitted[0].text).toMatch(/may carry out the plan you stated/);
       }
+    });
+  });
+
+  describe("an answer a dialog interrupted (#18157)", () => {
+    const RULE = "─".repeat(60);
+    /** Claude Code back at its prompt with nothing in the composer. */
+    const EMPTY_PROMPT = `⏺ Done.\r\n${RULE}\r\n❯ \r\n${RULE}\r\n  ? for shortcuts\r\n`;
+    /** The same, with the person's words in the composer. */
+    const TYPED_PROMPT = `⏺ Done.\r\n${RULE}\r\n❯ [Pasted text #1 +6 lines] and also\r\n${RULE}\r\n`;
+    /** The answer submitted, its marker in the transcript, and the composer empty again. */
+    const submittedPrompt = (injectionId: string) =>
+      `> ${markerFor(injectionId)}\r\n⏺ Thanks.\r\n${RULE}\r\n❯ \r\n${RULE}\r\n`;
+
+    /** A first attempt whose line the host stopped where `stop` says. */
+    async function stopped(h: Harness, stop: TerminalSubmissionStop) {
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = stop;
+      const first = track(h.sink.inject(TARGET, notice(), I1));
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      return first;
+    }
+
+    /** The library's next attempt at the same answer, under a fresh injection id. */
+    const retry = (h: Harness) => track(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2));
+
+    it("types an answer refused at the lane again on the pane's next ready moment", async () => {
+      const h = setup();
+      const first = await stopped(h, "admission");
+      // Nothing was written, so the library may try again.
+      expect(first.value).toEqual({ outcome: "held", reason: LINE_REFUSED });
+
+      const second = retry(h);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain(markerFor(I2));
+      expect(second.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("submits an answer held at its Enter once, after the dialog closes to an empty composer", async () => {
+      const h = setup();
+      const first = await stopped(h, "enter");
+      expect(first.value).toEqual({ outcome: "held", reason: ENTER_HELD });
+
+      // The dialog took the body with it: the composer is empty and the answer
+      // is nowhere on screen. No turn ended since.
+      h.client.screens.set(PANE, EMPTY_PROMPT);
+      const second = retry(h);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.client.submitted).toHaveLength(2);
+      expect(second.value).toMatchObject({ outcome: "delivered" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.client.submitted).toHaveLength(2);
+    });
+
+    it("records an answer the person submitted from the composer as delivered, typing nothing", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, submittedPrompt(I1));
+
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "delivered",
+        proof: `marker:${I1}`,
+      });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("never types over what the person typed after the held Enter", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, TYPED_PROMPT);
+
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "held",
+        reason: ENTER_HELD,
+      });
+      // Another answer for the same run waits on the same composer.
+      await expect(
+        h.sink.inject(TARGET, notice({ questionId: Q2, injectionId: I2 }), I2)
+      ).resolves.toEqual({ outcome: "held", reason: ENTER_HELD });
+      // So does one whose screen can't be read.
+      h.client.screens.delete(PANE);
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "held",
+        reason: ENTER_HELD,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.client.submitted).toHaveLength(1);
+
+      // Left that way past the wait, its fate is the person's to settle.
+      h.client.screens.set(PANE, TYPED_PROMPT);
+      vi.advanceTimersByTime(STAGED_WAIT_MS);
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "ambiguous",
+        reason: "enter-held-unresolved",
+      });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
+    it("types again only once the person's words are gone", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, TYPED_PROMPT);
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "held",
+        reason: ENTER_HELD,
+      });
+
+      h.client.screens.set(PANE, EMPTY_PROMPT);
+      const third = retry(h);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(third.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("types afresh on another run, which never had the staged text", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      h.client.screens.set(PANE, submittedPrompt(I1));
+      const relaunched = { ...TARGET, ownershipPrincipal: "principal-2" };
+      h.identity.principal = "principal-2";
+      h.origins.set(Q1, { ...ORIGIN, ownership_principal: "principal-2" });
+
+      const second = track(h.sink.inject(relaunched, notice({ injectionId: I2 }), I2));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(second.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("records an unclassified stop delivered when the screen shows it submitted", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.screens.set(PANE, submittedPrompt(I1));
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await flushLine();
+      expect(result.value).toEqual({ outcome: "delivered", proof: `marker:${I1}` });
+    });
+
+    it("keeps an unclassified stop uncertain while the answer may sit in the composer", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.screens.set(
+        PANE,
+        `> ${markerFor(I1)}\r\n${RULE}\r\n❯ [Pasted text #1 +6 lines]\r\n${RULE}\r\n`
+      );
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await flushLine();
+      expect(result.value).toEqual({ outcome: "ambiguous", reason: "unconfirmed" });
     });
   });
 
