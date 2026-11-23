@@ -122,6 +122,11 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // the three calls it exists to replace, with a worktree left behind when the
   // last one fails (#15738).
   "agent.launchInNewWorktree": "create, setup wait and launch in one call; split, it is three",
+  // One tool for every one-shot watch: a host's link or capacity, agents
+  // waiting, and plugins' notifications for an assistant (#18154), which share
+  // one per-run budget, one list and one cancel. A second watch tool would
+  // be the second channel #13496 and #16215 rule out.
+  "host.watch": "every watch kind shares one budget, list and cancel; split, it is a second channel",
 };
 
 /**
@@ -1097,7 +1102,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 201_214): the same `worktree` the external half above pays for, on each of
   // the three tools that answer with the close result (`terminal.close`,
   // `terminal.closeOwned` and `terminal.closeAll`).
-  const MAX_COHORT_PAYLOAD_BYTES = 202_700;
+  // 202_700 → 204_300 for #18154, measured at 204_229 B (+1_644 over develop's
+  // 202_585): `host.watch` on plugins' notifications for an assistant. Most of
+  // it is the closed output schema, which names each notification an arm hands
+  // over and the one a read returns, with its text; the argument descriptions
+  // were trimmed first. In-app only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

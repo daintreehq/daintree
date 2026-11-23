@@ -575,7 +575,7 @@ export const HostWatchArgsSchema = z.object({
   operation: z
     .enum(["arm", "cancel", "list", "read"])
     .describe(
-      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended. read: a plugin notification's text."
+      "arm: one notice when first observed. cancel: end one. list: yours. read: a notification's text."
     ),
   hostId: hostIdSchema
     .optional()
@@ -611,20 +611,18 @@ export const HostWatchArgsSchema = z.object({
     .min(1)
     .max(256)
     .optional()
-    .describe("With agentsWaiting or pluginNotifications: only that project."),
+    .describe("Only that project's agents or notifications."),
   pluginNotifications: z
     .literal(true)
     .optional()
-    .describe(
-      "Arm on plugins' notifications for an assistant: one goes to one watcher. Arm returns those no assistant took."
-    ),
+    .describe("Arm on plugin notifications for assistants. Arm returns untaken ones."),
   pluginId: z
     .string()
     .min(1)
     .max(HOST_WATCH_PLUGIN_ID_MAX)
     .optional()
-    .describe("With pluginNotifications: only that plugin."),
-  notificationId: z.string().uuid().optional().describe("For read: one given to you."),
+    .describe("Only that plugin."),
+  notificationId: z.string().max(64).optional().describe("For read."),
   expiresInSeconds: z
     .number()
     .int()
