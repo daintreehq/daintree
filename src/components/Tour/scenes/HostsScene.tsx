@@ -13,6 +13,7 @@ import {
   useMockCursor,
 } from "@daintreehq/tour/kit";
 import {
+  type AppRegion,
   GRID_RECT,
   MockApp,
   MockGrid,
@@ -28,6 +29,8 @@ const HOST_MENU = { x: 330, y: 26, width: 150 } as const;
 const PLACEMENT_MENU = { x: FORM.x + 14, y: FORM.y + 104, width: 200 } as const;
 const SSH_TARGET = "you@build-box";
 const NEW_BRANCH = "migrate-payments";
+// What a machine made for one worktree is called once it is up.
+const NEW_MACHINE = "payments-box";
 
 export const CURSOR: readonly CursorStep[] = [
   { cue: "settings", at: { anchor: "settings" } },
@@ -37,20 +40,35 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "add", at: { anchor: "add-host" } },
   { cue: "add", offset: 0.4, at: { anchor: "add-host" }, click: true },
   { cue: "ssh", offset: -0.4, at: { anchor: "add-host-target", dx: 30, dy: -3 } },
-  { cue: "cloud", at: { anchor: "add-host-cloud" } },
-  { cue: "cloud", offset: 0.4, at: { anchor: "add-host-cloud" }, click: true },
+  // The real dialog does nothing with an address until Check host is pressed.
+  { cue: "install", offset: -0.8, at: { anchor: "add-host-check" } },
+  { cue: "install", offset: -0.25, at: { anchor: "add-host-check" }, click: true },
+  // The cloud is the other way in: Add host again, then its own entry.
+  { cue: "cloud", offset: -0.9, at: { anchor: "add-host" } },
+  { cue: "cloud", offset: -0.3, at: { anchor: "add-host" }, click: true },
+  { cue: "cloud", offset: 0.2, at: { anchor: "add-host-cloud" } },
+  { cue: "cloud", offset: 0.7, at: { anchor: "add-host-cloud" }, click: true },
+  { cue: "provision", offset: -0.7, at: { anchor: "cloud-create" } },
+  { cue: "provision", offset: -0.2, at: { anchor: "cloud-create" }, click: true },
   { cue: "chip", at: { anchor: "host-chip" } },
   { cue: "pick", at: { anchor: "host-chip" }, click: true },
   { cue: "pick", offset: 0.6, at: { anchor: "host-menu-1" } },
   { cue: "pick", offset: 1.0, at: { anchor: "host-menu-1" }, click: true },
-  { cue: "placement", offset: -2.2, at: { anchor: "sidebar-plus" } },
-  { cue: "placement", offset: -1.8, at: { anchor: "sidebar-plus" }, click: true },
-  { cue: "placement", at: { anchor: "placement-host" } },
-  { cue: "placement", offset: 0.3, at: { anchor: "placement-host" }, click: true },
-  { cue: "fresh", at: { anchor: "placement-option-3" } },
-  { cue: "fresh", offset: 0.4, at: { anchor: "placement-option-3" }, click: true },
-  { cue: "fresh", offset: 1.2, at: { anchor: "placement-create" } },
-  { cue: "fresh", offset: 1.6, at: { anchor: "placement-create" }, click: true },
+  // A new machine is only offered from this computer's window, so go back first.
+  { cue: "placement", offset: -2.6, at: { anchor: "host-chip" } },
+  { cue: "placement", offset: -2.1, at: { anchor: "host-chip" }, click: true },
+  { cue: "placement", offset: -1.75, at: { anchor: "host-menu-0" } },
+  { cue: "placement", offset: -1.3, at: { anchor: "host-menu-0" }, click: true },
+  { cue: "placement", offset: -1.0, at: { anchor: "sidebar-plus" } },
+  { cue: "placement", offset: -0.55, at: { anchor: "sidebar-plus" }, click: true },
+  { cue: "placement", offset: 0.05, at: { anchor: "placement-host" } },
+  { cue: "placement", offset: 0.5, at: { anchor: "placement-host" }, click: true },
+  { cue: "fresh", offset: -0.3, at: { anchor: "placement-option-3" } },
+  { cue: "fresh", offset: 0.2, at: { anchor: "placement-option-3" }, click: true },
+  { cue: "fresh", offset: 0.6, at: { anchor: "placement-create" } },
+  { cue: "fresh", offset: 1.1, at: { anchor: "placement-create" }, click: true },
+  // Rest on the new worktree once the form is gone, never on a control that left.
+  { cue: "running", at: { anchor: `worktree-${NEW_BRANCH}` } },
 ];
 
 /** One step of the add-host run, as the real dialog's checklist. */
@@ -72,15 +90,142 @@ function InstallStep({ label, state }: { label: string; state: "todo" | "running
   );
 }
 
+function FooterButton({
+  anchor,
+  primary,
+  children,
+}: {
+  anchor: string;
+  primary?: boolean;
+  children: string;
+}) {
+  return (
+    <span
+      data-tour-anchor={anchor}
+      className={cn(
+        "rounded-md px-2 py-0.5 text-3xs font-medium",
+        primary
+          ? "bg-text-primary text-text-inverse"
+          : "border border-border-subtle text-text-secondary"
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** Add host over SSH, as the real dialog: an address, Check host, then its setup steps. */
+function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
+  // Opened a second time, for the cloud, it starts empty.
+  const checking = useCue("install") && !again;
+  const installing = useCue("install", 0.35) && !again;
+  const hostMode = useCue("install", 0.7) && !again;
+  const connected = useCue("install", 1.05) && !again;
+  const step = (at: boolean, done: boolean) => (done ? "done" : at ? "running" : "todo");
+  return (
+    <div
+      className={cn(
+        "absolute inset-2 flex flex-col gap-2 rounded-md border border-border-strong bg-surface-dialog p-2.5",
+        reveal(open, "none")
+      )}
+    >
+      <span className="text-2xs font-semibold text-text-primary">Add host</span>
+      <span className="text-3xs text-text-secondary">
+        A Mac or Linux machine you reach over SSH
+      </span>
+      <div
+        data-tour-anchor="add-host-target"
+        className="flex h-5 items-center gap-1.5 rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary"
+      >
+        <Server className="size-2.5 text-text-secondary" aria-hidden="true" />
+        {again ? (
+          <span className="text-text-secondary">user@host</span>
+        ) : (
+          <MockTyping
+            cue="ssh"
+            text={SSH_TARGET}
+            delay={0.2}
+            charsPerSecond={16}
+            finishBy={{ cue: "install", offset: -0.4 }}
+          />
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 pl-0.5">
+        <InstallStep label="Find" state={step(checking, checking)} />
+        <InstallStep label="Check" state={step(checking, installing)} />
+        <InstallStep label="Install" state={step(installing, hostMode)} />
+        <InstallStep label="Host mode" state={step(hostMode, connected)} />
+        <InstallStep label="Connect" state={step(connected, connected)} />
+      </div>
+      <span className="flex-1" />
+      <div className="flex items-center gap-1.5">
+        <FooterButton anchor="add-host-cloud">Create a cloud machine instead</FooterButton>
+        <span className="flex-1" />
+        <FooterButton anchor="add-host-check" primary>
+          Check host
+        </FooterButton>
+      </div>
+    </div>
+  );
+}
+
+/** The cloud machine dialog: an account from one of the providers, then Create and connect. */
+function CloudMachineDialog({ open }: { open: boolean }) {
+  return (
+    <div
+      className={cn(
+        "absolute inset-2 flex flex-col gap-2 rounded-md border border-border-strong bg-surface-dialog p-2.5",
+        reveal(open, "none")
+      )}
+    >
+      <span className="text-2xs font-semibold text-text-primary">New cloud machine</span>
+      <div className="flex gap-1.5">
+        {["DigitalOcean", "AWS", "Google Cloud"].map((provider, i) => (
+          <span
+            key={provider}
+            className={cn(
+              "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-3xs",
+              i === 0
+                ? "border-border-interactive bg-overlay-selected text-text-primary"
+                : "border-border-subtle text-text-secondary"
+            )}
+          >
+            <Cloud className="size-2.5" aria-hidden="true" />
+            {provider}
+          </span>
+        ))}
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-3xs font-medium text-text-secondary">Account</span>
+        <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+          Personal
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-3xs font-medium text-text-secondary">Name</span>
+        <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+          gpu-runner
+        </span>
+      </div>
+      <span className="flex-1" />
+      <div className="flex justify-end">
+        <FooterButton anchor="cloud-create" primary>
+          Create and connect
+        </FooterButton>
+      </div>
+    </div>
+  );
+}
+
 function SettingsDialog({ open }: { open: boolean }) {
   const hostsPage = useCue("hosts", 0.3);
   const adding = useCue("add", 0.6);
-  const checked = useCue("install");
-  const installed = useCue("install", 1.4);
-  const cloud = useCue("cloud", 0.6);
+  const sshAdded = useCue("install", 1.25);
+  const addingAgain = useCue("cloud", -0.2);
+  const cloudForm = useCue("cloud", 0.8);
   const provisioning = useCue("provision");
   const provisioned = useCue("provision", 1.6);
-  const step = (at: boolean, done: boolean) => (done ? "done" : at ? "running" : "todo");
+  const sshOpen = (adding && !sshAdded) || (addingAgain && !cloudForm);
 
   return (
     <div
@@ -130,54 +275,10 @@ function SettingsDialog({ open }: { open: boolean }) {
               Add host
             </span>
           </div>
-          <div className={cn("flex flex-col gap-1.5", reveal(adding))}>
-            <span className="text-3xs font-medium text-text-secondary">
-              A Mac or Linux machine over SSH
-            </span>
-            <div
-              data-tour-anchor="add-host-target"
-              className="flex h-5 items-center gap-1.5 rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary"
-            >
-              <Server className="size-2.5 text-text-secondary" aria-hidden="true" />
-              <MockTyping
-                cue="ssh"
-                text={SSH_TARGET}
-                delay={0.2}
-                charsPerSecond={16}
-                finishBy={{ cue: "install" }}
-              />
-            </div>
-            <div className="flex items-center gap-2.5 pl-0.5">
-              <InstallStep label="Find" state={step(checked, checked)} />
-              <InstallStep label="Check" state={step(checked, installed)} />
-              <InstallStep label="Install" state={step(checked, installed)} />
-              <InstallStep label="Connect" state={step(installed, installed)} />
-            </div>
-          </div>
-          <div className={cn("mt-1 flex flex-col gap-1.5", reveal(adding))}>
-            <span className="text-3xs font-medium text-text-secondary">Or a cloud account</span>
-            <div className="flex gap-1.5">
-              {["DigitalOcean", "AWS", "Google Cloud"].map((provider, i) => (
-                <span
-                  key={provider}
-                  data-tour-anchor={i === 0 ? "add-host-cloud" : undefined}
-                  className={cn(
-                    "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-3xs transition-colors duration-150 ease-out",
-                    i === 0 && cloud
-                      ? "border-border-interactive bg-overlay-selected text-text-primary"
-                      : "border-border-subtle text-text-secondary"
-                  )}
-                >
-                  <Cloud className="size-2.5" aria-hidden="true" />
-                  {provider}
-                </span>
-              ))}
-            </div>
-          </div>
           <div className="mt-1 flex flex-col gap-1">
             {(
               [
-                ["build-box", "SSH · Linux", installed],
+                ["build-box", "SSH · Linux", sshAdded],
                 ["gpu-runner", "DigitalOcean · Personal", provisioning],
               ] as const
             ).map(([name, detail, shown], i) => (
@@ -200,6 +301,8 @@ function SettingsDialog({ open }: { open: boolean }) {
             ))}
           </div>
         </div>
+        <AddHostDialog open={sshOpen} again={addingAgain} />
+        <CloudMachineDialog open={cloudForm && !provisioning} />
       </div>
     </div>
   );
@@ -214,7 +317,11 @@ function HostChip({ host, open }: { host: string; open: boolean }) {
         open ? "border-border-interactive" : "border-border-subtle"
       )}
     >
-      <Server className="size-2.5 text-text-secondary" aria-hidden="true" />
+      {host === "This Mac" ? (
+        <Laptop className="size-2.5 text-text-secondary" aria-hidden="true" />
+      ) : (
+        <Server className="size-2.5 text-text-secondary" aria-hidden="true" />
+      )}
       {host}
       <ChevronDown className="size-2.5 text-text-secondary" aria-hidden="true" />
     </span>
@@ -257,9 +364,9 @@ function CreateForm({
           {fresh ? (
             <Cloud className="size-2.5 text-text-secondary" aria-hidden="true" />
           ) : (
-            <Server className="size-2.5 text-text-secondary" aria-hidden="true" />
+            <Laptop className="size-2.5 text-text-secondary" aria-hidden="true" />
           )}
-          <span className="flex-1">{fresh ? "New machine · Personal" : "build-box"}</span>
+          <span className="flex-1">{fresh ? "New machine · Personal" : "This Mac"}</span>
           <ChevronDown className="size-2.5 text-text-secondary" aria-hidden="true" />
         </div>
       </div>
@@ -268,7 +375,7 @@ function CreateForm({
           data-tour-anchor="placement-create"
           className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse"
         >
-          Create worktree
+          {fresh ? "Create on new machine" : "Create worktree"}
         </span>
       </div>
     </div>
@@ -279,68 +386,84 @@ export function HostsScene() {
   const settingsOpen = useCue("settings", 0.6);
   const hostsCue = useCue("hosts");
   const sshCue = useCue("ssh");
-  const cloudCue = useCue("cloud");
+  const installCue = useCue("install");
+  const sshAdded = useCue("install", 1.25);
+  const addingAgain = useCue("cloud", -0.2);
+  const cloudForm = useCue("cloud", 0.8);
+  const provisionCue = useCue("provision");
   const chip = useCue("chip");
   const settingsClosed = useCue("chip", -0.4);
-  const hostMenu = useCue("pick", 0.2);
+  const firstMenu = useCue("pick", 0.2);
   const picked = useCue("pick", 1.1);
   const switched = useCue("switch");
-  const formOpen = useCue("placement", -1.6);
-  const choosing = useCue("placement", 0.4);
+  const backMenu = useCue("placement", -2.0);
+  const backHome = useCue("placement", -1.2);
+  const formOpen = useCue("placement", -0.4);
+  const choosing = useCue("placement", 0.6);
   const freshCue = useCue("fresh");
-  const fresh = useCue("fresh", 0.5);
-  const created = useCue("fresh", 1.7);
+  const fresh = useCue("fresh", 0.3);
+  const created = useCue("fresh", 1.2);
   const running = useCue("running");
+  const away = useCue("running", 0.6);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
-  const provisionCue = useCue("provision");
-  const away = useCue("running", 0.6);
-  const onRemote = switched;
-  const branch = created ? NEW_BRANCH : "main";
   const settings = settingsOpen && !settingsClosed;
   const placing = formOpen && !created;
+  // The window is on build-box from the pick until the person switches back,
+  // then on the new machine once the worktree made for it is up.
+  const onRemote = picked && !backHome;
+  const host = created ? NEW_MACHINE : onRemote ? "build-box" : "This Mac";
+  const hostMenuOpen = (firstMenu && !picked) || (backMenu && !backHome);
+  const branch = created ? NEW_BRANCH : "main";
 
-  const focus = settings || placing ? [] : chip && !switched ? ["toolbar"] : undefined;
+  const focus: readonly AppRegion[] | undefined =
+    settings || placing ? [] : chip && !switched ? ["toolbar"] : undefined;
 
   const spotlight = running
     ? [`worktree-${NEW_BRANCH}`]
-    : freshCue && !created
-      ? ["placement-option-3"]
-      : switched && !formOpen
-        ? ["host-chip", "worktree-list"]
-        : chip && !hostMenu
-          ? ["host-chip"]
-          : provisionCue
-            ? ["host-row-cloud"]
-            : cloudCue
-              ? ["add-host-cloud"]
-              : sshCue
-                ? ["add-host-target"]
-                : hostsCue && settings
-                  ? ["settings-nav-hosts"]
-                  : [];
+    : placing && freshCue
+      ? ["placement-host", "placement-create"]
+      : placing && choosing
+        ? ["placement-host"]
+        : switched && !backMenu
+          ? ["host-chip", "worktree-list"]
+          : chip && !firstMenu
+            ? ["host-chip"]
+            : settings && provisionCue
+              ? ["host-row-cloud"]
+              : settings && cloudForm
+                ? ["cloud-create"]
+                : settings && addingAgain
+                  ? ["add-host-cloud"]
+                  : settings && sshAdded
+                    ? ["host-row-ssh"]
+                    : settings && (sshCue || installCue)
+                      ? ["add-host-target"]
+                      : settings && hostsCue
+                        ? ["settings-nav-hosts"]
+                        : [];
 
   return (
     <MockApp
       branch={branch}
       focus={focus}
-      hostChip={
-        chip ? (
-          <HostChip host={onRemote ? "build-box" : "This Mac"} open={hostMenu && !picked} />
-        ) : undefined
-      }
+      hostChip={chip ? <HostChip host={host} open={hostMenuOpen} /> : undefined}
       worktrees={
-        onRemote ? (
+        created ? (
           <>
-            <MockWorktreeCard name="shop-app" branch="main" selected={!created} />
-            <MockWorktreeCard name="load-test" branch="load-test" states={["working"]} />
+            <MockWorktreeCard name="shop-app" branch="main" />
             <MockWorktreeCard
               name={NEW_BRANCH}
               branch={NEW_BRANCH}
-              selected={created}
-              states={running ? ["working"] : []}
+              selected
+              states={["working"]}
               className={reveal(created, "left")}
             />
+          </>
+        ) : onRemote ? (
+          <>
+            <MockWorktreeCard name="shop-app" branch="main" selected />
+            <MockWorktreeCard name="load-test" branch="load-test" states={["working"]} />
           </>
         ) : (
           <>
@@ -377,28 +500,28 @@ export function HostsScene() {
     >
       <MockMenu
         anchor="host-menu"
-        visible={hostMenu && !picked}
-        active={1}
+        visible={hostMenuOpen}
+        active={backMenu ? 0 : 1}
         x={HOST_MENU.x}
         y={HOST_MENU.y}
         width={HOST_MENU.width}
         items={[
-          { icon: <Check />, label: "This Mac" },
-          { icon: <Server />, label: "build-box" },
+          { icon: backMenu ? <Laptop /> : <Check />, label: "This Mac" },
+          { icon: backMenu ? <Check /> : <Server />, label: "build-box" },
           { icon: <Server />, label: "gpu-runner", muted: true },
           { icon: <Plus />, label: "Add host…", muted: true, separator: true },
         ]}
       />
       <MockMenu
         anchor="placement-option"
-        visible={choosing && !created}
-        active={fresh || freshCue ? 3 : 1}
+        visible={placing && choosing && !fresh}
+        active={freshCue ? 3 : 0}
         x={PLACEMENT_MENU.x}
         y={PLACEMENT_MENU.y}
         width={PLACEMENT_MENU.width}
         items={[
-          { icon: <Laptop />, label: "This Mac", muted: true },
-          { icon: <Server />, label: "build-box" },
+          { icon: <Laptop />, label: "This Mac" },
+          { icon: <Server />, label: "build-box", muted: true },
           { icon: <Server />, label: "gpu-runner", muted: true },
           { icon: <Cloud />, label: "New machine · Personal", separator: true },
         ]}

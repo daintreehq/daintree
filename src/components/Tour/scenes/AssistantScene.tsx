@@ -30,7 +30,7 @@ const ASKED = { cue: "act" } as const;
 const START_BUTTON = { anchor: "assistant-start" };
 const GLOBAL_OPTION = { anchor: "assistant-scope-global" };
 
-// What the global assistant looks after: every project, and only the machines it's been allowed.
+// What the global session reports: every project, and only the machines it's been allowed.
 const PROJECTS: ReadonlyArray<{ name: string; state: MockStateId }> = [
   { name: "shop-app", state: "waiting" },
   { name: "api-server", state: "working" },
@@ -76,12 +76,19 @@ function ScopeSwitch({ global }: { global: boolean }) {
   );
 }
 
-/** The global assistant's reach: every project, then the machines it may use. */
-function GlobalScope({ projects, machines }: { projects: boolean; machines: boolean }) {
+/**
+ * Global is its own session, not the project one widened: switching shows the
+ * global assistant's own transcript, already running here. What it looks after
+ * comes through what it says — every project, then the machines it may use.
+ */
+function GlobalSession({ projects, machines }: { projects: boolean; machines: boolean }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
+    <div
+      data-tour-anchor="assistant-global-session"
+      className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden p-2 font-mono"
+    >
+      <div className="text-3xs text-text-primary">› What needs me today?</div>
       <div className={cn("flex flex-col gap-0.5", reveal(projects))}>
-        <span className="text-3xs font-semibold text-text-secondary">Every project</span>
         {PROJECTS.map((project) => (
           <span key={project.name} className="flex items-center gap-1.5 text-3xs text-text-primary">
             <span className="flex size-2.5 items-center justify-center [&_svg]:size-2.5">
@@ -95,7 +102,7 @@ function GlobalScope({ projects, machines }: { projects: boolean; machines: bool
         data-tour-anchor="assistant-machines"
         className={cn("flex flex-col gap-0.5", reveal(machines))}
       >
-        <span className="text-3xs font-semibold text-text-secondary">Allowed machines</span>
+        <span className="text-3xs text-text-secondary">Machines I can use:</span>
         {MACHINES.map(({ name, Icon }) => (
           <span key={name} className="flex items-center gap-1.5 text-3xs text-text-primary">
             <Icon className="size-2.5 text-text-secondary" aria-hidden="true" />
@@ -162,7 +169,7 @@ function AssistantPanel({
       {started ? (
         <>
           {global ? (
-            <GlobalScope projects={projects} machines={machines} />
+            <GlobalSession projects={projects} machines={machines} />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2 font-mono">
               <div className={cn("text-3xs text-text-primary", reveal(act, "none"))}>

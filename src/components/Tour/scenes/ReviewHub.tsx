@@ -11,17 +11,32 @@ export interface ReviewFile {
 
 type DiffKind = "context" | "insert" | "delete";
 
-/** The diff rows the surface reveals one by one; a scene steps through them with `useTimelineIndex`. */
-export const REVIEW_DIFF: ReadonlyArray<{ kind: DiffKind; width: number }> = [
-  { kind: "context", width: 62 },
-  { kind: "context", width: 48 },
-  { kind: "delete", width: 70 },
-  { kind: "insert", width: 76 },
-  { kind: "insert", width: 58 },
-  { kind: "insert", width: 84 },
-  { kind: "context", width: 40 },
-  { kind: "insert", width: 66 },
-  { kind: "context", width: 52 },
+type DiffRow = { kind: DiffKind; width: number };
+
+/** One diff per file, so stepping to the next file visibly changes what's shown. */
+const REVIEW_DIFFS: ReadonlyArray<readonly DiffRow[]> = [
+  [
+    { kind: "context", width: 62 },
+    { kind: "context", width: 48 },
+    { kind: "delete", width: 70 },
+    { kind: "insert", width: 76 },
+    { kind: "insert", width: 58 },
+    { kind: "insert", width: 84 },
+    { kind: "context", width: 40 },
+    { kind: "insert", width: 66 },
+    { kind: "context", width: 52 },
+  ],
+  [
+    { kind: "context", width: 44 },
+    { kind: "delete", width: 58 },
+    { kind: "insert", width: 64 },
+    { kind: "insert", width: 72 },
+    { kind: "context", width: 56 },
+    { kind: "context", width: 38 },
+    { kind: "insert", width: 80 },
+    { kind: "insert", width: 50 },
+    { kind: "context", width: 46 },
+  ],
 ];
 
 const DIFF_ROW: Record<DiffKind, string> = {
@@ -31,26 +46,32 @@ const DIFF_ROW: Record<DiffKind, string> = {
 };
 
 /**
- * Review Hub over the grid: the worktree's changed files, the diff of the
- * first, and the commit bar. Cue reads stay in the scene, which hands in where
- * the timeline is and the typed message.
+ * Review Hub over the grid: the worktree's changed files, the diff of the one
+ * selected, the commit bar, and the push confirm that Commit & push opens. Cue
+ * reads stay in the scene, which hands in where the timeline is and the typed
+ * message.
  */
 export function ReviewHub({
   visible,
   branch,
   files,
-  diffStep,
+  selected,
   message,
+  confirming,
   pushed,
 }: {
   visible: boolean;
   branch: string;
   files: readonly ReviewFile[];
-  diffStep: number;
+  /** The file whose diff is open, or -1 before one is picked. */
+  selected: number;
   /** The commit message as typed so far; null shows the placeholder. */
   message: ReactNode;
+  /** Commit & push was pressed: the push confirm names where the branch goes. */
+  confirming: boolean;
   pushed: boolean;
 }) {
+  const diff = selected >= 0 ? REVIEW_DIFFS[selected % REVIEW_DIFFS.length]! : [];
   return (
     <div
       className={cn(
@@ -88,9 +109,10 @@ export function ReviewHub({
           {files.map((file, i) => (
             <div
               key={file.name}
+              data-tour-anchor={`review-file-${i}`}
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors duration-150 ease-out",
-                i === 0 && diffStep >= 0 ? "bg-overlay-selected" : "bg-transparent"
+                i === selected ? "bg-overlay-selected" : "bg-transparent"
               )}
             >
               <FileCode className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
@@ -106,13 +128,24 @@ export function ReviewHub({
           ))}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1 p-2.5">
-          {REVIEW_DIFF.map((row, i) => (
+          {selected >= 0 && (
+            <span className="flex h-3 items-center gap-1 text-3xs text-text-secondary">
+              <FileCode className="size-2.5" aria-hidden="true" />
+              {files[selected]?.name}
+            </span>
+          )}
+          {selected < 0 && (
+            <span className="m-auto text-3xs text-text-secondary">
+              Select a file to see its diff
+            </span>
+          )}
+          {/* Keyed by file, so each file's diff arrives as its own. */}
+          {diff.map((row, i) => (
             <div
-              key={i}
+              key={`${selected}-${i}`}
               className={cn(
-                "flex h-3.5 items-center rounded-sm px-1.5 transition-opacity duration-150 ease-out",
-                DIFF_ROW[row.kind],
-                i <= diffStep ? "opacity-100" : "opacity-0"
+                "flex h-3.5 items-center rounded-sm px-1.5 motion-safe:animate-in motion-safe:fade-in",
+                DIFF_ROW[row.kind]
               )}
             >
               <span className="w-3 shrink-0 text-3xs text-text-secondary">
@@ -141,6 +174,32 @@ export function ReviewHub({
         >
           Commit &amp; push
         </span>
+      </div>
+      {/* The push confirm, on by default per worktree: the destination is the point. */}
+      <div
+        className={cn(
+          "absolute inset-0 flex items-center justify-center bg-scrim-soft",
+          reveal(confirming && !pushed, "none")
+        )}
+      >
+        <div className="flex w-[260px] flex-col gap-2 rounded-lg border border-border-strong bg-surface-dialog p-3 shadow-[var(--theme-shadow-ambient)]">
+          <span className="text-xs font-semibold text-text-primary">Push commits?</span>
+          <span className="text-3xs text-text-secondary">
+            1 commit, {files.length} files, to{" "}
+            <span className="font-mono text-text-primary">origin/{branch}</span>
+          </span>
+          <div className="flex justify-end gap-1.5">
+            <span className="flex h-6 items-center rounded-md px-2.5 text-3xs text-text-secondary">
+              Cancel
+            </span>
+            <span
+              data-tour-anchor="review-push-confirm"
+              className="flex h-6 max-w-[160px] items-center rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse"
+            >
+              <span className="truncate">Push to origin/{branch}</span>
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

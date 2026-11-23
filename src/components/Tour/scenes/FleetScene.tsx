@@ -32,8 +32,6 @@ const titleBar = (agent: MockAgentId) => ({ anchor: `${agent}-titlebar`, dx: -12
 const FIRST_INPUT = { anchor: "claude-input", dx: -16, dy: 6 };
 const HEADER = { anchor: "sidebar-header", dx: 10 };
 const BOLT = { anchor: "sidebar-arm" };
-// Antigravity was shift-clicked back out, so the list is where it rejoins.
-const PICK_ROW = { anchor: "fleet-picker-antigravity", dx: -40 };
 const ARM = { anchor: "fleet-picker-arm" };
 const EXIT = { anchor: "fleet-exit" };
 const PICKER = { x: 170, y: 44, width: 300 } as const;
@@ -52,12 +50,12 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "out", offset: 0.1, at: titleBar("antigravity"), click: true, modifier: SHIFT },
   // Hovering the header is what shows the bolt.
   { cue: "hover", at: HEADER },
-  { cue: "bolt", offset: -0.2, at: BOLT },
-  { cue: "bolt", offset: 0.2, at: BOLT, click: true },
-  { cue: "list", at: PICK_ROW },
-  { cue: "list", offset: 0.15, at: PICK_ROW, click: true },
-  { cue: "list", offset: 0.4, at: ARM },
-  { cue: "list", offset: 0.55, at: ARM, click: true },
+  // Every glide is 450 ms, so each click comes at least that long after its approach.
+  { cue: "bolt", offset: -0.35, at: BOLT },
+  { cue: "bolt", offset: 0.15, at: BOLT, click: true },
+  // The list opens with every panel in the worktree ticked, Antigravity included.
+  { cue: "list", offset: -0.6, at: ARM },
+  { cue: "list", at: ARM, click: true },
   { cue: "type", at: FIRST_INPUT },
   { cue: "type", offset: 0.5, at: FIRST_INPUT, click: true },
   { cue: "exit", offset: -0.3, at: EXIT },
@@ -84,9 +82,11 @@ function FleetRibbon({ count, exitHint }: { count: number; exitHint: string }) {
   );
 }
 
-/** The bolt's picker: every panel in the grid, the ones already in the fleet ticked. */
-function FleetPicker({ open, selected }: { open: boolean; selected: readonly boolean[] }) {
-  const adding = selected.filter(Boolean).length - 2;
+/**
+ * The bolt's picker. It opens with every panel in the active worktree ticked,
+ * as the real one does, and arming replaces the fleet with that selection.
+ */
+function FleetPicker({ open }: { open: boolean }) {
   return (
     <div
       data-tour-anchor="fleet-picker"
@@ -99,22 +99,14 @@ function FleetPicker({ open, selected }: { open: boolean; selected: readonly boo
       <MockSearchField>
         <span className="text-text-secondary">Search terminals, worktrees, branches…</span>
       </MockSearchField>
-      {PANES.map((agent, i) => (
+      {PANES.map((agent) => (
         <div
           key={agent}
           data-tour-anchor={`fleet-picker-${agent}`}
-          className={cn(
-            "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-colors duration-150 ease-out",
-            selected[i] ? "bg-overlay-selected" : "bg-transparent"
-          )}
+          className="flex h-[18px] items-center gap-1.5 rounded-md bg-overlay-selected px-1.5"
         >
-          <span
-            className={cn(
-              "flex size-2.5 shrink-0 items-center justify-center rounded-sm border",
-              selected[i] ? "border-text-primary bg-text-primary" : "border-border-strong"
-            )}
-          >
-            {selected[i] && <Check className="size-2 text-text-inverse" aria-hidden="true" />}
+          <span className="flex size-2.5 shrink-0 items-center justify-center rounded-sm border border-text-primary bg-text-primary">
+            <Check className="size-2 text-text-inverse" aria-hidden="true" />
           </span>
           <MockAgentIcon agent={agent} className="size-3" />
           <span className="min-w-0 flex-1 truncate text-3xs text-text-primary">{NAMES[agent]}</span>
@@ -126,7 +118,7 @@ function FleetPicker({ open, selected }: { open: boolean; selected: readonly boo
           data-tour-anchor="fleet-picker-arm"
           className="rounded-md bg-text-primary px-2 py-0.5 text-3xs font-medium text-text-inverse"
         >
-          {adding > 0 ? `Arm ${adding} selected` : "Arm selected"}
+          Arm {PANES.length} selected
         </span>
       </div>
     </div>
@@ -141,9 +133,8 @@ export function FleetScene() {
   const hover = useCue("hover");
   const bolt = useCue("bolt");
   const pickerOpen = useCue("bolt", 0.35);
-  const listCue = useCue("list");
-  const ticked = useCue("list", 0.2);
-  const rejoined = useCue("list", 0.6);
+  // Arm closes the list once its click has read.
+  const rejoined = useCue("list", 0.25);
   const typeCue = useCue("type");
   const typing = useCue("type", 0.5);
   const sent = useCue("send");
@@ -229,13 +220,13 @@ export function FleetScene() {
         </div>
       }
     >
-      <FleetPicker open={picking} selected={[true, true, ticked]} />
+      <FleetPicker open={picking} />
       {/* The towers as they're named, then the header, its bolt, the list, and Exit. */}
       <MockSpotlight
         targets={
           exitCue
             ? ["fleet-exit"]
-            : listCue
+            : pickerOpen
               ? ["fleet-picker"]
               : bolt
                 ? ["sidebar-arm"]

@@ -1,4 +1,4 @@
-import { Check, Cloud, Lock, MessageCircleQuestionMark, Smartphone } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Cloud, Lock, Smartphone } from "lucide-react";
 import {
   cn,
   type CursorStep,
@@ -11,6 +11,7 @@ import {
   useMockCursor,
 } from "@daintreehq/tour/kit";
 import {
+  type AppRegion,
   MockApp,
   MockGrid,
   MockPane,
@@ -24,6 +25,19 @@ const INBOX = { x: 150, y: 46, width: 340, height: 250 } as const;
 const QUESTION = "Keep /login as a redirect, or remove it?";
 const ANSWER = "Keep the redirect";
 
+/** The Decisions mark: a rounded diamond with the question mark cut out of it. */
+function DecisionsMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="-40.4 -40.4 592.8 592.8" className={className} aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M222.059 23.059A48 48 0 0 1 289.941 23.059L488.941 222.059A48 48 0 0 1 488.941 289.941L289.941 488.941A48 48 0 0 1 222.059 488.941L23.059 289.941A48 48 0 0 1 23.059 222.059ZM282.2 304.4C282.2 300.8 282.3 298.7 283.3 293.7C287.4 274.5 308.3 268.5 323.5 255.8C340.4 241.7 350.8 224.2 350.2 198.6C350 190.4 347.6 178.2 342.8 168.7C319.9 123.5 259.2 112.7 214.3 130C181.2 142.8 158.9 172.4 160.7 208.3L220 208.3C220 204.5 220.3 201.6 221.4 198.4C224.1 190.6 228.3 184.1 235.7 179.5C253 168.8 282.2 174.2 284.5 197.8C286.9 221.7 264.2 230.3 249.9 239.8C229.9 253.2 219.7 270.4 219.4 295.5C219.4 298.5 219.4 301.5 219.4 304.4H282.2ZM290.4 361.7C289.9 340.3 271.9 323.3 250.7 323.6C228.3 324 211.3 342.4 211.9 363.7C212.5 384.8 230.7 402.3 252.9 401.4C273.9 400.6 290.9 382.4 290.4 361.7Z"
+      />
+    </svg>
+  );
+}
+
 export const CURSOR: readonly CursorStep[] = [
   { cue: "enable", at: { anchor: "decisions-toggle" } },
   { cue: "enable", offset: 0.4, at: { anchor: "decisions-toggle" }, click: true },
@@ -31,9 +45,42 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "answer", offset: 0.5, at: { anchor: "phone-answer" }, click: true },
   { cue: "inbox", at: { anchor: "decisions-inbox" } },
   { cue: "inbox", offset: 0.4, at: { anchor: "decisions-inbox" }, click: true },
+  // History opens shut; the answered question is in it.
+  { cue: "inbox", offset: 0.9, at: { anchor: "inbox-history" }, click: true },
 ];
 
-function SettingsDialog({ open, on }: { open: boolean; on: boolean }) {
+/** A setup step that turns from to-do to done. */
+function SetupStep({
+  icon: Icon,
+  label,
+  done,
+  doneLabel,
+}: {
+  icon: typeof Cloud;
+  label: string;
+  done: boolean;
+  doneLabel: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5 text-3xs text-text-secondary">
+      <Icon className="size-2.5" aria-hidden="true" />
+      <span className={done ? "text-text-primary" : undefined}>{done ? doneLabel : label}</span>
+      {done && <Check className="size-2.5 text-text-primary" aria-hidden="true" />}
+    </span>
+  );
+}
+
+function SettingsDialog({
+  open,
+  on,
+  relayed,
+  paired,
+}: {
+  open: boolean;
+  on: boolean;
+  relayed: boolean;
+  paired: boolean;
+}) {
   return (
     <div
       className={cn(
@@ -53,7 +100,8 @@ function SettingsDialog({ open, on }: { open: boolean; on: boolean }) {
           <span className="text-2xs font-medium text-text-primary">Enable Decisions</span>
           <span className="text-3xs text-text-secondary">
             Agents ask you a question and end their turn. You answer from your phone, and Daintree
-            types your answer into the terminal that asked.
+            types your answer into the terminal that asked. Needs a relay in your own Cloudflare
+            account and a paired phone.
           </span>
         </div>
         <span
@@ -68,15 +116,17 @@ function SettingsDialog({ open, on }: { open: boolean; on: boolean }) {
           />
         </span>
       </div>
-      <div className={cn("flex flex-col gap-1", reveal(on, "none"))}>
-        <span className="flex items-center gap-1.5 text-3xs text-text-secondary">
-          <Cloud className="size-2.5" aria-hidden="true" />
-          Relay · your Cloudflare account
-        </span>
-        <span className="flex items-center gap-1.5 text-3xs text-text-secondary">
-          <Smartphone className="size-2.5" aria-hidden="true" />
-          Phone paired
-        </span>
+      <div
+        data-tour-anchor="decisions-setup"
+        className={cn("flex flex-col gap-1", reveal(on, "none"))}
+      >
+        <SetupStep
+          icon={Cloud}
+          label="Deploy one to your own Cloudflare account"
+          done={relayed}
+          doneLabel="Relay deployed · your Cloudflare account"
+        />
+        <SetupStep icon={Smartphone} label="Pair a phone" done={paired} doneLabel="Phone paired" />
       </div>
     </div>
   );
@@ -146,7 +196,8 @@ function Route({
   );
 }
 
-function Inbox({ open }: { open: boolean }) {
+function Inbox({ open, history }: { open: boolean; history: boolean }) {
+  const Chevron = history ? ChevronDown : ChevronRight;
   return (
     <div
       className={cn(
@@ -156,7 +207,7 @@ function Inbox({ open }: { open: boolean }) {
       style={{ left: INBOX.x, top: INBOX.y, width: INBOX.width, height: INBOX.height }}
     >
       <span className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
-        <MessageCircleQuestionMark className="size-3" aria-hidden="true" />
+        <DecisionsMark className="size-3" />
         Decisions inbox
       </span>
       <span className="text-3xs font-medium text-text-secondary">Needs you</span>
@@ -167,8 +218,20 @@ function Inbox({ open }: { open: boolean }) {
         <span className="text-2xs text-text-primary">Bump the public rate limit to 200?</span>
         <span className="text-3xs text-text-secondary">api-server · Antigravity · 3m</span>
       </div>
-      <span className="mt-1 text-3xs font-medium text-text-secondary">History</span>
-      <div className="flex flex-col gap-0.5 rounded-md border border-border-subtle px-2 py-1.5">
+      <span
+        data-tour-anchor="inbox-history"
+        className="mt-1 flex items-center gap-1 text-3xs font-medium text-text-secondary"
+      >
+        <Chevron className="size-2.5" aria-hidden="true" />
+        History <span className="font-normal tabular-nums">1</span>
+      </span>
+      <div
+        data-tour-anchor="inbox-history-row"
+        className={cn(
+          "flex flex-col gap-0.5 rounded-md border border-border-subtle px-2 py-1.5",
+          reveal(history, "none")
+        )}
+      >
         <span className="text-2xs text-text-secondary">{QUESTION}</span>
         <span className="flex items-center gap-1 text-3xs text-text-secondary">
           <Check className="size-2.5" aria-hidden="true" />
@@ -182,36 +245,48 @@ function Inbox({ open }: { open: boolean }) {
 export function DecisionsScene() {
   const settingsOpen = useCue("enable", -0.3);
   const on = useCue("enable", 0.5);
+  const relayed = useCue("enable", 1.1);
+  const paired = useCue("enable", 1.8);
   const asked = useCue("ask");
+  // The agent finishes what didn't need the answer, then ends its turn at its prompt.
+  const yielded = useCue("ask", 4.5);
   const relay = useCue("relay");
   const sealed = useCue("encrypted");
   const answerCue = useCue("answer");
   const answered = useCue("answer", 0.6);
   const delivering = useCue("deliver");
+  const delivered = useCue("deliver", 0.4);
+  const resumed = useCue("deliver", 1.0);
   const inboxCue = useCue("inbox");
   const inboxOpen = useCue("inbox", 0.5);
+  const historyOpen = useCue("inbox", 1.1);
   const cursor = useMockCursor({ x: 420, y: 220 }, CURSOR);
 
   const settings = settingsOpen && !asked;
-  const focus = settings || inboxOpen ? [] : inboxCue ? ["toolbar"] : asked ? ["grid"] : undefined;
+  const focus: readonly AppRegion[] | undefined =
+    settings || inboxOpen ? [] : inboxCue ? ["toolbar"] : asked ? ["grid"] : undefined;
+  // One question waits while Codex's is open, and another has come in by the time you're back.
+  const pending = (asked && !answered) || inboxCue ? 1 : 0;
 
-  const spotlight = inboxOpen
-    ? ["inbox-needs-you"]
-    : inboxCue
-      ? ["decisions-inbox"]
-      : delivering
-        ? ["codex-input"]
-        : answerCue
-          ? ["phone-answer"]
-          : sealed
-            ? ["decisions-relay", "decisions-phone"]
-            : relay
-              ? ["decisions-relay"]
-              : asked
-                ? ["codex-body"]
-                : settings && on
-                  ? ["decisions-toggle"]
-                  : [];
+  const spotlight = historyOpen
+    ? ["inbox-history-row"]
+    : inboxOpen
+      ? ["inbox-needs-you"]
+      : inboxCue
+        ? ["decisions-inbox"]
+        : delivering
+          ? ["codex-delivered"]
+          : answerCue
+            ? ["phone-answer"]
+            : sealed
+              ? ["decisions-relay", "decisions-phone"]
+              : relay
+                ? ["decisions-relay"]
+                : asked
+                  ? ["codex-body"]
+                  : settings && on
+                    ? ["decisions-setup"]
+                    : [];
 
   return (
     <MockApp
@@ -219,8 +294,13 @@ export function DecisionsScene() {
       focus={focus}
       signals={
         on ? (
-          <MockToolbarButton anchor="decisions-inbox">
-            <MessageCircleQuestionMark aria-hidden="true" />
+          <MockToolbarButton anchor="decisions-inbox" className="relative">
+            <DecisionsMark />
+            {pending > 0 && (
+              <span className="absolute -right-1 -top-1 flex size-3 items-center justify-center rounded-full bg-state-waiting text-3xs leading-none font-semibold tabular-nums text-text-inverse">
+                {pending}
+              </span>
+            )}
           </MockToolbarButton>
         ) : undefined
       }
@@ -240,13 +320,8 @@ export function DecisionsScene() {
         <MockGrid columns={2}>
           <MockPane
             agent="codex"
-            state="working"
+            state={yielded && !resumed ? "waiting" : "working"}
             focused={delivering}
-            input={
-              <span className="truncate text-text-primary">
-                <MockTyping cue="deliver" text={ANSWER} delay={0.3} charsPerSecond={18} />
-              </span>
-            }
           >
             <div className="flex flex-col gap-1.5">
               <MockLines widths={[78, 56, 84]} />
@@ -257,12 +332,26 @@ export function DecisionsScene() {
                 )}
               >
                 <span className="flex items-center gap-1 text-3xs text-text-secondary">
-                  <MessageCircleQuestionMark className="size-2.5" aria-hidden="true" />
+                  <DecisionsMark className="size-2.5" />
                   Asked you
                 </span>
                 <span className="text-3xs text-text-primary">{QUESTION}</span>
               </div>
               <MockStreamingLines cue="ask" delay={0.8} widths={[70, 88, 60, 76]} perSecond={1.5} />
+              {/* Delivered once the run is back at its prompt: submitted, not left as a draft. */}
+              <span
+                data-tour-anchor="codex-delivered"
+                className={cn(
+                  "flex items-center gap-1 font-mono text-3xs text-text-primary",
+                  reveal(delivered, "none")
+                )}
+              >
+                <span className="text-text-secondary">›</span>
+                <MockTyping cue="deliver" text={ANSWER} delay={0.4} charsPerSecond={22} />
+              </span>
+              {resumed && (
+                <MockStreamingLines cue="deliver" delay={1.2} widths={[66, 82]} perSecond={2} />
+              )}
             </div>
           </MockPane>
           {relay ? (
@@ -276,8 +365,8 @@ export function DecisionsScene() {
       }
       overlay={
         <>
-          <SettingsDialog open={settings} on={on} />
-          <Inbox open={inboxOpen} />
+          <SettingsDialog open={settings} on={on} relayed={relayed} paired={paired} />
+          <Inbox open={inboxOpen} history={historyOpen} />
         </>
       }
     >

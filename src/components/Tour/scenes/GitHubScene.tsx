@@ -29,8 +29,8 @@ import {
   MockPane,
   MockWorktreeCard,
 } from "@daintreehq/tour/mock-app";
-import { useCue, useTimelineIndex, type TimelinePoint } from "@daintreehq/tour/react";
-import { REVIEW_DIFF, ReviewHub, type ReviewFile } from "./ReviewHub";
+import { useCue } from "@daintreehq/tour/react";
+import { ReviewHub, type ReviewFile } from "./ReviewHub";
 
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: ISSUES.x - 153, y: ISSUES.y + 14, width: 216 };
@@ -49,18 +49,18 @@ const REQUEST = "Commit, push and open the PR";
 const REQUEST_TYPED = { cue: "pr", offset: 0.3 } as const;
 const COMMIT_ICON = { anchor: "review-commit" };
 const COMMIT_BUTTON = { anchor: "review-commit-push", dx: 13, dy: 5 };
-// The message types while the diff is stepped through, so it's ready by "commits".
-const MESSAGE_TYPED = { cue: "commit", offset: 0.3 } as const;
+const PUSH_CONFIRM = { anchor: "review-push-confirm" };
+// "Steps you through every change": the first file's diff, then the next one's.
+const FIRST_FILE = { anchor: "review-file-0", dx: -30 };
+const SECOND_FILE = { anchor: "review-file-1", dx: -30 };
+// The message is written as Review Hub opens, so it's ready by "commits".
+const MESSAGE_TYPED = { cue: "diff", offset: -0.3 } as const;
 
 const FILES: readonly ReviewFile[] = [
   { name: "SettingsPage.tsx", added: 31, removed: 6 },
   { name: "useTheme.ts", added: 18, removed: 2 },
   { name: "settings.css", added: 22, removed: 0 },
 ];
-const DIFF_STEPS: readonly TimelinePoint[] = REVIEW_DIFF.map((_, i) => ({
-  cue: "diff",
-  offset: i * 0.12,
-}));
 
 const ISSUES_LIST = [
   ["#52 Checkout total rounds wrong", "2h"],
@@ -83,8 +83,15 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "ask", at: PANE_INPUT, click: true },
   { cue: "files", offset: 0.2, at: COMMIT_ICON },
   { cue: "open", offset: 0.4, at: COMMIT_ICON, click: true },
-  { cue: "commit", offset: 0.3, at: COMMIT_BUTTON },
-  { cue: "commit", offset: 0.8, at: COMMIT_BUTTON, click: true },
+  { cue: "diff", offset: -0.45, at: FIRST_FILE },
+  { cue: "diff", offset: 0.1, at: FIRST_FILE, click: true },
+  { cue: "diff", offset: 0.5, at: SECOND_FILE },
+  { cue: "diff", offset: 1.0, at: SECOND_FILE, click: true },
+  { cue: "commit", offset: -0.3, at: COMMIT_BUTTON },
+  { cue: "commit", offset: 0.2, at: COMMIT_BUTTON, click: true },
+  // Commit & push opens the push confirm; its button names the destination.
+  { cue: "commit", offset: 0.5, at: PUSH_CONFIRM },
+  { cue: "commit", offset: 1.0, at: PUSH_CONFIRM, click: true },
 ];
 
 export function GitHubScene() {
@@ -103,9 +110,11 @@ export function GitHubScene() {
   // "If you'd rather look first": the same card before anything was committed.
   const lookFirst = useCue("files");
   const opened = useCue("open", 0.6);
-  const diffStep = useTimelineIndex(DIFF_STEPS);
-  const typing = useCue("diff", 1.0);
-  const pushed = useCue("commit", 1.0);
+  const typing = useCue("open", 1.0);
+  const firstFile = useCue("diff", 0.15);
+  const secondFile = useCue("diff", 1.05);
+  const confirming = useCue("commit", 0.3);
+  const pushed = useCue("commit", 1.2);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   const showPr = badge && !lookFirst;
@@ -207,17 +216,18 @@ export function GitHubScene() {
           visible={opened}
           branch={BRANCH}
           files={FILES}
-          diffStep={diffStep}
+          selected={secondFile ? 1 : firstFile ? 0 : -1}
           message={
             typing ? (
               <MockTyping
-                cue="diff"
+                cue="open"
                 text="Add dark mode to settings"
                 delay={1.0}
                 finishBy={MESSAGE_TYPED}
               />
             ) : null
           }
+          confirming={confirming}
           pushed={pushed}
         />
       }
@@ -292,7 +302,8 @@ export function GitHubScene() {
           </span>
         </div>
       </div>
-      <MockCursor {...cursor} />
+      {/* Its last target leaves with the confirm, so the pointer goes once the push lands. */}
+      <MockCursor {...cursor} visible={cursor.visible && !pushed} />
     </MockApp>
   );
 }
