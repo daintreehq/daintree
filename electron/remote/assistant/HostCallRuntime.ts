@@ -63,6 +63,7 @@ import {
 } from "./HostSettingsRequests.js";
 import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
+import type { AssistantPluginNotifications } from "../../services/assistantPluginNotifications.js";
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
 import { runHostStatus } from "./hostStatus.js";
@@ -347,6 +348,12 @@ export interface HostCallRuntimeDeps {
    * never dials, holds or wakes a host. Absent, no agent watch is armed.
    */
   watchAgents?(listener: AgentWaitingListener): () => void;
+  /**
+   * Plugins' notifications marked for an assistant, for `host.watch` on them
+   * (#18154): loaded the first time a run arms for them or reads one. Absent,
+   * neither is offered.
+   */
+  pluginNotifications?(): Promise<AssistantPluginNotifications>;
   /**
    * A host's agent terminals as it lists them, over a link already up; it
    * never dials a host. What tells agents this Shell's assistants launched
@@ -1126,6 +1133,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               this.watchAgentsRead(hostId, options),
           }
         : {}),
+      ...(deps.pluginNotifications ? { pluginNotifications: deps.pluginNotifications } : {}),
+      // A global session standing by is never handed work its coordinator should get (#18143).
+      mayTakeWork: (run) => this.caller(run.sessionId)?.standby !== true,
       ...(deps.local ? { localName: () => deps.local!.name() } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
@@ -1874,6 +1884,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const controller = this.standDowns.get(helpSessionId);
     this.standDowns.delete(helpSessionId);
     controller?.abort();
+    // Nor is it handed plugins' notifications its coordinator should get (#18154).
+    this.hostWatches.standDown(helpSessionId);
   }
 
   private withStandDown(helpSessionId: string, signal: AbortSignal | undefined): AbortSignal {
@@ -2513,13 +2525,23 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     );
   }
 
-  /** Arms, cancels or lists the calling run's own host watches (#14463), agent watches too (#16188). */
+  /**
+   * Arms, cancels or lists the calling run's own host watches (#14463), agent
+   * watches (#16188) and plugin-notification watches too, and reads a plugin
+   * notification given to it (#18154).
+   */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
-    return this.settle(helpSessionId, async (caller) =>
-      args.operation === "arm" && args.agentsWaiting === true
-        ? this.hostWatches.armAgents(caller, args)
-        : this.hostWatches.run(caller, args)
-    );
+    return this.settle(helpSessionId, async (caller) => {
+      if (args.operation === "read")
+        return this.hostWatches.read(caller, args.notificationId ?? "");
+      if (args.operation === "arm" && args.agentsWaiting === true) {
+        return this.hostWatches.armAgents(caller, args);
+      }
+      if (args.operation === "arm" && args.pluginNotifications === true) {
+        return this.hostWatches.armPlugins(caller, args);
+      }
+      return this.hostWatches.run(caller, args);
+    });
   }
 
   /**

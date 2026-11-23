@@ -4171,6 +4171,9 @@ export class PluginService {
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
       pluginNotificationsBlocked: (pluginId, projectId) =>
         this.pluginNotificationsBlocked(pluginId, projectId),
+      // Loaded only once a plugin marks a notification for an assistant (#18154).
+      assistantNotifications: async () =>
+        (await import("./assistantPluginNotifications.js")).assistantPluginNotifications(),
     };
   }
 
