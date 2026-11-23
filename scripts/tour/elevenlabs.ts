@@ -145,9 +145,10 @@ export async function synthesizeElevenLabs(
     const detail = text.length > ERROR_BODY_LIMIT ? `${text.slice(0, ERROR_BODY_LIMIT)}…` : text;
     throw new Error(`ElevenLabs TTS failed (${response.status}): ${detail}`);
   }
-  let body: { audio_base64?: unknown; alignment?: unknown } | null = null;
+  type Body = { audio_base64?: unknown; alignment?: unknown };
+  let body: Body | null = null;
   try {
-    body = JSON.parse(raw) as typeof body;
+    body = JSON.parse(raw) as Body | null;
   } catch {
     // Reported below without quoting the body.
   }
