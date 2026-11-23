@@ -204,7 +204,17 @@ describe("agentUsageWithSuccessors", () => {
       resetsAt: null,
       observedAt: NOW - AGENT_USAGE_SHOWN_FOR_MS + 30_000,
     });
-    expect(agentUsageWithSuccessors([weekly, older, fiveHour], NOW)).toEqual([weekly, fiveHour]);
+    // Also outlasts the weekly, but looser than the five-hour reading.
+    const looser = codex({
+      usedPercent: 25,
+      windowDurationMins: 60,
+      resetsAt: null,
+      observedAt: NOW,
+    });
+    expect(agentUsageWithSuccessors([weekly, older, looser, fiveHour], NOW)).toEqual([
+      weekly,
+      fiveHour,
+    ]);
   });
 
   it("sends a winner that names no reset with what outlasts its age-out", () => {

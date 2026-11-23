@@ -484,14 +484,40 @@ describe("SidebarAgentUsage", () => {
       }
     });
 
-    it("goes, warning and all, once its last reading ages out, with no new snapshot (#18159)", async () => {
+    it("drops the folded warning and hands the row to a fresher reading as the tight one ages out (#18159)", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       try {
         const observedAt = Date.now() - AGENT_USAGE_SHOWN_FOR_MS + 30_000;
         const resetsAt = Date.now() + 3 * 86_400_000;
         installBridge([
           claude({ statement: "used", usedPercent: 99, resetsAt, observedAt }),
-          codex(90, VPS, { observedAt: Date.now() }),
+          claude({ statement: "used", usedPercent: 15, resetsAt, observedAt: Date.now() }),
+        ]);
+        const { container } = await renderUsage();
+        fireEvent.click(header(container));
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(31_000);
+        });
+        expect(header(container).hasAttribute("data-attention")).toBe(false);
+        fireEvent.click(header(container));
+        expect(rows(container).map((row) => row.textContent)).toEqual([
+          expect.stringMatching(/^15% · resets /),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("goes, warning and all, once a linked host's last reading ages out, with no new snapshot (#18159)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        showHost("studio-03");
+        const observedAt = Date.now() - AGENT_USAGE_SHOWN_FOR_MS + 30_000;
+        const resetsAt = Date.now() + 3 * 86_400_000;
+        installBridge([
+          claude({ statement: "used", usedPercent: 99, resetsAt, observedAt }, STUDIO),
+          codex(90, {}, { observedAt: Date.now() }),
         ]);
         const { container } = await renderUsage();
         fireEvent.click(header(container));

@@ -262,28 +262,43 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
-  it("stops sending a kept Codex reading once it has gone unobserved too long (#18159)", async () => {
+  it("stops sending a kept Codex reading once it has gone unobserved too long, and shows a new read again (#18159)", async () => {
     const h = harness();
     h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
-    h.codexAnswers.set("/accts/work", () => ({
-      ...codexQuota("/accts/work", 70, START),
+    // Read half a tick before the watch's first look, so its age-out falls between ticks.
+    const fetchedAt = START - TICK / 2;
+    const weekly = (usedPercent: number, at: number): CodexHomeQuota => ({
+      ...codexQuota("/accts/work", usedPercent, at),
       result: {
         status: "ok",
         planType: null,
-        windows: [{ usedPercent: 70, windowDurationMins: 10080, resetsAt: START + 86_400_000 }],
-        fetchedAt: START,
+        windows: [{ usedPercent, windowDurationMins: 10080, resetsAt: START + 86_400_000 }],
+        fetchedAt: at,
       },
-    }));
+    });
+    h.codexAnswers.set("/accts/work", () => weekly(70, fetchedAt));
     h.watch.acquire();
     await settle();
     h.codexAnswers.set("/accts/work", () => ({
       ...codexQuota("/accts/work", 0),
       result: { status: "unavailable", reason: "timeout", fetchedAt: Date.now() },
     }));
-    await vi.advanceTimersByTimeAsync(AGENT_USAGE_SHOWN_FOR_MS - 1);
-    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70, observedAt: START }]);
-    await vi.advanceTimersByTimeAsync(1);
+    const changes: number[] = [];
+    h.watch.onChange((readings) => changes.push(readings.length));
+    await vi.advanceTimersByTimeAsync(AGENT_USAGE_SHOWN_FOR_MS - TICK / 2 - 1);
+    expect(h.readCodexHomes.mock.calls.length).toBeGreaterThan(2);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70, observedAt: fetchedAt }]);
+    // Woken at the age-out itself, not at the next tick.
+    await vi.advanceTimersByTimeAsync(2);
     expect(h.watch.latest()).toEqual([]);
+    expect(changes).toEqual([0]);
+
+    h.codexAnswers.set("/accts/work", () => weekly(70, Date.now()));
+    await vi.advanceTimersByTimeAsync(CADENCE);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70 }]);
+    expect(h.watch.latest()[0]!.observedAt).toBeGreaterThan(
+      START + AGENT_USAGE_SHOWN_FOR_MS - TICK
+    );
     h.watch.dispose();
   });
 
