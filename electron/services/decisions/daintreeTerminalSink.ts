@@ -560,7 +560,12 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     if (composer === "unknown") {
       const drafted = this.drafted.get(target.paneId);
-      const since = Math.min(stagedSince, drafted?.at ?? Infinity, already?.since ?? Infinity);
+      // A staged block has its own window; proof only times a chunk with none.
+      const since = Math.min(
+        stagedSince,
+        drafted?.at ?? Infinity,
+        staged.size === 0 ? (already?.since ?? Infinity) : Infinity
+      );
       if (now - since < STAGED_WAIT_MS) return held;
       this.drafted.delete(target.paneId);
       if (staged.size > 0) return uncertain("enter-held-unresolved");
