@@ -58,6 +58,8 @@ const ELEVENLABS_VOICE_ID = "Mfk8L0DQ8Aj3aRtDY3oo";
 const ELEVENLABS_MODEL = "eleven_v4";
 const VOICE_SLUG = `elevenlabs-${ELEVENLABS_MODEL}-${ELEVENLABS_VOICE_ID}`;
 const BUCKET = "daintree-assets";
+/** Encoding to Opus can shift the end by a frame or two. */
+const AUDIO_END_TOLERANCE_S = 0.25;
 const CDN_ORIGIN = "https://cdn.daintree.org";
 const MANIFEST_PATH = resolve(
   import.meta.dirname,
@@ -308,11 +310,19 @@ async function voiceVariant(
   const contentHash = createHash("sha256").update(audioBytes).digest("hex").slice(0, 12);
   const objectKey = `tour/${voice}/${key}-${contentHash}.ogg`;
   const url = `${CDN_ORIGIN}/${objectKey}`;
+  const duration = oggOpusDuration(audioBytes);
+  // A word timed past the end of the audio would put a cue the player never reaches.
+  const lastEnd = alignment.wordEndTimeSeconds.at(-1) ?? 0;
+  if (lastEnd > duration + AUDIO_END_TOLERANCE_S) {
+    throw new Error(
+      `${key}: the voice's timings run to ${lastEnd.toFixed(2)}s, past the ${duration.toFixed(2)}s of audio; nothing published.`
+    );
+  }
   const { timing, matched, total } = timeChapter(
     key,
     parsed,
     alignment,
-    oggOpusDuration(audioBytes),
+    duration,
     args.upload ? url : null
   );
   if (matched < total) {
@@ -376,6 +386,21 @@ async function main(): Promise<void> {
   if (unknown.length > 0)
     throw new Error(`--only names no chapter or variant: ${unknown.join(", ")}`);
   migrateEntries(manifest);
+  // A publishing run writes the manifest only when every take is on the CDN, so
+  // a partial run that leaves one unpublished would pay for its takes and then
+  // throw them away. Refuse before the first paid request instead.
+  if (args.upload && args.only) {
+    const selected = (key: string) =>
+      args.only!.includes(key) || args.only!.includes(key.replace(/\.(mac|pc)$/, ""));
+    const missing = [...validKeys].filter(
+      (key) => !selected(key) && !manifest.chapters[key]?.audioUrl
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `--only leaves ${missing.join(", ")} with no published audio, so the manifest couldn't be written; include them or drop --only.`
+      );
+    }
+  }
 
   for (const chapter of TOUR_CHAPTERS) {
     for (const variant of narrationVariants(chapter)) {

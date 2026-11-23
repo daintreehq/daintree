@@ -201,10 +201,12 @@ describe("tour content", () => {
       expect(voice, `${key} is in another voice — run npm run tour:audio`).toBe(
         TOUR_TIMING_MANIFEST.voice
       );
+      expect(voice, "the built-in tour's voice").toBe("elevenlabs-eleven_v4-Mfk8L0DQ8Aj3aRtDY3oo");
+      // A take reused when its chapter gained or lost a shortcut keeps its first key.
+      const chapterId = key.replace(/\.(mac|pc)$/, "");
+      const takeKey = `${chapterId.replace(".", "\\.")}(\\.(mac|pc))?`;
       expect(entry.audioUrl, `${key} has no published audio`).toMatch(
-        new RegExp(
-          `^https://cdn\\.daintree\\.org/tour/${voice}/${key.replace(".", "\\.")}-[0-9a-f]{12}\\.ogg$`
-        )
+        new RegExp(`^https://cdn\\.daintree\\.org/tour/${voice}/${takeKey}-[0-9a-f]{12}\\.ogg$`)
       );
     }
     // Nothing left over from a chapter or keyboard that no longer exists.

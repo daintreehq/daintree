@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { alignWordStarts, parseNarration } from "@daintreehq/tour";
-import { synthesizeElevenLabs, wordsFromCharacters } from "../elevenlabs";
+import { retryDelayMs, synthesizeElevenLabs, wordsFromCharacters } from "../elevenlabs";
 
 function characterAlignment(text: string, step = 0.1) {
   const characters = [...text];
@@ -144,5 +144,78 @@ describe("synthesizeElevenLabs retries", () => {
         ),
       })
     ).rejects.toThrow(/no usable character alignment/);
+  });
+});
+
+describe("synthesizeElevenLabs safeguards", () => {
+  const audio = Buffer.from("mp3").toString("base64");
+  const call = (fetchMock: typeof fetch, text = "Hi", extra = {}) =>
+    synthesizeElevenLabs({
+      apiKey: "k",
+      text,
+      voiceId: "v",
+      modelId: "m",
+      fetch: fetchMock,
+      sleep: async () => {},
+      ...extra,
+    });
+
+  it("gives up after three refusals before voicing", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("busy", { status: 503 }));
+    await expect(call(fetchMock)).rejects.toThrow(/\(503\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a gateway timeout, which may arrive after the take was voiced", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("late", { status: 504 }));
+    await expect(call(fetchMock)).rejects.toThrow(/\(504\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops at its deadline without retrying", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason));
+        })
+    );
+    await expect(call(fetchMock, "Hi", { timeoutMs: 10 })).rejects.toThrow(/not retried/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("times words from the text as sent, not the engine's normalized reading", async () => {
+    const result = await call(
+      ok({
+        audio_base64: audio,
+        alignment: characterAlignment("1 item"),
+        normalized_alignment: characterAlignment("one item", 0.2),
+      }),
+      "1 item"
+    );
+    expect(result.alignment.words).toEqual(["1", "item"]);
+    expect(result.alignment.wordStartTimeSeconds).toEqual([0, 0.2]);
+  });
+
+  it("refuses an alignment of different words from the narration sent", async () => {
+    await expect(
+      call(
+        ok({ audio_base64: audio, alignment: characterAlignment("go right now") }),
+        "go left now"
+      )
+    ).rejects.toThrow(/different text/);
+  });
+
+  function ok(body: unknown) {
+    return vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status: 200 }));
+  }
+});
+
+describe("retryDelayMs", () => {
+  it("reads seconds or an HTTP date, capped at thirty seconds", () => {
+    const now = Date.parse("2026-11-23T00:00:00Z");
+    expect(retryDelayMs("4", 1, now)).toBe(4000);
+    expect(retryDelayMs("Mon, 23 Nov 2026 00:00:25 GMT", 1, now)).toBe(25_000);
+    expect(retryDelayMs("600", 1, now)).toBe(30_000);
+    expect(retryDelayMs(null, 2, now)).toBe(4000);
   });
 });

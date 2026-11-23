@@ -48,4 +48,21 @@ describe("the Daintree tour on Windows", () => {
     const { tour } = await loadOn("Linux x86_64", "Mozilla/5.0 (X11; Linux x86_64)");
     expect(tour.chapters.map((chapter) => chapter.id)).toContain("hosts");
   });
+
+  // A position saved on a Mac is the chapter's id; on Windows the same chapter sits one earlier.
+  it("offers to resume a saved chapter at its place in the Windows cut, and never Hosts", async () => {
+    await loadOn("Win32");
+    const { inviteStateFor } = await import("../TourInviteCard");
+    const { DAINTREE_TOUR_VERSION } = await import("../daintreeTourSummary");
+    const saved = (id: string) => ({
+      completed: false,
+      dismissed: false,
+      lastChapter: TOUR_CHAPTERS.findIndex((chapter) => chapter.id === id),
+      lastChapterId: id,
+      contentVersion: DAINTREE_TOUR_VERSION,
+    });
+    const allIndex = TOUR_CHAPTERS.findIndex((chapter) => chapter.id === "canopy");
+    expect(inviteStateFor(saved("canopy"))).toEqual({ kind: "resume", chapter: allIndex - 1 });
+    expect(inviteStateFor(saved("hosts")).kind).toBe("invite");
+  });
 });

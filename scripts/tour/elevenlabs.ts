@@ -4,6 +4,13 @@ const API_ORIGIN = "https://api.elevenlabs.io";
 const ERROR_BODY_LIMIT = 500;
 const ATTEMPTS = 3;
 const MAX_RETRY_WAIT_MS = 30_000;
+/** Covers the request and reading its body; a chapter voices in well under a minute. */
+const REQUEST_TIMEOUT_MS = 180_000;
+/**
+ * Refusals that come before anything is voiced, so retrying can't buy a take
+ * twice. A gateway timeout or other server error may arrive after synthesis.
+ */
+const RETRYABLE = new Set([429, 503]);
 
 export interface ElevenLabsSpeechOptions {
   apiKey: string;
@@ -13,6 +20,7 @@ export interface ElevenLabsSpeechOptions {
   /** Injected in tests. */
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
 }
 
 export interface ElevenLabsCharacterAlignment {
@@ -96,51 +104,85 @@ export async function synthesizeElevenLabs(
   const url = `${API_ORIGIN}/v1/text-to-speech/${encodeURIComponent(opts.voiceId)}/with-timestamps?output_format=mp3_44100_128`;
   const doFetch = opts.fetch ?? fetch;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
+  const notRetried = (what: string, error: unknown) => {
+    // Not retried: the request may have been voiced, and billed, before it failed.
+    const message = error instanceof Error ? error.message : String(error);
+    return new Error(
+      redact(
+        `ElevenLabs TTS ${what}: ${message} (not retried; it may have been billed)`,
+        opts.apiKey
+      )
+    );
+  };
   let response: Response;
+  let raw: string;
   for (let attempt = 1; ; attempt++) {
+    const signal = AbortSignal.timeout(opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
     try {
       response = await doFetch(url, {
         method: "POST",
         headers: { "xi-api-key": opts.apiKey, "Content-Type": "application/json" },
         body: JSON.stringify({ text: opts.text, model_id: opts.modelId }),
+        signal,
       });
     } catch (error) {
-      // Not retried: the request may have been voiced, and billed, before it failed.
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(redact(`ElevenLabs TTS request failed: ${message}`, opts.apiKey));
+      throw notRetried("request failed", error);
     }
-    // Throttling and server errors are refused before anything is voiced.
-    const transient = response.status === 429 || response.status >= 500;
-    if (!transient || attempt >= ATTEMPTS) break;
+    if (!RETRYABLE.has(response.status) || attempt >= ATTEMPTS) {
+      try {
+        raw = await response.text();
+      } catch (error) {
+        throw notRetried("response could not be read", error);
+      }
+      break;
+    }
     await response.body?.cancel().catch(() => {});
-    const retryAfter = Number(response.headers.get("retry-after"));
-    await sleep(
-      Number.isFinite(retryAfter) && retryAfter > 0
-        ? Math.min(retryAfter * 1000, MAX_RETRY_WAIT_MS)
-        : 2000 * attempt
-    );
+    await sleep(retryDelayMs(response.headers.get("retry-after"), attempt));
   }
   if (!response.ok) {
     // Redact before truncating, or a key cut at the limit would leak its prefix.
-    const text = redact(await response.text().catch(() => ""), opts.apiKey);
+    const text = redact(raw, opts.apiKey);
     const detail = text.length > ERROR_BODY_LIMIT ? `${text.slice(0, ERROR_BODY_LIMIT)}…` : text;
     throw new Error(`ElevenLabs TTS failed (${response.status}): ${detail}`);
   }
-  const body = (await response.json().catch(() => null)) as {
-    audio_base64?: unknown;
-    alignment?: unknown;
-  } | null;
+  let body: { audio_base64?: unknown; alignment?: unknown } | null = null;
+  try {
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    // Reported below without quoting the body.
+  }
   if (!body || typeof body.audio_base64 !== "string" || body.audio_base64.length === 0) {
     throw new Error("ElevenLabs TTS response carried no audio");
   }
   if (!isCharacterAlignment(body.alignment)) {
     throw new Error("ElevenLabs TTS response carried no usable character alignment");
   }
+  // Cues and captions are placed on these characters, so they must be the text that was sent.
+  if (normalizeSpace(body.alignment.characters.join("")) !== normalizeSpace(opts.text)) {
+    throw new Error("ElevenLabs TTS aligned different text from the narration it was sent");
+  }
   const alignment = wordsFromCharacters(body.alignment);
   if (alignment.words.length === 0) {
     throw new Error("ElevenLabs TTS response aligned no words");
   }
   return { audio: Buffer.from(body.audio_base64, "base64"), alignment };
+}
+
+// Delivery directions are read as stage cues, not text, so they may not come back.
+const normalizeSpace = (text: string) =>
+  text
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** `Retry-After` in seconds or as an HTTP date, capped; a backoff when it's absent. */
+export function retryDelayMs(header: string | null, attempt: number, now = Date.now()): number {
+  if (header) {
+    const seconds = Number(header);
+    const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - now;
+    if (Number.isFinite(ms) && ms > 0) return Math.min(ms, MAX_RETRY_WAIT_MS);
+  }
+  return 2000 * attempt;
 }
 
 function redact(message: string, apiKey: string): string {
