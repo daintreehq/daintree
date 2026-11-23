@@ -456,6 +456,25 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  it("never sends a restored Claude Code reading observed more than six hours ago (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [
+        claudeReading({
+          usedPercent: 99,
+          resetsAt: START + 86_400_000,
+          observedAt: START - 7 * 60 * 60_000,
+        }),
+      ]),
+    ];
+    h.watch.acquire();
+    await settle();
+    expect(h.readClaudeAccounts).toHaveBeenCalled();
+    expect(h.watch.latest()).toEqual([]);
+    h.watch.dispose();
+  });
+
   it("hands over from a Claude Code reading as it ages out, not a tick later (#18159)", async () => {
     const h = harness();
     h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };

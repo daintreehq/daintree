@@ -213,7 +213,14 @@ describe("agentUsageWithSuccessors", () => {
     expect(agentUsageWithSuccessors([open, later], NOW)).toEqual([open, later]);
   });
 
-  it("sends a winner alone when it names no reset, or nothing outlasts it", () => {
+  it("never sends a successor that ends with the winner, even on an equal rank", () => {
+    const winner = codex({ usedPercent: 70, resetsAt: NOW + 1_000 });
+    const sameEnd = codex({ usedPercent: 70, resetsAt: NOW + 1_000, windowDurationMins: 10080 });
+    const longer = codex({ usedPercent: 20, resetsAt: NOW + 2_000 });
+    expect(agentUsageWithSuccessors([winner, sameEnd, longer], NOW)).toEqual([winner, longer]);
+  });
+
+  it("sends a winner alone when nothing it outranks is shown longer", () => {
     const open = claude({ statement: "approaching", usedPercent: null, resetsAt: null });
     expect(agentUsageWithSuccessors([open, claude({ usedPercent: 10 })], NOW)).toEqual([open]);
     const only = codex({ resetsAt: NOW + 1_000 });

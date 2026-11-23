@@ -509,6 +509,37 @@ describe("SidebarAgentUsage", () => {
       }
     });
 
+    it("ages a reading out on time when it arrives well after the last minute sample", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        installBridge([codex(30)]);
+        const { container } = await renderUsage();
+        // The wall clock moves on without the minute clock seeing it.
+        vi.setSystemTime(Date.now() + 20_000);
+        const observedAt = Date.now() - AGENT_USAGE_SHOWN_FOR_MS + 30_000;
+        act(() =>
+          pushed!({
+            readouts: [
+              codex(30),
+              claude({ statement: "used", usedPercent: 99, resetsAt: null, observedAt }),
+            ],
+            revision: 2,
+          })
+        );
+        expect(rows(container)).toHaveLength(2);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(29_000);
+        });
+        expect(rows(container)).toHaveLength(2);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(rows(container).map((row) => row.textContent)).toEqual(["30%"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("never shows a reading older than the span, letting a fresher looser one take the row", async () => {
       const resetsAt = NOW + 3 * 86_400_000;
       installBridge([

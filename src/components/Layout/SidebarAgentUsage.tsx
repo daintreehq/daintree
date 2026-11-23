@@ -130,9 +130,10 @@ function useResetAwareClock(readouts: readonly AgentUsageReadout[], minute: numb
     })
   );
   useEffect(() => {
-    const wait = next - now;
+    // From the wall clock, not `now`: the minute sample can be most of a minute old.
+    const wait = next - Date.now();
     if (!Number.isFinite(wait) || wait > RESET_WAKE_HORIZON_MS) return;
-    const timer = setTimeout(() => setAtReset(next), wait + 1);
+    const timer = setTimeout(() => setAtReset(next), Math.max(0, wait) + 1);
     return () => clearTimeout(timer);
   }, [next, now]);
   return now;
