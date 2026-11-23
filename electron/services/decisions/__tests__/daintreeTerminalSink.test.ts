@@ -1240,6 +1240,22 @@ describe("DaintreeTerminalSink", () => {
       expect(third.value).toMatchObject({ outcome: "delivered" });
     });
 
+    it("takes no empty prompt on an alternate screen for proof, the draft may be on the other", async () => {
+      const h = setup();
+      await stopped(h, "enter");
+      // The staged draft with its marker in the main buffer, an empty prompt on the alternate one.
+      h.client.screens.set(
+        PANE,
+        `${RULE}\r\n❯ ${markerFor(I1)}\r\n${RULE}\r\n\x1b[?1049h\x1b[H${EMPTY_PROMPT}`
+      );
+
+      await expect(h.sink.inject(TARGET, notice({ injectionId: I2 }), I2)).resolves.toEqual({
+        outcome: "held",
+        reason: ENTER_HELD,
+      });
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
     it("types afresh on another run, which never had the staged text", async () => {
       const h = setup();
       await stopped(h, "enter");

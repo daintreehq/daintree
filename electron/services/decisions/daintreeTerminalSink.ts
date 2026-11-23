@@ -9,6 +9,7 @@ import {
   type TerminalTarget,
   type UnavailableReason,
 } from "@daintreehq/decisions-client";
+import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
   inputSuggestionRuleFor,
@@ -108,6 +109,13 @@ const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set<UnavailableReason>([
 
 /** Rows of scrollback read for a marker after a crash. */
 const MARKER_SEARCH_ROWS = 2_000;
+/**
+ * Rows read to settle a staged answer (#18157): all the host keeps, so a long
+ * turn since a person submitted it doesn't hide its marker short of that.
+ */
+const STAGED_SEARCH_ROWS = PTY_MIRROR_SCROLLBACK;
+/** A snapshot holding an alternate screen: its prompt and its markers can sit in different buffers. */
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const MARKER_ID = /^[A-Za-z0-9_-]{8,80}$/;
 /** Whitespace and the gutter glyphs a TUI paints between the rows of a wrapped line. */
 const WRAP_NOISE = /[\s─-▟⎿⏺|>›❯•●◦·]/gu;
@@ -311,13 +319,14 @@ export class DaintreeTerminalSink implements TerminalSink {
   }
 
   /**
-   * The run's screen, read between two checks that it is still the run
-   * `target` names: null when it couldn't be read or the run changed,
-   * undefined when this host can't read screens at all.
+   * The run's screen, its newest `rows`, read between two checks that it is
+   * still the run `target` names: null when it couldn't be read or the run
+   * changed, undefined when this host can't read screens at all.
    */
   private async readScreen(
     target: TerminalTarget,
-    askerKinds: readonly string[]
+    askerKinds: readonly string[],
+    rows = MARKER_SEARCH_ROWS
   ): Promise<ScreenRead | null | undefined> {
     const observed = await this.observe(target, askerKinds);
     if (observed.state !== "alive") return null;
@@ -325,8 +334,7 @@ export class DaintreeTerminalSink implements TerminalSink {
     if (client?.getSerializedStateAsync === undefined) return undefined;
     let data: string | undefined;
     try {
-      data = (await client.getSerializedStateAsync(target.paneId, { tailRows: MARKER_SEARCH_ROWS }))
-        ?.data;
+      data = (await client.getSerializedStateAsync(target.paneId, { tailRows: rows }))?.data;
     } catch {
       return null;
     }
@@ -337,9 +345,15 @@ export class DaintreeTerminalSink implements TerminalSink {
     if (after.state !== "alive") return null;
     const input = observeInputLine(data, inputSuggestionRuleFor(after.info.detectedAgentId))
       .inputLine.state;
-    const screen = tailCapturedOutput(data, MARKER_SEARCH_ROWS, true).content;
+    const screen = tailCapturedOutput(data, rows, true).content;
     return {
-      composer: input === "empty" || input === "suggestion" ? "empty" : input,
+      // The input row is read off the alternate screen while a marker can be
+      // in a draft on the other: an empty prompt there settles nothing.
+      composer: data.includes(ALT_SCREEN_ENTER)
+        ? "unknown"
+        : input === "empty" || input === "suggestion"
+          ? "empty"
+          : input,
       // The id is random hex, so it is found whole even across a wrapped row.
       text: screen.replace(WRAP_NOISE, ""),
     };
@@ -355,7 +369,7 @@ export class DaintreeTerminalSink implements TerminalSink {
     askerKinds: readonly string[],
     blocks: readonly DecisionBlock[]
   ): Promise<InjectResult | null> {
-    const screen = await this.readScreen(target, askerKinds);
+    const screen = await this.readScreen(target, askerKinds, STAGED_SEARCH_ROWS);
     if (screen === null || screen === undefined || screen.composer !== "empty") return null;
     const ids = blocks.map((block) => block.injectionId);
     return ids.every((id) => screen.text.includes(id))
@@ -419,7 +433,7 @@ export class DaintreeTerminalSink implements TerminalSink {
     const unstage = () => {
       for (const key of keys) this.staged.delete(key);
     };
-    const screen = await this.readScreen(target, askerKinds);
+    const screen = await this.readScreen(target, askerKinds, STAGED_SEARCH_ROWS);
     if (screen === null || screen === undefined || screen.composer !== "empty") {
       const drafted = this.drafted.get(target.paneId);
       const since = Math.min(
