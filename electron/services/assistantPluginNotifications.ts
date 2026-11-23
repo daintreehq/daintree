@@ -1,9 +1,9 @@
 import type { HostWatchNotification } from "../../shared/types/hostControl.js";
 import {
   assistantAgentMcpAccess,
-  assistantAgentMcpAccessOffSince,
   onAssistantAgentMcpAccessOff,
 } from "./pluginAgentMcp/projectEnablement.js";
+import { assistantGrantOffEpoch } from "./pluginAgentMcp/assistantGrantEpoch.js";
 
 /** A plugin's notification for an assistant (#18154), with the words only a read returns. */
 export interface AssistantPluginNotification extends HostWatchNotification {
@@ -22,10 +22,11 @@ export interface AssistantPluginNotificationsDeps {
   /** The person let this project's Assistant use this plugin's tools: the whole grant. */
   mayHear(projectId: string, pluginId: string): boolean;
   /**
-   * When that grant last ended, or null. One raised before then was raised
-   * under the grant that ended, even if it is on again now.
+   * The grant epoch that pair last went off at (`assistantGrantEpoch`). One
+   * raised at an earlier epoch was raised under the grant that ended, even if
+   * it is on again now.
    */
-  offSince?(projectId: string, pluginId: string): number | null;
+  offEpoch?(projectId: string, pluginId: string): number;
   now(): number;
 }
 
@@ -37,6 +38,8 @@ interface Row {
   takenBy: string | null;
   /** When it was published, or taken: it is kept for its taker from then. */
   since: number;
+  /** Hand-over order, whatever the clock did: the latest given lists last. */
+  takenSeq: number;
 }
 
 export interface AssistantNotificationFilter {
@@ -54,14 +57,18 @@ export interface AssistantNotificationFilter {
 export class AssistantPluginNotifications {
   private readonly rows = new Map<string, Row>();
   private readonly listeners = new Set<(notification: AssistantPluginNotification) => void>();
+  private takes = 0;
 
   constructor(private readonly deps: AssistantPluginNotificationsDeps) {}
 
-  /** Keeps one and tells the listeners, unless its project's Assistant may not hear that plugin. */
-  publish(notification: AssistantPluginNotification): void {
+  /**
+   * Keeps one and tells the listeners, unless its project's Assistant may not
+   * hear that plugin, or the grant went off after it was raised at `raisedEpoch`.
+   */
+  publish(notification: AssistantPluginNotification, raisedEpoch?: number): void {
     if (!this.deps.mayHear(notification.projectId, notification.pluginId)) return;
-    const offSince = this.deps.offSince?.(notification.projectId, notification.pluginId) ?? null;
-    if (offSince !== null && notification.createdAt <= offSince) return;
+    const offEpoch = this.deps.offEpoch?.(notification.projectId, notification.pluginId) ?? 0;
+    if (raisedEpoch !== undefined && offEpoch > raisedEpoch) return;
     this.prune();
     if (this.rows.size >= ASSISTANT_NOTIFICATIONS_MAX && !this.evictOne()) return;
     const pluginName = notification.pluginName.slice(0, ASSISTANT_NOTIFICATION_PLUGIN_NAME_MAX);
@@ -72,6 +79,7 @@ export class AssistantPluginNotifications {
       heldBy: null,
       takenBy: null,
       since: this.deps.now(),
+      takenSeq: 0,
     });
     for (const listener of [...this.listeners]) listener(kept);
   }
@@ -140,6 +148,7 @@ export class AssistantPluginNotifications {
     row.heldBy = null;
     row.takenBy = run;
     row.since = this.deps.now();
+    row.takenSeq = ++this.takes;
     return true;
   }
 
@@ -151,14 +160,17 @@ export class AssistantPluginNotifications {
     return row.notification;
   }
 
-  /** Those given to `run` that are still kept and allowed, oldest first: how a lost answer is found again. */
+  /**
+   * Those given to `run` that are still kept and allowed, in the order they
+   * were given, the latest last: how a lost answer or line is found again.
+   */
   takenBy(run: string): AssistantPluginNotification[] {
     this.prune();
-    const found: AssistantPluginNotification[] = [];
+    const found: Row[] = [];
     for (const row of this.rows.values()) {
-      if (row.takenBy === run && this.mayHear(row.notification)) found.push(row.notification);
+      if (row.takenBy === run && this.mayHear(row.notification)) found.push(row);
     }
-    return found.sort((a, b) => a.createdAt - b.createdAt);
+    return found.sort((a, b) => a.takenSeq - b.takenSeq).map((row) => row.notification);
   }
 
   /**
@@ -212,7 +224,7 @@ export function assistantPluginNotifications(): AssistantPluginNotifications {
   if (shared !== null) return shared;
   const created = new AssistantPluginNotifications({
     mayHear: (projectId, pluginId) => assistantAgentMcpAccess(projectId, pluginId) !== "off",
-    offSince: assistantAgentMcpAccessOffSince,
+    offEpoch: assistantGrantOffEpoch,
     now: () => Date.now(),
   });
   onAssistantAgentMcpAccessOff((projectId, pluginId) => created.forget(projectId, pluginId));

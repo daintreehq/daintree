@@ -263,7 +263,7 @@ export interface PluginHostFactoryDeps {
    * silence, mute and budget; loaded on first use. Absent, none reaches one.
    */
   assistantNotifications?: () => Promise<{
-    publish(notification: AssistantPluginNotification): void;
+    publish(notification: AssistantPluginNotification, raisedEpoch?: number): void;
   }>;
 }
 

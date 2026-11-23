@@ -53,6 +53,7 @@ import type {
 import { type PluginHostFactoryDeps, isProjectViewUnavailable } from "./pluginHostDeps.js";
 import type { PluginEventScope } from "./pluginEventScope.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
+import { assistantGrantEpoch } from "../pluginAgentMcp/assistantGrantEpoch.js";
 
 /**
  * A targeted `terminal.close` for a project with no live view (#13507): main
@@ -754,6 +755,7 @@ export function buildNotificationsHostApi(
       // When it was raised, before any wait: one raised before the person ends
       // an assistant's grant never reaches an assistant under a later one.
       const raisedAt = Date.now();
+      const raisedEpoch = assistantGrantEpoch();
       if (!deps.plugins.has(pluginId)) return { id };
       const parsed = PluginNotifyOptionsSchema.safeParse(options);
       if (!parsed.success) {
@@ -869,17 +871,20 @@ export function buildNotificationsHostApi(
           try {
             const assistants = await deps.assistantNotifications();
             if (!isBound()) return { id };
-            assistants.publish({
-              notificationId: id,
-              pluginId,
-              pluginName: displayName,
-              projectId,
-              dedupeKey: dedupeKey ?? null,
-              severity,
-              createdAt: raisedAt,
-              title,
-              body,
-            });
+            assistants.publish(
+              {
+                notificationId: id,
+                pluginId,
+                pluginName: displayName,
+                projectId,
+                dedupeKey: dedupeKey ?? null,
+                severity,
+                createdAt: raisedAt,
+                title,
+                body,
+              },
+              raisedEpoch
+            );
           } catch (error) {
             console.warn("[PluginHost] Couldn't offer a notification to assistants", error);
           }

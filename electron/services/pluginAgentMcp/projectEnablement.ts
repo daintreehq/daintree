@@ -8,6 +8,7 @@ import {
   type AgentMcpAccess,
 } from "../../../shared/types/ipc/pluginAgentMcp.js";
 import { pluginMcpGrantRegistry, type PluginMcpGrant } from "./grantRegistry.js";
+import { noteAssistantGrantOff } from "./assistantGrantEpoch.js";
 import {
   accessAllowsEndpoint,
   hasProjectMcpDefaults,
@@ -626,20 +627,6 @@ export function setAllProjectsAgentMcpAccess(
 const assistantAccessOffListeners = new Set<
   (projectId: string, pluginInstanceId: string) => void
 >();
-/** When each project and plugin's Assistant access was last turned off, by this process's clock. */
-const assistantAccessOffAt = new Map<string, number>();
-
-/**
- * When the user last turned this plugin's tools off for this project's
- * Assistant in this run of Daintree, or null: what the plugin raised before
- * then was raised under a grant that has since ended (#18154).
- */
-export function assistantAgentMcpAccessOffSince(
-  projectId: string,
-  pluginInstanceId: string
-): number | null {
-  return assistantAccessOffAt.get(`${projectId}\u0000${pluginInstanceId}`) ?? null;
-}
 
 /**
  * Told each time the user turns a plugin's tools off for a project's Daintree
@@ -691,7 +678,7 @@ export function setProjectAssistantAgentMcpAccess(
     (grant) => grant.pluginInstanceId !== pluginInstanceId || isPluginMcpGrantAllowed(grant)
   );
   if (access === "off") {
-    assistantAccessOffAt.set(`${projectId}\u0000${pluginInstanceId}`, Date.now());
+    noteAssistantGrantOff(projectId, pluginInstanceId);
     for (const listener of [...assistantAccessOffListeners]) listener(projectId, pluginInstanceId);
   }
 }

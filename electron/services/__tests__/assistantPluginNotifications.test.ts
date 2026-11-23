@@ -141,22 +141,32 @@ describe("AssistantPluginNotifications (#18154)", () => {
     expect(kept?.pluginName.length).toBeLessThan(1_000);
   });
 
-  it("keeps none raised before the grant last ended, even with it on again", () => {
-    let offSince: number | null = now;
+  it("keeps none raised before its own pair's grant last ended, whatever the clock says", () => {
+    const offEpochs = new Map<string, number>([["p1\u0000acme", 3]]);
     const gated = new AssistantPluginNotifications({
       mayHear: () => true,
-      offSince: () => offSince,
+      offEpoch: (projectId, pluginId) => offEpochs.get(`${projectId}\u0000${pluginId}`) ?? 0,
       now: () => now,
     });
-    gated.publish(notification({ createdAt: now - 1 }));
-    gated.publish(notification({ createdAt: now }));
-    const after = notification({ createdAt: now + 1 });
-    gated.publish(after);
-    expect(gated.untaken({ projectId: null, pluginId: null })).toEqual([after]);
-    offSince = null;
-    const any = notification({ createdAt: 0 });
-    gated.publish(any);
-    expect(gated.untaken({ projectId: null, pluginId: null })).toContain(any);
+    // Raised at epoch 2, before the grant went off at 3: dropped, even dated later.
+    gated.publish(notification({ createdAt: now + 60_000 }), 2);
+    // Raised at 3 or later, after it went off and came back: kept, even dated earlier.
+    const same = notification({ createdAt: 0 });
+    gated.publish(same, 3);
+    // Another plugin's grant never ended.
+    const other = notification({ pluginId: "other" });
+    gated.publish(other, 0);
+    expect(gated.untaken({ projectId: null, pluginId: null })).toEqual([same, other]);
+  });
+
+  it("lists what a run was given in the order it was given, not raised", () => {
+    const older = notification({ createdAt: now - 10 });
+    const newer = notification({ createdAt: now });
+    store.publish(older);
+    store.publish(newer);
+    store.take(newer.notificationId, null, "run-a");
+    store.take(older.notificationId, null, "run-a");
+    expect(store.takenBy("run-a")).toEqual([newer, older]);
   });
 
   it("forgets only that plugin's, and a held one is held by no one after", () => {

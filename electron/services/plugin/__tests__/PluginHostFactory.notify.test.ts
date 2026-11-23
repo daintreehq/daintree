@@ -732,17 +732,21 @@ describe("a notification for an assistant (#18154)", () => {
       audience: "assistant",
     });
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith({
-      notificationId: id,
-      pluginId: PLUGIN_ID,
-      pluginName: "Acme",
-      projectId: PROJECT_A,
-      dedupeKey: "run-42",
-      severity: "warning",
-      createdAt: expect.any(Number),
-      title: "Run blocked",
-      body: "Needs criteria",
-    });
+    expect(publish).toHaveBeenCalledWith(
+      {
+        notificationId: id,
+        pluginId: PLUGIN_ID,
+        pluginName: "Acme",
+        projectId: PROJECT_A,
+        dedupeKey: "run-42",
+        severity: "warning",
+        createdAt: expect.any(Number),
+        title: "Run blocked",
+        body: "Needs criteria",
+      },
+      // The grant epoch it was raised at, so a later revocation still covers it.
+      expect.any(Number)
+    );
     // The person's own row is unchanged by it.
     expect(lastToast()).toMatchObject({ title: "Acme: Run blocked", priority: "low" });
 
@@ -801,7 +805,10 @@ describe("a notification for an assistant (#18154)", () => {
       audience: "assistant",
       target: { worktreeId: "/repos/beta/feature" },
     });
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-b" }));
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-b", body: "b" }),
+      expect.any(Number)
+    );
   });
 
   it("refuses any other audience", async () => {

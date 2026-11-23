@@ -21,11 +21,11 @@ import {
   makeProjectPluginInstanceKey,
 } from "../../../../shared/types/plugin.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
+import { assistantGrantEpoch, assistantGrantOffEpoch } from "../assistantGrantEpoch.js";
 import {
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
   assistantAgentMcpAccess,
-  assistantAgentMcpAccessOffSince,
   assistantAgentMcpScopeFor,
   hasAnyAgentMcpEnablement,
   hasAnyAssistantAgentMcpAccess,
@@ -842,11 +842,13 @@ describe("projectEnablement", () => {
       const off = onAssistantAgentMcpAccessOff(heard);
       setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
       expect(heard).not.toHaveBeenCalled();
-      const before = Date.now();
+      const raised = assistantGrantEpoch();
       setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
       expect(heard).toHaveBeenCalledWith(PROJECT_A, LEDGER);
-      expect(assistantAgentMcpAccessOffSince(PROJECT_A, LEDGER)).toBeGreaterThanOrEqual(before);
-      expect(assistantAgentMcpAccessOffSince(PROJECT_B, LEDGER)).toBeNull();
+      // Gone off after a notification raised at `raised`, and only for that pair.
+      expect(assistantGrantOffEpoch(PROJECT_A, LEDGER)).toBeGreaterThan(raised);
+      expect(assistantGrantOffEpoch(PROJECT_A, "acme.crm")).toBeLessThanOrEqual(raised);
+      expect(assistantGrantOffEpoch(PROJECT_B, LEDGER)).toBeLessThanOrEqual(raised);
       off();
       setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
       expect(heard).toHaveBeenCalledTimes(1);
