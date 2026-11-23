@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentUsageReadout, AgentUsageSnapshot } from "@shared/types/ipc/agentUsage";
+import { AGENT_USAGE_SHOWN_FOR_MS } from "@shared/utils/agentUsage";
 
 const { dispatch, view } = vi.hoisted(() => ({
   dispatch: vi.fn(),
@@ -481,6 +482,48 @@ describe("SidebarAgentUsage", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("goes, warning and all, once its last reading ages out, with no new snapshot (#18159)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const observedAt = Date.now() - AGENT_USAGE_SHOWN_FOR_MS + 30_000;
+        const resetsAt = Date.now() + 3 * 86_400_000;
+        installBridge([
+          claude({ statement: "used", usedPercent: 99, resetsAt, observedAt }),
+          codex(90, VPS, { observedAt: Date.now() }),
+        ]);
+        const { container } = await renderUsage();
+        fireEvent.click(header(container));
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(29_000);
+        });
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never shows a reading older than the span, letting a fresher looser one take the row", async () => {
+      const resetsAt = NOW + 3 * 86_400_000;
+      installBridge([
+        claude({
+          statement: "used",
+          usedPercent: 99,
+          resetsAt,
+          observedAt: Date.now() - AGENT_USAGE_SHOWN_FOR_MS - 1,
+        }),
+        claude({ statement: "used", usedPercent: 15, resetsAt, observedAt: Date.now() }),
+      ]);
+      const { container } = await renderUsage();
+      expect(rows(container)).toHaveLength(1);
+      expect(rows(container)[0]!.textContent).toMatch(/^15% · resets /);
+      expect(header(container).hasAttribute("data-attention")).toBe(false);
     });
 
     it("leaves no section folded when nothing has a reading, and returns folded when one does", async () => {

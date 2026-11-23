@@ -5,6 +5,7 @@ import type {
   CodexAgentUsageReading,
 } from "../../types/ipc/agentUsage.js";
 import {
+  AGENT_USAGE_SHOWN_FOR_MS,
   agentUsageWithSuccessors,
   compareAgentUsage,
   isAgentUsagePastAttention,
@@ -101,6 +102,25 @@ describe("tightestAgentUsage", () => {
     expect(tightestAgentUsage(readings, (r) => r, NOW)).toEqual([readings[3], readings[2]]);
   });
 
+  it("drops a reading once it has gone unobserved too long, so a fresher looser one shows (#18159)", () => {
+    const seen = NOW - AGENT_USAGE_SHOWN_FOR_MS;
+    const old = claude({ usedPercent: 99, resetsAt: NOW + 86_400_000, observedAt: seen });
+    const fresh = claude({ usedPercent: 10, resetsAt: NOW + 86_400_000 });
+    expect(tightestAgentUsage([old, fresh], (r) => r, NOW - 1)).toEqual([old]);
+    expect(tightestAgentUsage([old, fresh], (r) => r, NOW)).toEqual([fresh]);
+    expect(tightestAgentUsage([old], (r) => r, NOW)).toEqual([]);
+    // Observed again, the same limit shows for another full span.
+    const again = { ...old, observedAt: NOW - 1 };
+    expect(tightestAgentUsage([again, fresh], (r) => r, NOW + AGENT_USAGE_SHOWN_FOR_MS - 2)).toEqual(
+      [again]
+    );
+  });
+
+  it("ages out a reading that names no reset as well", () => {
+    const open = codex({ resetsAt: null, observedAt: NOW - AGENT_USAGE_SHOWN_FOR_MS });
+    expect(tightestAgentUsage([open], (r) => r, NOW)).toEqual([]);
+  });
+
   it("drops a reading once its reset passes, so a runner-up shows", () => {
     const over = codex({ usedPercent: 95, resetsAt: NOW });
     const live = codex({ usedPercent: 10, windowDurationMins: 10080, resetsAt: null });
@@ -157,6 +177,40 @@ describe("agentUsageWithSuccessors", () => {
     });
     const sooner = codex({ usedPercent: 90, windowDurationMins: 60, resetsAt: NOW + 500 });
     expect(agentUsageWithSuccessors([sooner, weekly, fiveHour], NOW)).toEqual([fiveHour, weekly]);
+  });
+
+  it("never lets an aged-out tight reading keep a fresher one from being sent (#18159)", () => {
+    const old = claude({
+      usedPercent: 99,
+      resetsAt: NOW + 86_400_000,
+      observedAt: NOW - AGENT_USAGE_SHOWN_FOR_MS - 1,
+    });
+    const fresh = claude({ window: "5-hour limit", usedPercent: 20, resetsAt: NOW + 3_600_000 });
+    expect(agentUsageWithSuccessors([old, fresh], NOW)).toEqual([fresh]);
+  });
+
+  it("sends what takes over when a winner ages out before its reset", () => {
+    const weekly = codex({
+      usedPercent: 95,
+      windowDurationMins: 10080,
+      resetsAt: NOW + 86_400_000,
+      observedAt: NOW - AGENT_USAGE_SHOWN_FOR_MS + 60_000,
+    });
+    // Resets after the weekly ages out, though long before the weekly's reset.
+    const fiveHour = codex({ usedPercent: 30, resetsAt: NOW + 3_600_000 });
+    // Ages out before the weekly does, so it can't take over from it.
+    const older = codex({
+      usedPercent: 60,
+      resetsAt: null,
+      observedAt: NOW - AGENT_USAGE_SHOWN_FOR_MS + 30_000,
+    });
+    expect(agentUsageWithSuccessors([weekly, older, fiveHour], NOW)).toEqual([weekly, fiveHour]);
+  });
+
+  it("sends a winner that names no reset with what outlasts its age-out", () => {
+    const open = claude({ statement: "approaching", usedPercent: null, resetsAt: null });
+    const later = claude({ usedPercent: 10, resetsAt: null, observedAt: NOW });
+    expect(agentUsageWithSuccessors([open, later], NOW)).toEqual([open, later]);
   });
 
   it("sends a winner alone when it names no reset, or nothing outlasts it", () => {

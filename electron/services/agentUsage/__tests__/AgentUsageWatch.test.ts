@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeUsageAccount } from "../../../../shared/types/ipc/agentQuota.js";
 import type { CodexHomeQuota } from "../../codex/CodexQuotaService.js";
+import { AGENT_USAGE_SHOWN_FOR_MS } from "../../../../shared/utils/agentUsage.js";
 import {
   AgentUsageWatch,
   liveAgentFolders,
@@ -261,6 +262,31 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  it("stops sending a kept Codex reading once it has gone unobserved too long (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    h.codexAnswers.set("/accts/work", () => ({
+      ...codexQuota("/accts/work", 70, START),
+      result: {
+        status: "ok",
+        planType: null,
+        windows: [{ usedPercent: 70, windowDurationMins: 10080, resetsAt: START + 86_400_000 }],
+        fetchedAt: START,
+      },
+    }));
+    h.watch.acquire();
+    await settle();
+    h.codexAnswers.set("/accts/work", () => ({
+      ...codexQuota("/accts/work", 0),
+      result: { status: "unavailable", reason: "timeout", fetchedAt: Date.now() },
+    }));
+    await vi.advanceTimersByTimeAsync(AGENT_USAGE_SHOWN_FOR_MS - 1);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70, observedAt: START }]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.watch.latest()).toEqual([]);
+    h.watch.dispose();
+  });
+
   describe("tracking turned off and on again (#17981)", () => {
     function failing(): CodexHomeQuota {
       return {
@@ -426,6 +452,28 @@ describe("AgentUsageWatch", () => {
     // Woken at the reset itself, not a tick later.
     await vi.advanceTimersByTimeAsync(TICK / 2 + 1);
     expect(h.watch.latest()).toMatchObject([{ window: "weekly limit", usedPercent: 30 }]);
+    expect(h.watch.latest()).toHaveLength(1);
+    h.watch.dispose();
+  });
+
+  it("hands over from a Claude Code reading as it ages out, not a tick later (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [
+        claudeReading({
+          usedPercent: 99,
+          resetsAt: START + 86_400_000,
+          observedAt: START - AGENT_USAGE_SHOWN_FOR_MS + TICK / 2,
+        }),
+        claudeReading({ window: "5-hour limit", usedPercent: 20, resetsAt: START + 3_600_000 }),
+      ]),
+    ];
+    h.watch.acquire();
+    await settle();
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 99 }, { usedPercent: 20 }]);
+    await vi.advanceTimersByTimeAsync(TICK / 2 + 1);
+    expect(h.watch.latest()).toMatchObject([{ window: "5-hour limit", usedPercent: 20 }]);
     expect(h.watch.latest()).toHaveLength(1);
     h.watch.dispose();
   });
