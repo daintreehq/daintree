@@ -6,7 +6,6 @@ import {
   Folders,
   GitBranch,
   GitPullRequest,
-  MessageSquareMore,
   PanelLeft,
   Plus,
   Search,
@@ -63,8 +62,8 @@ export const TOOLBAR_AGENTS = ["claude", "codex", "antigravity"] as const;
  */
 export const ANCHOR = {
   launcher: { x: 51, y: 14 },
-  "forge-issues": { x: 443, y: 14 },
-  "copy-context": { x: 523, y: 14 },
+  "forge-issues": { x: 465, y: 14 },
+  "copy-context": { x: 545, y: 14 },
 } as const satisfies Record<string, { x: number; y: number }>;
 
 export type AppRegion = "toolbar" | "sidebar" | "grid" | "dock" | "right";
@@ -191,8 +190,16 @@ export function MockWorktreeCard({
   );
 }
 
-/** The dock's waiting pill, as the real one: glyph, word, count. */
-export function MockWaitingPill({ count, className }: { count: number; className?: string }) {
+/** The dock's attention pill, as the real one: glyph, word, count. */
+export function MockWaitingPill({
+  count,
+  label = "Attention",
+  className,
+}: {
+  count: number;
+  label?: string;
+  className?: string;
+}) {
   const waiting = resolveMockState(useMockKit(), "waiting");
   const Icon = waiting?.Icon;
   return (
@@ -204,7 +211,7 @@ export function MockWaitingPill({ count, className }: { count: number; className
       )}
     >
       {Icon && <Icon className={cn("size-2.5", waiting?.colorClass)} />}
-      <span className="text-3xs font-medium text-text-primary">Waiting</span>
+      <span className="text-3xs font-medium text-text-primary">{label}</span>
       <span className="text-3xs tabular-nums text-text-secondary">{count}</span>
     </span>
   );
@@ -225,7 +232,34 @@ export interface MockAppProps {
   rightPanel?: ReactNode;
   /** Floats above the main area: dialogs, menus, the review surface. */
   overlay?: ReactNode;
+  /**
+   * Extra toolbar buttons before the notification bell, such as Canopy or
+   * Decisions. Everything left of them moves left by their width, the forge
+   * counts included, so a scene that hangs a menu from `ANCHOR` leaves this out.
+   */
+  signals?: ReactNode;
+  /** Beside the project pill, as the real host chip. Omit for none. */
+  hostChip?: ReactNode;
+  /** The sidebar header's fleet bolt, which the real one shows on hover. Defaults to shown. */
+  sidebarArm?: boolean;
   children?: ReactNode;
+}
+
+/** A toolbar button for `signals`, named by `anchor` so the pointer can find it. */
+export function MockToolbarButton({
+  anchor,
+  children,
+  className,
+}: {
+  anchor: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <ToolbarButton anchor={anchor} className={className}>
+      {children}
+    </ToolbarButton>
+  );
 }
 
 export function MockApp({
@@ -237,6 +271,9 @@ export function MockApp({
   branch = "main",
   rightPanel,
   overlay,
+  signals,
+  hostChip,
+  sidebarArm = true,
   children,
 }: MockAppProps) {
   const kit = useMockKit();
@@ -288,6 +325,7 @@ export function MockApp({
             <span className="truncate">{branch}</span>
           </span>
         </span>
+        {hostChip}
         <span className="flex-1" />
         <span
           data-tour-anchor="forge"
@@ -301,6 +339,7 @@ export function MockApp({
             <GitPullRequest aria-hidden="true" />3
           </span>
         </span>
+        {signals}
         <ToolbarButton anchor="notifications">
           <Bell aria-hidden="true" />
         </ToolbarButton>
@@ -317,9 +356,6 @@ export function MockApp({
         <ToolbarButton anchor="assistant">
           {AssistantIcon && <AssistantIcon className="size-3" />}
         </ToolbarButton>
-        <ToolbarButton anchor="portal">
-          <MessageSquareMore aria-hidden="true" />
-        </ToolbarButton>
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -331,10 +367,20 @@ export function MockApp({
           )}
           style={{ width: APP_LAYOUT.sidebarWidth }}
         >
-          <div className="flex h-7 shrink-0 items-center justify-between px-2.5 pt-1">
+          <div
+            data-tour-anchor="sidebar-header"
+            className="flex h-7 shrink-0 items-center justify-between px-2.5 pt-1"
+          >
             <span className="text-2xs font-semibold text-text-primary">Worktrees</span>
             <span className="flex items-center gap-2 text-text-secondary">
-              <Zap data-tour-anchor="sidebar-arm" className="size-3" aria-hidden="true" />
+              <Zap
+                data-tour-anchor="sidebar-arm"
+                className={cn(
+                  "size-3 transition-opacity duration-150 ease-out",
+                  sidebarArm ? "opacity-100" : "opacity-0"
+                )}
+                aria-hidden="true"
+              />
               <Plus data-tour-anchor="sidebar-plus" className="size-3" aria-hidden="true" />
             </span>
           </div>

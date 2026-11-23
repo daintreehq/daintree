@@ -127,6 +127,7 @@ describe("plugin tours", () => {
       title: "Welcome Tour",
       minutes: 1,
       chapterTitles: ["intro", "publish"],
+      chapterIds: ["intro", "publish"],
     });
     expect(prepareMock).not.toHaveBeenCalled();
   });

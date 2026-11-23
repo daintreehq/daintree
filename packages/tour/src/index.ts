@@ -5,6 +5,7 @@ export type {
   TourCaption,
   TourChapter,
   TourChapterTiming,
+  TourPlatform,
   TourPlaybackStatus,
   TourPlayerState,
   TourTimingManifest,

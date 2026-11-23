@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import {
   cn,
   type CursorStep,
@@ -10,6 +11,7 @@ import {
 } from "@daintreehq/tour/kit";
 import {
   GRID_RECT,
+  MockAgentIcon,
   MockApp,
   MockEmptyGrid,
   MockGrid,
@@ -18,11 +20,22 @@ import {
 } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
 
-const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;
+const DIALOG = { x: GRID_RECT.x + 119, y: 64, width: 230 } as const;
 const NAME_FIELD = { anchor: "create-worktree-name", dx: 5, dy: -3 };
 const CREATE_BUTTON = { anchor: "create-worktree-button" };
+const AGENT_FIELD = { anchor: "create-worktree-agent", dx: 30 };
+const CLAUDE_OPTION = { anchor: "create-worktree-agent-claude", dx: -20 };
+const NO_AGENT_OPTION = { anchor: "create-worktree-agent-none", dx: -20 };
+const AGENT_OPTIONS = [
+  { id: "none", label: "No agent" },
+  { id: "claude", label: "Claude" },
+  { id: "codex", label: "Codex" },
+] as const;
+const PROMPT_FIELD = { anchor: "create-worktree-prompt", dx: 20, dy: -6 };
 // The name is done before the pointer sets off for Create.
 const CREATE = { cue: "create" } as const;
+const EMPTY = { cue: "empty" } as const;
+const FIRST_TASK = "Add a search box to the header";
 
 export const CURSOR: readonly CursorStep[] = [
   { cue: "plus", at: { anchor: "sidebar-plus" } },
@@ -30,7 +43,160 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "name", at: NAME_FIELD },
   { cue: "create", at: CREATE_BUTTON },
   { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
+  // The same form again, to show what else it can do. The Agent field opens a
+  // list, and a second click picks from it; every glide is 450 ms, so each click
+  // comes at least that long after its approach.
+  { cue: "agent", offset: -0.9, at: AGENT_FIELD },
+  { cue: "agent", offset: -0.4, at: AGENT_FIELD, click: true },
+  { cue: "agent", offset: -0.35, at: CLAUDE_OPTION },
+  { cue: "agent", offset: 0.15, at: CLAUDE_OPTION, click: true },
+  { cue: "prompt", at: PROMPT_FIELD },
+  { cue: "empty", offset: -0.9, at: AGENT_FIELD },
+  { cue: "empty", offset: -0.4, at: AGENT_FIELD, click: true },
+  { cue: "empty", offset: -0.35, at: NO_AGENT_OPTION },
+  { cue: "empty", offset: 0.15, at: NO_AGENT_OPTION, click: true },
 ];
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-2 flex flex-col gap-1">
+      <span className="text-3xs font-medium text-text-secondary">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The Create worktree form. The first time through it names a branch and
+ * creates it; the second shows its Agent and Prompt rows, then sets the agent
+ * back to "No agent" — the choice that leaves the new worktree empty.
+ */
+function CreateForm({
+  visible,
+  showcase,
+  agentChosen,
+  listOpen,
+}: {
+  visible: boolean;
+  /** The second visit, which shows the agent rows rather than naming a branch. */
+  showcase: boolean;
+  agentChosen: boolean;
+  /** The Agent field's list, open between the click on the field and the pick. */
+  listOpen: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "absolute z-10 rounded-lg border border-border-strong bg-surface-dialog p-3.5 shadow-[var(--theme-shadow-ambient)]",
+        reveal(visible)
+      )}
+      style={{ left: DIALOG.x, top: DIALOG.y, width: DIALOG.width }}
+    >
+      <div className="mb-2.5 text-xs font-semibold text-text-primary">Create worktree</div>
+      <Row label="Base">
+        <div className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+          main
+        </div>
+      </Row>
+      <Row label="Name">
+        <div
+          data-tour-anchor="create-worktree-name"
+          className={cn(
+            "flex h-5 items-center rounded-md border bg-surface-input px-2 text-3xs",
+            showcase
+              ? "border-border-input text-text-secondary"
+              : "border-border-interactive text-text-primary"
+          )}
+        >
+          {showcase ? (
+            "Branch name"
+          ) : (
+            <MockTyping
+              cue="name"
+              text="add-search"
+              delay={0.4}
+              charsPerSecond={14}
+              finishBy={CREATE}
+            />
+          )}
+        </div>
+      </Row>
+      <Row label="Agent">
+        <div className="relative">
+          <AgentList open={listOpen} chosen={agentChosen ? "claude" : "none"} />
+          <div
+            data-tour-anchor="create-worktree-agent"
+            className="flex h-5 items-center gap-1.5 rounded-md border border-border-input bg-surface-input px-2 text-3xs"
+          >
+            {agentChosen ? (
+              <>
+                <MockAgentIcon agent="claude" className="size-2.5" />
+                <span className="text-text-primary">Claude</span>
+              </>
+            ) : (
+              <span className="text-text-secondary">No agent</span>
+            )}
+            <span className="flex-1" />
+            <ChevronDown className="size-2.5 text-text-secondary" aria-hidden="true" />
+          </div>
+        </div>
+      </Row>
+      {/* The real form shows Prompt only once an agent is chosen. */}
+      {agentChosen && (
+        <Row label="Prompt">
+          <div
+            data-tour-anchor="create-worktree-prompt"
+            className="flex h-9 items-start rounded-md border border-border-input bg-surface-input px-2 py-1 text-3xs text-text-primary"
+          >
+            <PromptText />
+          </div>
+        </Row>
+      )}
+      <div className="mt-3 flex justify-end">
+        <span
+          data-tour-anchor="create-worktree-button"
+          className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse"
+        >
+          Create worktree
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** The Agent field's list, dropped under it as the real picker's popover. */
+function AgentList({ open, chosen }: { open: boolean; chosen: string }) {
+  return (
+    <div
+      data-tour-anchor="create-worktree-agent-list"
+      className={cn(
+        "absolute inset-x-0 top-[22px] z-10 flex flex-col gap-px rounded-md border border-border-strong bg-surface-panel-elevated p-1 shadow-[var(--theme-shadow-ambient)]",
+        reveal(open)
+      )}
+    >
+      {AGENT_OPTIONS.map((option) => (
+        <span
+          key={option.id}
+          data-tour-anchor={`create-worktree-agent-${option.id}`}
+          className={cn(
+            "flex h-[15px] items-center gap-1.5 rounded-sm px-1.5 text-3xs",
+            option.id === chosen ? "bg-overlay-selected text-text-primary" : "text-text-secondary"
+          )}
+        >
+          {option.id !== "none" && <MockAgentIcon agent={option.id} className="size-2.5" />}
+          {option.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PromptText() {
+  const typing = useCue("prompt", 0.3);
+  if (!typing)
+    return <span className="text-text-secondary">First task for the agent (optional)</span>;
+  return <MockTyping cue="prompt" text={FIRST_TASK} delay={0.3} finishBy={EMPTY} />;
+}
 
 export function WorktreesScene() {
   const project = useCue("project");
@@ -38,7 +204,33 @@ export function WorktreesScene() {
   const branchCue = useCue("branch");
   const dialogOpen = useCue("plus", 0.7);
   const created = useCue("create", 0.7);
+  const formCue = useCue("form");
+  const agentCue = useCue("agent", -0.9);
+  const pickingAgent = useCue("agent", -0.35);
+  const agentPicked = useCue("agent", 0.2);
+  const promptCue = useCue("prompt");
+  const emptyCue = useCue("empty", -0.9);
+  const pickingNone = useCue("empty", -0.35);
+  const noAgent = useCue("empty", 0.2);
+  const showcaseClosed = useCue("empty", 1.4);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
+
+  const showcase = formCue;
+  const formVisible = showcase ? !showcaseClosed : dialogOpen && !created;
+
+  const listOpen = (pickingAgent && !agentPicked) || (pickingNone && !noAgent);
+  const spotTargets = showcase
+    ? listOpen
+      ? ["create-worktree-agent", "create-worktree-agent-list"]
+      : promptCue && !emptyCue
+        ? ["create-worktree-prompt"]
+        : ["create-worktree-agent"]
+    : branchCue
+      ? ["worktree-fix-login-redirect-branch"]
+      : list
+        ? ["worktree-list"]
+        : ["project"];
+  const spotVisible = showcase ? agentCue && !showcaseClosed : project && !dialogOpen;
 
   return (
     <MockApp
@@ -80,58 +272,17 @@ export function WorktreesScene() {
         )
       }
       overlay={
-        <div
-          className={cn(
-            "absolute z-10 rounded-lg border border-border-strong bg-surface-dialog p-3.5 shadow-[var(--theme-shadow-ambient)]",
-            reveal(dialogOpen && !created)
-          )}
-          style={{ left: DIALOG.x, top: DIALOG.y, width: DIALOG.width }}
-        >
-          <div className="mb-2.5 text-xs font-semibold text-text-primary">Create worktree</div>
-          <div className="mb-2 flex flex-col gap-1">
-            <span className="text-3xs font-medium text-text-secondary">Base</span>
-            <div className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
-              main
-            </div>
-          </div>
-          <div className="mb-3 flex flex-col gap-1">
-            <span className="text-3xs font-medium text-text-secondary">Name</span>
-            <div
-              data-tour-anchor="create-worktree-name"
-              className="flex h-5 items-center rounded-md border border-border-interactive bg-surface-input px-2 text-3xs text-text-primary"
-            >
-              <MockTyping
-                cue="name"
-                text="add-search"
-                delay={0.4}
-                charsPerSecond={14}
-                finishBy={CREATE}
-              />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <span
-              data-tour-anchor="create-worktree-button"
-              className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse"
-            >
-              Create worktree
-            </span>
-          </div>
-        </div>
+        <CreateForm
+          visible={formVisible}
+          showcase={showcase}
+          agentChosen={showcase && agentPicked && !noAgent}
+          listOpen={showcase && listOpen}
+        />
       }
     >
-      {/* "Its worktrees sit down the left" — the whole list, not one card. */}
-      {/* Project, then the list, then one worktree's branch — each as it's named. */}
-      <MockSpotlight
-        targets={
-          branchCue
-            ? ["worktree-fix-login-redirect-branch"]
-            : list
-              ? ["worktree-list"]
-              : ["project"]
-        }
-        visible={project && !dialogOpen}
-      />
+      {/* Project, then the list, then one worktree's branch — each as it's named;
+          then the form's Agent and Prompt rows. */}
+      <MockSpotlight targets={spotTargets} visible={spotVisible} />
       <MockCursor {...cursor} />
     </MockApp>
   );

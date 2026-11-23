@@ -177,6 +177,7 @@ export function pluginTourSummary(tour: PluginTourDescriptor): TourSummary {
     minutes: Math.max(1, Math.round(seconds / 60)),
     // The module holds the titles and isn't loaded until the tour opens.
     chapterTitles: tour.chapters.map((chapter) => chapter.id),
+    chapterIds: tour.chapters.map((chapter) => chapter.id),
     ...(tour.version !== undefined ? { version: tour.version } : {}),
   };
 }

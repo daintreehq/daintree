@@ -94,6 +94,35 @@ describe("readTourStatus", () => {
     });
   });
 
+  it("reports no resume point for a chapter the registered tour doesn't play", async () => {
+    unregister = registerTour({
+      summary: {
+        id: TOUR_ID,
+        title: "Welcome",
+        minutes: 1,
+        chapterTitles: ["One", "Three"],
+        chapterIds: ["one", "three"],
+        version: "2",
+      },
+      load: () => Promise.reject(new Error("not loaded in this test")),
+    });
+    const saved = (lastChapterId: string) => ({
+      tours: {
+        [TOUR_ID]: {
+          completed: false,
+          dismissed: false,
+          lastChapter: 1,
+          lastChapterId,
+          contentVersion: "2",
+        },
+      },
+    });
+    getOnboardingStateMock.mockResolvedValue(saved("two"));
+    expect((await readTourStatus([TOUR_ID])).lastChapterId).toBeNull();
+    getOnboardingStateMock.mockResolvedValue(saved("three"));
+    expect((await readTourStatus([TOUR_ID])).lastChapterId).toBe("three");
+  });
+
   it("finds a withdrawn tour's progress under the qualified id a plugin was given", async () => {
     getOnboardingStateMock.mockResolvedValue({
       tours: {

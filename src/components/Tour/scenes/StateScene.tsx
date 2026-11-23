@@ -24,14 +24,14 @@ import {
 } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
 
-// Claude holds the check: Antigravity never reports finishing (its config has
-// no completion patterns), so it can only ever show working or waiting.
+// Claude finishes: Antigravity never reports finishing (its config has no
+// completion patterns), so it can only ever show working or waiting.
 const AGENTS: readonly MockAgentId[] = ["antigravity", "codex", "claude"];
 
 const QUESTION = "Search product names only, or descriptions too?";
 const CODEX_INPUT = { anchor: "codex-input", dy: 6 };
 
-// The pill opens the "Waiting for input" list above it; picking a row jumps there.
+// The Attention pill opens the "Needs attention" list above it; picking a row jumps there.
 const POPOVER = { width: 190, x: GRID_RECT.x + GRID_RECT.width - 190, y: 250 };
 const WAITING_ROW = { anchor: "menu-0", dx: -25, dy: -18 };
 const WAITING_PILL = { anchor: "dock-waiting", dx: 8 };
@@ -48,6 +48,8 @@ export const CURSOR: readonly CursorStep[] = [
 export function StateScene() {
   const working = useCue("working");
   const waiting = useCue("waiting");
+  const unread = useCue("unread");
+  // Read, then checked: the solid disc turns into the check once the output is seen.
   const done = useCue("done");
   const pill = useCue("pill");
   const listOpen = useCue("jump", 0.7);
@@ -61,7 +63,7 @@ export function StateScene() {
   const states: (MockStateId | null)[] = [
     working ? "working" : null,
     answered ? "working" : waiting ? "waiting" : working ? "working" : null,
-    done ? "completed" : working ? "working" : null,
+    done ? "completed" : unread ? "unread" : working ? "working" : null,
   ];
   const live = states.filter((s): s is MockStateId => s !== null);
 
@@ -83,7 +85,8 @@ export function StateScene() {
               key={agent}
               agent={agent}
               state={states[i]}
-              focused={i === 1 && jumped}
+              // Claude's pane takes focus as its output is read, which clears its disc.
+              focused={(i === 1 && jumped) || (i === 2 && done && !pill)}
               input={
                 i === 1 && answering && !answered ? (
                   <MockTyping cue="answer" text="Both" delay={0.7} charsPerSecond={8} />
@@ -113,7 +116,7 @@ export function StateScene() {
               ? ["menu-0"]
               : pill
                 ? ["dock-waiting"]
-                : done
+                : unread
                   ? ["claude-glyph"]
                   : waiting
                     ? ["codex-glyph"]
@@ -129,7 +132,7 @@ export function StateScene() {
         width={POPOVER.width}
         header={
           <div className="flex flex-col gap-0.5 px-2 pb-1 pt-0.5">
-            <span className="text-3xs font-semibold text-text-primary">Waiting for input</span>
+            <span className="text-3xs font-semibold text-text-primary">Needs attention</span>
             <span className="text-3xs text-text-secondary">This worktree</span>
           </div>
         }
@@ -147,11 +150,16 @@ export function StateScene() {
           {
             glyph: <MockStateGlyph state="waiting" />,
             label: "waiting for you",
-            active: waiting && !done,
+            active: waiting && !unread,
+          },
+          {
+            glyph: <MockStateGlyph state="unread" />,
+            label: "finished, unread",
+            active: unread && !done,
           },
           {
             glyph: <MockStateGlyph state="completed" />,
-            label: "looks finished",
+            label: "read",
             active: done,
           },
         ]}
