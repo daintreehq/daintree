@@ -1,14 +1,29 @@
-import { ChevronDown, FileCode, FileText, Folder, FolderTree, X } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronDown,
+  FileCode,
+  FileText,
+  Folder,
+  Folders,
+  FolderTree,
+  History,
+  Settings2,
+  X,
+} from "lucide-react";
 import {
   cn,
   type CursorStep,
   MockCursor,
   MockLines,
+  MockMenu,
   MockPanel,
   MockSpotlight,
+  MockTooltip,
+  reveal,
   useMockCursor,
+  useTourShortcuts,
 } from "@daintreehq/tour/kit";
-import { MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
+import { ANCHOR, MockApp, MockGrid, MockPane, MockWorktreeCard } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
 
 const TREE: ReadonlyArray<{ name: string; depth: number; folder?: boolean }> = [
@@ -29,18 +44,33 @@ const CLAUDE_INPUT = { anchor: "claude-input", dy: 6 };
 const CLAUDE_BODY = { anchor: "claude-body", dy: -32 };
 const DRAGGING = "Header.tsx";
 
+const COPY = ANCHOR["copy-context"];
+const COPY_BUTTON = { anchor: "copy-context" };
+// Copy context is a menu; its first item copies the whole worktree.
+const MENU = { width: 176, x: COPY.x - 166, y: COPY.y + 14 };
+const COPY_FULL = { anchor: "menu-0", dx: -28, dy: -3 };
+// Wherever the person pastes it: an unbranded chat window over Daintree.
+const CHAT = { x: 170, y: 60, width: 300, height: 220 };
+const COMPOSER = { anchor: "chat-composer" };
+
 export const CURSOR: readonly CursorStep[] = [
   { cue: "open", at: { anchor: "file-browser" } },
   { cue: "open", offset: 0.5, at: { anchor: "file-browser" }, click: true },
   { cue: "pick", at: PICKED_ROW },
   { cue: "pick", offset: 0.5, at: PICKED_ROW, click: true },
   // Press on the file, carry it across Claude's terminal, and let go on the
-  // prompt bar exactly as the voice says "drops".
+  // prompt bar as the voice says "drops".
   { cue: "ref", at: PICKED_ROW },
   { cue: "ref", offset: 0.3, at: PICKED_ROW, modifier: DRAGGING },
   { cue: "ref", offset: 0.8, at: CLAUDE_BODY, modifier: DRAGGING },
-  { cue: "drop", offset: -0.5, at: CLAUDE_INPUT, modifier: DRAGGING },
-  { cue: "drop", at: CLAUDE_INPUT, click: true },
+  { cue: "drop", offset: -0.2, at: CLAUDE_INPUT, modifier: DRAGGING },
+  { cue: "drop", offset: 0.5, at: CLAUDE_INPUT, click: true },
+  { cue: "copy", at: COPY_BUTTON },
+  { cue: "copy", offset: 0.5, at: COPY_BUTTON, click: true },
+  { cue: "full", at: COPY_FULL },
+  { cue: "full", offset: 0.5, at: COPY_FULL, click: true },
+  { cue: "clipboard", offset: 0.8, at: COMPOSER },
+  { cue: "paste", at: COMPOSER, click: true },
 ];
 
 function FileBrowser({ picked, lifted }: { picked: boolean; lifted: boolean }) {
@@ -90,19 +120,84 @@ function FileBrowser({ picked, lifted }: { picked: boolean; lifted: boolean }) {
   );
 }
 
+/** Another app's chat window, the pasted worktree waiting in its composer as an attachment. */
+function ChatWindow({ open, pasted }: { open: boolean; pasted: boolean }) {
+  return (
+    <div
+      className={cn(
+        "absolute z-20 flex flex-col overflow-hidden rounded-lg border border-border-strong bg-surface-dialog shadow-[var(--theme-shadow-ambient)]",
+        reveal(open)
+      )}
+      style={{ left: CHAT.x, top: CHAT.y, width: CHAT.width, height: CHAT.height }}
+    >
+      <div className="relative flex h-6 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
+        {[0, 1, 2].map((dot) => (
+          <span key={dot} className="size-1.5 rounded-full bg-overlay-strong" />
+        ))}
+        <span className="absolute inset-x-0 text-center text-3xs text-text-secondary">
+          New chat
+        </span>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 p-2">
+        <span className="h-2 w-24 rounded-full bg-overlay-strong" />
+        <span className="h-1.5 w-36 rounded-full bg-overlay-medium" />
+      </div>
+      <div className="shrink-0 p-2">
+        <div
+          data-tour-anchor="chat-composer"
+          className="flex flex-col gap-1.5 rounded-md border border-border-subtle bg-surface-input p-1.5"
+        >
+          <span
+            className={cn(
+              "inline-flex w-fit items-center gap-1 rounded-sm bg-overlay-subtle px-1.5 py-0.5 text-3xs text-text-primary",
+              reveal(pasted, "none")
+            )}
+          >
+            <Folders className="size-2.5 text-text-secondary" aria-hidden="true" />
+            add-search · 42 files
+          </span>
+          <span className="flex items-center justify-between text-3xs text-text-secondary">
+            Ask anything
+            <ArrowUp className="size-2.5 text-text-secondary" aria-hidden="true" />
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FilesScene() {
   const browseCue = useCue("open");
   const opened = useCue("open", 0.6);
   const picked = useCue("pick", 0.6);
   const lifted = useCue("ref", 0.3);
-  const hovering = useCue("drop", -0.5);
-  const dropped = useCue("drop");
+  const hovering = useCue("drop", -0.2);
+  const dropped = useCue("drop", 0.5);
+  const copyCue = useCue("copy");
+  const menuOpen = useCue("copy", 0.6);
+  const copied = useCue("full", 0.6);
+  const clipboard = useCue("clipboard");
+  const chatOpen = useCue("clipboard", 0.6);
+  const pasted = useCue("paste", 0.3);
+  const shortcuts = useTourShortcuts();
   const cursor = useMockCursor({ x: 360, y: 200 }, CURSOR);
+
+  const spotlight = pasted
+    ? ["chat-composer"]
+    : clipboard
+      ? ["copy-context"]
+      : menuOpen
+        ? ["menu-0"]
+        : copyCue
+          ? ["copy-context"]
+          : dropped
+            ? ["claude-input"]
+            : ["file-browser"];
 
   return (
     <MockApp
       branch="add-search"
-      focus={opened ? ["grid"] : ["toolbar"]}
+      focus={chatOpen ? [] : copyCue ? ["toolbar"] : opened ? ["grid"] : ["toolbar"]}
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" />
@@ -136,10 +231,41 @@ export function FilesScene() {
           </MockPane>
         </MockGrid>
       }
+      overlay={<ChatWindow open={chatOpen} pasted={pasted} />}
     >
+      <MockMenu
+        visible={menuOpen && !copied}
+        active={0}
+        x={MENU.x}
+        y={MENU.y}
+        width={MENU.width}
+        items={[
+          {
+            icon: <Folders />,
+            label: "Copy full context",
+            hint: shortcuts.hint("worktree.copyTree"),
+          },
+          { icon: <History />, label: "Recent", muted: true },
+          { icon: <Settings2 />, label: "Context settings", muted: true, separator: true },
+        ]}
+      />
+      <MockTooltip
+        visible={copied && !chatOpen}
+        x={COPY.x + 10}
+        y={COPY.y + 14}
+        align="right"
+        title="Context copied"
+        detail="Copied 42 files (186 KB) to clipboard"
+      />
       <MockSpotlight
-        targets={dropped ? ["claude-input"] : ["file-browser"]}
-        visible={(browseCue && !opened) || dropped}
+        targets={spotlight}
+        visible={
+          (browseCue && !opened) ||
+          (dropped && !copyCue) ||
+          (copyCue && !copied) ||
+          (clipboard && !chatOpen) ||
+          pasted
+        }
       />
       <MockCursor {...cursor} />
     </MockApp>

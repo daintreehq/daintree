@@ -1,14 +1,18 @@
-import { ChevronDown, RadioTower, X } from "lucide-react";
+import { Check, ChevronDown, RadioTower, X } from "lucide-react";
 import {
+  cn,
   type CursorStep,
   MockCursor,
+  MockSearchField,
   MockSpotlight,
   MockStreamingLines,
   MockTyping,
+  reveal,
   useMockCursor,
   useTourShortcuts,
 } from "@daintreehq/tour/kit";
 import {
+  MockAgentIcon,
   type MockAgentId,
   MockApp,
   MockGrid,
@@ -26,6 +30,18 @@ const SHIFT = "shift";
 /** Where a pane's title bar is clicked — shift-click only counts on the title bar. */
 const titleBar = (agent: MockAgentId) => ({ anchor: `${agent}-titlebar`, dx: -12 });
 const FIRST_INPUT = { anchor: "claude-input", dx: -16, dy: 6 };
+const HEADER = { anchor: "sidebar-header", dx: 10 };
+const BOLT = { anchor: "sidebar-arm" };
+// Antigravity was shift-clicked back out, so the list is where it rejoins.
+const PICK_ROW = { anchor: "fleet-picker-antigravity", dx: -40 };
+const ARM = { anchor: "fleet-picker-arm" };
+const EXIT = { anchor: "fleet-exit" };
+const PICKER = { x: 170, y: 44, width: 300 } as const;
+const NAMES: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "Antigravity",
+};
 
 export const CURSOR: readonly CursorStep[] = [
   // Claude is the focused panel; the first shift-click arms it along with Codex.
@@ -34,12 +50,18 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "pick", offset: 1.0, at: titleBar("antigravity"), modifier: SHIFT },
   { cue: "pick", offset: 1.5, at: titleBar("antigravity"), click: true, modifier: SHIFT },
   { cue: "out", offset: 0.1, at: titleBar("antigravity"), click: true, modifier: SHIFT },
-  { cue: "out", offset: 1.0, at: titleBar("antigravity"), click: true, modifier: SHIFT },
-  { cue: "bolt", at: { anchor: "sidebar-arm" } },
+  // Hovering the header is what shows the bolt.
+  { cue: "hover", at: HEADER },
+  { cue: "bolt", offset: -0.2, at: BOLT },
+  { cue: "bolt", offset: 0.2, at: BOLT, click: true },
+  { cue: "list", at: PICK_ROW },
+  { cue: "list", offset: 0.15, at: PICK_ROW, click: true },
+  { cue: "list", offset: 0.4, at: ARM },
+  { cue: "list", offset: 0.55, at: ARM, click: true },
   { cue: "type", at: FIRST_INPUT },
   { cue: "type", offset: 0.5, at: FIRST_INPUT, click: true },
-  { cue: "exit", at: titleBar("claude") },
-  { cue: "exit", offset: 0.5, at: titleBar("claude"), click: true },
+  { cue: "exit", offset: -0.3, at: EXIT },
+  { cue: "exit", offset: 0.3, at: EXIT, click: true },
 ];
 
 /** The fleet ribbon as the app draws it: amber band, a left stripe, the count, and Exit. */
@@ -52,9 +74,61 @@ function FleetRibbon({ count, exitHint }: { count: number; exitHint: string }) {
         <ChevronDown className="size-2.5 text-text-secondary" aria-hidden="true" />
       </span>
       <span className="flex-1" />
-      <span className="rounded-sm bg-overlay-subtle px-1.5 py-px text-text-secondary">
+      <span
+        data-tour-anchor="fleet-exit"
+        className="rounded-sm bg-overlay-subtle px-1.5 py-px text-text-secondary"
+      >
         Exit {exitHint}
       </span>
+    </div>
+  );
+}
+
+/** The bolt's picker: every panel in the grid, the ones already in the fleet ticked. */
+function FleetPicker({ open, selected }: { open: boolean; selected: readonly boolean[] }) {
+  const adding = selected.filter(Boolean).length - 2;
+  return (
+    <div
+      data-tour-anchor="fleet-picker"
+      className={cn(
+        "absolute z-20 flex flex-col rounded-lg border border-border-strong bg-surface-dialog p-2 shadow-[var(--theme-shadow-ambient)]",
+        reveal(open)
+      )}
+      style={{ left: PICKER.x, top: PICKER.y, width: PICKER.width }}
+    >
+      <MockSearchField>
+        <span className="text-text-secondary">Search terminals, worktrees, branches…</span>
+      </MockSearchField>
+      {PANES.map((agent, i) => (
+        <div
+          key={agent}
+          data-tour-anchor={`fleet-picker-${agent}`}
+          className={cn(
+            "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-colors duration-150 ease-out",
+            selected[i] ? "bg-overlay-selected" : "bg-transparent"
+          )}
+        >
+          <span
+            className={cn(
+              "flex size-2.5 shrink-0 items-center justify-center rounded-sm border",
+              selected[i] ? "border-text-primary bg-text-primary" : "border-border-strong"
+            )}
+          >
+            {selected[i] && <Check className="size-2 text-text-inverse" aria-hidden="true" />}
+          </span>
+          <MockAgentIcon agent={agent} className="size-3" />
+          <span className="min-w-0 flex-1 truncate text-3xs text-text-primary">{NAMES[agent]}</span>
+          <span className="text-3xs text-text-secondary">shop-app</span>
+        </div>
+      ))}
+      <div className="mt-1.5 flex items-center justify-end border-t border-border-subtle pt-1.5">
+        <span
+          data-tour-anchor="fleet-picker-arm"
+          className="rounded-md bg-text-primary px-2 py-0.5 text-3xs font-medium text-text-inverse"
+        >
+          {adding > 0 ? `Arm ${adding} selected` : "Arm selected"}
+        </span>
+      </div>
     </div>
   );
 }
@@ -63,24 +137,33 @@ export function FleetScene() {
   const firstPair = useCue("pick", 0.55);
   const third = useCue("pick", 1.55);
   const outAgain = useCue("out", 0.15);
-  const backIn = useCue("out", 1.05);
   const markers = useCue("armed");
+  const hover = useCue("hover");
   const bolt = useCue("bolt");
+  const pickerOpen = useCue("bolt", 0.35);
+  const listCue = useCue("list");
+  const ticked = useCue("list", 0.2);
+  const rejoined = useCue("list", 0.6);
   const typeCue = useCue("type");
   const typing = useCue("type", 0.5);
   const sent = useCue("send");
-  const left = useCue("exit", 0.55);
+  const exitCue = useCue("exit");
+  const left = useCue("exit", 0.35);
   const cursor = useMockCursor({ x: 420, y: 300 }, CURSOR);
   const shortcuts = useTourShortcuts();
   const mac = shortcuts.keyboard === "mac";
 
-  const antigravityIn = third && (!outAgain || backIn);
+  const antigravityIn = third && (!outAgain || rejoined);
   const armed = [firstPair && !left, firstPair && !left, antigravityIn && !left];
   const count = armed.filter(Boolean).length;
+  const picking = pickerOpen && !rejoined && !typeCue;
+  // The bolt shows while the pointer is over the header, and until the list it opens closes.
+  const boltShown = hover && !rejoined && !typeCue;
 
   return (
     <MockApp
-      focus={bolt && !typeCue ? ["grid", "sidebar"] : ["grid"]}
+      focus={hover && !typeCue ? ["grid", "sidebar"] : ["grid"]}
+      sidebarArm={boltShown}
       worktrees={
         <>
           <MockWorktreeCard
@@ -146,10 +229,21 @@ export function FleetScene() {
         </div>
       }
     >
-      {/* The towers as they're named, then the bolt while it's named. */}
+      <FleetPicker open={picking} selected={[true, true, ticked]} />
+      {/* The towers as they're named, then the header, its bolt, the list, and Exit. */}
       <MockSpotlight
-        targets={bolt ? ["sidebar-arm"] : ["claude-armed", "codex-armed", "antigravity-armed"]}
-        visible={markers && !typeCue}
+        targets={
+          exitCue
+            ? ["fleet-exit"]
+            : listCue
+              ? ["fleet-picker"]
+              : bolt
+                ? ["sidebar-arm"]
+                : hover
+                  ? ["sidebar-header"]
+                  : ["claude-armed", "codex-armed"]
+        }
+        visible={(markers && !typeCue && (!pickerOpen || picking)) || (exitCue && !left)}
       />
       <MockCursor
         {...cursor}
