@@ -10,11 +10,13 @@ import {
   TerminalNotifyService,
   auditCodeForNotifyRefusal,
   createNoticeHold,
+  ENTER_HELD,
   formatAssistantApprovalLine,
   formatRetiredExchangesLine,
   LANE_WAKE_LONGEST_PENDING_MS,
   LANE_WAKE_MAX_PENDING_MS,
   LANE_WAKE_RECHECK_MS,
+  LINE_REFUSED,
   MAX_QUEUED_WAKES_PER_PANE,
   NOTIFY_RECHECK_MAX_MS,
   NOTIFY_RECHECK_MIN_MS,
@@ -70,6 +72,8 @@ class FakePtyClient implements TerminalNotifyPtyClient {
   records = new Map<string, Omit<TerminalSubmissionRecord, "token">>();
   /** Phase a delivered line's record reports when not listed in `records`. */
   linePhase: TerminalSubmissionPhase = "pty_written";
+  /** Where a `cancelled` line not listed in `records` stopped (#18157). */
+  lineStop: TerminalSubmissionRecord["cancelledAt"] = undefined;
   withdrawn: Array<{ id: string; token: string }> = [];
   /** Screen text by terminal id; a terminal not listed has no readable screen. */
   screens = new Map<string, string>();
@@ -79,7 +83,11 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     const info = this.terminals.get(id);
     if (info === undefined) return null;
     if (submissionToken === undefined) return { ...info };
-    const record = this.records.get(submissionToken) ?? { phase: this.linePhase, at: Date.now() };
+    const record = this.records.get(submissionToken) ?? {
+      phase: this.linePhase,
+      at: Date.now(),
+      ...(this.lineStop !== undefined ? { cancelledAt: this.lineStop } : {}),
+    };
     return { ...info, submission: { token: submissionToken, ...record } };
   }
 
@@ -1807,6 +1815,39 @@ describe("TerminalNotifyService", () => {
       expect(h.client.submitted[1].text).toBe(h.client.submitted[0].text);
     });
 
+    it("resends a line refused at the lane on the next recheck, with no turn to wait for (#18157)", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await flushNotice();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.service.getPaneState(OWN)?.delivery.status).not.toBe("failed");
+
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS + MIN_NOTIFY_INTERVAL_MS);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toBe(h.client.submitted[0].text);
+    });
+
+    it("waits for the pane's turn after a line whose Enter the host held (#18157)", async () => {
+      const h = setup();
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "enter";
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.settle("t-a");
+      await flushNotice();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.service.getPaneState(OWN)).toMatchObject({ delivery: { status: "failed" } });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(h.client.submitted).toHaveLength(1);
+    });
+
     it("never resends a notice a later prompt superseded while its line was in flight", async () => {
       const h = setup();
       h.client.linePhase = "queued";
@@ -3107,6 +3148,144 @@ describe("decision wakes (#16015)", () => {
     // Rechecked once on admission, then against the record the attempt read.
     expect(decision.records[0]).toBeUndefined();
     expect(decision.records.at(-1)).toMatchObject({ agentState: "waiting", hasPty: true });
+  });
+
+  describe("a line the host stopped (#18157)", () => {
+    /** A decision and another wake on one line, which the host stops where `stop` says. */
+    async function stoppedLine(stop: "admission" | "enter", options: { enabled?: boolean } = {}) {
+      const h = setup({ enabled: options.enabled ?? false });
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = stop;
+      const scope = h.service.openWakeScope();
+      const decision = decisionWake("Daintree Decisions: section");
+      const other = fakeWake("task-1");
+      scope.enqueueWake(PANE, PROJECT, decision.wake);
+      scope.enqueueWake(PANE, PROJECT, other.wake);
+      await flushWake();
+      expect(h.client.submitted).toHaveLength(1);
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      return { h, scope, decision, other };
+    }
+
+    /** Another answer for the same pane, queued after the stopped line. */
+    function nextDecision() {
+      const next = decisionWake("Daintree Decisions: next");
+      next.wake.id = "dec-2";
+      return next;
+    }
+
+    it("ends a refused line's decision untyped and its other wakes as before", async () => {
+      const { h, scope, decision, other } = await stoppedLine("admission");
+      expect(decision.outcomes).toEqual([
+        { outcome: { kind: "unavailable", reason: LINE_REFUSED }, evidence: undefined },
+      ]);
+      expect(other.outcomes).toEqual([{ kind: "ambiguous", reason: "unconfirmed" }]);
+
+      // Nothing reached the composer: the next answer waits for no turn.
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(next.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
+    });
+
+    it("ends a held line's wakes as held at the Enter, and lets answers follow it", async () => {
+      const { h, scope, decision, other } = await stoppedLine("enter");
+      expect(decision.outcomes).toEqual([
+        { outcome: { kind: "ambiguous", reason: ENTER_HELD }, evidence: undefined },
+      ]);
+      expect(other.outcomes).toEqual([{ kind: "ambiguous", reason: ENTER_HELD }]);
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("failed");
+
+      // Its sink reads the composer before it queues an answer; none waits on a turn.
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toBe("Daintree Decisions: next");
+    });
+
+    it("still holds a notice behind a held line until the pane's turn ends", async () => {
+      const { h, scope } = await stoppedLine("enter", { enabled: true });
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      h.settle("t-a");
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_TARGET_SETTLE_MS + 5_000);
+
+      // The answer went alone; the notice waits for a submitted composer.
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toBe("Daintree Decisions: next");
+      // Short of the answer line's own release, with no turn seen.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.client.submitted).toHaveLength(2);
+    });
+
+    it("restores the written line an answer followed when the host refuses the answer", async () => {
+      const h = setup({ enabled: false });
+      const scope = h.service.openWakeScope();
+      const first = decisionWake("Daintree Decisions: first");
+      scope.enqueueWake(PANE, PROJECT, first.wake);
+      await flushWake();
+      expect(first.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      // An answer follows the written line, and the host refuses it at the lane.
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+      expect(next.outcomes[0]?.outcome).toEqual({ kind: "unavailable", reason: LINE_REFUSED });
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      // Another may still follow the written line, with no turn seen.
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+      const third = decisionWake("Daintree Decisions: third");
+      third.wake.id = "dec-3";
+      scope.enqueueWake(PANE, PROJECT, third.wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(3);
+      expect(h.client.submitted[2].text).toBe("Daintree Decisions: third");
+    });
+
+    it("keeps the release deadline of the written line a refused answer followed", async () => {
+      const h = setup({ enabled: false });
+      const scope = h.service.openWakeScope();
+      scope.enqueueWake(PANE, PROJECT, decisionWake("Daintree Decisions: first").wake);
+      await flushWake();
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      scope.enqueueWake(PANE, PROJECT, nextDecision().wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+
+      // The written line is let go a minute after it was written, not a minute after the refusal.
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(h.service.getPaneState(OWN)?.delivery.status ?? "idle").not.toBe("outstanding");
+    });
+
+    it("lets no answer follow a held line that carried none", async () => {
+      const h = setup({ enabled: false });
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "enter";
+      const scope = h.service.openWakeScope();
+      scope.enqueueWake(PANE, PROJECT, fakeWake("task-1").wake);
+      await flushWake();
+      h.client.linePhase = "pty_written";
+      h.client.lineStop = undefined;
+
+      const next = nextDecision();
+      scope.enqueueWake(PANE, PROJECT, next.wake);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(next.outcomes).toEqual([]);
+    });
   });
 
   it("holds the host to the agent the record it was checked against detected (#18116)", async () => {

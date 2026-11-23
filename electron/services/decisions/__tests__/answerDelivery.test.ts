@@ -113,7 +113,10 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   screens = new Map<string, string>();
   /** A submitted line's phase until a test moves it; written unless held. */
   holdWrites = false;
-  readonly phases = new Map<string, "queued" | "pty_written">();
+  readonly phases = new Map<string, "queued" | "pty_written" | "cancelled">();
+  /** Where the host stops the next line it is given, ending it `cancelled` (#18157). */
+  nextStop: "admission" | "enter" | undefined = undefined;
+  readonly stops = new Map<string, "admission" | "enter">();
   /** Strict reads that fail before one answers, as a host that is slow to start. */
   failStrictReads = 0;
   /** Screen reads that come back empty, as the client answers one that timed out. */
@@ -134,12 +137,28 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
     const phase = this.phases.get(submissionToken);
     const given = this.submitted.some((s) => s.id === id && s.token === submissionToken);
     if (!given || phase === undefined) return { ...info };
-    return { ...info, submission: { token: submissionToken, phase, at: Date.now() } };
+    const stop = this.stops.get(submissionToken);
+    return {
+      ...info,
+      submission: {
+        token: submissionToken,
+        phase,
+        at: Date.now(),
+        ...(stop !== undefined ? { cancelledAt: stop } : {}),
+      },
+    };
   }
 
   submit(id: string, text: string, token?: string) {
     this.submitted.push({ id, text, token, at: Date.now() });
-    if (token !== undefined) this.phases.set(token, this.holdWrites ? "queued" : "pty_written");
+    if (token === undefined) return;
+    if (this.nextStop !== undefined) {
+      this.phases.set(token, "cancelled");
+      this.stops.set(token, this.nextStop);
+      this.nextStop = undefined;
+      return;
+    }
+    this.phases.set(token, this.holdWrites ? "queued" : "pty_written");
   }
 
   /** The host writes every held line. */
@@ -779,6 +798,75 @@ describe("AnswerDelivery", () => {
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted).toHaveLength(1);
     await stopped(h.delivery);
+  });
+
+  describe("an answer a dialog interrupted (#18157)", () => {
+    const RULE = "─".repeat(60);
+    const EMPTY_PROMPT = `⏺ Done.\r\n${RULE}\r\n❯ \r\n${RULE}\r\n  ? for shortcuts\r\n`;
+    const status = async (h: ReturnType<typeof setup>) => (await h.question(Q1))?.delivery_status;
+
+    it("types an answer refused at the lane again and records it delivered", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.nextStop = "admission";
+
+      h.delivery.start();
+      await until(
+        async () => (await status(h)) === "terminal-delivered",
+        4 * DELIVERY_CHECK_INTERVAL_MS
+      );
+      expect(h.client.submitted).toHaveLength(2);
+      await until(() => h.terminalReports().length === 1);
+
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toHaveLength(2);
+      await stopped(h.delivery);
+    });
+
+    it("submits an answer held at its Enter once, after the dialog closes to an empty composer", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.nextStop = "enter";
+
+      h.delivery.start();
+      await until(() => h.client.submitted.length === 1);
+      // The dialog is still up: its screen shows no prompt to type at.
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(await status(h)).not.toBe("delivery-uncertain");
+
+      h.client.screens.set(PANE, EMPTY_PROMPT);
+      await until(
+        async () => (await status(h)) === "terminal-delivered",
+        4 * DELIVERY_CHECK_INTERVAL_MS
+      );
+      expect(h.client.submitted).toHaveLength(2);
+      expect(typedChoices(h.client.submitted[1].text)).toEqual(["approve"]);
+      await until(() => h.terminalReports().length === 1);
+
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.client.submitted).toHaveLength(2);
+      await stopped(h.delivery);
+    });
+
+    it("records an answer the person submitted from the composer as delivered, typing it once", async () => {
+      const h = setup();
+      await answered(h.store, Q1, 1, "approve");
+      h.client.nextStop = "enter";
+
+      h.delivery.start();
+      await until(() => h.client.submitted.length === 1);
+      const marker = h.client.submitted[0].text.match(/\[decision-injection [^\]]+\]/)?.[0];
+      expect(marker).toBeDefined();
+      h.client.screens.set(PANE, `> ${marker}\r\n⏺ Thanks.\r\n${RULE}\r\n❯ \r\n${RULE}\r\n`);
+
+      await until(
+        async () => (await status(h)) === "terminal-delivered",
+        4 * DELIVERY_CHECK_INTERVAL_MS
+      );
+      expect(h.client.submitted).toHaveLength(1);
+      await stopped(h.delivery);
+    });
   });
 
   it("types the notice of a question that never reached the relay, and reports no answer for it (0.9.0, #17939)", async () => {
