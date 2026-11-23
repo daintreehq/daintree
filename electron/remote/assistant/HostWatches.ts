@@ -174,10 +174,10 @@ interface PluginsRecord extends BaseRecord {
   /** Always set for a project's run: its own project. Null: every project, for the global run. */
   projectId: string | null;
   pluginId: string | null;
-  /** Arm order, for two armed in one clock tick. */
+  /** Arm order: the longest armed is the lowest, whatever the wall clock did. */
   seq: number;
-  /** What it fired on, held for it until its notice is typed or let go. */
-  fired: AssistantPluginNotification | null;
+  /** What it fired on, held for it until its notice is typed or let go; never the words. */
+  fired: HostWatchNotification | null;
 }
 
 type WatchRecord = HostRecord | AgentsRecord | PluginsRecord;
@@ -205,7 +205,7 @@ const ENDED_DETAIL = "It had already ended; nothing changed.";
 const AGENTS_ARMED_DETAIL =
   "Armed. One notice comes when an agent is first seen starting to wait for a reason you named, or when it expires or is lost. Those already waiting are in agents.matches; no notice comes for them. Cancel it with operation cancel and its watchId.";
 const PLUGINS_ARMED_DETAIL =
-  "Armed. One notice comes for the next plugin notification for an assistant that matches, unless another assistant's watch takes it, or when it expires. Those no assistant had taken are in notifications.matches, now yours; no notice comes for them. Read each one's text with operation read.";
+  "Armed. One notice comes for the next plugin notification for an assistant that matches, unless another assistant's watch takes it, or when it expires. Those no assistant had taken are in notifications.matches, now yours; no notice comes for them. Read each one's text with operation read; list names every one you were given.";
 const PLUGINS_ENDED_DETAIL =
   "It was armed and has already ended; see its status. Those no assistant had taken are in notifications.matches.";
 const STANDBY_DETAIL =
@@ -306,7 +306,6 @@ function outranks(a: PluginsRecord, b: PluginsRecord): boolean {
   if (project !== 0) return project > 0;
   const plugin = Number(a.pluginId !== null) - Number(b.pluginId !== null);
   if (plugin !== 0) return plugin > 0;
-  if (a.armedAt !== b.armedAt) return a.armedAt < b.armedAt;
   return a.seq < b.seq;
 }
 
@@ -401,6 +400,29 @@ export class HostWatches {
     }
     // What its notices held and never typed goes to another watch, never back to it.
     for (const record of gone) this.letGo(record);
+    this.release();
+  }
+
+  /**
+   * Coordination left a global session (#18143): it is handed no more
+   * plugins' notifications. Its plugin watches end, and what one held and
+   * hasn't started typing goes to another watch. What it was given stays its.
+   */
+  standDown(helpSessionId: string): void {
+    const unsettled: PluginsRecord[] = [];
+    for (const record of this.watches.values()) {
+      if (record.kind !== "plugins" || record.run.sessionId !== helpSessionId) continue;
+      if (record.status === "armed") {
+        this.end(record, "cancelled");
+      } else if (
+        record.typing !== true &&
+        (record.delivery === "queued" || record.delivery === "held")
+      ) {
+        record.delivery = "withdrawn";
+        unsettled.push(record);
+      }
+    }
+    for (const record of unsettled) this.letGo(record);
     this.release();
   }
 
@@ -589,6 +611,8 @@ export class HostWatches {
     if (store === null || this.disposed || !this.deps.stillRunning(caller)) {
       return this.refuse("unsupported", UNSUPPORTED_DETAIL);
     }
+    // Coordination may have moved while the store loaded.
+    if (!this.mayTakeWork(caller)) return this.refuse("unsupported", STANDBY_DETAIL);
     const projectId = global ? (args.projectId ?? null) : caller.projectId;
     const pluginId = args.pluginId ?? null;
     const condition: HostWatchCondition = {
@@ -636,10 +660,15 @@ export class HostWatches {
     const matches: HostWatchNotification[] = [];
     let omitted = 0;
     for (const notification of store.untaken({ projectId, pluginId })) {
-      if (matches.length >= HOST_WATCH_MATCHES_MAX) {
+      const summary = summaryOf(notification);
+      // One a more specific or longer-armed watch hears goes to it, as a live one would.
+      const best = this.bestFor(summary);
+      if (best !== null && best !== record) {
+        this.offer(summary);
+      } else if (matches.length >= HOST_WATCH_MATCHES_MAX) {
         omitted += 1;
       } else if (store.take(notification.notificationId, null, key)) {
-        matches.push(summaryOf(notification));
+        matches.push(summary);
       }
     }
     const armed = record.status === "armed";
@@ -867,10 +896,20 @@ export class HostWatches {
     const ended = mine
       .filter((record) => record.status !== "armed")
       .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+    // What this run was given and may still read, so an answer or a line it lost is found again.
+    const given = this.notifications?.takenBy(key) ?? [];
     return this.answer("ok", null, {
       armed: armed.length > 0,
       watches: [...armed, ...ended].map((record) => this.view(record)),
       observed: null,
+      ...(given.length > 0
+        ? {
+            notifications: {
+              matches: given.slice(-HOST_WATCH_MATCHES_MAX).map(summaryOf),
+              omitted: Math.max(0, given.length - HOST_WATCH_MATCHES_MAX),
+            },
+          }
+        : {}),
     });
   }
 
@@ -991,7 +1030,7 @@ export class HostWatches {
   /** A plugin marked a notification for an assistant: it goes to one armed watch, if any hears it. */
   private onNotification(notification: AssistantPluginNotification): void {
     if (this.disposed) return;
-    this.offer(notification);
+    this.offer(summaryOf(notification));
     this.release();
   }
 
@@ -1000,20 +1039,29 @@ export class HostWatches {
    * it, holding it there until its notice is typed. None hears it: it waits,
    * untaken, for the next arm.
    */
-  private offer(notification: AssistantPluginNotification): void {
+  private offer(notification: HostWatchNotification): void {
     const store = this.notifications;
     if (store === null || this.disposed || !store.mayHear(notification)) return;
+    const best = this.bestFor(notification);
+    if (best === null || !store.hold(notification.notificationId, best.watchId)) return;
+    best.fired = notification;
+    this.end(best, "fired");
+  }
+
+  /** The armed watch that outranks every other that hears this one; null when none does. */
+  private bestFor(notification: HostWatchNotification): PluginsRecord | null {
+    const now = this.deps.now();
     let best: PluginsRecord | null = null;
     for (const record of this.watches.values()) {
       if (record.kind !== "plugins" || record.status !== "armed") continue;
+      // Past its time, though its timer hasn't run yet.
+      if (now >= record.expiresAt) continue;
       if (record.projectId !== null && record.projectId !== notification.projectId) continue;
       if (record.pluginId !== null && record.pluginId !== notification.pluginId) continue;
       if (!this.mayTakeWork(record.run)) continue;
       if (best === null || outranks(record, best)) best = record;
     }
-    if (best === null || !store.hold(notification.notificationId, best.watchId)) return;
-    best.fired = notification;
-    this.end(best, "fired");
+    return best;
   }
 
   /** A running run that may still be handed work. */
@@ -1138,7 +1186,7 @@ export class HostWatches {
       ...(record.note !== undefined ? { note: record.note } : {}),
       ...(record.lostReason !== null ? { lostReason: record.lostReason } : {}),
       ...(agents !== null ? { agents } : {}),
-      ...(notification !== null ? { notification: summaryOf(notification) } : {}),
+      ...(notification !== null ? { notification } : {}),
     };
     // A plugin's notification is typed only while the run may take work and the person allows it.
     const pluginAllowed = (): boolean =>
@@ -1263,7 +1311,8 @@ export class HostWatches {
   }
 
   private acquire(): void {
-    if (this.unsubscribe === null && this.deps.observe !== undefined) {
+    // A plugin watch needs no host: only its own timer and the store.
+    if (this.unsubscribe === null && this.deps.observe !== undefined && this.hostsNeeded()) {
       this.unsubscribe = this.deps.observe({
         changed: () => this.evaluate(),
         summary: (hostId) => this.onSummary(hostId),
@@ -1298,6 +1347,11 @@ export class HostWatches {
       this.unsubscribePlugins = null;
       unsubscribePlugins?.();
     }
+    if (!this.hostsNeeded() || this.disposed) {
+      const unsubscribe = this.unsubscribe;
+      this.unsubscribe = null;
+      unsubscribe?.();
+    }
     if (this.armedCount() > 0 && !this.disposed) {
       this.schedule();
       return;
@@ -1306,9 +1360,14 @@ export class HostWatches {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    const unsubscribe = this.unsubscribe;
-    this.unsubscribe = null;
-    unsubscribe?.();
+  }
+
+  /** A host or agent watch is armed: the link, host list and summaries are listened to. */
+  private hostsNeeded(): boolean {
+    for (const record of this.watches.values()) {
+      if (record.kind !== "plugins" && record.status === "armed") return true;
+    }
+    return false;
   }
 
   /** One timer, to the next expiry, link settle or agent settle. */

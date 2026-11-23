@@ -623,6 +623,23 @@ export function setAllProjectsAgentMcpAccess(
   pluginMcpGrantRegistry.revokeDisallowedForPlugin(pluginInstanceId, isPluginMcpGrantAllowed);
 }
 
+const assistantAccessOffListeners = new Set<
+  (projectId: string, pluginInstanceId: string) => void
+>();
+
+/**
+ * Told each time the user turns a plugin's tools off for a project's Daintree
+ * Assistant, so what was kept under that grant can go with it (#18154).
+ */
+export function onAssistantAgentMcpAccessOff(
+  listener: (projectId: string, pluginInstanceId: string) => void
+): () => void {
+  assistantAccessOffListeners.add(listener);
+  return () => {
+    assistantAccessOffListeners.delete(listener);
+  };
+}
+
 /**
  * Record the user's answer for the project's Daintree Assistant; off removes
  * it. Anything it takes away is revoked at once for the Assistant, which loses
@@ -659,4 +676,7 @@ export function setProjectAssistantAgentMcpAccess(
     projectId,
     (grant) => grant.pluginInstanceId !== pluginInstanceId || isPluginMcpGrantAllowed(grant)
   );
+  if (access === "off") {
+    for (const listener of [...assistantAccessOffListeners]) listener(projectId, pluginInstanceId);
+  }
 }

@@ -1,5 +1,8 @@
 import type { HostWatchNotification } from "../../shared/types/hostControl.js";
-import { assistantAgentMcpAccess } from "./pluginAgentMcp/projectEnablement.js";
+import {
+  assistantAgentMcpAccess,
+  onAssistantAgentMcpAccessOff,
+} from "./pluginAgentMcp/projectEnablement.js";
 
 /** A plugin's notification for an assistant (#18154), with the words only a read returns. */
 export interface AssistantPluginNotification extends HostWatchNotification {
@@ -7,6 +10,8 @@ export interface AssistantPluginNotification extends HostWatchNotification {
   body: string;
 }
 
+/** Longest plugin display name kept: a manifest can carry far more than a tool answer can. */
+export const ASSISTANT_NOTIFICATION_PLUGIN_NAME_MAX = 200;
 /** Notifications kept at once; past it the oldest no one holds goes first. */
 export const ASSISTANT_NOTIFICATIONS_MAX = 128;
 /** How long one waits for an assistant, and how long its taker may still read it. */
@@ -51,13 +56,16 @@ export class AssistantPluginNotifications {
     if (!this.deps.mayHear(notification.projectId, notification.pluginId)) return;
     this.prune();
     if (this.rows.size >= ASSISTANT_NOTIFICATIONS_MAX && !this.evictOne()) return;
+    const pluginName = notification.pluginName.slice(0, ASSISTANT_NOTIFICATION_PLUGIN_NAME_MAX);
+    const kept =
+      pluginName === notification.pluginName ? notification : { ...notification, pluginName };
     this.rows.set(notification.notificationId, {
-      notification,
+      notification: kept,
       heldBy: null,
       takenBy: null,
       since: this.deps.now(),
     });
-    for (const listener of [...this.listeners]) listener(notification);
+    for (const listener of [...this.listeners]) listener(kept);
   }
 
   subscribe(listener: (notification: AssistantPluginNotification) => void): () => void {
@@ -87,8 +95,9 @@ export class AssistantPluginNotifications {
     return found.sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  /** Holds one for a watch's notice; false when it is gone, held or taken. */
+  /** Holds one for a watch's notice; false when it is gone, past its time, held or taken. */
   hold(notificationId: string, watchId: string): boolean {
+    this.prune();
     const row = this.rows.get(notificationId);
     if (row === undefined || row.heldBy !== null || row.takenBy !== null) return false;
     row.heldBy = watchId;
@@ -129,6 +138,29 @@ export class AssistantPluginNotifications {
     return row.notification;
   }
 
+  /** Those given to `run` that are still kept and allowed, oldest first: how a lost answer is found again. */
+  takenBy(run: string): AssistantPluginNotification[] {
+    this.prune();
+    const found: AssistantPluginNotification[] = [];
+    for (const row of this.rows.values()) {
+      if (row.takenBy === run && this.mayHear(row.notification)) found.push(row.notification);
+    }
+    return found.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /**
+   * The person turned this plugin's tools off for this project's Assistant:
+   * everything kept under that grant goes, held and taken too, so turning it
+   * back on never brings back what was raised before.
+   */
+  forget(projectId: string, pluginId: string): void {
+    for (const [id, row] of this.rows) {
+      if (row.notification.projectId === projectId && row.notification.pluginId === pluginId) {
+        this.rows.delete(id);
+      }
+    }
+  }
+
   /** Drops those past their time; one a watch's notice holds stays until it settles. */
   private prune(): void {
     const cutoff = this.deps.now() - ASSISTANT_NOTIFICATION_KEEP_MS;
@@ -164,9 +196,12 @@ let shared: AssistantPluginNotifications | null = null;
  * notification for an assistant or an assistant arms for one.
  */
 export function assistantPluginNotifications(): AssistantPluginNotifications {
-  shared ??= new AssistantPluginNotifications({
+  if (shared !== null) return shared;
+  const created = new AssistantPluginNotifications({
     mayHear: (projectId, pluginId) => assistantAgentMcpAccess(projectId, pluginId) !== "off",
     now: () => Date.now(),
   });
+  onAssistantAgentMcpAccessOff((projectId, pluginId) => created.forget(projectId, pluginId));
+  shared = created;
   return shared;
 }

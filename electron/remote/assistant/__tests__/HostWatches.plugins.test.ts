@@ -43,6 +43,7 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
   let notificationIds: number;
   let store: AssistantPluginNotifications;
   let watches: HostWatches;
+  let hostSubscriptions: number;
 
   const make = () =>
     new HostWatches({
@@ -50,6 +51,12 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
       controlOn: () => false,
       stillRunning: (candidate) => live.has(candidate.launchGeneration),
       mayTakeWork: (candidate) => !standby.has(candidate.launchGeneration),
+      observe: () => {
+        hostSubscriptions += 1;
+        return () => {
+          hostSubscriptions -= 1;
+        };
+      },
       pluginNotifications: async () => store,
       localName: () => "this Mac",
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
@@ -98,6 +105,7 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
     queued = [];
     ids = 0;
     notificationIds = 0;
+    hostSubscriptions = 0;
     store = new AssistantPluginNotifications({
       mayHear: (projectId, pluginId) => granted.has(`${projectId}\u0000${pluginId}`),
       now: () => now,
@@ -128,6 +136,7 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
     expect(line).toContain("acme.stages");
     expect(line).toContain("proj-a");
     expect(line).toContain("key run-42");
+    expect(notice.notification).toMatchObject({ severity: "warning", pluginName: "Stage Runner" });
     expect(line).toContain('Your note: "stage gates"');
     // The plugin's words reach neither the line nor anything the wake carries.
     expect(JSON.stringify(notice)).not.toContain("SENTINEL");
@@ -306,6 +315,8 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
     await arm(PROJECT_A, { expiresInSeconds: 60 });
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(watches.isActive()).toBe(true);
+    // It needs no host: nothing listens to links or summaries for it.
+    expect(hostSubscriptions).toBe(0);
 
     now += 60_000;
     vi.advanceTimersByTime(60_000);
@@ -317,5 +328,108 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
     // Nothing armed hears it now; it waits.
     publish();
     expect(queued).toHaveLength(1);
+  });
+
+  it("refuses an arm whose session stood down while the store loaded", async () => {
+    standby.add(GLOBAL.launchGeneration);
+    publish();
+    await expect(arm(GLOBAL)).resolves.toMatchObject({ outcome: "unsupported", armed: false });
+    expect((await arm(PROJECT_A)).notifications?.matches).toHaveLength(1);
+  });
+
+  it("on stand-down, ends the session's watches and hands on what it held untyped", async () => {
+    await arm(GLOBAL, { projectId: "proj-a" });
+    const held = publish();
+    await arm(GLOBAL, { pluginId: "acme.stages" });
+    await arm(PROJECT_B);
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g"]);
+    standby.add(GLOBAL.launchGeneration);
+    await arm(PROJECT_A);
+    watches.standDown("g");
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g", "pa"]);
+    expect(queued[1]!.wake.hostWatch?.notification?.notificationId).toBe(held.notificationId);
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "cancelled" });
+    const listed = watches.run(GLOBAL, { operation: "list" });
+    expect(listed.watches.filter((watch) => watch.status === "armed")).toEqual([]);
+  });
+
+  it("lists what a run was given, so an answer it lost is found again", async () => {
+    const first = publish();
+    await arm(PROJECT_A);
+    const second = publish();
+    deliver(queued[0]!);
+    expect(
+      watches
+        .run(PROJECT_A, { operation: "list" })
+        .notifications?.matches.map((match) => match.notificationId)
+    ).toEqual([first.notificationId, second.notificationId]);
+    expect(JSON.stringify(watches.run(PROJECT_A, { operation: "list" }))).not.toContain("SENTINEL");
+    expect(watches.run(PROJECT_A2, { operation: "list" }).notifications).toBeUndefined();
+  });
+
+  it("brings back nothing raised before the switch was turned off and on again", async () => {
+    await arm(PROJECT_A);
+    const sent = publish();
+    deliver(queued[0]!);
+    publish();
+    store.forget("proj-a", "acme.stages");
+    await expect(watches.read(PROJECT_A, sent.notificationId)).resolves.toMatchObject({
+      outcome: "not_found",
+    });
+    expect((await arm(PROJECT_A2)).notifications?.matches).toEqual([]);
+  });
+
+  it("passes over a watch past its time whose timer hasn't run, and an expired one let go", async () => {
+    await arm(PROJECT_A, { expiresInSeconds: 60 });
+    now += 30_000;
+    await arm(PROJECT_A2);
+    now += 30_000;
+    publish();
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["pa2"]);
+
+    await arm(PROJECT_A);
+    now += 30 * 60_000;
+    queued[0]!.wake.report({ kind: "unavailable", reason: "gone" });
+    // Past its time when let go: offered to no one.
+    expect(queued).toHaveLength(1);
+  });
+
+  it("hands an arm sixteen, counts the rest, and leaves those for its next arm", async () => {
+    const sent = Array.from({ length: 17 }, () => publish());
+    const armed = await arm(PROJECT_A);
+    expect(armed.notifications?.matches).toHaveLength(16);
+    expect(armed.notifications?.omitted).toBe(1);
+    await expect(watches.read(PROJECT_A, sent[16]!.notificationId)).resolves.toMatchObject({
+      outcome: "not_found",
+    });
+    const again = await arm(PROJECT_A);
+    expect(again.notifications?.matches.map((match) => match.notificationId)).toEqual([
+      sent[16]!.notificationId,
+    ]);
+  });
+
+  it("gives a waiting one to a watch that outranks the arming one, as a live one would", async () => {
+    Array.from({ length: 17 }, () => publish());
+    await arm(PROJECT_A);
+    const global = await arm(GLOBAL);
+    expect(global.notifications?.matches).toEqual([]);
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["pa"]);
+  });
+
+  it("lets a project's run name its own project", async () => {
+    await expect(arm(PROJECT_A, { projectId: "proj-a" })).resolves.toMatchObject({
+      outcome: "ok",
+      armed: true,
+    });
+  });
+
+  it("hands on one whose session stood down after it was handed, before typing", async () => {
+    await arm(GLOBAL);
+    publish();
+    await arm(PROJECT_A);
+    standby.add(GLOBAL.launchGeneration);
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "control-off" });
+    expect(queued[0]!.wake.beforeType()).toBe(false);
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g", "pa"]);
   });
 });

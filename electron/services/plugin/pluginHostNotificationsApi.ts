@@ -312,7 +312,7 @@ export interface PluginHostNotificationsContext {
     | "panelLifecycleBroker"
     | "pluginDisplayName"
     | "pluginNotificationsBlocked"
-    | "publishAssistantNotification"
+    | "assistantNotifications"
     | "pluginTasks"
     | "plugins"
     | "safeAppendAudit"
@@ -794,25 +794,6 @@ export function buildNotificationsHostApi(
         if (!admitPluginToast(pluginId)) return { id };
         const displayName = deps.pluginDisplayName(pluginId);
         const displayTitle = `${displayName}: ${title}`;
-        // An assistant hears only what the person was let see, and only for a
-        // project, whose Agent tools switch is the grant (#18154).
-        if (audience === "assistant" && projectId !== null && deps.publishAssistantNotification) {
-          try {
-            deps.publishAssistantNotification({
-              notificationId: id,
-              pluginId,
-              pluginName: displayName,
-              projectId,
-              dedupeKey: dedupeKey ?? null,
-              severity,
-              createdAt: Date.now(),
-              title,
-              body,
-            });
-          } catch (error) {
-            console.warn("[PluginHost] Couldn't offer a notification to assistants", error);
-          }
-        }
         const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
         pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: severity,
@@ -877,6 +858,28 @@ export function buildNotificationsHostApi(
             .catch(() => {
               // Best-effort, like the local push.
             });
+        }
+        // An assistant hears only what the person was let see, and only for a
+        // project, whose Agent tools switch is the grant (#18154). Loaded in
+        // order, and never published for an instance replaced meanwhile.
+        if (audience === "assistant" && projectId !== null && deps.assistantNotifications) {
+          try {
+            const assistants = await deps.assistantNotifications();
+            if (!isBound()) return { id };
+            assistants.publish({
+              notificationId: id,
+              pluginId,
+              pluginName: displayName,
+              projectId,
+              dedupeKey: dedupeKey ?? null,
+              severity,
+              createdAt: Date.now(),
+              title,
+              body,
+            });
+          } catch (error) {
+            console.warn("[PluginHost] Couldn't offer a notification to assistants", error);
+          }
         }
         return { id };
       });

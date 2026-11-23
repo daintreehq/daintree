@@ -1884,6 +1884,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const controller = this.standDowns.get(helpSessionId);
     this.standDowns.delete(helpSessionId);
     controller?.abort();
+    // Nor is it handed plugins' notifications its coordinator should get (#18154).
+    this.hostWatches.standDown(helpSessionId);
   }
 
   private withStandDown(helpSessionId: string, signal: AbortSignal | undefined): AbortSignal {

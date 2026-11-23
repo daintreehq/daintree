@@ -440,7 +440,7 @@ describe("createMockHost", () => {
     // One marked for an assistant is a shape the real host takes (#18154).
     const marked = createMockHost({ pluginId: "acme.demo" });
     await marked.notify({ title: "t", body: "b", audience: "assistant" });
-    expect(marked.notifications).toHaveLength(1);
+    expect(marked.notifications[0]?.options).toMatchObject({ audience: "assistant" });
 
     const withArgs = (args: unknown) =>
       host.notify({

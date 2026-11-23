@@ -102,4 +102,42 @@ describe("AssistantPluginNotifications (#18154)", () => {
     store.publish(notification({ pluginId: "other" }));
     expect(store.untaken({ projectId: "p1", pluginId: "acme" })).toEqual([early, late]);
   });
+
+  it("forgets everything kept for a project and plugin when its switch goes off, held and taken too", () => {
+    const held = notification();
+    const taken = notification();
+    const other = notification({ projectId: "p2" });
+    for (const one of [held, taken, other]) store.publish(one);
+    store.hold(held.notificationId, "w1");
+    store.take(taken.notificationId, null, "run-a");
+    store.forget("p1", "acme");
+    expect(store.take(held.notificationId, "w1", "run-a")).toBe(false);
+    expect(store.read(taken.notificationId, "run-a")).toBeNull();
+    expect(store.takenBy("run-a")).toEqual([]);
+    expect(store.untaken({ projectId: null, pluginId: null })).toEqual([other]);
+  });
+
+  it("hands over nothing whose grant is off, even straight from the store", () => {
+    const one = notification();
+    store.publish(one);
+    granted = false;
+    expect(store.untaken({ projectId: null, pluginId: null })).toEqual([]);
+    expect(store.take(one.notificationId, null, "run-a")).toBe(false);
+    granted = true;
+    expect(store.take(one.notificationId, null, "run-a")).toBe(true);
+  });
+
+  it("makes room from the oldest taken when none is free, and bounds a long plugin name", () => {
+    const all = Array.from({ length: ASSISTANT_NOTIFICATIONS_MAX }, () => notification());
+    for (const one of all) store.publish(one);
+    store.hold(all[0]!.notificationId, "w1");
+    for (const one of all.slice(1)) store.take(one.notificationId, null, "run-a");
+    const added = notification({ pluginName: "n".repeat(10_000) });
+    store.publish(added);
+    expect(store.read(all[1]!.notificationId, "run-a")).toBeNull();
+    expect(store.read(all[2]!.notificationId, "run-a")).toBe(all[2]);
+    const [kept] = store.untaken({ projectId: null, pluginId: null });
+    expect(kept?.notificationId).toBe(added.notificationId);
+    expect(kept?.pluginName.length).toBeLessThan(1_000);
+  });
 });

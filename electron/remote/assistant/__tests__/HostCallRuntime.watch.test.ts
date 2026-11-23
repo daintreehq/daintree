@@ -332,6 +332,12 @@ describe("HostCallRuntime host.watch on plugins' notifications (#18154)", () => 
     await expect(
       runtime.watch("a", { operation: "arm", pluginNotifications: true })
     ).resolves.toMatchObject({ ok: true, value: { outcome: "unsupported", armed: false } });
+    await expect(
+      runtime.watch("a", {
+        operation: "read",
+        notificationId: "11111111-1111-4111-8111-000000000001",
+      })
+    ).resolves.toMatchObject({ ok: true, value: { outcome: "unsupported" } });
   });
 
   it("passes over a global session once it stands down, as its caller says", async () => {

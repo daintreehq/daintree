@@ -258,11 +258,13 @@ export interface PluginHostFactoryDeps {
    */
   pluginNotificationsBlocked: (pluginId: string, projectId: string | null) => Promise<boolean>;
   /**
-   * Offers a notification the plugin marked for an assistant (#18154) to the
-   * assistants watching for one, once it passed the user's silence, mute and
-   * budget. Absent, no notification reaches an assistant.
+   * Where a notification the plugin marked for an assistant (#18154) is
+   * offered to the assistants watching for one, once it passed the user's
+   * silence, mute and budget; loaded on first use. Absent, none reaches one.
    */
-  publishAssistantNotification?: (notification: AssistantPluginNotification) => void;
+  assistantNotifications?: () => Promise<{
+    publish(notification: AssistantPluginNotification): void;
+  }>;
 }
 
 /**
