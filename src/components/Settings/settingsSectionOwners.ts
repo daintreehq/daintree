@@ -30,6 +30,7 @@ export const SECTION_SETTINGS = {
     "remoteHostsPreferences",
   ],
   promptTemplates: ["folder:prompt-templates"],
+  agentUsage: ["agentUsageTrackingEnabled"],
   twoPaneSplit: ["storage:daintree-two-pane-split"],
   gridLayout: ["appState.panelGridConfig"],
   scrollback: ["terminalConfig.scrollbackLines"],

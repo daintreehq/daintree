@@ -15,6 +15,7 @@ import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionReference,
+  DecisionReplyMode,
 } from "@shared/types/decisionsQuestion";
 import { useAnswerComposerMode, type AnswerComposerMode } from "./DecisionAnswerComposer";
 import {
@@ -67,8 +68,11 @@ function onQuestionMoved(target: DecisionQuestionTarget, moved: () => void): () 
     const item = list.questions.find(
       (question) => targetKey({ scope: "reference", reference: question.reference }) === key
     );
-    // The person's marks (#17895) move nothing that is read; a new ask does.
-    const now = JSON.stringify(item === undefined ? null : { ...item, inbox: item.inbox?.ask });
+    // The person's marks (#17895) and what was seen of its asker (#18029) move nothing that is
+    // read; a new ask does.
+    const now = JSON.stringify(
+      item === undefined ? null : { ...item, inbox: item.inbox?.ask, asker: undefined }
+    );
     if (now === last) return;
     last = now;
     moved();
@@ -123,6 +127,8 @@ export interface DismissalSubject {
   status: DecisionQuestionContent["status"];
   /** When it was last read (epoch ms) while its Host is away; null when read just now. */
   lastReadAt: number | null;
+  /** The mode of the round at `revision` (#17943), as read with it; null where that read didn't say. */
+  replyMode: DecisionReplyMode | null;
 }
 
 export interface DecisionQuestionReader {
@@ -267,6 +273,7 @@ export function useDecisionQuestionReader(
           alias: question.alias,
           status: question.status,
           lastReadAt: null,
+          replyMode: question.replyMode ?? null,
         }
       : lastRead !== null && target?.scope === "reference"
         ? {
@@ -275,6 +282,7 @@ export function useDecisionQuestionReader(
             alias: lastRead.alias,
             status: "open",
             lastReadAt: lastRead.readAt,
+            replyMode: null,
           }
         : null;
   const answerMode = useAnswerComposerMode(question);
@@ -411,6 +419,7 @@ export function useQuestionCancel(
         line: null,
         revision: subject.revision,
         lastReadAt: subject.lastReadAt,
+        replyMode: subject.replyMode,
       },
       open: true,
       mode,

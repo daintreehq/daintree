@@ -2,11 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { DecisionsPolicy } from "@shared/types/decisions";
 
-export interface DecisionsPolicySaveFailure {
-  allowed: boolean;
-  message: string;
-}
-
 export interface DecisionsExpirySaveFailure {
   ms: number | null;
   message: string;
@@ -22,9 +17,6 @@ export interface UseDecisionsPolicyResult {
   /** Null until main has answered, and while Decisions is off. */
   policy: DecisionsPolicy | null;
   loadError: string | null;
-  /** The allowlist value being saved, so the switch shows what was asked while main acts. */
-  pending: boolean | null;
-  saveFailure: DecisionsPolicySaveFailure | null;
   /** The default expiry being saved, boxed because null is "never"; null when nothing is saving. */
   pendingExpiry: { ms: number | null } | null;
   expirySaveFailure: DecisionsExpirySaveFailure | null;
@@ -33,7 +25,6 @@ export interface UseDecisionsPolicyResult {
   /** Each agent's last failed save, by agent id, until that agent is saved again. */
   agentSaveFailures: ReadonlyMap<string, DecisionsAgentSaveFailure>;
   reload(): Promise<void>;
-  setProxyAllowlisted(allowed: boolean): Promise<void>;
   setDefaultQuestionExpiry(ms: number | null): Promise<void>;
   setAgentAskHuman(agentId: string, enabled: boolean): Promise<void>;
 }
@@ -56,7 +47,7 @@ function without<V>(map: ReadonlyMap<string, V>, key: string): ReadonlyMap<strin
  * mount, again after every status push (main sends one with each policy
  * change, so another window's change shows here too), and answered by each
  * change asked here. Whichever answer carries the higher revision wins, so a
- * read that lands after a newer change can't roll the switch back. Turning
+ * read that lands after a newer change can't roll a setting back. Turning
  * off forgets what was read, and anything still in flight from before lands
  * nowhere, so turning on again starts from main's answer, never a stale one.
  * Each field saves on its own, and each agent's `ask_human` switch too, so
@@ -67,8 +58,6 @@ function without<V>(map: ReadonlyMap<string, V>, key: string): ReadonlyMap<strin
 export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [policy, setPolicy] = useState<DecisionsPolicy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pending, setPending] = useState<boolean | null>(null);
-  const [saveFailure, setSaveFailure] = useState<DecisionsPolicySaveFailure | null>(null);
   const [pendingExpiry, setPendingExpiry] = useState<{ ms: number | null } | null>(null);
   const [expirySaveFailure, setExpirySaveFailure] = useState<DecisionsExpirySaveFailure | null>(
     null
@@ -77,7 +66,6 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [pendingAgents, setPendingAgents] = useState<ReadonlyMap<string, boolean>>(NO_AGENTS);
   const [agentSaveFailures, setAgentSaveFailures] =
     useState<ReadonlyMap<string, DecisionsAgentSaveFailure>>(NO_FAILURES);
-  const savingRef = useRef(false);
   const savingExpiryRef = useRef(false);
   const savingAgentsRef = useRef(new Set<string>());
   const revisionRef = useRef(-1);
@@ -128,7 +116,6 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
       revisionRef.current = -1;
       setPolicy(null);
       setLoadError(null);
-      setSaveFailure(null);
       setExpirySaveFailure(null);
       // A save still in flight lands nowhere now, so its row is free again
       // and turning on starts from main's answer alone.
@@ -141,29 +128,6 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const reload = (): Promise<void> => {
     setLoadError(null);
     return read();
-  };
-
-  const setProxyAllowlisted = (allowed: boolean): Promise<void> => {
-    if (savingRef.current) return Promise.resolve();
-    savingRef.current = true;
-    setPending(allowed);
-    setSaveFailure(null);
-    const generation = generationRef.current;
-    return window.electron.decisions
-      .setProxyAllowlisted(allowed)
-      .then(
-        (next) => accept(next, generation),
-        (error: unknown) => {
-          if (generation !== generationRef.current) return;
-          setSaveFailure({ allowed, message: formatErrorMessage(error, "Try again in a moment.") });
-          // Show what main holds now rather than what was asked.
-          void read();
-        }
-      )
-      .then(() => {
-        savingRef.current = false;
-        setPending(null);
-      });
   };
 
   const setDefaultQuestionExpiry = (ms: number | null): Promise<void> => {
@@ -182,6 +146,7 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
             ms,
             message: formatErrorMessage(error, "Try again in a moment."),
           });
+          // Show what main holds now rather than what was asked.
           void read();
         }
       )
@@ -225,14 +190,11 @@ export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   return {
     policy: active ? policy : null,
     loadError: active ? loadError : null,
-    pending,
-    saveFailure: active ? saveFailure : null,
     pendingExpiry,
     expirySaveFailure: active ? expirySaveFailure : null,
     pendingAgents,
     agentSaveFailures: active ? agentSaveFailures : NO_FAILURES,
     reload,
-    setProxyAllowlisted,
     setDefaultQuestionExpiry,
     setAgentAskHuman,
   };

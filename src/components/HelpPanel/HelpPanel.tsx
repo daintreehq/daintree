@@ -51,6 +51,7 @@ import {
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
 import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
+import { GLOBAL_ASSISTANT_SESSION_AGENT_IDS } from "@shared/config/globalAssistantSessions";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import {
   closeSessionDescription,
@@ -254,6 +255,7 @@ export function HelpPanel({
   // The global assistant replaces the lane body while its tab is selected
   // (#14454); every lane keeps running behind it, as a background lane does.
   const globalSelected = useHelpPanelStore((s) => s.globalSelected);
+  const globalSlot = useHelpPanelStore((s) => s.globalSlot);
   const controller = useHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
@@ -940,7 +942,15 @@ export function HelpPanel({
     }
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
-  const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const globalNewSessionAgentIds = useMemo(
+    () =>
+      supportedInstalledAgentIds.filter((id) => GLOBAL_ASSISTANT_SESSION_AGENT_IDS.includes(id)),
+    [supportedInstalledAgentIds]
+  );
+  const globalAgentState = useGlobalAssistantActivity(
+    isOpen && isVisible && !globalSelected,
+    globalSlot
+  );
   const projectIdentity = useProjectAssistantIdentity(activeWorkspaceId);
   const globalIdentity = useGlobalAssistantIdentity();
   const globalAssistantName = displayIdentityName(globalIdentity, "Global assistant");
@@ -1360,6 +1370,10 @@ export function HelpPanel({
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
+          workspaceId={activeWorkspaceId}
+          // A launch reserves the id, then commits a spawning placeholder, before
+          // the PTY exists; plugins get it once there is one to act on.
+          activeTerminalId={terminalSpawnStatus === "ready" ? terminalId : null}
         />
       )}
 
@@ -1433,6 +1447,7 @@ export function HelpPanel({
               controlsHost={globalControlsHost}
               focusHandledThrough={scopeSwitchFocusRequest}
               onOpenDocs={handleOpenAssistantDocs}
+              newSessionAgentIds={globalNewSessionAgentIds}
             />
           </Suspense>
         ) : showTerminal ? (

@@ -82,7 +82,7 @@ Commands are callable actions that appear in the command palette and can be boun
 | `category` | yes | Sub-label on the command's row. The palette gives your plugin one group of its own, titled with its display name, so this only tells your commands apart inside it. Up to 40 characters; a built-in category id (`worktree`, `git`, `terminal`, …, compared case-insensitively) is refused. |
 | `kind` | yes | `"command"` or `"query"`. |
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
-| `assistantReach` | no | `"confirm-only"` puts the command on the project Daintree Assistant's MCP tools. Needs `"danger": "confirm"` on the same command; the handler's [dispatch context](./host-api.md#the-dispatch-context) says whether a person answered the confirm dialog for each call. See [Actions the Assistant can run](./host-api.md#actions-the-assistant-can-run). |
+| `assistantReach` | no | `"confirm-only"` puts the command on the project Daintree Assistant's MCP tools, and within reach of the global Assistant's `host.call` on the same machine. Needs `"danger": "confirm"` on the same command; the handler's [dispatch context](./host-api.md#the-dispatch-context) says whether a person answered the confirm dialog for each call. See [Actions the Assistant can run](./host-api.md#actions-the-assistant-can-run). |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
 | `resultSchema` | no | JSON schema, rooted at `type: "object"`, that every result is checked against in its JSON form, which is then what the caller receives; a mismatch fails the dispatch with `RESULT_VALIDATION_ERROR`. Published as the action's `outputSchema`. Rules are under [`registerAction`](./host-api.md#registeraction). |
@@ -1046,7 +1046,7 @@ Changes made through Daintree fire the `host.settings.onDidChange` subscription,
 
 ## Context menus — _Shipped_
 
-Adds entries to right-click menus on specific UI elements.
+Adds entries to right-click menus on specific UI elements, and to the Assistant panel's session menus.
 
 ```json
 {
@@ -1062,6 +1062,12 @@ Adds entries to right-click menus on specific UI elements.
         "location": "terminal",
         "label": "Attach output to Linear issue…",
         "when": "panelKind == 'terminal'"
+      },
+      {
+        "actionId": "acme.linear-planner.attach-log",
+        "location": "assistant",
+        "label": "Attach output to Linear issue…",
+        "when": "assistantScope == 'project' && terminalId"
       }
     ]
   }
@@ -1073,9 +1079,10 @@ Adds entries to right-click menus on specific UI elements.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `actionId` | yes | Fully-qualified action ID to dispatch. |
-| `location` | yes | `"worktree"`, `"terminal"`, `"file"`, `"browser"` or `"project"`. |
+| `location` | yes | `"worktree"`, `"terminal"`, `"file"`, `"browser"`, `"project"` or `"assistant"`. |
 | `label` | yes | Menu entry label. |
 | `when` | no | Context expression gating whether the item appears, in the same syntax as a [keybinding `when`](#keybindings--shipped). See below. |
+| `availability` | no | An id for your availability handler: letters, digits, `_` and `-`, at most 64 characters. Set it on an item that applies to a subject but can't always run on it. See [Showing an item as unavailable](#showing-an-item-as-unavailable). |
 
 **`when` context keys.** A context menu's `when` is evaluated in the renderer against keys describing what was right-clicked, not the keybinding keys:
 
@@ -1086,16 +1093,67 @@ Adds entries to right-click menus on specific UI elements.
 | `browser` | `panelId` — the pane's id; `panelKind` — `browser` or `dev-preview` |
 | `file` | None |
 | `project` | `projectId` — the project the pill belongs to |
+| `assistant` | `assistantScope` — `project` on a project assistant session, `global` on the global assistant; `projectId` — the project or scratch workspace whose Assistant panel holds the session (project sessions only); `terminalId` — the session's terminal (unset on a project session whose terminal isn't up yet: paused, or still launching); `agentId` — the agent the session runs (unset while nothing says) |
 
 An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those shared keys or a constant.
 
-**Dispatch arguments.** Every location dispatches its action with the clicked subject, so your handler receives what was clicked rather than `undefined`: `worktree` with `{ worktreeId }`, `terminal` with `{ panelId, panelKind, worktreeId }` (`worktreeId` is omitted for a panel with no worktree), `browser` with `{ panelId, panelKind, url }`, `project` with `{ projectId }` for the project whose pill was right-clicked, and `file` with the clicked file, as described next. Only ids and the page URL are passed — never terminal output or a selection, which stay behind `terminal:read`.
+**Dispatch arguments.** Every location dispatches its action with the clicked subject, so your handler receives what was clicked rather than `undefined`: `worktree` with `{ worktreeId }`, `terminal` with `{ panelId, panelKind, worktreeId }` (`worktreeId` is omitted for a panel with no worktree), `browser` with `{ panelId, panelKind, url }`, `project` with `{ projectId }` for the project whose pill was right-clicked, `assistant` with the session the menu belongs to, and `file` with the clicked file, as described next. A project assistant session dispatches `{ assistantScope: "project", projectId, slot, terminalId, agentId }`, where `slot` is the zero-based lane number, which stays with the lane across relaunches; the global assistant dispatches `{ assistantScope: "global", terminalId, incarnation, agentId }`, where `incarnation` tells one launch of that terminal from the next. A field the session doesn't have is left out rather than passed empty, and `slot` and `incarnation` are numbers, so they reach the action but not a `when`. If the command declares an `inputSchema` with `additionalProperties: false`, list every field of each location it is contributed to, or the call is refused; and mark a field `required` only when every location it is contributed to always passes it, since `terminalId` and `agentId` can be missing on an assistant. Only identifying fields like these and the page URL are passed — never terminal output or a selection, which stay behind `terminal:read`.
 
-**Locations:** `worktree`, `terminal`, `file`, `browser`, `project`. More may be added. `terminal` is the right-click menu of a terminal-backed panel; `browser` is the "More page actions" menu of a browser or dev preview panel, and its `url` is the address the pane shows with any `user:password@` credentials removed. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, isDirectory, relativePath, worktreePath, status }` for the clicked file or folder (so your handler receives the subject, not `undefined`) — `path` is always absolute, `relativePath` is relative to the worktree root with forward slashes, while `relativePath`, `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
+**Locations:** `worktree`, `terminal`, `file`, `browser`, `project`, `assistant`. More may be added. `terminal` is the right-click menu of a terminal-backed panel; `assistant` is the Assistant panel: the project assistant's session picker and the global assistant's **More actions** menu. The two never mix: a `terminal` item never appears on an assistant and an `assistant` item never appears on a worker pane, so a command meant for both is contributed once at each, as in the example above; `browser` is the "More page actions" menu of a browser or dev preview panel, and its `url` is the address the pane shows with any `user:password@` credentials removed. The `file` location is the one file menu Daintree shares across every surface that shows a file — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree, folder listing and change summary, the diff viewer's file sidebar, and the right-click menu on a file's own content in the file browser and in a file panel — so a single `file` contribution reaches all of them without any per-surface work. Its action is dispatched with `{ path, isDirectory, relativePath, worktreePath, status }` for the clicked file or folder (so your handler receives the subject, not `undefined`) — `path` is always absolute, `relativePath` is relative to the worktree root with forward slashes, while `relativePath`, `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone.
 
 **Targeting rows.** A `file` item can declare which rows it appears on, and the host evaluates it per row, ANDed with `when`: `kind` (`"file"` or `"folder"`), `extensions` (bare lower-case suffixes without the dot, matched case-insensitively against a file's last suffix; a dotfile or bare name has none; not allowed with `kind: "folder"`) and `paths` (globs relative to the worktree root using `**`, `*` and `?`, the same grammar as `fileEditors[].paths`). Omitted fields match everything, and the three fields are rejected on any other location.
 
-**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop project and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu.
+**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop project and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu. In the project assistant's session picker, `assistant` items act on the session on screen and sit after New session and before Clear conversation and Close session; in the global assistant's **More actions** menu they sit after Open docs and before Stop global assistant, and appear only while a run is on screen. They act on the session the menu was opened on: if that session is replaced while the menu is open (another lane, a relaunch in the same lane, a terminal coming up in a lane that had none, a new launch of the global assistant), its items go until the menu is opened again. The global assistant belongs to no project, but its menu offers the items visible in the window it is shown in, so a project plugin's `assistant` items appear there only in that project's windows, and its dispatch still carries no `projectId`.
+
+### Showing an item as unavailable
+
+`when` decides whether an item applies to what was right-clicked. When it applies but can't run right now (a pane whose session file isn't known yet, an agent your plugin doesn't support), hiding it leaves the person wondering where it went. Set `availability` on the item instead, and answer for it at runtime: the item stays visible but disabled, with your reason beside it, the way Daintree's own **New session** row reads at the session ceiling.
+
+```json
+[
+  {
+    "actionId": "acme.continue.continue",
+    "location": "terminal",
+    "label": "Continue in another agent…",
+    "when": "panelKind == 'terminal'",
+    "availability": "continue"
+  },
+  {
+    "actionId": "acme.continue.continue",
+    "location": "assistant",
+    "label": "Continue in another agent…",
+    "availability": "continue"
+  }
+]
+```
+
+```ts
+import {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  type ContextMenuAvailabilityRequest,
+} from "@daintreehq/plugin-sdk";
+
+await host.registerHandler(CONTEXT_MENU_AVAILABILITY_CHANNEL, async (_ctx, payload: unknown) => {
+  const request = payload as ContextMenuAvailabilityRequest;
+  if (request.availability !== "continue") return null;
+  // A worker pane names its terminal as the panel; an assistant session names it directly.
+  const terminalId = request.panelId ?? request.terminalId;
+  if (!terminalId) return "Session hasn't started yet";
+  const found = await host.dispatch("terminal.sessionFile.get", { terminalId });
+  if (!found.ok) return "Couldn't find this session";
+  const file = found.result as { status: string; reason?: string };
+  if (file.status === "observed") return null;
+  return file.reason === "unsupported-agent"
+    ? "Not supported for this agent"
+    : "Session file not found yet";
+});
+```
+
+Each time a menu shows the item (as the menu or its **Extensions** submenu opens), Daintree invokes your plugin's `CONTEXT_MENU_AVAILABILITY_CHANNEL` handler with a `ContextMenuAvailabilityRequest`: the item's `availability` id, its `location`, and the ids that name what was right-clicked — `panelId` and `panelKind` on `terminal` and `browser`, `worktreeId` on `worktree` (and on a `terminal` whose panel has one), `projectId` on `project`, `isDirectory` on `file`, with `relativePath` when the row is inside a worktree, and on `assistant` the session's identifying fields as the action receives them (`assistantScope`, `projectId`, `slot`, `terminalId`, `incarnation`, `agentId`, each when the session has it). A browser page's URL, a file's absolute path and its worktree root are not sent; they arrive with the dispatch, when the person picks the item. One handler answers for every item that sets `availability`, so branch on the id. The handler receives the request as its second argument, typed `unknown` by the untyped `registerHandler` overload; register it with a [channel schema](./host-api.md#registerhandler-and-broadcasttorenderer) instead to have it parsed.
+
+Return `null` when the item can run, or a short reason when it can't: one line, at most `CONTEXT_MENU_AVAILABILITY_REASON_MAX` (120) characters, sentence case with no full stop. The reason is shown beside the dimmed label and read out to screen readers, which skip disabled rows. The item can't be picked while Daintree waits or when you name a reason; it shows "Checking…" if your answer takes longer than a moment.
+
+The answer is advice about one opening of one menu, never a gate: the action can still be dispatched from the palette, a keybinding or `host.dispatch`, so check again when it runs. The menu waits up to `CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS` (three seconds from opening, including starting your plugin if it isn't running), and when the handler is missing, throws, answers late or answers anything other than `null` or a valid reason, the item is offered as if it didn't set `availability`. Separately, the host stops waiting for your handler three seconds after it starts, whatever longer `timeoutMs` you register it with; the handler itself isn't interrupted. Nothing is cached: every opening asks again. Items without `availability` are never asked about.
 
 Context menus follow the same `actionId` dispatch pattern as menu items. A `terminal`-location item appears in the right-click menu of terminal-backed panels, not on browser, dev preview or review panels; gate it with `when` (for example `panelKind == 'terminal'`). To put entries on your own panels, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
@@ -2171,7 +2229,7 @@ At most 10 steps per plugin.
 
 Declares an editor the host's file panel offers for matching files. An entry takes one of two forms.
 
-A **view-backed** editor names one of the plugin's own `location: "fileEditor"` views. `"mode": "edit"` fills the file panel's writable **Edit** mode; `"mode": "view"` fills **Rendered** for a type the host can't render itself (CSV, data exports). Any plugin may declare one. Installed plugins match by extension; a `"scope": "project"` plugin may also match project-relative `paths`, and its editors only ever appear in its own project.
+A **view-backed** editor names one of the plugin's own `location: "fileEditor"` views. `"mode": "edit"` fills the file panel's writable **Edit** mode; `"mode": "view"` fills **Rendered** for a type the host can't render itself (CSV, data exports). Any plugin may declare one. Installed plugins match by extension; a `"scope": "project"` plugin may also match project-relative `paths`, and its editors only ever appear in its own project. The first-party CSV viewer (`plugins/builtin/csv-viewer/`) is one: a `"mode": "view"` table for `.csv` and `.tsv` files, on by default. A built-in plugin's view is compiled into the host and registered in-process under its hosted-view id (`plugin-view:{name}/{viewId}`), so its `componentPath` is never fetched.
 
 ```json
 {
@@ -2208,13 +2266,13 @@ A **slot-backed** editor names a builtin view the plugin's renderer registers wi
 | `default` | no | `"scope": "project"` plugins only (`fileEditors_default_project_only`), on a view-backed `"mode": "edit"` editor with `paths` (`fileEditors_default_invalid`). Makes the editor what files matching its `paths` open in; see below. A pattern may be the default for one entry of a plugin (`fileEditors_default_duplicate`). |
 | `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and the editor is not offered; the host document also refuses larger reads and saves. Defaults to 2 MiB; capped at 64 MiB. |
 
-**Choosing an editor.** The host's own editor or renderer stays the default; an installed or project editor adds a choice rather than displacing it. When more than one editor can fill a mode, the panel's toolbar shows **Edit with…** (or **View with…** for Rendered), and the pick is remembered per project and per file type in Daintree's own settings, never in the repository. A mode a plugin fills is labelled with the plugin's name (`Edit · Acme records`), and Source is always one click away.
+**Choosing an editor.** The host's own editor or renderer stays the default; an installed or project editor adds a choice rather than displacing it. A viewer that ships with Daintree is what a matching file opens in when no mode was asked for, and a panel keeps Source once the user picks it. A viewer is offered once the file's size is known to be within its `maxBytes`, from the panel's own read: the text it loaded, or the size it refused the file at for Source (512 KiB), so a file between the two opens only in the viewer. When more than one editor can fill a mode, the panel's toolbar shows **Edit with…** (or **View with…** for Rendered), and the pick is remembered per project and per file type in Daintree's own settings, never in the repository. A mode a plugin fills is labelled with the plugin's name (`Edit · Acme records`), and Source is always one click away.
 
 **A project's default editor.** A project plugin can make its editor what its own files open in by adding `"default": true`. Each of the entry's `paths` becomes a file editor slot in the project, one per exact pattern string, and a new file panel opened on a matching file without an explicit mode (a double-click in the file browser, `file.openPanel` from an agent, a plain click on a file link in a terminal) opens in Edit with that editor. The slots behave like [surfaces](#surfaces--shipped-project-scope-only): when two plugins name the same pattern, the lower manifest id holds it and the other is refused, attributed; the first time it applies, the file panel asks **Keep** or **Use Daintree's**; and **Project settings → Plugins** lists it with a reset. When the defaults of several patterns match one file, the most specific pattern wins: fewer `**` segments first, then more literal characters (so `content/about.json` beats both `**/content/about.json` and `content/*.json`), then the ordinally first. Extensions never set a default, an explicit mode or a panel already showing the file is left as it is, and Source stays in the mode toggle.
 
-**The host-owned document.** A view-backed editor's view receives `PanelViewProps.fileDocument` (`PluginFileDocument` in the SDK): `read()` returns the text and an opaque revision; `save(text, { expectedRevision })` writes only if the file is still at that revision, checked in the main process at write time, and otherwise returns `conflict` without writing; `setDraft(text | null)` reports unsaved text, and `setConflict` raises a conflict the editor detected itself; `onDidChange` reports a disk change, a save made by the host, or a discard. The host keeps the draft, so it survives a switch to Source and back, and the dirty mark, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close apply exactly as for the built-in editor. Text is UTF-8 with lines joined by `\n`; a save keeps the file's BOM, dominant line ending and mode.
+**The host-owned document.** A view-backed editor's view receives `PanelViewProps.fileDocument` (`PluginFileDocument` in the SDK): `read()` returns the text and an opaque revision; `save(text, { expectedRevision })` writes only if the file is still at that revision, checked in the main process at write time, and otherwise returns `conflict` without writing; `setDraft(text | null, { baseRevision })` reports unsaved text, where `baseRevision` is the revision of the read or save the text came from, passed when the draft starts and kept until it is saved or cleared (the close prompt's Save writes against it, and refuses a draft started without one; `getDraftBaseRevision()` returns it with a restored draft, and clearing the draft then starting it again rebases it), and `setConflict` raises a conflict the editor detected itself; `onDidChange` reports a disk change, a save made by the host, or a discard. Calls a view makes after it unmounts change nothing, so a view flushes a pending (debounced) draft in its unmount cleanup. The host keeps the draft, so it survives a switch to Source and back, and the dirty mark, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close apply exactly as for the built-in editor. Text is UTF-8 with lines joined by `\n`; a save keeps the file's BOM, dominant line ending and mode.
 
-The host offers editors inside the file browser’s existing content area (built-in editors only) and in standalone file panels (the standalone file viewer dialog stays read-only), only inside a project or worktree root. Plugin editors load only when chosen, so they never weigh on the file panel's first render.
+The host offers editors and viewers inside the file browser’s existing content area (built-in ones only) and in standalone file panels (the standalone file viewer dialog stays read-only), only inside a project or worktree root. Plugin editors load only when chosen, so they never weigh on the file panel's first render.
 
 ## Agents — _Shipped (minimal tier)_
 

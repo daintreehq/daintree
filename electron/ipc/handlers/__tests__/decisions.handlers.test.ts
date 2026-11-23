@@ -6,6 +6,8 @@ import type {
   DecisionsExportResult,
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
+  DecisionsKeyErasurePayload,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsPolicy,
   DecisionsRelayCheck,
@@ -29,6 +31,10 @@ import type {
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
 import type {
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
+} from "../../../../shared/types/decisionsAttention.js";
+import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   DecisionQuestionMarkResult,
@@ -49,6 +55,7 @@ import type {
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
@@ -110,6 +117,13 @@ const decisionsEntry = vi.hoisted(() => ({
       result: "not-found",
     })
   ),
+  getDecisionQuestionPaneByReference: vi.fn(
+    async (
+      _payload: GetDecisionQuestionByReferencePayload
+    ): Promise<DecisionQuestionPaneResult> => ({
+      result: "not-found",
+    })
+  ),
   getDecisionQuestionImageByReference: vi.fn(
     async (
       _payload: GetDecisionQuestionImageByReferencePayload
@@ -124,6 +138,11 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _payload: CancelDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
+  ),
+  actOnHostAttention: vi.fn(
+    async (_request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> => ({
+      result: "no-host",
+    })
   ),
   markDecisionQuestions: vi.fn(
     async (_payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => ({
@@ -226,25 +245,19 @@ const decisionsEntry = vi.hoisted(() => ({
     result: "deleted",
     status: { state: "not-connected" },
   })),
+  removeSettledQuestions: vi.fn(async (): Promise<DecisionsHistoryRemoveResult> => ({
+    result: "removed",
+    count: 3,
+  })),
   getDecisionsPolicy: vi.fn((): DecisionsPolicy => ({
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
     maxQuestionExpiryMs: 2,
     askHumanAgents: [],
     revision: 0,
   })),
-  setDecisionsProxyAllowlisted: vi.fn(async (allowed: boolean): Promise<DecisionsPolicy> => ({
-    gates: [],
-    proxyAllowlisted: allowed,
-    defaultQuestionExpiryMs: 1,
-    maxQuestionExpiryMs: 2,
-    askHumanAgents: [],
-    revision: 1,
-  })),
   setDecisionsDefaultQuestionExpiry: vi.fn(async (ms: number | null): Promise<DecisionsPolicy> => ({
     gates: [],
-    proxyAllowlisted: false,
     defaultQuestionExpiryMs: ms,
     maxQuestionExpiryMs: null,
     askHumanAgents: [],
@@ -253,7 +266,6 @@ const decisionsEntry = vi.hoisted(() => ({
   setDecisionsAgentAskHuman: vi.fn(
     async (payload: SetDecisionsAgentAskHumanPayload): Promise<DecisionsPolicy> => ({
       gates: [],
-      proxyAllowlisted: false,
       defaultQuestionExpiryMs: 1,
       maxQuestionExpiryMs: 2,
       askHumanAgents: payload.enabled ? [payload.agentId] : [],
@@ -270,6 +282,11 @@ const decisionsEntry = vi.hoisted(() => ({
     enabled
       ? { state: "connected", revision: 1 }
       : { state: "connected", holdPhonePushes: false, revision: 1 }
+  ),
+  setDecisionsAgentStoppedPushes: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> =>
+    enabled
+      ? { state: "connected", agentStoppedPushes: true, revision: 1 }
+      : { state: "connected", revision: 1 }
   ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
@@ -346,9 +363,11 @@ vi.mock("../../../services/decisions/index.js", () => {
     cancelDecisionQuestion: decisionsEntry.cancelDecisionQuestion,
     getDecisionQuestionImage: decisionsEntry.getDecisionQuestionImage,
     getDecisionQuestionContentByReference: decisionsEntry.getDecisionQuestionContentByReference,
+    getDecisionQuestionPaneByReference: decisionsEntry.getDecisionQuestionPaneByReference,
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
+    actOnHostAttention: decisionsEntry.actOnHostAttention,
     markDecisionQuestions: decisionsEntry.markDecisionQuestions,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
@@ -369,12 +388,13 @@ vi.mock("../../../services/decisions/index.js", () => {
     exportData: decisionsEntry.exportData,
     deleteRelayData: decisionsEntry.deleteRelayData,
     deleteLocalData: decisionsEntry.deleteLocalData,
+    removeSettledQuestions: decisionsEntry.removeSettledQuestions,
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
-    setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
     setDecisionsHoldPhonePushes: decisionsEntry.setDecisionsHoldPhonePushes,
+    setDecisionsAgentStoppedPushes: decisionsEntry.setDecisionsAgentStoppedPushes,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -445,6 +465,10 @@ const getQuestionContentByReference = decisionsNamespace.ops.getQuestionContentB
   .handler as unknown as (
   payload: GetDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionContentResult>;
+const getQuestionPaneByReference = decisionsNamespace.ops.getQuestionPaneByReference
+  .handler as unknown as (
+  payload: GetDecisionQuestionByReferencePayload
+) => Promise<DecisionQuestionPaneResult>;
 const getQuestionImageByReference = decisionsNamespace.ops.getQuestionImageByReference
   .handler as unknown as (
   payload: GetDecisionQuestionImageByReferencePayload
@@ -457,6 +481,9 @@ const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReferen
   .handler as unknown as (
   payload: CancelDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionCancelResult>;
+const hostAttention = decisionsNamespace.ops.hostAttention.handler as unknown as (
+  request: DecisionsHostAttentionRequest
+) => Promise<DecisionsHostAttentionResult>;
 const markQuestions = decisionsNamespace.ops.markQuestions.handler as unknown as (
   payload: MarkDecisionQuestionsPayload
 ) => Promise<DecisionQuestionMarkResult>;
@@ -506,13 +533,11 @@ const claimDeployedRelay = decisionsNamespace.ops.claimDeployedRelay.handler as 
 const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknown as (
   payload: RestoreDecisionsIdentityPayload
 ) => Promise<DecisionsConnectResult>;
-const disconnectRelay = decisionsNamespace.ops.disconnectRelay
-  .handler as unknown as () => Promise<DecisionsStatus>;
+const disconnectRelay = decisionsNamespace.ops.disconnectRelay.handler as unknown as (
+  payload?: DecisionsKeyErasurePayload
+) => Promise<DecisionsStatus>;
 const getPolicy = decisionsNamespace.ops.getPolicy
   .handler as unknown as () => Promise<DecisionsPolicy>;
-const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler as unknown as (
-  allowed: boolean
-) => Promise<DecisionsPolicy>;
 const setDefaultQuestionExpiry = decisionsNamespace.ops.setDefaultQuestionExpiry
   .handler as unknown as (ms: number | null) => Promise<DecisionsPolicy>;
 const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unknown as (
@@ -522,6 +547,9 @@ const setTerminalSnapshots = decisionsNamespace.ops.setTerminalSnapshots.handler
   payload: SetDecisionsTerminalSnapshotsPayload
 ) => Promise<DecisionsStatus>;
 const setHoldPhonePushes = decisionsNamespace.ops.setHoldPhonePushes.handler as unknown as (
+  enabled: boolean
+) => Promise<DecisionsStatus>;
+const setAgentStoppedPushes = decisionsNamespace.ops.setAgentStoppedPushes.handler as unknown as (
   enabled: boolean
 ) => Promise<DecisionsStatus>;
 
@@ -542,8 +570,13 @@ const exportData = decisionsNamespace.ops.exportData.handler as unknown as Expor
 const deleteRelayData = decisionsNamespace.ops.deleteRelayData.handler as unknown as (
   payload: DeleteDecisionsRelayDataPayload
 ) => Promise<DecisionsRelayDeleteResult>;
-const deleteLocalData = decisionsNamespace.ops.deleteLocalData
-  .handler as unknown as () => Promise<DecisionsLocalDeleteResult>;
+const deleteLocalData = decisionsNamespace.ops.deleteLocalData.handler as unknown as (
+  payload?: DecisionsKeyErasurePayload
+) => Promise<DecisionsLocalDeleteResult>;
+/** A confirm that asked for the typed gate (#18064). */
+const TYPED: DecisionsKeyErasurePayload = { oneClick: false, relayOrigin: null, keys: null };
+const removeSettledQuestions = decisionsNamespace.ops.removeSettledQuestions
+  .handler as unknown as () => Promise<DecisionsHistoryRemoveResult>;
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
 const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
@@ -636,9 +669,11 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_CANCEL_QUESTION,
   CHANNELS.DECISIONS_LIST_QUESTIONS,
   CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,
+  CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+  CHANNELS.DECISIONS_HOST_ATTENTION,
   CHANNELS.DECISIONS_MARK_QUESTIONS,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
@@ -657,11 +692,12 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_EXPORT_DATA,
   CHANNELS.DECISIONS_DELETE_RELAY_DATA,
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
+  CHANNELS.DECISIONS_REMOVE_SETTLED_QUESTIONS,
   CHANNELS.DECISIONS_GET_POLICY,
-  CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
   CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
+  CHANNELS.DECISIONS_SET_AGENT_STOPPED_PUSHES,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -690,9 +726,11 @@ describe("decisions IPC", () => {
     decisionsEntry.cancelDecisionQuestion.mockClear();
     decisionsEntry.getDecisionQuestionImage.mockClear();
     decisionsEntry.getDecisionQuestionContentByReference.mockClear();
+    decisionsEntry.getDecisionQuestionPaneByReference.mockClear();
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
+    decisionsEntry.actOnHostAttention.mockClear();
     decisionsEntry.markDecisionQuestions.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
@@ -715,14 +753,15 @@ describe("decisions IPC", () => {
     decisionsEntry.exportData.mockClear();
     decisionsEntry.deleteRelayData.mockClear();
     decisionsEntry.deleteLocalData.mockClear();
+    decisionsEntry.removeSettledQuestions.mockClear();
     decisionsEntry.exportRecoveryKit.mockClear();
     decisionsEntry.verifyRecoveryKit.mockClear();
     dialogMock.showSaveDialog.mockClear();
     decisionsEntry.getDecisionsPolicy.mockClear();
-    decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
     decisionsEntry.setDecisionsHoldPhonePushes.mockClear();
+    decisionsEntry.setDecisionsAgentStoppedPushes.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -888,6 +927,9 @@ describe("decisions IPC", () => {
         saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
 
         await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
           result: "off",
         });
         await expect(
@@ -1066,6 +1108,15 @@ describe("decisions IPC", () => {
     sealDecisionsModule();
     const ctx = { projectId: "project-1" };
 
+    const reference: DecisionQuestionReference = {
+      hostId: "host_1",
+      projectId: "project-1",
+      terminalId: "pane-a",
+      questionId: QUESTION_ID,
+    };
+    await expect(getQuestionPaneByReference({ reference })).resolves.toEqual({
+      result: "not-running",
+    });
     await expect(
       getQuestionContent(ctx, { terminalId: "pane-a", questionId: QUESTION_ID })
     ).resolves.toEqual({ result: "not-running" });
@@ -1156,7 +1207,7 @@ describe("decisions IPC", () => {
 
       await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "PERMISSION" });
-      await expect(disconnectRelay()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(disconnectRelay(TYPED)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1193,12 +1244,11 @@ describe("decisions IPC", () => {
     expect(getVoiceSettings).not.toHaveBeenCalled();
   });
 
-  it("refuses to read the policy or change the allowlist while off, loading none of Decisions", async () => {
+  it("refuses to read or change the policy while off, loading none of Decisions", async () => {
     for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
       saved.value = value;
 
       await expect(getPolicy()).rejects.toMatchObject({ code: "PERMISSION" });
-      await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setDefaultQuestionExpiry(null)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setAgentAskHuman({ agentId: "claude", enabled: true })).rejects.toMatchObject({
         code: "PERMISSION",
@@ -1207,6 +1257,8 @@ describe("decisions IPC", () => {
         code: "PERMISSION",
       });
       await expect(setHoldPhonePushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentStoppedPushes(true)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentStoppedPushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1311,7 +1363,7 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "CANCELLED" });
-    await expect(disconnectRelay()).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(disconnectRelay(TYPED)).rejects.toMatchObject({ code: "CANCELLED" });
 
     expect(decisionsEntry.evaluated).toBe(0);
   });
@@ -1326,7 +1378,8 @@ describe("decisions IPC", () => {
       await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
         code: "PERMISSION",
       });
-      await expect(deleteLocalData()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(removeSettledQuestions()).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1344,7 +1397,8 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
       code: "CANCELLED",
     });
-    await expect(deleteLocalData()).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(removeSettledQuestions()).rejects.toMatchObject({ code: "CANCELLED" });
 
     expect(decisionsEntry.evaluated).toBe(0);
   });
@@ -1381,6 +1435,33 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.clearDecisionsModelHistory).toHaveBeenCalledOnce();
     // The settings are Decisions' own to write, behind its transitions.
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes how a key erasure was confirmed, and nothing else (#18064)", () => {
+    for (const op of [
+      decisionsNamespace.ops.disconnectRelay,
+      decisionsNamespace.ops.deleteLocalData,
+    ]) {
+      const schema = op.schema as SafeParse;
+      expect(
+        schema.safeParse({ oneClick: true, relayOrigin: RELAY_ORIGIN, keys: "a.none" }).success
+      ).toBe(true);
+      expect(schema.safeParse({ oneClick: false, relayOrigin: null, keys: null }).success).toBe(
+        true
+      );
+      for (const value of [
+        undefined,
+        {},
+        { oneClick: true },
+        { oneClick: true, relayOrigin: null },
+        { oneClick: "yes", relayOrigin: null, keys: null },
+        { oneClick: true, relayOrigin: 42, keys: null },
+        { oneClick: true, relayOrigin: null, keys: 7 },
+        { oneClick: true, relayOrigin: null, keys: null, origin: "x" },
+      ]) {
+        expect(schema.safeParse(value).success, JSON.stringify(value)).toBe(false);
+      }
+    }
   });
 
   it("takes only the model's own preferences, a confidence for an evaluation, and a run id", () => {
@@ -1466,6 +1547,25 @@ describe("decisions IPC", () => {
       { runId: "x".repeat(65) },
       { runId: 7 },
       { runId: "a", extra: 1 },
+    ]) {
+      expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("takes a move only with the destination's run as main listed it (#18093)", () => {
+    const schema = decisionsNamespace.ops.reassignAnswer.schema as SafeParse;
+    const move = { questionId: QUESTION_ID, terminalId: "pane-2", run: "0a9f".repeat(16) };
+    expect(schema.safeParse(move).success).toBe(true);
+    expect(schema.safeParse({ ...move, expected: "c".repeat(64) }).success).toBe(true);
+    const { run: _run, ...withoutRun } = move;
+    for (const bad of [
+      withoutRun,
+      { ...move, run: "" },
+      { ...move, run: "B".repeat(64) },
+      { ...move, run: "0a9g".repeat(16) },
+      { ...move, run: "b".repeat(63) },
+      { ...move, run: "b".repeat(65) },
+      { ...move, run: 7 },
     ]) {
       expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
@@ -1575,12 +1675,15 @@ describe("decisions IPC", () => {
         summaries: [{ questionId: QUESTION_ID, result: "read", line: "Ship it?" }],
       };
       const cancel: DecisionQuestionCancelResult = { result: "refused", reason: "answered" };
+      const pane: DecisionQuestionPaneResult = { result: "closed" };
       decisionsEntry.getDecisionQuestionContentByReference.mockResolvedValueOnce(content);
+      decisionsEntry.getDecisionQuestionPaneByReference.mockResolvedValueOnce(pane);
       decisionsEntry.getDecisionQuestionImageByReference.mockResolvedValueOnce(part);
       decisionsEntry.getDecisionQuestionSummariesByReference.mockResolvedValueOnce(summaries);
       decisionsEntry.cancelDecisionQuestionByReference.mockResolvedValueOnce(cancel);
 
       await expect(getQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(content);
+      await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toBe(pane);
       await expect(getQuestionImageByReference(image)).resolves.toBe(part);
       await expect(getQuestionSummariesByReference({ references: [REFERENCE] })).resolves.toBe(
         summaries
@@ -1588,6 +1691,9 @@ describe("decisions IPC", () => {
       await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toBe(cancel);
 
       expect(decisionsEntry.getDecisionQuestionContentByReference).toHaveBeenCalledExactlyOnceWith({
+        reference: REFERENCE,
+      });
+      expect(decisionsEntry.getDecisionQuestionPaneByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,
       });
       expect(decisionsEntry.getDecisionQuestionImageByReference).toHaveBeenCalledExactlyOnceWith(
@@ -1598,6 +1704,64 @@ describe("decisions IPC", () => {
       ).toHaveBeenCalledExactlyOnceWith({ references: [REFERENCE] });
       expect(decisionsEntry.cancelDecisionQuestionByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,
+      });
+    });
+
+    it("acts on a Remote Host's stopped delivery only once on, a resume or Mark handled only with its token (#18031)", async () => {
+      const schema = decisionsNamespace.ops.hostAttention.schema as SafeParse;
+      const expected = "d".repeat(64);
+      expect(schema.safeParse({ action: "read", reference: REFERENCE }).success).toBe(true);
+      expect(schema.safeParse({ action: "copy", reference: REFERENCE }).success).toBe(true);
+      for (const action of ["resume", "handled"]) {
+        expect(schema.safeParse({ action, reference: REFERENCE, expected }).success).toBe(true);
+        expect(schema.safeParse({ action, reference: REFERENCE }).success).toBe(false);
+        expect(
+          schema.safeParse({ action, reference: REFERENCE, expected: "not-a-token" }).success
+        ).toBe(false);
+      }
+      expect(schema.safeParse({ action: "reassign", reference: REFERENCE }).success).toBe(false);
+      expect(
+        schema.safeParse({ action: "read", reference: REFERENCE, terminalId: "pane-1" }).success
+      ).toBe(false);
+
+      const request: DecisionsHostAttentionRequest = {
+        action: "handled",
+        reference: REFERENCE,
+        expected,
+      };
+      saved.value = { enabled: false };
+      await expect(hostAttention(request)).rejects.toMatchObject({ code: "PERMISSION" });
+      expect(decisionsEntry.actOnHostAttention).not.toHaveBeenCalled();
+
+      saved.value = { enabled: true };
+      const acted: DecisionsHostAttentionResult = {
+        result: "acted",
+        outcome: { result: "handled" },
+      };
+      decisionsEntry.actOnHostAttention.mockResolvedValueOnce(acted);
+      await expect(hostAttention(request)).resolves.toBe(acted);
+      expect(decisionsEntry.actOnHostAttention).toHaveBeenCalledExactlyOnceWith(request);
+    });
+
+    it("hands no terminal output to the window once Decisions is turned off under the read (#18037)", async () => {
+      saved.value = { enabled: true };
+      decisionsEntry.getDecisionQuestionPaneByReference.mockImplementationOnce(async () => {
+        saved.value = { enabled: false };
+        return {
+          result: "read",
+          reference: REFERENCE,
+          pane: {
+            agentState: "waiting",
+            waitingReason: null,
+            paneTitle: "Claude",
+            lines: ["secret plan"],
+            observedAt: "2026-11-20T10:00:00.000Z",
+          },
+        };
+      });
+
+      await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
+        result: "off",
       });
     });
 
@@ -1645,9 +1809,10 @@ describe("decisions IPC", () => {
     it("takes a whole reference and nothing else", () => {
       const content = decisionsNamespace.ops.getQuestionContentByReference.schema as SafeParse;
       const cancel = decisionsNamespace.ops.cancelQuestionByReference.schema as SafeParse;
+      const pane = decisionsNamespace.ops.getQuestionPaneByReference.schema as SafeParse;
       const image = decisionsNamespace.ops.getQuestionImageByReference.schema as SafeParse;
       const summaries = decisionsNamespace.ops.getQuestionSummariesByReference.schema as SafeParse;
-      for (const schema of [content, cancel]) {
+      for (const schema of [content, cancel, pane]) {
         expect(schema.safeParse({ reference: REFERENCE }).success).toBe(true);
         for (const bad of [
           {},
@@ -2091,11 +2256,13 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).resolves.toMatchObject({ result: "saved" });
     await expect(restoreIdentity(RESTORE)).resolves.toMatchObject({ result: "saved" });
-    await expect(disconnectRelay()).resolves.toEqual({ state: "not-connected" });
+    const confirmed = { oneClick: true, relayOrigin: RELAY_ORIGIN, keys: "a.none" };
+    await expect(disconnectRelay(confirmed)).resolves.toEqual({ state: "not-connected" });
 
     expect(decisionsEntry.claimRelay).toHaveBeenCalledExactlyOnceWith(CLAIM);
     expect(decisionsEntry.restoreIdentity).toHaveBeenCalledExactlyOnceWith(RESTORE);
-    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledOnce();
+    // How the person confirmed reaches main, which rechecks a one-click confirm (#18064).
+    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledExactlyOnceWith(confirmed);
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2152,12 +2319,23 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).resolves.toMatchObject({
       result: "deleted",
     });
-    await expect(deleteLocalData()).resolves.toMatchObject({ result: "deleted" });
+    const confirmed = { oneClick: true, relayOrigin: null, keys: null };
+    await expect(deleteLocalData(confirmed)).resolves.toMatchObject({ result: "deleted" });
 
     expect(decisionsEntry.deleteRelayData).toHaveBeenCalledExactlyOnceWith({
       origin: RELAY_ORIGIN,
     });
-    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledOnce();
+    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledExactlyOnceWith(confirmed);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("removes settled questions through Decisions itself once the setting is on (#18033)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(removeSettledQuestions()).resolves.toEqual({ result: "removed", count: 3 });
+
+    expect(decisionsEntry.removeSettledQuestions).toHaveBeenCalledOnce();
+    expect(decisionsEntry.deleteLocalData).not.toHaveBeenCalled();
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2184,14 +2362,12 @@ describe("decisions IPC", () => {
     }
   });
 
-  it("reads the policy and changes the allowlist through Decisions itself once on", async () => {
+  it("reads the policy through Decisions itself once on", async () => {
     saved.value = { enabled: true };
 
-    await expect(getPolicy()).resolves.toMatchObject({ proxyAllowlisted: false });
-    await expect(setProxyAllowlisted(true)).resolves.toMatchObject({ proxyAllowlisted: true });
+    await expect(getPolicy()).resolves.toMatchObject({ gates: [], revision: 0 });
 
     expect(decisionsEntry.getDecisionsPolicy).toHaveBeenCalledOnce();
-    expect(decisionsEntry.setDecisionsProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2252,6 +2428,22 @@ describe("decisions IPC", () => {
     expect(schema.safeParse(true).success).toBe(true);
     expect(schema.safeParse(false).success).toBe(true);
     for (const value of [undefined, "false", 0, { enabled: false }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("changes agent-stopped pushes through Decisions itself once on, and takes only a boolean (#17319)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setAgentStoppedPushes(true)).resolves.toMatchObject({ agentStoppedPushes: true });
+    await expect(setAgentStoppedPushes(false)).resolves.not.toHaveProperty("agentStoppedPushes");
+    expect(decisionsEntry.setDecisionsAgentStoppedPushes.mock.calls).toEqual([[true], [false]]);
+    expect(store.set).not.toHaveBeenCalled();
+
+    const schema = decisionsNamespace.ops.setAgentStoppedPushes.schema as SafeParse;
+    expect(schema.safeParse(true).success).toBe(true);
+    expect(schema.safeParse(false).success).toBe(true);
+    for (const value of [undefined, "true", 1, { enabled: true }]) {
       expect(schema.safeParse(value).success).toBe(false);
     }
   });
@@ -2345,14 +2537,13 @@ describe("decisions IPC", () => {
     }
   });
 
-  it("takes only a boolean for the allowlist, and nothing that could carry a gate", () => {
-    const schema = decisionsNamespace.ops.setProxyAllowlisted.schema as SafeParse;
-
-    expect(schema.safeParse(true).success).toBe(true);
-    expect(schema.safeParse(false).success).toBe(true);
-    for (const value of [undefined, "true", 1, { proxyAllowlisted: true }, { gates: [] }]) {
-      expect(schema.safeParse(value).success).toBe(false);
-    }
+  // #18062: whether a question without a gate may take a proxy answer is
+  // the decision model's threshold choice, so no op sets it on its own.
+  it("offers no op that lets questions without a gate take a proxy answer by itself", () => {
+    const ops = Object.keys(decisionsNamespace.ops);
+    expect(ops).toContain("setModelThreshold");
+    expect(ops.filter((name) => /proxy|allowlist/i.test(name))).toEqual([]);
+    expect(Object.values(CHANNELS)).not.toContain("decisions:set-proxy-allowlisted");
   });
 
   it("revokes and rotates through Decisions itself once the setting is on", async () => {

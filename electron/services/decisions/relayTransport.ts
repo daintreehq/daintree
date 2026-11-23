@@ -1,6 +1,6 @@
 import { net, powerMonitor } from "electron";
 import type {
-  DecisionsBridge,
+  DeliveryEngine,
   InjectResult,
   InjectionIntent,
   LocalStore,
@@ -10,7 +10,7 @@ import type {
   TerminalSink,
   WebSocketLike,
 } from "@daintreehq/decisions-client";
-import { targetOf } from "@daintreehq/decisions-client";
+import { DecisionsBridge, targetOf } from "@daintreehq/decisions-client";
 
 export type BridgeLock = DecisionsBridge["ctx"]["lock"];
 
@@ -129,8 +129,8 @@ export function retireable<T extends object>(target: T, isRetired: () => boolean
 /**
  * The sink a socket attempt's bridge runs with. Answers are typed by the
  * lifetime's delivery (`AnswerDelivery`, #16017), never by an attempt: every
- * pane reads as present but busy, so an attempt's engine, which also runs
- * stopped, defers without changing a question's status and types nothing.
+ * pane reads as present but busy, so an attempt's engine, which is also
+ * inert (`inertAttemptDelivery`), types nothing.
  */
 export const holdingTerminalSink: TerminalSink = {
   locate: async (origin: QuestionOrigin): Promise<LocateResult> => ({
@@ -141,6 +141,170 @@ export const holdingTerminalSink: TerminalSink = {
   inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "socket-attempt" }),
   hasMarker: async () => false,
 };
+
+/** The lifetime's delivery, as a socket attempt's inert engine reports to it. */
+export interface LifetimeDelivery {
+  /** An advisory notice waits for the ledger (#17941). */
+  readonly replayHeld: boolean;
+  request(): void;
+  /** Whether an advisory notice would wait for the ledger, on the lifetime engine's clock. */
+  ledgerHolds(questionId: string, opts?: { start?: boolean }): Promise<boolean>;
+}
+
+/**
+ * Makes a socket attempt's delivery engine inert, as the lifetime's delivery
+ * types every answer (#16017). From 0.9.0 the bridge reopens delivery a stop
+ * closed, as it starts and on any pump that finds it closed, so the engine's
+ * `stopped` no longer holds: its drain does nothing instead, reading no rows
+ * and reporting no receipts. Its inbox waits for a closure notice being typed
+ * before it applies a reopen; the lifetime's engine is the one typing it, so
+ * the attempt asks that one. An advisory notice of the lifetime's waits for
+ * the ledger the attempt reads (#17941): the attempt sees that wait as its
+ * own, so once its read settles, its drain asks the lifetime's delivery to
+ * try again, without waiting for it. Whether a notice waits, as `get_decision`
+ * reads it, is the lifetime engine's answer on its own clock, so the two never
+ * disagree. `lifetime` is null once the attempt has ended.
+ */
+export function inertAttemptDelivery(
+  engine: DeliveryEngine,
+  closureWrite: (questionId: string) => Promise<void> | null,
+  lifetime: () => LifetimeDelivery | null = () => null
+): void {
+  engine.drain = async () => {
+    const delivery = lifetime();
+    if (delivery?.replayHeld === true) delivery.request();
+    return { delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 };
+  };
+  Object.defineProperty(engine, "replayHeld", {
+    configurable: true,
+    get: () => lifetime()?.replayHeld === true,
+  });
+  const ownHolds = engine.ledgerHolds.bind(engine);
+  engine.ledgerHolds = (questionId, opts) =>
+    (lifetime() ?? { ledgerHolds: ownHolds }).ledgerHolds(questionId, opts);
+  engine.closureWrite = closureWrite;
+}
+
+/**
+ * An attempt's drain is inert (`inertAttemptDelivery`), so it never reports
+ * a delivery for the bridge to announce. The rows the bridge reads before
+ * each drain to tell what it delivered, on every pump and every ask, would be
+ * read for nothing, every settled question with them (#18033): the attempt
+ * drains without that read.
+ */
+export function drainWithoutAnnouncing(bridge: { delivery: Pick<DeliveryEngine, "drain"> }): void {
+  Object.defineProperty(bridge, "deliverNow", {
+    configurable: true,
+    writable: true,
+    value: async (): Promise<void> => {
+      await bridge.delivery.drain();
+    },
+  });
+}
+
+const noop = (): void => {};
+
+/**
+ * A pump asked for while one runs, run once more after it. The library joins
+ * such a call to the pass in flight, which may already have read its outbox:
+ * a question committed then would reach the relay only on the next pump, 30 s
+ * later (#18002). Every call made meanwhile shares the one pass after it,
+ * which waits on the passes in flight alone, never on the advisory read the
+ * library runs beside them. A call made once that pass has started queues
+ * another. Each caller still settles as the pass it joined does; the pass
+ * after is extra work, so it fails to `report`, as a background pump does.
+ */
+export class TrailingPump {
+  private queued: { started: Promise<void>; done: Promise<void> } | null = null;
+
+  constructor(
+    private readonly pass: () => Promise<void>,
+    private readonly inFlight: () => Promise<unknown> | null,
+    private readonly report: (error: Error) => void
+  ) {}
+
+  run(): Promise<void> {
+    const running = this.inFlight();
+    const joined = this.pass();
+    if (running === null) return joined;
+    this.queued ??= this.after(running);
+    return Promise.all([joined, this.queued.done]).then(noop);
+  }
+
+  /** Settles once the queued pass has started, from when the library's `idle()` sees it; null with none queued. */
+  started(): Promise<void> | null {
+    return this.queued?.started ?? null;
+  }
+
+  /**
+   * Starts a pass once none is in flight. One another call started meanwhile
+   * may have read before a call sharing this pass was made, so it's waited out
+   * too.
+   */
+  private after(running: Promise<unknown>): { started: Promise<void>; done: Promise<void> } {
+    let done: Promise<void> = Promise.resolve();
+    const start = async (current: Promise<unknown>): Promise<void> => {
+      await current.then(noop, noop);
+      const next = this.inFlight();
+      if (next !== null) {
+        await start(next);
+        return;
+      }
+      this.queued = null;
+      try {
+        done = this.pass();
+      } catch (error) {
+        done = Promise.reject(error as Error);
+      }
+    };
+    const started = start(running);
+    return {
+      started,
+      done: started
+        .then(() => done)
+        .catch((error: unknown) => {
+          try {
+            this.report(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // A listener's own failure: its callers still settle as the pass they joined.
+          }
+        }),
+    };
+  }
+}
+
+/**
+ * A socket attempt's bridge, whose pump never joins a pass that may already
+ * have read past what the call was made for (`TrailingPump`). The library's
+ * own calls, from an ask, a cancel, a thread post and the end of a replay,
+ * reach the override too. A stopped or revoked bridge, and a library without
+ * the pass where this reads it, pump as the library does.
+ */
+export class AttemptBridge extends DecisionsBridge {
+  private trailing: TrailingPump | undefined;
+
+  override pump(): Promise<void> {
+    if (this.state === "stopped" || this.state === "revoked") return super.pump();
+    this.trailing ??= new TrailingPump(
+      () => super.pump(),
+      () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null,
+      (error) => this.reportPumpError(error)
+    );
+    return this.trailing.run();
+  }
+
+  override idle(): Promise<void> {
+    const queued = this.trailing?.started() ?? null;
+    return queued === null ? super.idle() : queued.then(() => super.idle());
+  }
+
+  /** On the bridge's `error`, where the library reports a background pump's failure. */
+  private reportPumpError(error: Error): void {
+    const emit = (this as unknown as { emitError?: (e: Error) => void }).emitError;
+    if (typeof emit === "function") emit.call(this, error);
+    else console.warn("[Decisions] A relay pump failed:", error.message);
+  }
+}
 
 /**
  * The store as a socket attempt's bridge sees it once delivery runs for the

@@ -14,9 +14,12 @@ import {
   msUntilChange,
   parseLocalDateTime,
   readOnlyText,
+  sameDraft,
   saveNotice,
   setOnText,
   thenText,
+  unavailableLabel,
+  unavailableText,
   type AvailablePreference,
 } from "../decisionsInvolvementModel";
 
@@ -110,17 +113,63 @@ describe("decisionsInvolvementModel", () => {
     expect(modeDetail("involve-early", 3)).not.toContain("3");
   });
 
+  it("names why none is in force in a few words for one line, and in a sentence otherwise", () => {
+    const reasons = [
+      "not-set",
+      "not-synced",
+      "unsupported",
+      "signer-revoked",
+      "device-revoked",
+    ] as const;
+    // Each reason keeps its own words when shortened.
+    expect(new Set(reasons.map(unavailableLabel)).size).toBe(reasons.length);
+    for (const reason of [
+      "not-set",
+      "not-synced",
+      "unsupported",
+      "signer-revoked",
+      "device-revoked",
+    ] as const) {
+      expect(unavailableLabel(reason)).not.toMatch(/\.$/);
+      expect(unavailableText(reason).length).toBeGreaterThan(unavailableLabel(reason).length);
+    }
+  });
+
   describe("drafts", () => {
+    it("counts two drafts as the same only when they would save the same preference", () => {
+      const until = "2026-11-18T12:34:56.789Z";
+      const temporary = draftFrom(available({ override: { mode: "involve-early", until } }), NOW);
+      expect(sameDraft(temporary, { ...temporary })).toBe(true);
+      expect(sameDraft(temporary, { ...temporary, consultCount: 3 })).toBe(false);
+      expect(sameDraft(temporary, { ...temporary, temporaryMode: "recommend" })).toBe(false);
+      // Typing the same minute back drops the end's seconds: a different end.
+      expect(
+        sameDraft(temporary, {
+          ...temporary,
+          until: localDateTime(Date.parse(until)),
+          keptUntil: null,
+        })
+      ).toBe(false);
+
+      const permanent = draftFrom(available(), NOW);
+      expect(sameDraft(permanent, { ...permanent, normalMode: "involve-early" })).toBe(false);
+      // A temporary mode's fields mean nothing while it is off.
+      expect(sameDraft(permanent, { ...permanent, temporaryMode: "recommend", until: "" })).toBe(
+        true
+      );
+      expect(sameDraft(permanent, { ...permanent, temporary: true })).toBe(false);
+      expect(sameDraft(permanent, { ...permanent, consultCount: Number.NaN })).toBe(false);
+    });
+
     it("starts from the preference reviewed, keeping an active temporary mode and its exact end", () => {
       const until = "2026-11-18T12:34:56.789Z";
-      // The same mode as the normal one, which no default would pick.
-      const draft = draftFrom(available({ override: { mode: "recommend", until } }), NOW);
+      const draft = draftFrom(available({ override: { mode: "involve-early", until } }), NOW);
 
       expect(draft).toMatchObject({
         normalMode: "recommend",
         consultCount: 2,
         temporary: true,
-        temporaryMode: "recommend",
+        temporaryMode: "involve-early",
         keptUntil: until,
       });
       expect(draftIssue(draft, NOW)).toBeNull();
@@ -128,7 +177,25 @@ describe("decisionsInvolvementModel", () => {
         expectedRevision: 3,
         normalMode: "recommend",
         consultCount: 2,
-        override: { mode: "recommend", until },
+        override: { mode: "involve-early", until },
+      });
+    });
+
+    it("starts without a temporary mode the same as the usual one, so saving keeps what agents are told", () => {
+      const until = "2026-11-18T12:34:56.789Z";
+      // A phone can set one; keeping it would flip it to the other mode in a draft.
+      const draft = draftFrom(available({ override: { mode: "recommend", until } }), NOW);
+
+      expect(draft).toMatchObject({
+        temporary: false,
+        temporaryMode: "involve-early",
+        keptUntil: null,
+      });
+      expect(draftPayload(draft, 3)).toEqual({
+        expectedRevision: 3,
+        normalMode: "recommend",
+        consultCount: 2,
+        override: null,
       });
     });
 

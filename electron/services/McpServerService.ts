@@ -38,6 +38,7 @@ import {
 import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import { readWorktreeGitObservation } from "./mcp-server/worktreeRetirementGit.js";
+import { readWorktreesLocalWork } from "./git/worktreeLocalWork.js";
 import {
   helpConversationKey,
   helpOwnershipPrincipal,
@@ -86,6 +87,7 @@ import {
   type OwnPane,
 } from "./mcp-server/terminalNotify.js";
 import { WorkerSteerQueue } from "./assistants/WorkerSteerQueue.js";
+import { liveClaudeUpdateApply, type ClaudeUpdateApply } from "./assistants/ClaudeUpdateApply.js";
 import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import { createApprovalWake } from "./mcp-server/approvalWake.js";
@@ -222,6 +224,12 @@ export interface McpWakeHold {
   release(): void;
 }
 
+/**
+ * How long the global Assistant's close question waits on git for the panels'
+ * worktrees (#18151) before what hasn't answered reads as unreadable.
+ */
+const GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS = 20_000;
+
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
   private _registry: WindowRegistry | null = null;
@@ -235,6 +243,8 @@ export class McpServerService {
   private readonly terminalNotify: TerminalNotifyService;
   /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
   private readonly workerSteerQueue: WorkerSteerQueue;
+  /** Claude Code updates assistants asked to apply (#17908), one per pane at a time. */
+  private readonly claudeUpdate: ClaudeUpdateApply = liveClaudeUpdateApply(() => getPtyClient());
   /** A pane's launch principal, whichever bearers it holds: the key its notices are held under. */
   private workerPrincipalResolver: ((paneId: string) => string | null) | null = null;
   private readonly replyWaiter: ReplyWaiterService;
@@ -572,14 +582,20 @@ export class McpServerService {
         handleProjectRunCommand(rawArgs, signal, authorize),
       handleAgentResumeOwned: (rawArgs, projectId, signal, authorize) =>
         handleAgentResumeOwned(rawArgs, projectId, signal, authorize),
-      handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants, admittedGlobal) =>
-        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants, admittedGlobal),
+      handleTerminalGetStatusViewless: (
+        rawArgs,
+        workspaceId,
+        admittedAssistants,
+        admittedGlobals
+      ) =>
+        handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants, admittedGlobals),
       machineName: () => (localMachineName ??= machineDisplayName()),
       readCodexQuota: async () => {
         const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
         return readCodexQuota();
       },
       readClaudeUsage: readClaudeUsageObservations,
+      claudeUpdate: this.claudeUpdate,
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
@@ -614,6 +630,17 @@ export class McpServerService {
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
       readWorktreeGit: (worktreePath, signal) => readWorktreeGitObservation(worktreePath, signal),
+      // On this host, where the agents run, and only for the project the
+      // global Assistant's session is bound to.
+      readCloseWorktrees: async (projectId, worktreeIds, signal) => {
+        // Loaded on first use: the store opens its database when imported.
+        const { projectStore } = await import("./ProjectStore.js");
+        const projectPath = projectStore.getProjectById(projectId)?.path ?? null;
+        return readWorktreesLocalWork(
+          worktreeIds.map((worktreeId) => ({ projectPath, worktreeId })),
+          { signal, deadlineMs: GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS }
+        );
+      },
       terminalGenerationOf: (terminalId) => {
         const client = getPtyClient();
         if (!client) return undefined;
@@ -1044,6 +1071,32 @@ export class McpServerService {
       return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
     }
     return { status: "handed-over", adoption: toTerminalAdoptionEntry(outcome.record) };
+  }
+
+  /**
+   * Coordination moved from one global assistant session to the other
+   * (#18143). What the outgoing session's conversation launched follows the
+   * conversation's ownership id, which the handover moved, so only what is
+   * held by its run itself is handled here: the prompts it left waiting on
+   * busy agents on this machine are dropped, without the fence of a session
+   * that ended, since it may coordinate again; and the terminals the person
+   * handed it go to the incoming session's run, or back to the person while
+   * that session isn't running.
+   */
+  handOverGlobalAssistantWork(
+    fromSessionId: string,
+    to: { sessionId: string; terminalId: string } | null
+  ): void {
+    const from = relayOwnershipPrincipal(LOCAL_HOST_ID, fromSessionId);
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(from));
+    const adoption = this.sessionStore.terminalAdoption;
+    if (to === null) {
+      adoption.revokePrincipal(from);
+      return;
+    }
+    adoption.reassignPrincipal(from, relayOwnershipPrincipal(LOCAL_HOST_ID, to.sessionId), {
+      orchestratorPaneId: to.terminalId,
+    });
   }
 
   /**

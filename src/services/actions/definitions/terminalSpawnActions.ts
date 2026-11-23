@@ -9,8 +9,12 @@ import {
 } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
-import { buildResumePanelOptions } from "@/services/agentResume";
-import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+import {
+  bringResumedPaneForward,
+  RESUME_UNAVAILABLE_MESSAGE,
+  resumeSessionIntoPanel,
+} from "@/services/agentResume";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
@@ -19,7 +23,6 @@ import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { isForegroundDispatch } from "./dispatchSource";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
-import { isPtyPanel } from "@shared/types/panel";
 
 // Guards the async journal-resume fallback of `terminal.reopenLast` against a
 // second dispatch racing the first's pending `list`/`addPanel` — two rapid
@@ -224,7 +227,7 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
+    run: async (_args: unknown, ctx) => {
       // Commit any in-flight optimistic close first — until it flushes the
       // panel isn't in `trashedTerminals` yet and restore would no-op.
       flushOptimisticCloses();
@@ -253,35 +256,41 @@ export function registerTerminalSpawnActions(
         const session = sessions[0];
         if (!session) return;
 
-        const options = buildResumePanelOptions(
-          session,
-          { cwd, worktreeId: activeWorktreeId },
-          await resolveCurrentAgentLaunchBaseCommand(session.agentId)
-        );
-        if (!options) return;
-
         // Records are non-destructive/unconsumed, so a repeat press would try to
-        // resume the same session again — concurrent transcript access. If a live
-        // panel in this worktree already carries the session, focus it instead of
-        // respawning. Scope by worktree too so a panel moved to another worktree
-        // can't steal focus across worktrees.
-        const state = usePanelStore.getState();
-        const existingId = state.panelIds.find((id) => {
-          const panel = state.panelsById[id];
-          return (
-            panel &&
-            isPtyPanel(panel) &&
-            panel.location !== "trash" &&
-            panel.agentSessionId === session.sessionId &&
-            panel.worktreeId === activeWorktreeId
+        // resume the same session again — concurrent transcript access. The
+        // shared resume hands back the live pane already carrying the session,
+        // wherever a move has filed it (#18009), and shares one launch with any
+        // other resume of it in flight. A person pressing this is taken to that
+        // pane; a headless caller only gets it back.
+        const showWorktree = isForegroundDispatch(ctx.dispatchSource)
+          ? (worktreeId: string) => {
+              const selection = useWorktreeSelectionStore.getState();
+              if (worktreeId !== selection.activeWorktreeId) {
+                selection.selectWorktree(worktreeId, { source: "user" });
+              }
+            }
+          : undefined;
+        try {
+          const resumed = await resumeSessionIntoPanel(
+            session,
+            { cwd, worktreeId: activeWorktreeId },
+            { showWorktree }
           );
-        });
-        if (existingId) {
-          state.activateTerminal(existingId);
-          return;
+          // Joined someone else's launch, its callbacks never ran here; a
+          // worktree chosen meanwhile is a newer choice, and stands.
+          const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
+          if (
+            showWorktree &&
+            (selectedNow === activeWorktreeId || selectedNow === resumed.worktreeId)
+          ) {
+            bringResumedPaneForward(resumed, showWorktree);
+          }
+        } catch (error) {
+          // A record its agent can no longer resume reopens nothing, quietly,
+          // as an empty journal does.
+          if (error instanceof Error && error.message === RESUME_UNAVAILABLE_MESSAGE) return;
+          throw error;
         }
-
-        await state.addPanel(options);
       } finally {
         reopenJournalInFlight = false;
       }

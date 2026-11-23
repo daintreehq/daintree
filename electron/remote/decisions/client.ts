@@ -1,5 +1,9 @@
 import type { z } from "zod";
 import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../shared/types/decisionsAttention.js";
+import type {
   DecisionsHostRuntime,
   DecisionsHostRuntimeObservation,
 } from "../../../shared/types/decisionsHosts.js";
@@ -19,17 +23,20 @@ import {
   type DecisionsHostLink,
   type DecisionsHostsPort,
   type HostAcceptResult,
+  type HostAgentStopChange,
   type HostCallOutcome,
   type HostIdentityReport,
   type HostRequestResult,
   type OwnerStateAnnouncement,
 } from "../../types/decisionsHosts.js";
+import { hostAttentionResultSchema } from "./attentionSchemas.js";
 import {
   DecisionsLinkMethod,
   EnrollHostPayloadSchema,
   HostAcceptResultSchema,
   HostRequestResultSchema,
   HostRuntimePayloadSchema,
+  HostRuntimeV2PayloadSchema,
   HostStatusResultSchema,
   OwnerStatePayloadSchema,
   OwnerStateV2PayloadSchema,
@@ -38,14 +45,20 @@ import {
 import {
   HostQuestionCancelResultSchema,
   HostQuestionContentResultSchema,
+  HostQuestionContentV2ResultSchema,
+  HostQuestionContentV3ResultSchema,
   HostQuestionImagePartResultSchema,
+  HostQuestionPaneResultSchema,
   HostQuestionAskSchema,
   HostQuestionItemSchema,
+  HostQuestionItemV3Schema,
   HostQuestionListSchema,
   HostQuestionListV2Schema,
+  HostQuestionListV3Schema,
   HostQuestionSummariesResultSchema,
   HostQuestionsChangedPayloadSchema,
   HostQuestionsChangedV2PayloadSchema,
+  HostQuestionsChangedV3PayloadSchema,
   MAX_HOST_IMAGE_PART_BYTES,
   type HostQuestionListPayload,
 } from "./questionSchemas.js";
@@ -59,6 +72,12 @@ export const HOST_ACCEPT_TIMEOUT_MS = 75_000;
 export const OWNER_STATE_TIMEOUT_MS = 75_000;
 /** A Host's list, or one of its questions opened there: an image is fetched and checked first. */
 export const HOST_QUESTION_TIMEOUT_MS = 75_000;
+/**
+ * How long a resume of a Host's stopped delivery is waited on (#18031): the
+ * Host reopens the session and waits up to a minute and a half for its
+ * prompt before delivery has its go. Past this its outcome is unknown.
+ */
+export const HOST_ATTENTION_RESUME_TIMEOUT_MS = 180_000;
 
 export interface DecisionsHostSession {
   readonly isOpen: boolean;
@@ -85,6 +104,8 @@ export interface DecisionsHostsClientDeps {
    * is announced.
    */
   ownerState(): OwnerStateAnnouncement | null;
+  /** Hosts' agents' stops as the host summaries' client hears them (#17933). */
+  onAgentStopChanges?(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
   now?: () => number;
 }
 
@@ -195,12 +216,17 @@ function answersRead(read: DecisionsHostQuestionRead, answer: unknown): boolean 
         answered.size === result.summaries.length && [...answered].every((id) => asked.has(id))
       );
     }
+    case "pane": {
+      const result = answer as PaneResultLike;
+      return result.result !== "read" || sameReference(result.reference, read.reference);
+    }
   }
 }
 
 type DecisionQuestionContentResultLike = z.infer<typeof HostQuestionContentResultSchema>;
 type ImagePartResultLike = z.infer<typeof HostQuestionImagePartResultSchema>;
 type SummariesResultLike = z.infer<typeof HostQuestionSummariesResultSchema>;
+type PaneResultLike = z.infer<typeof HostQuestionPaneResultSchema>;
 
 function answerSchemaOf(read: DecisionsHostQuestionRead): z.ZodType {
   switch (read.read) {
@@ -210,6 +236,8 @@ function answerSchemaOf(read: DecisionsHostQuestionRead): z.ZodType {
       return HostQuestionImagePartResultSchema;
     case "summaries":
       return HostQuestionSummariesResultSchema;
+    case "pane":
+      return HostQuestionPaneResultSchema;
   }
 }
 
@@ -330,6 +358,25 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly announced = new Map<string, number>();
   /** Sessions whose Host answered `OWNER_STATE_V2` UNSUPPORTED: they are told the older method only. */
   private readonly beforeSnapshots = new WeakSet<DecisionsHostSession>();
+  /**
+   * Sessions whose Host answered `OWNER_STATE_V3` UNSUPPORTED (#17942): they
+   * are told `OWNER_STATE_V2` or older, and report no question policy.
+   */
+  private readonly beforeQuestionPolicy = new WeakSet<DecisionsHostSession>();
+  /**
+   * The latest word each owner identity announced on each session, recorded
+   * as the announcement begins: what a fallback says for that owner.
+   */
+  private readonly announcedStates = new WeakMap<
+    DecisionsHostSession,
+    Map<string, OwnerStateAnnouncement>
+  >();
+  /**
+   * The newest turn each Host's report was taken from, a push's or an
+   * announcement's: an answer to an older announcement never replaces it,
+   * while one whose newer announcement failed is still taken.
+   */
+  private readonly observedTurns = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
   /** Each wired session's handler and close listener, removed on stop. */
   private readonly unwires = new Set<() => void>();
@@ -341,6 +388,14 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
   private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered the list with rounds UNSUPPORTED: from before #17943. */
+  private readonly beforeRounds = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered content with rounds UNSUPPORTED: from before #17943. */
+  private readonly beforeContentRounds = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered content with its preparation UNSUPPORTED: from before #18042. */
+  private readonly beforePreparation = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered its stopped deliveries UNSUPPORTED: from before #18031. */
+  private readonly beforeAttention = new WeakSet<DecisionsHostSession>();
   /**
    * Reads of the list with its asks out, per session. A Host answers one with
    * its list as it stands then, after any v1 push it sent before the read
@@ -417,6 +472,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     );
   }
 
+  onAgentStopChanges(listener: (hostId: string, change: HostAgentStopChange) => void): () => void {
+    return this.deps.onAgentStopChanges?.(listener) ?? (() => {});
+  }
+
   onHostsChanged(listener: () => void): () => void {
     const offHosts = this.deps.onHostsChanged(listener);
     this.listeners.add(listener);
@@ -488,7 +547,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
             turn: ++this.readTurns,
           }
         : null;
-    return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read)).then(
+    return this.callQuestionRead(hostId, read).then(
       (answered): HostCallOutcome<DecisionsHostQuestionAnswer<R>> => {
         if (!answered.ok) return answered;
         if (!answersRead(read, answered.value)) return { ok: false, failure: "unexpected-answer" };
@@ -498,6 +557,63 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         return answered as HostCallOutcome<DecisionsHostQuestionAnswer<R>>;
       }
     );
+  }
+
+  /**
+   * A read over the Host's current link: content with its preparation (#18042)
+   * and round (#17943) where the Host reads them, else with its round alone,
+   * else as `QUESTIONS` reads it, as everything else is.
+   */
+  private async callQuestionRead(
+    hostId: string,
+    read: DecisionsHostQuestionRead
+  ): Promise<HostCallOutcome<unknown>> {
+    // Only its own method reads a pane: a Host from before it is told it needs updating.
+    if (read.read === "pane") {
+      return this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_PANE,
+        { reference: read.reference },
+        HostQuestionPaneResultSchema
+      );
+    }
+    const session = this.deps.sessionFor(hostId);
+    if (read.read === "content" && session !== null && !this.beforePreparation.has(session)) {
+      let unsupported = false;
+      const answered = await this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_CONTENT_V3,
+        { reference: read.reference },
+        HostQuestionContentV3ResultSchema,
+        () => {
+          unsupported = true;
+        }
+      );
+      if (!unsupported) return answered;
+      // A Host from before #18042, asked again from the top as below.
+      this.beforePreparation.add(session);
+      return this.callQuestionRead(hostId, read);
+    }
+    if (read.read === "content" && session !== null && !this.beforeContentRounds.has(session)) {
+      // Only the method itself going unknown says the Host is older: a refused step of a
+      // method it knows reads as `needs-update` too, and must never cost later reads their round.
+      let unsupported = false;
+      const answered = await this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_CONTENT_V2,
+        { reference: read.reference },
+        HostQuestionContentV2ResultSchema,
+        () => {
+          unsupported = true;
+        }
+      );
+      if (!unsupported) return answered;
+      // A Host from before #17943 reads content only as `QUESTIONS` does. Asked again from the
+      // top, so a link that replaced this one meanwhile is asked for the round in its own right.
+      this.beforeContentRounds.add(session);
+      return this.callQuestionRead(hostId, read);
+    }
+    return this.callHost(hostId, DecisionsLinkMethod.QUESTIONS, read, answerSchemaOf(read));
   }
 
   lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null {
@@ -597,6 +713,56 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     );
   }
 
+  hostAttention(
+    request: DecisionsHostAttentionRequest
+  ): Promise<HostCallOutcome<DecisionsHostAttentionAnswer>> | null {
+    const { reference } = request;
+    const host = this.hostQuestions().find((heard) => heard.questionHostId === reference.hostId);
+    // Only a question the Host lists: one it never listed has nothing to act on here.
+    if (!host?.questions.some((question) => sameReference(question.reference, reference))) {
+      return null;
+    }
+    // Only over the link its list came on: a newer one hasn't listed the question yet.
+    if (!host.connected) return Promise.resolve({ ok: false, failure: "disconnected" });
+    const session = this.deps.sessionFor(host.hostId);
+    // A Host that answered this link UNSUPPORTED is never asked again on it: it's from before.
+    if (session?.isOpen && this.beforeAttention.has(session)) {
+      return Promise.resolve({ ok: false, failure: "needs-update" });
+    }
+    return this.callHost(
+      host.hostId,
+      DecisionsLinkMethod.ATTENTION,
+      request,
+      hostAttentionResultSchema(request.action),
+      (unsupported) => this.beforeAttention.add(unsupported),
+      request.action === "resume" ? HOST_ATTENTION_RESUME_TIMEOUT_MS : HOST_QUESTION_TIMEOUT_MS
+    ).then((answered): HostCallOutcome<DecisionsHostAttentionAnswer> => {
+      if (!answered.ok || answered.value.result !== "read" || answered.value.item === null) {
+        return answered;
+      }
+      const { item } = answered.value;
+      if (
+        item.questionId !== reference.questionId ||
+        item.origin.projectId !== reference.projectId ||
+        item.origin.paneId !== reference.terminalId
+      ) {
+        return { ok: false, failure: "unexpected-answer" };
+      }
+      // `canReassign` stays as the Host said: choosing another of its panes is offered only there,
+      // but handling it here still takes that away, so it still asks first.
+      return {
+        ok: true,
+        value: {
+          result: "read",
+          item: {
+            ...item,
+            origin: { ...item.origin, otherHost: { hostId: reference.hostId, name: host.name } },
+          },
+        },
+      };
+    });
+  }
+
   /** The Host whose questions name `questionHostId`, by its host list id; null when none's do. */
   private hostAsking(questionHostId: string): string | null {
     return (
@@ -609,15 +775,18 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     method: string,
     payload: unknown,
-    schema: S
+    schema: S,
+    onUnsupported?: (session: DecisionsHostSession) => void,
+    timeoutMs = HOST_QUESTION_TIMEOUT_MS
   ): Promise<HostCallOutcome<z.infer<S>>> {
     const session = this.deps.sessionFor(hostId);
     if (!session?.isOpen) return { ok: false, failure: "disconnected" };
     const release = this.deps.hold(hostId);
     let raw: unknown;
     try {
-      raw = await session.call(method, payload, { timeoutMs: HOST_QUESTION_TIMEOUT_MS });
+      raw = await session.call(method, payload, { timeoutMs });
     } catch (error) {
+      if (codeOf(error) === "UNSUPPORTED") onUnsupported?.(session);
       return failureOf(error);
     } finally {
       release();
@@ -635,15 +804,32 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.questionTurns.set(hostId, turn);
     let raw: unknown;
     let withAsks = !this.beforeAsks.has(session);
+    let withRounds = withAsks && !this.beforeRounds.has(session);
     try {
       if (withAsks) {
         this.readingAsks.set(session, (this.readingAsks.get(session) ?? 0) + 1);
         try {
-          raw = await session.call(
-            DecisionsLinkMethod.QUESTION_LIST_V2,
-            {},
-            { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
-          );
+          if (withRounds) {
+            try {
+              raw = await session.call(
+                DecisionsLinkMethod.QUESTION_LIST_V3,
+                {},
+                { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+              );
+            } catch (error) {
+              // A Host from before #17943 lists its questions without their rounds.
+              if (codeOf(error) !== "UNSUPPORTED") throw error;
+              this.beforeRounds.add(session);
+              withRounds = false;
+            }
+          }
+          if (!withRounds) {
+            raw = await session.call(
+              DecisionsLinkMethod.QUESTION_LIST_V2,
+              {},
+              { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+            );
+          }
         } catch (error) {
           // A Host from before #17895 lists its questions without what each asks.
           if (codeOf(error) !== "UNSUPPORTED") throw error;
@@ -675,11 +861,13 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     if (withAsks) {
       // Ordered by the Host's own count, not by turns: a push can arrive after a newer reply.
-      const parsed = HostQuestionListV2Schema.safeParse(raw);
+      const parsed = (withRounds ? HostQuestionListV3Schema : HostQuestionListV2Schema).safeParse(
+        raw
+      );
       if (!parsed.success) return;
       this.listsAsks.add(session);
       if (this.listCounts(hostId, session, parsed.data)) {
-        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
+        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks, withRounds);
       }
       return;
     }
@@ -697,7 +885,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     session: DecisionsHostSession,
     payload: HostQuestionListPayload,
-    rawAsks?: readonly unknown[]
+    rawAsks?: readonly unknown[],
+    rounds = false
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
     if (owner === null || payload.hostId === null || !this.takesList(hostId, session, payload)) {
@@ -705,8 +894,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     }
     const questionHostId = payload.hostId;
     const questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[] = [];
+    // A v3 list's items carry their round (#17943); an older list's are read as they always were.
+    const itemSchema = rounds ? HostQuestionItemV3Schema : HostQuestionItemSchema;
     for (const raw of payload.questions) {
-      const item = HostQuestionItemSchema.safeParse(raw);
+      const item = itemSchema.safeParse(raw);
       if (item.success && item.data.reference.hostId === questionHostId) questions.push(item.data);
     }
     // Each ask read on its own, and kept only for a question the list kept.
@@ -781,9 +972,15 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.HOST_RUNTIME,
       HostRuntimePayloadSchema,
       ({ runtime }) => {
-        // Newer than any announcement still waiting for its answer.
-        this.announced.set(hostId, (this.announced.get(hostId) ?? 0) + 1);
-        this.observe(hostId, session, runtime);
+        this.observePushed(hostId, session, runtime);
+        return null;
+      }
+    );
+    const offReportV2 = session.registerCallHandler(
+      DecisionsLinkMethod.HOST_RUNTIME_V2,
+      HostRuntimeV2PayloadSchema,
+      ({ runtime }) => {
+        this.observePushed(hostId, session, runtime);
         return null;
       }
     );
@@ -808,16 +1005,31 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       HostQuestionsChangedV2PayloadSchema,
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
+        // One sent before the Host knew this Shell reads rounds is older than what it listed
+        // since by the session's count; one after is the Host telling it without them.
         this.listsAsks.add(session);
         if (!this.listCounts(hostId, session, payload)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks);
         return null;
       }
     );
+    const offQuestionsV3 = session.registerCallHandler(
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V3,
+      HostQuestionsChangedV3PayloadSchema,
+      (payload) => {
+        if (!this.takesList(hostId, session, payload)) return null;
+        this.listsAsks.add(session);
+        if (!this.listCounts(hostId, session, payload)) return null;
+        this.hearQuestions(hostId, session, payload, payload.asks, true);
+        return null;
+      }
+    );
     const unwire = () => {
       offReport();
+      offReportV2();
       offQuestions();
       offQuestionsV2();
+      offQuestionsV3();
       offClose();
       this.unwires.delete(unwire);
     };
@@ -837,47 +1049,97 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     if (state === null) return;
     const turn = (this.announced.get(hostId) ?? 0) + 1;
     this.announced.set(hostId, turn);
-    let raw: unknown;
+    let states = this.announcedStates.get(session);
+    if (states === undefined) {
+      states = new Map();
+      this.announcedStates.set(session, states);
+    }
+    states.set(ownerKey(state), state);
+    let answer: { raw: unknown; v2: boolean };
     try {
-      raw = await this.sendOwnerState(session, state);
+      answer = await this.sendOwnerState(session, state);
     } catch {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
     }
     // Whatever the owner said, the Host's questions as they stand now (#17230).
     void this.readQuestions(hostId, session);
-    if (this.announced.get(hostId) !== turn) return;
-    const parsed = HostRuntimePayloadSchema.safeParse(raw);
-    if (parsed.success) this.observe(hostId, session, parsed.data.runtime);
+    if (turn <= (this.observedTurns.get(hostId) ?? 0)) return;
+    // Read as the method it answered: a v2 report says how a running Host asks, a v1 one can't.
+    const parsed = (answer.v2 ? HostRuntimeV2PayloadSchema : HostRuntimePayloadSchema).safeParse(
+      answer.raw
+    );
+    if (!parsed.success) return;
+    this.observedTurns.set(hostId, turn);
+    this.observe(hostId, session, parsed.data.runtime);
+  }
+
+  /** A report the Host pushed: newer than any announcement still waiting for its answer. */
+  private observePushed(
+    hostId: string,
+    session: DecisionsHostSession,
+    runtime: DecisionsHostRuntime
+  ): void {
+    const turn = (this.announced.get(hostId) ?? 0) + 1;
+    this.announced.set(hostId, turn);
+    this.observedTurns.set(hostId, turn);
+    this.observe(hostId, session, runtime);
   }
 
   /**
-   * `state` as the Host can take it (#16230): with terminal snapshots, or,
-   * to a Host from before them, without, which it reads as off.
+   * `state` as the Host can take it, and whether it answered a v2 report
+   * (#17942): asked for one, else with terminal snapshots (#16230), or, to a
+   * Host from before them, without, which it reads as off. Each method a
+   * Host answers UNSUPPORTED is never tried again on that link. A fallback
+   * says the latest word its owner announced on this session, not what it
+   * said when this one began: a later announcement may have gone ahead while
+   * it waited on the refusal, or failed, and the Host must neither apply an
+   * older word last nor miss the latest. It stays that owner's word even if
+   * this computer has since disconnected or speaks as another owner.
    */
   private async sendOwnerState(
     session: DecisionsHostSession,
-    state: OwnerStateAnnouncement
-  ): Promise<unknown> {
+    first: OwnerStateAnnouncement
+  ): Promise<{ raw: unknown; v2: boolean }> {
     const options = { timeoutMs: OWNER_STATE_TIMEOUT_MS };
+    let state = first;
+    const latest = (): OwnerStateAnnouncement =>
+      this.announcedStates.get(session)?.get(ownerKey(first)) ?? first;
+    if (!this.beforeQuestionPolicy.has(session) && !this.beforeSnapshots.has(session)) {
+      try {
+        const raw = await session.call(
+          DecisionsLinkMethod.OWNER_STATE_V3,
+          OwnerStateV2PayloadSchema.parse(state),
+          options
+        );
+        return { raw, v2: true };
+      } catch (error) {
+        if (codeOf(error) !== "UNSUPPORTED") throw error;
+        this.beforeQuestionPolicy.add(session);
+        state = latest();
+      }
+    }
     if (!this.beforeSnapshots.has(session)) {
       try {
-        return await session.call(
+        const raw = await session.call(
           DecisionsLinkMethod.OWNER_STATE_V2,
           OwnerStateV2PayloadSchema.parse(state),
           options
         );
+        return { raw, v2: false };
       } catch (error) {
         if (codeOf(error) !== "UNSUPPORTED") throw error;
         this.beforeSnapshots.add(session);
+        state = latest();
       }
     }
     const { terminalSnapshots: _snapshots, ...earlier } = state;
-    return session.call(
+    const raw = await session.call(
       DecisionsLinkMethod.OWNER_STATE,
       OwnerStatePayloadSchema.parse(earlier),
       options
     );
+    return { raw, v2: false };
   }
 
   private observe(

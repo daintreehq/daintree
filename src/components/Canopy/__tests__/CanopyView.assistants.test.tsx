@@ -161,7 +161,11 @@ const GLOBAL_SUBJECT = {
 /** The global assistant as main tells a view of it. */
 function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    coordinating: false,
+    occupied: true,
     generation: 1,
     agentId: "claude",
     terminalId: "g-1",
@@ -185,6 +189,7 @@ let ownerOnAttach: (attachmentId: string) => string | null;
 function makeHelp() {
   return {
     onGlobalAssistantChanged: vi.fn((_listener: (state: GlobalAssistantView) => void) => () => {}),
+    listGlobalAssistantSessions: vi.fn(async () => [globalView]),
     attachGlobalAssistant: vi.fn(async () => {
       const attachmentId = `attachment-${++attachments}`;
       const owner = ownerOnAttach(attachmentId);
@@ -1359,7 +1364,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     await settle();
     expect(dock()).toBeNull();
     expect(toggle.getAttribute("aria-label")).toBe("Global assistant");
-    expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1");
+    expect(electronHelp().detachGlobalAssistant).toHaveBeenCalledWith("attachment-1", 0);
   });
 
   it("stays docked whatever the filters hide", async () => {
@@ -1402,6 +1407,28 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     await settle();
     expect(document.getElementById("canopy-detail-working")).not.toBeNull();
     expect(document.activeElement).toBe(composer);
+  });
+
+  it("shows a selected row whose run is no session's now as ended, attaching to nothing (#18142)", async () => {
+    // A second session's row the directory still lists after that session stopped.
+    directory.entries = [
+      assistant(0),
+      assistant(0, { subject: GLOBAL_SUBJECT }),
+      assistant(0, {
+        subject: { ...GLOBAL_SUBJECT, terminalId: "g-2", incarnation: 1 },
+        label: "Second session",
+      }),
+    ];
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const attachesBefore = electronHelp().attachGlobalAssistant.mock.calls.length;
+    const row = assistantRows().find((each) => each.textContent?.includes("Second session"))!;
+    await act(async () => fireEvent.click(row));
+    await settle();
+    const pane = document.querySelector("[data-testid=canopy-global-assistant]")!;
+    expect(pane.textContent).toContain("This global assistant session has ended");
+    expect(pane.querySelector("[data-testid=canopy-global-start]")).toBeNull();
+    expect(electronHelp().attachGlobalAssistant.mock.calls.length).toBe(attachesBefore);
   });
 
   it("shows one pane for the global assistant's own row, without reopening its stream", async () => {
@@ -1464,7 +1491,7 @@ describe("CanopyView's docked global assistant (#16214)", () => {
         vi.advanceTimersByTime(5_000);
       });
       await act(async () => fireEvent.click(buttonIn(dock()!, "Cancel")!));
-      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3);
+      expect(electronHelp().cancelGlobalAssistantLaunch).toHaveBeenCalledWith(3, 0);
       expect(electronHelp().ensureGlobalAssistant).not.toHaveBeenCalled();
       expect(dock()!.querySelector("[data-testid=canopy-global-start]")).not.toBeNull();
     } finally {
@@ -1495,7 +1522,11 @@ describe("CanopyView's docked global assistant (#16214)", () => {
     act(() => take.focus());
     await act(async () => fireEvent.click(take));
     await settle();
-    expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith("attachment-1");
+    expect(electronHelp().claimGlobalAssistantInput).toHaveBeenCalledWith(
+      "attachment-1",
+      undefined,
+      0
+    );
     expect(globalApiStamps().at(-1)).toEqual({ attachmentId: "attachment-1", inputEpoch: 4 });
     // The button went with the stream it was in; the keyboard follows to the composer.
     expect(document.activeElement).toBe(dock()!.querySelector("[data-testid=global-composer]"));
@@ -1515,6 +1546,31 @@ describe("CanopyView's docked global assistant (#16214)", () => {
       ok: false,
       message: expect.stringContaining("agent's reply"),
     });
+  });
+
+  it("dictates into nothing while a dialog over Canopy holds the keyboard, and says why (#18048)", async () => {
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const stream = terminalApis.filter((entry) => entry.runId === "waiting").at(-1)!;
+    await act(async () =>
+      stream.onStreamChange?.({ watchId: 7, ended: false, secretPrompt: false })
+    );
+    expect(resolveCanopyReplyDictation().ok).toBe(true);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const answer = document.createElement("textarea");
+    dialog.append(answer);
+    document.body.append(dialog);
+    try {
+      act(() => answer.focus());
+      expect(resolveCanopyReplyDictation()).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("Close the dialog"),
+      });
+    } finally {
+      dialog.remove();
+    }
+    expect(resolveCanopyReplyDictation().ok).toBe(true);
   });
 
   it("keeps Escape in its terminal for the agent, with Canopy left open", async () => {

@@ -166,6 +166,39 @@ function sessionOf(origin: QuestionOrigin): string | null {
 }
 
 /**
+ * What refuses a resume of the run `origin` names before anything is
+ * launched, from what main holds now, except whether its worktree's
+ * directory is still there, which the caller checks after. Shared by the
+ * resume adapter and the inbox's observation of the run that asked (#18029),
+ * so the two never disagree. `ended`: a resume already handed an answer to
+ * this run, and it went away.
+ */
+export function resumePrerequisite(
+  origin: QuestionOrigin,
+  facts: { hostId: string | null; hasPtyClient: boolean; ended: boolean }
+): ResumeFailure | null {
+  if (facts.hostId !== origin.host_id) return "resume_other_host";
+  if (!facts.hasPtyClient) return "resume_host_unreachable";
+  if (facts.ended) return "resume_ended";
+  const resumeKind = getEffectiveAgentConfig(origin.agent_kind)?.resume?.kind;
+  if (
+    !RESUMABLE_AGENTS.has(origin.agent_kind) ||
+    (resumeKind !== "session-id" && resumeKind !== "named-target")
+  ) {
+    return "resume_unsupported_agent";
+  }
+  if (sessionOf(origin) === null) return "resume_no_session";
+  if (
+    origin.project_id === "" ||
+    origin.worktree_id === NO_WORKTREE ||
+    origin.worktree_root.trim() === ""
+  ) {
+    return "resume_no_worktree";
+  }
+  return null;
+}
+
+/**
  * Resumes a Claude or Codex session to deliver an answer whose pane is gone
  * (#16019), as the library's `AgentResumeAdapter` for each agent.
  *
@@ -279,6 +312,11 @@ export class DaintreeResume {
     };
   }
 
+  /** Whether a resume already handed an answer to the run `origin` names, and it went away (#18029). */
+  resumeEnded(origin: QuestionOrigin): boolean {
+    return this.resumedInto.has(originRun(origin));
+  }
+
   private hostRefusal(hostId: string): ResumeFailure | null {
     if (this.deps.hostId() !== hostId) return "resume_other_host";
     if (this.deps.getPtyClient() === null) return "resume_host_unreachable";
@@ -286,21 +324,12 @@ export class DaintreeResume {
   }
 
   private async eligibility(origin: QuestionOrigin): Promise<ResumeFailure | null> {
-    const host = this.hostRefusal(origin.host_id);
-    if (host !== null) return host;
-    if (this.resumedInto.has(originRun(origin))) return "resume_ended";
-    const resumeKind = getEffectiveAgentConfig(origin.agent_kind)?.resume?.kind;
-    if (resumeKind !== "session-id" && resumeKind !== "named-target") {
-      return "resume_unsupported_agent";
-    }
-    if (sessionOf(origin) === null) return "resume_no_session";
-    if (
-      origin.project_id === "" ||
-      origin.worktree_id === NO_WORKTREE ||
-      origin.worktree_root.trim() === ""
-    ) {
-      return "resume_no_worktree";
-    }
+    const refused = resumePrerequisite(origin, {
+      hostId: this.deps.hostId(),
+      hasPtyClient: this.deps.getPtyClient() !== null,
+      ended: this.resumeEnded(origin),
+    });
+    if (refused !== null) return refused;
     const there = await this.deps.isDirectory(origin.worktree_root).catch(() => false);
     this.throwIfStopped();
     return there ? null : "resume_worktree_gone";

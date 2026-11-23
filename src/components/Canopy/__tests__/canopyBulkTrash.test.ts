@@ -4,12 +4,17 @@ import type { AgentState } from "@shared/types/agent";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { ALL_HOSTS_ID } from "@/store/canopyStore";
 import { allHostsKey } from "../canopyAllHosts";
-import { bulkTrashHold, hasReplyDraft } from "../canopyBulkTrash";
+import { bulkTrashHold, bulkTrashWorktree, hasReplyDraft } from "../canopyBulkTrash";
 import { hostRefusal, refusedOutcomes } from "../canopyHostSource";
 import type { CanopyItem } from "../canopyModel";
 
-function item(runId: string, agentState?: AgentState, workspaceId = "p1"): CanopyItem {
-  return { runId, workspaceId, row: { run: { agentState } } } as unknown as CanopyItem;
+function item(
+  runId: string,
+  agentState?: AgentState,
+  workspaceId = "p1",
+  counts: { answerAttention?: number; questionAttention?: number } = {}
+): CanopyItem {
+  return { runId, workspaceId, row: { run: { agentState, ...counts } } } as unknown as CanopyItem;
 }
 
 describe("bulkTrashHold", () => {
@@ -20,6 +25,71 @@ describe("bulkTrashHold", () => {
     expect(bulkTrashHold(item("a", "idle"), "empty", true)).toBe("reply");
     // Working is said first: it is what the person would weigh first.
     expect(bulkTrashHold(item("a", "working"), "typed", true)).toBe("working");
+  });
+
+  it("holds back a run Decisions holds an answer or a question for, after working", () => {
+    expect(
+      bulkTrashHold(item("a", "completed", "p1", { questionAttention: 1 }), "empty", false)
+    ).toBe("question");
+    expect(
+      bulkTrashHold(
+        item("a", "waiting", "p1", { answerAttention: 1, questionAttention: 1 }),
+        "typed",
+        true
+      )
+    ).toBe("answer");
+    expect(
+      bulkTrashHold(
+        item("a", "working", "p1", { answerAttention: 1, questionAttention: 1 }),
+        "empty",
+        false
+      )
+    ).toBe("working");
+    expect(
+      bulkTrashHold(item("a", "completed", "p1", { answerAttention: 0 }), "empty", false)
+    ).toBeNull();
+    expect(bulkTrashHold(item("a", "waiting", "p1", { questionAttention: 1 }), "typed", true)).toBe(
+      "question"
+    );
+  });
+
+  it("holds back a run whose worktree has work only on this machine, after everything seen in its terminal", () => {
+    const observed = (unpushedCommits: number | null, changedEntries = 0, hiddenFromStatus = 0) =>
+      ({ kind: "observed", unpushedCommits, changedEntries, hiddenFromStatus }) as const;
+    const done = item("a", "completed");
+    expect(bulkTrashHold(done, "empty", false, observed(0))).toBeNull();
+    expect(bulkTrashHold(done, "empty", false, { kind: "not-applicable" })).toBeNull();
+    expect(bulkTrashHold(done, "empty", false, observed(72))).toBe("unpushed");
+    expect(bulkTrashHold(done, "empty", false, observed(null))).toBe("unpushed");
+    expect(bulkTrashHold(done, "empty", false, observed(0, 3))).toBe("uncommitted");
+    expect(bulkTrashHold(done, "empty", false, observed(0, 0, 1))).toBe("uncommitted");
+    expect(bulkTrashHold(done, "empty", false, observed(2, 3))).toBe("unpushed");
+    expect(bulkTrashHold(done, "empty", false, { kind: "unreadable" })).toBe("unreadable");
+    expect(bulkTrashHold(done, "typed", false, observed(72))).toBe("typed");
+    expect(bulkTrashHold(done, "empty", true, observed(0, 3))).toBe("reply");
+  });
+
+  it("reads a run in a worktree that no host answered for as unreadable, and one in none as nothing to read", () => {
+    const inTree = {
+      runId: "a",
+      workspaceId: "p1",
+      row: { run: { agentState: "completed", worktreeId: "/wt/a" } },
+    } as unknown as CanopyItem;
+    expect(bulkTrashWorktree(inTree, undefined)).toEqual({ kind: "unreadable" });
+    expect(bulkTrashWorktree(item("b", "completed"), undefined)).toEqual({
+      kind: "not-applicable",
+    });
+    const clean = {
+      kind: "observed",
+      unpushedCommits: 0,
+      changedEntries: 0,
+      hiddenFromStatus: 0,
+    } as const;
+    expect(bulkTrashWorktree(inTree, clean)).toBe(clean);
+    // Its host said it is the main checkout: nothing to hold it for.
+    expect(bulkTrashWorktree(inTree, { kind: "not-applicable" })).toEqual({
+      kind: "not-applicable",
+    });
   });
 
   it("never holds back for the agent's own suggestion, or for an input nobody could read", () => {

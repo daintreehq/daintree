@@ -4,6 +4,7 @@ import type {
   ClaimDecisionsRelayPayload,
   ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsKeyErasurePayload,
   DecisionsRelayCheck,
   DecisionsStatus,
   RestoreDecisionsIdentityPayload,
@@ -28,7 +29,8 @@ export interface UseRelayIdentityResult {
   claimDeployed(payload: ClaimDeployedDecisionsRelayPayload): void;
   restore(payload: RestoreDecisionsIdentityPayload): void;
   /** Resolves true once the identity is removed; false when it wasn't (see `error`). */
-  disconnect(): Promise<boolean>;
+  /** How it was confirmed, which main checks still holds before removing anything (#18064). */
+  disconnect(confirmed: DecisionsKeyErasurePayload): Promise<boolean>;
   /** Forgets the last outcome; a change already sent still finishes in main. */
   reset(): void;
 }
@@ -110,7 +112,8 @@ export function useRelayIdentity(
     void run("restore", () => window.electron.decisions.restoreIdentity(payload));
   };
 
-  const disconnect = () => run("disconnect", () => window.electron.decisions.disconnectRelay());
+  const disconnect = (confirmed: DecisionsKeyErasurePayload) =>
+    run("disconnect", () => window.electron.decisions.disconnectRelay(confirmed));
 
   const reset = () => {
     generation.current += 1;

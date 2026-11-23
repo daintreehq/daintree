@@ -1,10 +1,12 @@
-import { forwardRef, lazy, Suspense, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, lazy, Suspense, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { FileRenderMode } from "@shared/types/panel";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
+import { sourceLinks } from "@/components/FileViewer/sourceLinks";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 import { MarkdownFindBar } from "./MarkdownFindBar";
+import { activateMarkdownLink, resolveMarkdownLink } from "./markdownLinkPolicy";
 import { FIND_BAR_CLEARANCE, useRenderedFind } from "./useRenderedFind";
 
 // The rendered document pulls react-markdown + remark-gfm; keep that weight
@@ -97,6 +99,15 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
     const codeViewerRef = useRef<CodeViewerHandle>(null);
     const [documentElement, setDocumentElement] = useState<HTMLDivElement | null>(null);
     const find = useRenderedFind(viewMode === "source" ? null : documentElement);
+    // Source follows links through the rendered document's policy, so a link
+    // goes to the same place whichever way the file is read.
+    const sourceExtensions = useMemo(() => {
+      const paths = { filePath, rootPath };
+      return sourceLinks({
+        canFollow: (href) => resolveMarkdownLink(href, paths) !== null,
+        follow: (href) => activateMarkdownLink(href, paths),
+      });
+    }, [filePath, rootPath]);
 
     useImperativeHandle(
       ref,
@@ -118,6 +129,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           initialLine={initialLine}
           wrapLines={wrapLines}
           className={cn("min-h-[300px]", className)}
+          extraExtensions={sourceExtensions}
         />
       );
     }

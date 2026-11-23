@@ -20,6 +20,7 @@ import {
   isWithheldFromRelayDiscovery,
   isTierPermitted,
   pluginActionMinimumTier,
+  sessionReachesPluginActions,
   isApprovalRequestable,
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
@@ -86,7 +87,15 @@ export function buildCallIntrospectionSurface(
       .filter((toolId) => isGenericNativeGrantEligible(toolId))
   );
   const permittedActionIds = new Set<string>([
-    ...getReachableActionIds(tier, rendererOwnedOrigin, sessionSurface.paneApproval === true),
+    ...getReachableActionIds(
+      tier,
+      rendererOwnedOrigin,
+      sessionSurface.paneApproval === true,
+      sessionReachesPluginActions({
+        rendererOwnedOrigin,
+        relayPluginReach: sessionSurface.relayPluginReach,
+      })
+    ),
     ...perToolGrantedActionIds,
     ...nativeGrantedActionIds,
   ]);
@@ -123,6 +132,7 @@ export function buildCallIntrospectionSurface(
       // So an existence stub names nothing the global Assistant's runtime
       // would refuse to send (#16764).
       relayGlobal: sessionSurface.relayGlobal === true,
+      relayPluginReach: sessionSurface.relayPluginReach === true,
       paneApproval: sessionSurface.paneApproval === true,
       paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
       hostCall: hostCallOffered(),
@@ -196,7 +206,15 @@ export function admitToolCall(
       ? commandRunnerCaller
       : ASSISTANT_CONTROL_TOOL_IDS.has(actionId)
         ? assistantControlCaller
-        : isTierPermitted(tier, actionId, rendererOwnedOrigin));
+        : isTierPermitted(
+            tier,
+            actionId,
+            rendererOwnedOrigin,
+            sessionReachesPluginActions({
+              rendererOwnedOrigin,
+              relayPluginReach: sessionSurface.relayPluginReach,
+            })
+          ));
   // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
   const paneApproval = sessionSurface.paneApproval === true;
   let grantIssuedAt: number | undefined;

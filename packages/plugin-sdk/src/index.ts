@@ -12,6 +12,12 @@ export { localAuthStubs } from "../../../shared/types/plugin-sdk.js";
 // must carry; authors read it at runtime, so the api-report's value declaration
 // needs a real binding behind it.
 export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../shared/types/plugin-sdk.js";
+// A worker registers its context-menu availability handler on this channel.
+export {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  CONTEXT_MENU_AVAILABILITY_REASON_MAX,
+  CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS,
+} from "../../../shared/types/plugin-sdk.js";
 // The agent-context drag contract: a view sets the type and payload at
 // `dragstart`, so the constants and the helper need real bindings.
 export {

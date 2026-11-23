@@ -320,6 +320,12 @@ export class LinkSession {
   /** When each recent ping of ours went, by nonce: what a peer's answer can be dated by. */
   private readonly sentPings = new Map<number, ElapsedStamp>();
   private _peerPingNonce: number | null = null;
+  /**
+   * When this session was made, on this machine's clocks. For a client that
+   * is before its HELLO went out, so before the host could post anything on
+   * it; a host's may come after the client's HELLO arrived.
+   */
+  readonly startedAt: ElapsedStamp;
   private _lastReceivedAt: number;
   private _framesSinceOpen = 0;
   /** Reads that brought bytes, so a probe can tell whether anything arrived after it. */
@@ -334,6 +340,7 @@ export class LinkSession {
     this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
     this.encodingLimits = options.encodingLimits;
     this.now = options.now ?? Date.now;
+    this.startedAt = (options.clock ?? stampNow)();
     this.decoder = new FrameDecoder(
       this.role === "host"
         ? Math.min(HANDSHAKE_MAX_FRAME_BYTES, this.maxFrameBytes)

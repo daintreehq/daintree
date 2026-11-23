@@ -156,6 +156,43 @@ describe("useOverflowBadgeSeverity", () => {
     expect(mounted.result.current).toBe("waiting");
   });
 
+  it("warns of a delivery stopped on the person's answer while the inbox button is folded in and the inbox is closed (#18045)", () => {
+    const severity = (
+      ids: Parameters<typeof useOverflowBadgeSeverity>[0],
+      waiting: number,
+      stopped: number
+    ) =>
+      renderHook(() => useOverflowBadgeSeverity(ids, 0, 0, false, false, waiting, stopped)).result
+        .current;
+    expect(severity(["decisions-inbox"], 0, 1)).toBe("warning");
+    // One mark on the trigger: a question to answer outranks the warning.
+    expect(severity(["decisions-inbox"], 2, 1)).toBe("waiting");
+    expect(severity(["copy-tree"], 0, 1)).toBeNull();
+
+    const folded: Parameters<typeof useOverflowBadgeSeverity>[0] = ["decisions-inbox"];
+    const mounted = renderHook(() => useOverflowBadgeSeverity(folded, 0, 0, false, false, 0, 1));
+    expect(mounted.result.current).toBe("warning");
+    try {
+      act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+      expect(mounted.result.current).toBeNull();
+    } finally {
+      act(() => useDecisionsInboxStore.setState({ isOpen: false }));
+    }
+    expect(mounted.result.current).toBe("warning");
+
+    // One mount, the overflow ids held: only the stopped count moves the result.
+    const live = renderHook(
+      ({ stopped }: { stopped: number }) =>
+        useOverflowBadgeSeverity(folded, 0, 0, false, false, 0, stopped),
+      { initialProps: { stopped: 0 } }
+    );
+    expect(live.result.current).toBeNull();
+    live.rerender({ stopped: 1 });
+    expect(live.result.current).toBe("warning");
+    live.rerender({ stopped: 0 });
+    expect(live.result.current).toBeNull();
+  });
+
   it("returns critical when problems is overflowed and errorCount > 0", () => {
     const { result } = renderHook(() => useOverflowBadgeSeverity(["problems"], 3));
     expect(result.current).toBe("critical");

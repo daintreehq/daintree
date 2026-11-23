@@ -750,6 +750,52 @@ describe("terminal notices", () => {
       expect(terminalNotify.settleTargetHold).toHaveBeenCalledWith(OWN_PANE, hold, false);
     });
 
+    // #17908: `/restart` keeps the run, so only an answer saying it went in
+    // with no refusal seen ends what the notice was about.
+    it.each<[string, Record<string, unknown>, boolean]>([
+      ["went in with no refusal seen", { status: "sent", refusal: null, output: "read" }, true],
+      [
+        "was refused by Claude",
+        { status: "sent", refusal: "Can't restart automatically.", output: "read" },
+        false,
+      ],
+      ["never went in", { status: "not-sent", reason: "typed" }, false],
+      ["may or may not have gone in", { status: "unconfirmed" }, false],
+      [
+        "went in but its answer couldn't all be read",
+        { status: "sent", refusal: null, output: "lost" },
+        false,
+      ],
+    ])(
+      "holds the pane's notice across a Claude Code update, dropping it only when it %s",
+      async (_name, answer, replaced) => {
+        const claudeUpdate = {
+          exclusive: vi.fn(async (_id: string, run: () => Promise<unknown>) => run()),
+          preflight: vi.fn(async () => ({ terminalId: "t-a", generation: 1, observedAt: 900 })),
+          apply: vi.fn(async () => ({ terminalId: "t-a", message: "m", ...answer })),
+        };
+        const { deps, terminalNotify, start } = notifyDeps(
+          { origin: "help" },
+          { claudeUpdate: claudeUpdate as unknown as SessionServerDeps["claudeUpdate"] }
+        );
+        deps.sessionStore.resourceOwnership.record("session-update-holds", [
+          { kind: "terminal", id: "t-a" },
+        ]);
+        const server = await start("session-update-holds");
+
+        await callTool(server, {
+          name: "terminal.applyClaudeUpdateOwned",
+          arguments: { terminalId: "t-a" },
+        });
+
+        const hold = terminalNotify.holdTarget.mock.calls[0]?.[2];
+        expect(terminalNotify.holdTarget).toHaveBeenCalledWith(OWN_PANE, "t-a", hold);
+        expect(terminalNotify.settleTargetHold).toHaveBeenCalledTimes(1);
+        expect(terminalNotify.settleTargetHold).toHaveBeenCalledWith(OWN_PANE, hold, replaced);
+        expect(terminalNotify.supersede).not.toHaveBeenCalled();
+      }
+    );
+
     it("leaves a send without the flag alone", async () => {
       const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
       const server = await start("session-send-plain");

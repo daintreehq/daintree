@@ -1,4 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  GLOBAL_ASSISTANT_SLOT,
+  type GlobalAssistantSlot,
+} from "@shared/config/globalAssistantSessions";
 import type { GlobalAssistantView } from "@shared/types/ipc/help";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
@@ -15,8 +19,12 @@ function subscribeViewCache(onChange: () => void): () => void {
  * or joins the attachments that decide who holds it. Null while nothing is
  * known, nothing runs, or `active` is false — and in a cached view or one bound
  * to another host, where the global pane shows nothing of This Mac's run either.
+ * `slot` names the session the window's global pane shows (#18142).
  */
-export function useGlobalAssistantActivity(active: boolean): AgentState | null {
+export function useGlobalAssistantActivity(
+  active: boolean,
+  slot: GlobalAssistantSlot = GLOBAL_ASSISTANT_SLOT
+): AgentState | null {
   const viewCached = useSyncExternalStore(subscribeViewCache, isProjectViewCached);
   const observing = active && !viewCached && getViewHostId() === null;
   const [view, setView] = useState<GlobalAssistantView | null>(null);
@@ -30,11 +38,11 @@ export function useGlobalAssistantActivity(active: boolean): AgentState | null {
     // change don't share an ordering on the way here, and every change carries
     // the whole state: once one has landed, the answer has nothing newer to say.
     const off = help.onGlobalAssistantChanged((state) => {
-      if (disposed) return;
+      if (disposed || state.slot !== slot) return;
       told = true;
       setView(state);
     });
-    help.getGlobalAssistantState().then(
+    help.getGlobalAssistantState(slot).then(
       (state) => {
         if (!disposed && !told) setView(state);
       },
@@ -46,7 +54,7 @@ export function useGlobalAssistantActivity(active: boolean): AgentState | null {
       // What was seen before going quiet is not shown again before it is reread.
       setView(null);
     };
-  }, [observing]);
+  }, [observing, slot]);
 
   return observing && view?.phase === "running" && view.subject ? view.agentState : null;
 }

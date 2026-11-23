@@ -83,6 +83,7 @@ import {
   useVoiceRecordingStore,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
+import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 import {
   InlineStatusBanner,
@@ -1045,9 +1046,9 @@ export function CanopyCard({
               ? {
                   action: {
                     id: "review-answers",
-                    label: "Review answers",
+                    label: REVIEW_ATTENTION_LABEL,
                     variant: "primary" as const,
-                    ariaLabel: `Review answers for ${row.title}`,
+                    ariaLabel: `${REVIEW_ATTENTION_LABEL} for ${row.title}`,
                     onClick: () => answers.onReviewAnswers(item),
                   },
                 }

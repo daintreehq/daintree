@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import {
+  ADVISORY_NOTE_FALLBACK_DUE,
+  ADVISORY_NOTE_FALLBACK_WITHHELD,
+  ADVISORY_NOTE_UNANSWERED,
   BLOCK_END,
   BLOCK_START,
   FOLLOWUP_BLOCK_END,
@@ -24,7 +27,9 @@ import { LIMITS } from "@daintreehq/decisions-protocol";
  * per answer, each carrying its injection marker, with every field of answer
  * text sanitised again as data. A follow-up the person sent from their phone
  * (#16231) is its own block, parsed and rendered the same way, and either one
- * lists the photos the person attached (#16233).
+ * lists the photos the person attached (#16233). An advisory question's
+ * unanswered deadline (#17941) is a `system` block of its own, read and typed
+ * with the disposition it was recorded with: never an answer.
  */
 
 /** A phone image as a block lists it: the path the agent can open, or why there is none. */
@@ -48,6 +53,25 @@ export interface AnswerBlock {
   onComputer: boolean;
   /** A `system` block: the question expired without an answer. */
   expired: boolean;
+  /**
+   * A `system` block from 0.9.0: the question's deadline passed before this
+   * computer could send it to the relay, so no answer was recorded and it
+   * authorises nothing.
+   */
+  neverPublished: boolean;
+  /**
+   * A `system` block from 0.9.0 (#17941): an advisory question's deadline,
+   * `deadline`, passed with no answer committed. It authorises nothing.
+   */
+  advisoryUnanswered: boolean;
+  /** An advisory block's elapsed deadline, as the library recorded it (ISO 8601, UTC); null on every other block. */
+  deadline: string | null;
+  /**
+   * An advisory block, or a never-published one of an advisory question: the
+   * host let the plan the agent stated go ahead, at the agent's discretion.
+   * False when the plan was withheld, and on every other block.
+   */
+  fallbackDue: boolean;
   /**
    * The person declined to answer from their phone or tablet (#17234): a
    * `human` block that carries no answer and authorises nothing.
@@ -122,6 +146,16 @@ const EXPIRED_NOTE =
   "note: The question expired without an answer. You are not authorised to continue the gated step: ask again, or stop and report.";
 const DECLINED_NOTE =
   "note: The person chose not to answer this question. Nothing was decided or approved: stop waiting for it, and don't continue the gated step.";
+const NEVER_PUBLISHED_NOTE =
+  "note: This question never reached the relay: its deadline passed before this computer could send it, so it never reached the person's phone, no answer was recorded, and nothing was decided or approved. You are not authorised to continue the gated step: ask again if you still need an answer, or stop and report.";
+const NEVER_PUBLISHED_FALLBACK_DUE_NOTE =
+  "note: This question never reached the relay: its deadline passed before this computer could send it, so it never reached the person's phone, no answer was recorded, and nothing was decided or approved. You asked for advice, so you may carry out the plan you stated, at your own discretion: the person did not choose it.";
+const ADVISORY_UNANSWERED_NOTE =
+  "note: No answer was recorded by the deadline. Nothing was decided or approved.";
+const ADVISORY_FALLBACK_DUE_NOTE =
+  "note: You asked for advice, so you may now carry out the plan you stated, at your own discretion. The person did not choose it.";
+const ADVISORY_FALLBACK_WITHHELD_NOTE =
+  "note: Daintree does not let the plan you stated go ahead on its own here: you are not authorised to carry it out. Ask again if you still need a decision, or stop and report.";
 
 // The library's own fixed lines, which are all a `note:` may say.
 const LIBRARY_PROXY_NOTE =
@@ -136,6 +170,14 @@ const LIBRARY_EXPIRED_NOTE =
   "note: The question expired without an answer. You are NOT authorised to continue the gated step; re-ask or stop and report.";
 const LIBRARY_DECLINED_NOTE =
   "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
+const LIBRARY_NEVER_PUBLISHED_NOTE =
+  "note: This question never reached the relay: its deadline passed before this computer could publish it, so it never reached the person's phone and no answer to it was recorded. Nothing was decided or approved.";
+/** The blocking form's last line. */
+const LIBRARY_NEVER_PUBLISHED_BLOCKING_NOTE =
+  "note: You are NOT authorised to continue the gated step; ask again if you still need an answer, or stop and report.";
+/** The advisory form's last line: the host let the plan the agent stated go ahead. */
+const LIBRARY_NEVER_PUBLISHED_FALLBACK_DUE_NOTE =
+  "note: It was an advisory question. You may carry out the plan you stated, at your own discretion; the person did not choose it.";
 
 /** Question and injection ids as the library mints them: hex, never free text. */
 const ID = /^[A-Za-z0-9_-]{8,80}$/;
@@ -186,14 +228,30 @@ const MARKER_LIKE = /\[\s*decision-injection\b[^\]]*\]/gi;
 const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
 
+/** Escape sequences and controls gone, every line break a newline. */
+function withoutControls(input: string): string {
+  const text = input.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
+  return text.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROLS, "");
+}
+
+/**
+ * Text only ever read on screen, never typed in (#18055): controls gone and
+ * newlines folded as in an answer, but uncut and with no delimiter rewrite,
+ * since nothing parses it.
+ */
+export function displayText(input: string): string {
+  return withoutControls(input)
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * Answer text as inert data: escape sequences and controls gone, newlines
  * folded, anything that could pass for a delimiter or a marker bracketed
  * differently, and the length capped.
  */
 export function sanitizeAnswerText(input: string, maxChars: number): string {
-  let text = input.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
-  text = text.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROLS, "");
+  let text = withoutControls(input);
   text = text
     .replace(DELIMITER_LIKE, (m) => `(${m.slice(1, -1)})`)
     .replace(MARKER_LIKE, (m) => `(${m.slice(1, -1)})`);
@@ -313,6 +371,12 @@ export function isTypedImagePath(path: string): boolean {
   );
 }
 
+/** An advisory deadline as the library writes it: `Date#toISOString`, read back to the same text. */
+function isDeadline(text: string): boolean {
+  const time = Date.parse(text);
+  return Number.isFinite(time) && new Date(time).toISOString() === text;
+}
+
 function parseBlock(cursor: Cursor): AnswerBlock | null {
   if (!cursor.takeExact(BLOCK_START)) return null;
   const asked = takeQuestionId(cursor);
@@ -332,6 +396,10 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     source: "human",
     onComputer: false,
     expired: false,
+    neverPublished: false,
+    advisoryUnanswered: false,
+    deadline: null,
+    fallbackDue: false,
     declined: false,
     correction: false,
     modelId: null,
@@ -344,15 +412,38 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
   };
 
   if (source === "system") {
-    if (
-      !cursor.takeExact("status: expired") ||
-      !cursor.takeExact("authorised: no") ||
-      !cursor.takeExact(LIBRARY_EXPIRED_NOTE)
-    ) {
+    if (cursor.takeExact("status: expired")) {
+      if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_EXPIRED_NOTE)) {
+        return null;
+      }
+      block.expired = true;
+    } else if (cursor.takeExact("status: never-published")) {
+      if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_NEVER_PUBLISHED_NOTE)) {
+        return null;
+      }
+      if (cursor.takeExact(LIBRARY_NEVER_PUBLISHED_FALLBACK_DUE_NOTE)) block.fallbackDue = true;
+      else if (!cursor.takeExact(LIBRARY_NEVER_PUBLISHED_BLOCKING_NOTE)) return null;
+      block.neverPublished = true;
+    } else if (cursor.takeExact("status: advisory-unanswered")) {
+      const deadline = cursor.take("deadline");
+      if (deadline === null || !isDeadline(deadline)) return null;
+      const disposition = cursor.take("disposition");
+      if (disposition !== "fallback-due" && disposition !== "fallback-withheld") return null;
+      const due = disposition === "fallback-due";
+      if (
+        !cursor.takeExact("authorised: no") ||
+        !cursor.takeExact(ADVISORY_NOTE_UNANSWERED) ||
+        !cursor.takeExact(due ? ADVISORY_NOTE_FALLBACK_DUE : ADVISORY_NOTE_FALLBACK_WITHHELD)
+      ) {
+        return null;
+      }
+      block.advisoryUnanswered = true;
+      block.deadline = deadline;
+      block.fallbackDue = due;
+    } else {
       return null;
     }
     block.source = "system";
-    block.expired = true;
   } else if (source === "human" && cursor.takeExact("status: declined")) {
     // A decline is the person's, and says only that: no choice, words or images follow.
     if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_DECLINED_NOTE)) {
@@ -529,6 +620,23 @@ function renderBlock(block: AnswerBlock, marked = true): string {
   }
   if (block.expired) {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
+  } else if (block.neverPublished) {
+    lines.push(
+      "source: system",
+      "status: never-published",
+      "authorised: no",
+      block.fallbackDue ? NEVER_PUBLISHED_FALLBACK_DUE_NOTE : NEVER_PUBLISHED_NOTE
+    );
+  } else if (block.advisoryUnanswered) {
+    lines.push(
+      "source: system",
+      "status: advisory-unanswered",
+      `deadline: ${block.deadline}`,
+      `disposition: ${block.fallbackDue ? "fallback-due" : "fallback-withheld"}`,
+      "authorised: no",
+      ADVISORY_UNANSWERED_NOTE,
+      block.fallbackDue ? ADVISORY_FALLBACK_DUE_NOTE : ADVISORY_FALLBACK_WITHHELD_NOTE
+    );
   } else if (block.declined) {
     lines.push("source: human", "status: declined", "authorised: no", DECLINED_NOTE);
   } else {

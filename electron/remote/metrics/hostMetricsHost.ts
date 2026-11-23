@@ -13,18 +13,23 @@ import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
+import { elapsedSince, stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { FleetCaller } from "./hostOps.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import { boundProcessInventory } from "./processInventoryWire.js";
 import {
+  MAX_METRICS_ID_CHARS,
   MAX_RESTART_SHELLS,
+  AgentUsageDemandSchema,
   MetricsLinkMethod,
   SubmitFleetPayloadSchema,
+  type AgentStopChangePayload,
   type AgentWaitingPayload,
   type AttentionPayload,
 } from "./linkMethods.js";
 import { agentWaitingOf } from "./agentWaiting.js";
+import { agentStopChangeOf, type AgentStopChange } from "./agentStops.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
@@ -53,9 +58,16 @@ export interface MetricsHostDeps {
   };
   /**
    * Wants this host's agent usage readings (#17318) for as long as it samples
-   * for a Shell, so its summaries carry them; returns the release.
+   * for a Shell that tracks usage, so its summaries carry them; returns the release.
    */
   watchAgentUsage?(): () => void;
+  /**
+   * Whether this host's own usage tracking switch is on (#17981). Off, it reads
+   * usage for no Shell and sends none. Absent reads as on.
+   */
+  agentUsageTracking?(): boolean;
+  /** Told when this host's own switch changes. */
+  onAgentUsageTrackingChanged?(listener: () => void): () => void;
   listFleetTargets(): Promise<HostFleetTargetList>;
   submitFleet(
     terminalId: string,
@@ -86,6 +98,11 @@ export interface MetricsHostDeps {
    */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
   /**
+   * Told when one of this host's agents stops, or a stop it reported no
+   * longer stands (#17933).
+   */
+  onAgentStopChanges(listener: (change: AgentStopChange) => void): () => void;
+  /**
    * Whether this host takes work from other machines' assistants: only then
    * are its agents' waits sent for their watches, as their directory is read.
    */
@@ -109,6 +126,8 @@ export interface MetricsHostDeps {
   /** Whether the Shell decides which of this host's agents alert it, by its own settings. */
   shellDecides(clientId: string): boolean;
   now(): number;
+  /** This machine's clocks, dating agents' stops against each link's start; the real ones by default. */
+  clock?(): ElapsedStamp;
 }
 
 /** What a restart ends on this machine, before the attached Shells are added. */
@@ -167,17 +186,20 @@ export const ATTENTION_COOLDOWN_MS = 60_000;
 function postSummary(
   session: LinkSession,
   summary: HostMetricsSummary,
-  loop: MetricsHostDeps["loop"]
+  loop: MetricsHostDeps["loop"],
+  withUsage: boolean
 ): void {
   if (!session.isOpen) return;
   // Stamped as it is posted, so a cached sample handed to a new Shell carries its real age (#14462).
   const timing = { sampleAgeMs: loop.ageOf?.(summary) ?? null, afterPing: session.peerPingNonce };
+  // A Shell that doesn't track usage, or a host that doesn't, gets none (#17981).
+  const { agentUsage: _agentUsage, ...withoutUsage } = summary;
   try {
     // A full queue drops this frame; the next one follows in a few seconds.
     session.post({
       lane: Lane.CONTROL,
       kind: ControlKind.HOST_SUMMARY,
-      body: { ...summary, timing },
+      body: { ...(withUsage ? summary : withoutUsage), timing },
     });
   } catch (error) {
     const suppressedCount = logLimiter.take("post-summary");
@@ -205,10 +227,29 @@ export function installHostMetricsHostWith(
 ): () => void {
   const wired = new WeakSet<LinkSession>();
   const lastAttention = new Map<string, number>();
+  /** Per session, whether its Shell tracks usage, as its calls say. */
+  const usageWanted = new WeakMap<LinkSession, boolean>();
+  const hostTracks = (): boolean => deps.agentUsageTracking?.() ?? true;
+  const sendsUsage = (session: LinkSession): boolean =>
+    hostTracks() && usageWanted.get(session) !== false;
 
   const wire = ({ session, sessionId, client }: MetricsSessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
+    // A Shell from before #17981 can't say, and has always had usage. One that
+    // can says again as its session opens, and nothing is read or sent for it
+    // until then: it may have turned tracking off since its HELLO.
+    usageWanted.set(session, client.agentUsage === undefined);
+    session.registerCallHandler(
+      MetricsLinkMethod.AGENT_USAGE_DEMAND,
+      AgentUsageDemandSchema,
+      ({ enabled }) => {
+        usageWanted.set(session, enabled);
+        reconcileUsage();
+        return null;
+      }
+    );
+    session.onClose(() => reconcileUsage());
     session.registerCallHandler(
       MetricsLinkMethod.LIST_FLEET_TARGETS,
       EmptyPayloadSchema,
@@ -247,7 +288,7 @@ export function installHostMetricsHostWith(
       }
     );
     const latest = deps.loop.latest();
-    if (latest) postSummary(session, latest, deps.loop);
+    if (latest) postSummary(session, latest, deps.loop, sendsUsage(session));
   };
 
   for (const ctx of server.sessions) wire(ctx);
@@ -283,29 +324,51 @@ export function installHostMetricsHostWith(
   // Sample only while some Shell is attached; the loop stops itself when the last one leaves.
   let offLoop: (() => void) | null = null;
   let releaseUsage: (() => void) | null = null;
+  let disposed = false;
+  /**
+   * A host watched only through its Shells' summaries reads its own quota on
+   * its own clock: while it samples, its own switch is on, and an attached
+   * Shell tracks usage (#17981).
+   */
+  const reconcileUsage = (): void => {
+    const wanted =
+      !disposed &&
+      offLoop !== null &&
+      hostTracks() &&
+      server.sessions.some((ctx) => ctx.session.isOpen && usageWanted.get(ctx.session) !== false);
+    if (wanted && releaseUsage === null) {
+      releaseUsage = deps.watchAgentUsage?.() ?? null;
+    } else if (!wanted && releaseUsage !== null) {
+      const release = releaseUsage;
+      releaseUsage = null;
+      release();
+    }
+  };
   const stopLoop = (): void => {
     offLoop?.();
     offLoop = null;
-    releaseUsage?.();
-    releaseUsage = null;
+    reconcileUsage();
   };
   const ensureLoop = (): void => {
-    if (offLoop) return;
-    // A host watched only through its Shells' summaries reads its own quota on its own clock.
-    releaseUsage = deps.watchAgentUsage?.() ?? null;
-    offLoop = deps.loop.subscribe((summary) => {
-      const sessions = server.sessions.filter((ctx) => ctx.session.isOpen);
-      if (sessions.length === 0) {
-        stopLoop();
-        return;
-      }
-      for (const ctx of sessions) postSummary(ctx.session, summary, deps.loop);
-      // A project closed or removed fires none of the worktree events; the
-      // sample tick catches it, and the signature keeps it from saying more.
-      worktrees.poke();
-    });
+    if (!offLoop) {
+      offLoop = deps.loop.subscribe((summary) => {
+        const sessions = server.sessions.filter((ctx) => ctx.session.isOpen);
+        if (sessions.length === 0) {
+          stopLoop();
+          return;
+        }
+        for (const ctx of sessions) {
+          postSummary(ctx.session, summary, deps.loop, sendsUsage(ctx.session));
+        }
+        // A project closed or removed fires none of the worktree events; the
+        // sample tick catches it, and the signature keeps it from saying more.
+        worktrees.poke();
+      });
+    }
+    reconcileUsage();
   };
   if (server.sessions.length > 0) ensureLoop();
+  const offTracking = deps.onAgentUsageTrackingChanged?.(reconcileUsage) ?? (() => {});
 
   const offWaiting = deps.onAgentWaiting((event) => {
     // Sent first, so a Shell hears it before the same transition's attention.
@@ -354,10 +417,35 @@ export function installHostMetricsHostWith(
     }
   });
 
+  // Only to a Shell that said it reads them, and once: a Shell whose link is
+  // down when an agent stops never hears of it, rather than hearing late, nor
+  // on the link that comes up after: a stop older than the link was seen while
+  // there was none. Ages, not times, are compared, so a clock stepped back
+  // can't make a fresh stop look older than its link.
+  const offStops = deps.onAgentStopChanges((change) => {
+    const at = (deps.clock ?? stampNow)();
+    const ageMs = Math.max(0, at.wall - change.seenAt);
+    for (const ctx of server.sessions) {
+      if (!ctx.session.isOpen || ctx.client.agentStopChanges !== true) continue;
+      if (change.stopped && ageMs > elapsedSince(ctx.session.startedAt, at)) continue;
+      const payload: AgentStopChangePayload = {
+        ...change,
+        ageMs,
+        afterPing: ctx.session.peerPingNonce,
+      };
+      ctx.session.call(MetricsLinkMethod.AGENT_STOP_CHANGED, payload).catch(() => {
+        // Nothing to retry: sent again later, it would be late.
+      });
+    }
+  });
+
   return () => {
     offSession();
+    offTracking();
     stopLoop();
+    disposed = true;
     offWaiting();
+    offStops();
     offWorktrees();
     offProjects();
     worktrees.dispose();
@@ -417,10 +505,11 @@ export async function installHostMetricsHost(
     ops,
     { events },
     { projectStore },
-    { getPtyClient },
+    { getPtyClient, getRunAttentionServiceRef },
     registry,
     { agentNotificationService },
     { getAgentUsageWatch },
+    { isAgentUsageTrackingEnabled, onAgentUsageTrackingChanged },
   ] = await Promise.all([
     import("./localLoop.js"),
     import("./hostOps.js"),
@@ -430,10 +519,13 @@ export async function installHostMetricsHost(
     import("../../../shared/config/agentRegistry.js"),
     import("../../services/AgentNotificationService.js"),
     import("../../services/agentUsage/AgentUsageWatch.js"),
+    import("../../services/agentUsage/AgentUsageTracking.js"),
   ]);
   return installHostMetricsHostWith(server, {
     loop: getLocalSummaryLoop(),
     watchAgentUsage: () => getAgentUsageWatch().acquire(),
+    agentUsageTracking: isAgentUsageTrackingEnabled,
+    onAgentUsageTrackingChanged: (listener) => onAgentUsageTrackingChanged(() => listener()),
     listFleetTargets: ops.listLocalFleetTargets,
     submitFleet: ops.submitLocalFleet,
     listWorktrees: ops.listLocalWorktrees,
@@ -459,6 +551,47 @@ export async function installHostMetricsHost(
           seen,
         });
       });
+    },
+    onAgentStopChanges(listener) {
+      const projectOf = (id: string) => getPtyClient()?.getTerminalProjectId(id) ?? null;
+      const facts = {
+        getTerminalProjectId: projectOf,
+        putAside: (id: string) => {
+          const attention = getRunAttentionServiceRef();
+          return (
+            attention !== null &&
+            (attention.getParkRecord(id) !== undefined || attention.isSnoozed(id))
+          );
+        },
+      };
+      // Put aside after its stop was sent: the stop no longer stands, and lifting it brings none back.
+      const withdraw = (terminalId: string, seenAt: number) => {
+        if (terminalId.length > MAX_METRICS_ID_CHARS) return;
+        const projectId = projectOf(terminalId);
+        listener({
+          terminalId,
+          projectId:
+            projectId !== null && projectId.length <= MAX_METRICS_ID_CHARS ? projectId : null,
+          stopped: false,
+          state: null,
+          seenAt,
+        });
+      };
+      const offs = [
+        events.on("agent:state-changed", (payload) => {
+          const change = agentStopChangeOf(payload, facts);
+          if (change !== null) listener(change);
+        }),
+        events.on("terminal:park-changed", (payload) => {
+          if (payload.parked) withdraw(payload.id, payload.timestamp);
+        }),
+        events.on("terminal:snooze-changed", (payload) => {
+          if (payload.snoozed) withdraw(payload.id, payload.timestamp);
+        }),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
     },
     notificationSettings: (projectId) => projectStore.getEffectiveNotificationSettings(projectId),
     shellDecides: (clientId) => agentNotificationService.hasShellPolicy(clientId),

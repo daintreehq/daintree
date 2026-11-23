@@ -15,11 +15,20 @@ import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import {
+  _resetPluginContextMenuItemsStoreForTest,
+  usePluginContextMenuItemsStore,
+} from "@/store/pluginContextMenuItemsStore";
+import {
   HelpSessionTabs,
   TabStateIndicator,
   helpSessionTabId,
   type HelpSessionTab,
 } from "../HelpSessionTabs";
+
+const dispatchAction = vi.hoisted(() =>
+  vi.fn((_actionId: string, _args?: unknown, _options?: unknown) => Promise.resolve({ ok: true }))
+);
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchAction } }));
 
 const CLOSE_SETTLE_MS = 250;
 
@@ -658,5 +667,115 @@ describe("TabStateIndicator", () => {
     expect(drawn("idle")).toBe(0);
     expect(drawn("completed")).toBe(0);
     expect(drawn(undefined)).toBe(0);
+  });
+});
+
+describe("HelpSessionTabs plugin assistant items (#18138)", () => {
+  afterEach(() => {
+    cleanup();
+    _resetPluginContextMenuItemsStoreForTest();
+    dispatchAction.mockClear();
+  });
+
+  const seedContributions = () =>
+    act(() =>
+      usePluginContextMenuItemsStore.setState({
+        entries: [
+          {
+            pluginId: "acme",
+            item: {
+              actionId: "acme.worker",
+              label: "Continue in another agent…",
+              location: "terminal",
+            },
+          },
+          {
+            pluginId: "acme",
+            item: {
+              actionId: "acme.lane",
+              label: "Hand this lane on…",
+              location: "assistant",
+              when: "assistantScope == 'project'",
+            },
+          },
+          {
+            pluginId: "acme",
+            item: {
+              actionId: "acme.global",
+              label: "Global only",
+              location: "assistant",
+              when: "assistantScope == 'global'",
+            },
+          },
+        ],
+      })
+    );
+
+  /** Every row and separator, in order: radio rows (the lane list) aren't counted. */
+  const structure = (menu: HTMLElement) =>
+    Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]')).map((el) =>
+      el.getAttribute("role") === "separator" ? "—" : el.textContent
+    );
+
+  it("puts the selected lane's items after the ways to another session and before Clear and Close", async () => {
+    seedContributions();
+    render(
+      strip({
+        tabs: lanes(3, (slot) => ({ canRestart: true, agentId: slot === 2 ? "codex" : "claude" })),
+        activeSlot: 2,
+        onRestart: vi.fn(),
+        onOpenSession: vi.fn(),
+        canOpenSession: true,
+        newSessionAgentIds: ["claude", "codex"],
+        onOpenSessionWithAgent: vi.fn(),
+        workspaceId: "proj-1",
+        activeTerminalId: "help-term-2",
+      })
+    );
+    const menu = await openPicker();
+    expect(structure(menu)).toEqual([
+      "—",
+      "New session",
+      "New session with Claude",
+      "New session with Codex",
+      "—",
+      "Hand this lane on…",
+      "—",
+      "Clear conversation",
+      "Close session",
+    ]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Hand this lane on…" }));
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "acme.lane",
+      {
+        assistantScope: "project",
+        projectId: "proj-1",
+        slot: 2,
+        terminalId: "help-term-2",
+        agentId: "codex",
+      },
+      { source: "menu" }
+    );
+  });
+
+  it("offers a lane whose terminal isn't up yet, named by workspace and slot", async () => {
+    seedContributions();
+    render(strip({ tabs: lanes(2), activeSlot: 1, workspaceId: "scratch-1" }));
+    const menu = await openPicker();
+    expect(structure(menu)).toEqual(["—", "Hand this lane on…", "—", "Close session"]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Hand this lane on…" }));
+    expect(dispatchAction.mock.calls[0]?.[1]).toStrictEqual({
+      assistantScope: "project",
+      projectId: "scratch-1",
+      slot: 1,
+    });
+  });
+
+  it("offers no plugin item without a workspace to name the lane by", async () => {
+    seedContributions();
+    render(strip({ tabs: lanes(2), activeSlot: 0, activeTerminalId: "help-term-0" }));
+    expect(structure(await openPicker())).toEqual(["—", "Close session"]);
   });
 });

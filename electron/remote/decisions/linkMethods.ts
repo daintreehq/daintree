@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
+import type {
+  DecisionsHostQuestionPolicy,
+  DecisionsHostRuntime,
+} from "../../../shared/types/decisionsHosts.js";
 import {
   MAX_HOST_DETAIL_LENGTH,
   type HostAcceptResult,
@@ -35,11 +38,21 @@ export const DecisionsLinkMethod = {
    */
   OWNER_STATE_V2: "decisions.ownerState.v2",
   /**
+   * Shell → Host (#17942): `OWNER_STATE_V2`, answered with a v2 report, whose
+   * running Host also says how it asks its agents' questions. A Host from
+   * before it answers UNSUPPORTED, and is told `OWNER_STATE_V2` instead: that
+   * method's report is strict, so a field an older Shell doesn't know would
+   * fail it.
+   */
+  OWNER_STATE_V3: "decisions.ownerState.v3",
+  /**
    * Host → Shell (#16022): what the Host reports of its own Decisions changed,
    * sent to the Shells whose owner enrolled it. A Shell from before it
    * answers UNSUPPORTED, which changes nothing.
    */
   HOST_RUNTIME: "decisions.hostRuntime",
+  /** Host → Shell (#17942): `HOST_RUNTIME` with a v2 report, to a Shell that announced with v3. */
+  HOST_RUNTIME_V2: "decisions.hostRuntime.v2",
   /**
    * Shell → Host (#17230): the Host's own questions, as a content-free list,
    * and one of them read by reference (content, an image part, opening
@@ -68,6 +81,46 @@ export const DecisionsLinkMethod = {
    * that read the list with `QUESTION_LIST_V2`, also when only an ask moved.
    */
   QUESTIONS_CHANGED_V2: "decisions.questionsChanged.v2",
+  /**
+   * Shell → Host (#17943): `QUESTION_LIST_V2` whose items also carry their
+   * round: its mode, why it closed without an answer, and how far its closing
+   * notice got. A Host from before it answers UNSUPPORTED, and is read with
+   * `QUESTION_LIST_V2` instead: those items are strict, so a field an older
+   * Shell doesn't know would fail them.
+   */
+  QUESTION_LIST_V3: "decisions.questionList.v3",
+  /** Host → Shell (#17943): `QUESTIONS_CHANGED_V2` with v3 items, to a Shell that read v3. */
+  QUESTIONS_CHANGED_V3: "decisions.questionsChanged.v3",
+  /**
+   * Shell → Host (#17943): one question's content as `QUESTIONS` reads it,
+   * with its round and the plan its advisory round states. A Host from before
+   * it answers UNSUPPORTED, and is read with `QUESTIONS` instead, whose
+   * content is strict.
+   */
+  QUESTION_CONTENT_V2: "decisions.questionContent.v2",
+  /**
+   * Shell → Host (#18042): `QUESTION_CONTENT_V2` with the agent's account of
+   * how it prepared the question. A Host from before it answers UNSUPPORTED,
+   * and is read with `QUESTION_CONTENT_V2` instead, whose content is strict.
+   */
+  QUESTION_CONTENT_V3: "decisions.questionContent.v3",
+  /**
+   * Shell → Host (#18031): one of the Host's own stopped deliveries, by
+   * reference, read with what the Host would offer, copied, resumed or marked
+   * handled through the Host's own delivery, so resolving it once holds for
+   * the Host's window too. Answered only to the owner that enrolled the Host,
+   * while that owner's Decisions is on. A Host from before it answers
+   * UNSUPPORTED, and its stalls are resolved on the Host.
+   */
+  ATTENTION: "decisions.attention",
+  /**
+   * Shell → Host (#18037): the pane that asked one of the Host's questions,
+   * as it shows now, redacted as a terminal snapshot is. Answered only to the
+   * owner that enrolled the Host, while that owner's Decisions is on, and
+   * whatever the snapshot switch says. A Host from before it answers
+   * UNSUPPORTED, and the owner is told the Host needs updating.
+   */
+  QUESTION_PANE: "decisions.questionPane",
 } as const;
 
 /**
@@ -79,12 +132,20 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.ENROLL_HOST]: "host",
   [DecisionsLinkMethod.OWNER_STATE]: "host",
   [DecisionsLinkMethod.OWNER_STATE_V2]: "host",
+  [DecisionsLinkMethod.OWNER_STATE_V3]: "host",
   [DecisionsLinkMethod.HOST_RUNTIME]: "shell",
+  [DecisionsLinkMethod.HOST_RUNTIME_V2]: "shell",
   [DecisionsLinkMethod.QUESTIONS]: "host",
   [DecisionsLinkMethod.CANCEL_QUESTION]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED]: "shell",
   [DecisionsLinkMethod.QUESTION_LIST_V2]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED_V2]: "shell",
+  [DecisionsLinkMethod.QUESTION_LIST_V3]: "host",
+  [DecisionsLinkMethod.QUESTIONS_CHANGED_V3]: "shell",
+  [DecisionsLinkMethod.QUESTION_CONTENT_V2]: "host",
+  [DecisionsLinkMethod.QUESTION_CONTENT_V3]: "host",
+  [DecisionsLinkMethod.ATTENTION]: "host",
+  [DecisionsLinkMethod.QUESTION_PANE]: "host",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"
@@ -184,30 +245,65 @@ export const OwnerStateV2PayloadSchema = z
 /** A time a Host reports, as epoch ms. */
 const Time = z.number().int().nonnegative();
 
+const NotEnrolledSchema = z.object({ state: z.literal("not-enrolled") });
+const RunningSchema = z.object({
+  state: z.literal("running"),
+  deviceId: RelayId,
+  connection: z.enum([
+    "not-connected",
+    "connecting",
+    "connected",
+    "reconnecting",
+    "replaced",
+    "revoked",
+  ]),
+  nextAttemptAt: Time.optional(),
+  problem: z.enum(["keys", "storage", "other-relay"]).optional(),
+});
+const OwnerOffSchema = z.object({ state: z.literal("owner-off"), deviceId: RelayId, since: Time });
+const RevokedSchema = z.object({
+  state: z.literal("revoked"),
+  deviceId: RelayId,
+  since: Time,
+  credentialsRemoved: z.boolean(),
+});
+
 export const HostRuntimeSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("not-enrolled") }),
-  z.object({
-    state: z.literal("running"),
-    deviceId: RelayId,
-    connection: z.enum([
-      "not-connected",
-      "connecting",
-      "connected",
-      "reconnecting",
-      "replaced",
-      "revoked",
-    ]),
-    nextAttemptAt: Time.optional(),
-    problem: z.enum(["keys", "storage", "other-relay"]).optional(),
-  }),
-  z.object({ state: z.literal("owner-off"), deviceId: RelayId, since: Time }),
-  z.object({
-    state: z.literal("revoked"),
-    deviceId: RelayId,
-    since: Time,
-    credentialsRemoved: z.boolean(),
-  }),
+  NotEnrolledSchema,
+  RunningSchema,
+  OwnerOffSchema,
+  RevokedSchema,
 ]) satisfies z.ZodType<DecisionsHostRuntime>;
 
 export const HostRuntimePayloadSchema = z.object({ runtime: HostRuntimeSchema }).strict();
 export type HostRuntimePayload = z.infer<typeof HostRuntimePayloadSchema>;
+
+/** The longest default expiry a policy accepts: under the relay's 366-day limit. */
+const MAX_DEFAULT_EXPIRY_MS = 366 * 24 * 60 * 60 * 1000;
+
+const QuestionPolicySchema = z
+  .object({
+    advisoryQuestions: z.boolean(),
+    defaultQuestionExpiryMs: z.number().int().positive().max(MAX_DEFAULT_EXPIRY_MS).nullable(),
+  })
+  .strict() satisfies z.ZodType<DecisionsHostQuestionPolicy>;
+
+/**
+ * A v2 report (#17942): a running Host always says how it asks its agents'
+ * questions, so a report without it is one from before, read with v1.
+ */
+export const HostRuntimeV2Schema = z.discriminatedUnion("state", [
+  NotEnrolledSchema,
+  RunningSchema.extend({ questionPolicy: QuestionPolicySchema }),
+  OwnerOffSchema,
+  RevokedSchema,
+]) satisfies z.ZodType<DecisionsHostRuntime>;
+
+export const HostRuntimeV2PayloadSchema = z.object({ runtime: HostRuntimeV2Schema }).strict();
+
+/** A report as a Shell from before #17942 reads it: a running Host's without its question policy. */
+export function legacyRuntime(runtime: DecisionsHostRuntime): DecisionsHostRuntime {
+  if (runtime.state !== "running" || runtime.questionPolicy === undefined) return runtime;
+  const { questionPolicy: _policy, ...legacy } = runtime;
+  return legacy;
+}

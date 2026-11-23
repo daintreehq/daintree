@@ -184,6 +184,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
+  promptUnseen?: true;
   /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
   lastOutputChangeAt?: number;
   lastInputTime?: number;
@@ -217,6 +219,8 @@ interface TerminalInfoResponse {
    * still waiting on its exit — the host's project stats count those.
    */
   isExited?: boolean;
+  /** Its agent is being quit: the PTY still runs, but nothing new should land in it. */
+  isClosing?: boolean;
   agentSessionId?: string;
   /** The Claude store the launch env names; absent when it can't be resolved (#16269). */
   claudeConfigDir?: string;

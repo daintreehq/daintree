@@ -8,7 +8,7 @@ import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
-import { currentFileEditorDefault } from "@/registry/fileEditorDefaults";
+import { currentFileEditorDefault, currentFileViewerClaim } from "@/registry/fileEditorDefaults";
 import {
   isAbsolute,
   isPathInside,
@@ -97,7 +97,7 @@ const openPanelArgsSchema = z.object({
     .enum(["rendered", "source"])
     .optional()
     .describe(
-      'Defaults to "source", or a project plugin\'s default editor. "rendered": Markdown/HTML.'
+      'Defaults to "source", a built-in viewer (CSV table), or a project plugin\'s default editor. "rendered": Markdown/HTML or a plugin viewer\'s type.'
     ),
 });
 
@@ -121,9 +121,9 @@ const showItemInFolderArgsSchema = z.object({
 });
 
 /**
- * "rendered" applies only to Markdown and HTML — clamp so a stray request can't
- * persist a mode the panel can never display. Shared by the dialog and grid
- * openers so both answer the same way for the same path.
+ * "rendered" applies only to Markdown and HTML in the viewer dialog, which
+ * offers no plugin viewer — clamp so a stray request can't persist a mode the
+ * panel can never display.
  */
 function resolveFileViewMode(
   absolutePath: string,
@@ -131,6 +131,22 @@ function resolveFileViewMode(
 ): FileViewMode | undefined {
   if (viewMode !== "rendered") return viewMode;
   return isMarkdownFilePath(absolutePath) || isHtmlFilePath(absolutePath) ? viewMode : "source";
+}
+
+/**
+ * A grid panel also renders a type a plugin viewer claims (a CSV's table,
+ * #17336). Whether the viewer is enabled and the file fits it is the pane's
+ * live call, which shows Source until it can without writing that back, so a
+ * claim, or a plugin snapshot not loaded yet, keeps the request; a type no
+ * viewer claims clamps as in the dialog.
+ */
+function resolveGridFileViewMode(
+  absolutePath: string,
+  viewMode: FileViewMode | undefined
+): FileViewMode | undefined {
+  const hostMode = resolveFileViewMode(absolutePath, viewMode);
+  if (hostMode === viewMode) return hostMode;
+  return currentFileViewerClaim(absolutePath) === false ? hostMode : viewMode;
 }
 
 /**
@@ -290,7 +306,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openPanel",
     title: "Open file panel",
     description:
-      "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
+      "Show a file to the user in a persistent read-only panel in the grid. Markdown, HTML and CSV/TSV can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -314,7 +330,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown, ctx?: ActionContext) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
-      const effectiveViewMode = resolveFileViewMode(absolutePath, viewMode);
+      const effectiveViewMode = resolveGridFileViewMode(absolutePath, viewMode);
 
       const store = usePanelStore.getState();
       const existing = store.panelIds

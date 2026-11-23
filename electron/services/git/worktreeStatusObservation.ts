@@ -20,6 +20,11 @@ export interface WorktreeStatusObservation {
   untracked: number;
   conflicted: number;
   /**
+   * Status entries, each path once however many of the counts above it is in:
+   * a staged file edited again is one entry, an untracked directory is one.
+   */
+  changedEntries: number;
+  /**
    * Tracked files status never checks: marked assume-unchanged, or
    * skip-worktree while present in the working tree. A sparse checkout's
    * absent skip-worktree files are not counted; there is nothing there to lose.
@@ -135,6 +140,9 @@ export async function readWorktreeStatusObservation(
     unstaged,
     untracked,
     conflicted,
+    // A path git lists twice (`git rm --cached` leaves a staged delete and an
+    // untracked file) is still one path; latin1 keeps any filename's bytes apart.
+    changedEntries: new Set(status.records.map((record) => record.path.toString("latin1"))).size,
     hiddenFromStatus,
   };
 }

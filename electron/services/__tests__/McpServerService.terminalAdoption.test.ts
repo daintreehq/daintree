@@ -660,6 +660,29 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     ownership.clearSession("relay-session");
   });
 
+  it("moves the coordinator's hand-overs to the session taking over, or back to the person (#18143)", () => {
+    adoptGlobal();
+    const NEXT = { sessionId: "help-global-2", terminalId: "terminal-global-2" };
+    const nextOwner = principalOwnerKey(relayOwnershipPrincipal("local", NEXT.sessionId));
+    const adoption = service._sessionStore.terminalAdoption;
+
+    service.handOverGlobalAssistantWork(GLOBAL.sessionId, NEXT);
+
+    expect(adoption.get(globalOwner, "terminal-1")).toBeUndefined();
+    expect(adoption.get(nextOwner, "terminal-1")).toMatchObject({
+      orchestratorPaneId: NEXT.terminalId,
+      recipient: "global-assistant",
+      launchGeneration: 3,
+    });
+    expect(service.listTerminalAdoptions()).toEqual([
+      expect.objectContaining({ terminalId: "terminal-1", orchestratorPaneId: NEXT.terminalId }),
+    ]);
+
+    // To a session that isn't running, nothing can drive it: the person has it back.
+    service.handOverGlobalAssistantWork(NEXT.sessionId, null);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
   it("refuses with no assistant running, its own PTY, and an assistant's terminal", () => {
     expect(adoptGlobal({ global: null })).toMatchObject({ reason: "not-orchestrator" });
     terminals.set(GLOBAL.terminalId, null);

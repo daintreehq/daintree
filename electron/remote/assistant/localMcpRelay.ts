@@ -75,6 +75,11 @@ export interface LocalMcpRelayDeps extends Pick<
 export interface LocalMcpRelay {
   relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
   /**
+   * Stops one of `relayCall`'s calls from `helpSessionId` (#17985), as a
+   * host's MCP_CANCEL does; false when it couldn't be held.
+   */
+  cancelCall(helpSessionId: string, callId: string): boolean;
+  /**
    * `terminal.getStatus` in several of this machine's projects (#16191), each
    * through the gates `relayCall` meets there, screens redacted as a host's are.
    */
@@ -170,6 +175,8 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
       if (disposed) return { status: "refused", reason: "server-off" };
       return executor.call(specFor(payload, payload.global === true), payload);
     },
+    cancelCall: (helpSessionId, callId) =>
+      !disposed && executor.cancel(LOCAL_RELAY_SENDER_ID, helpSessionId, callId) !== "full",
     status: async (payload) => {
       const read = deps.readAgents;
       return readProjectStatuses(

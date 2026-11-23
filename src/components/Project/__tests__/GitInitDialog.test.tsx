@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 import {
@@ -82,7 +82,7 @@ vi.mock("@/components/ui/AppDialog", () => {
 
 import { GitInitDialog } from "../GitInitDialog";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
-import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
+import { createGroupLikeHost, makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 // `InlineStatusBanner` — the failure treatment this dialog now shares with the
 // rest of the app — reads `prefers-reduced-motion` on render, and jsdom ships no
@@ -690,9 +690,68 @@ describe("GitInitDialog", () => {
       fireEvent.click(await screen.findByTestId("git-init-open"));
     }
 
-    it("offers no group row while no groups exist", () => {
+    async function makeGroup(name: string): Promise<void> {
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      const input = await screen.findByTestId("project-group-name-input");
+      fireEvent.change(input, { target: { value: name } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+    }
+
+    it("offers only New group… while no groups exist", () => {
       renderDialog();
       expect(groupField()).toBeNull();
+      expect(screen.getByTestId("project-group-new")).toBeTruthy();
+    });
+
+    it("makes the first group here, keeps what was typed, and reports the new group", async () => {
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+      const projectName = screen.getByLabelText<HTMLInputElement>(/^name$/i);
+      fireEvent.change(projectName, { target: { value: "Helios" } });
+      fireEvent.change(screen.getByLabelText(/^gitignore$/i), { target: { value: "python" } });
+      fireEvent.change(screen.getByLabelText(/^message$/i), { target: { value: "feat: start" } });
+
+      await makeGroup("Clients");
+
+      expect(groupField()?.value).toBe("new-Clients");
+      expect(projectName.value).toBe("Helios");
+      expect(screen.getByLabelText<HTMLSelectElement>(/^gitignore$/i).value).toBe("python");
+      expect(screen.getByLabelText<HTMLInputElement>(/^message$/i).value).toBe("feat: start");
+
+      await finish();
+      expect(initGitGuidedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gitignoreTemplate: "python",
+          initialCommitMessage: "feat: start",
+        })
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Helios" }),
+        "new-Clients"
+      );
+    });
+
+    it("keeps the group chosen before a cancelled New group…", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+
+      fireEvent.click(screen.getByTestId("project-group-new"));
+      fireEvent.change(await screen.findByTestId("project-group-name-input"), {
+        target: { value: "Never made" },
+      });
+      // The second dialog on screen is the name prompt, stacked over this one.
+      const [, namePrompt] = screen.getAllByTestId("app-dialog");
+      fireEvent.click(within(namePrompt!).getByText("dialog-close"));
+      expect(screen.getByTestId("project-group-new")).toBeTruthy();
+
+      await waitFor(() => expect(screen.queryByTestId("project-group-name-input")).toBeNull());
+      expect(groupField()?.value).toBe("g1");
+      expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual(["g1"]);
+      await finish();
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), "g1");
     });
 
     it("defaults to no group and reports none", async () => {
@@ -774,6 +833,42 @@ describe("GitInitDialog", () => {
       rerender(<GitInitDialog isOpen={true} directoryPath="/tmp/second-folder" {...props} />);
 
       expect(groupField()?.value).toBe("g2");
+    });
+
+    it("doesn't let a group saved for the last folder become the new folder's choice", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      let land!: () => Promise<void>;
+      useProjectGroupsStore.setState({
+        createGroup: (name: string) =>
+          new Promise((resolve) => {
+            land = () => createGroupLikeHost(name).then(resolve);
+          }),
+      });
+      try {
+        const props = { initialGroupId: "g1", onSuccess: vi.fn(), onCancel: vi.fn() };
+        const { rerender } = render(
+          <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
+        );
+        fireEvent.click(screen.getByTestId("project-group-new"));
+        const input = await screen.findByTestId("project-group-name-input");
+        fireEvent.change(input, { target: { value: "For first" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        rerender(<GitInitDialog isOpen={true} directoryPath="/tmp/second-folder" {...props} />);
+        // The half-finished prompt went with the folder it was for.
+        expect(screen.queryByTestId("project-group-name-input")).toBeNull();
+        await act(() => land());
+
+        expect(useProjectGroupsStore.getState().groups.map((g) => g.id)).toEqual([
+          "g1",
+          "new-For first",
+        ]);
+        expect(groupField()?.value).toBe("g1");
+        await finish();
+        expect(props.onSuccess).toHaveBeenCalledWith(expect.any(Object), "g1");
+      } finally {
+        useProjectGroupsStore.setState({ createGroup: createGroupLikeHost });
+      }
     });
   });
 

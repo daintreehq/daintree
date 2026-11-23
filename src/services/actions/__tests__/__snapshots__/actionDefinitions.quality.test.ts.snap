@@ -741,7 +741,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live panel forward, not a second agent. Opens off-screen unless that worktree is active.",
+    "description": "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A live panel already holding it is returned, wherever it is filed. Opens off-screen unless that worktree is active.",
     "examples": [
       {
         "args": {
@@ -1421,7 +1421,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "navigation",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open the oldest Decisions question waiting on the user, from which the others waiting can be stepped through in order. Does nothing when none is waiting. Only opens the view",
+    "description": "Open the Decisions inbox at the oldest question waiting on the user, with the others waiting listed beside it. Does nothing when none is waiting. Only opens the view",
     "examples": undefined,
     "id": "decisions.openNextQuestion",
     "keywords": [
@@ -1857,7 +1857,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
+    "description": "Show a file to the user in a persistent read-only panel in the grid. Markdown, HTML and CSV/TSV can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     "examples": [
       {
         "args": {
@@ -3122,6 +3122,24 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Ask the person to replace the global Daintree Assistant's run with a new conversation on a chosen agent that starts from a hand-off",
+    "examples": undefined,
+    "id": "help.replaceGlobalAssistant",
+    "keywords": [
+      "assistant",
+      "global",
+      "agent",
+      "continue",
+      "hand-off",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Replace global assistant",
+  },
+  {
+    "category": "help",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Reopen an earlier Daintree Assistant conversation from this project",
     "examples": undefined,
     "id": "help.resumePastSession",
@@ -3361,7 +3379,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
+    "description": "One notice when a host's link or a fresh load sample meets your condition, an agent here or on a host starts to wait, or a plugin notifies an assistant, so you can end your turn. It only observes: never dials, holds or acts. Watches expire.",
     "examples": undefined,
     "id": "host.watch",
     "keywords": [
@@ -3375,6 +3393,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "agents",
       "waiting",
       "approval",
+      "plugin",
     ],
     "kind": "command",
     "requiresArgs": true,
@@ -5140,6 +5159,39 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   {
     "category": "terminal",
     "danger": "confirm",
+    "dangerRationale": "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    "description": "Approve typing /restart into a Claude Code panel once it waits at its empty prompt, to run the update it installed.",
+    "examples": undefined,
+    "id": "terminal.applyClaudeUpdate",
+    "keywords": [
+      "update",
+      "restart",
+      "claude",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Apply Claude Code update",
+  },
+  {
+    "category": "terminal",
+    "danger": "confirm",
+    "dangerRationale": "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    "description": "After the user approves, types /restart once into a Claude Code panel whose updateInstalled names it, when it waits at its empty prompt (up to 30s). Quotes any refusal Claude prints; never says the conversation came back.",
+    "examples": undefined,
+    "id": "terminal.applyClaudeUpdateOwned",
+    "keywords": [
+      "update",
+      "restart",
+      "claude",
+      "owned",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Apply Claude Code update",
+  },
+  {
+    "category": "terminal",
+    "danger": "confirm",
     "dangerRationale": "Arming reroutes the human's next keystrokes to every armed terminal — an assistant arming a set the user forgets can broadcast commands to multiple terminals unintentionally.",
     "description": "Add a terminal to the set that receives the user's fleet broadcasts, so the next broadcast reaches it too. Read back the resulting set to confirm — a terminal that cannot be armed is ignored rather than reported as an error. This changes where the user's subsequent broadcast input lands.",
     "examples": undefined,
@@ -5330,6 +5382,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": false,
     "title": "Copy selection",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Copy the terminal selection as clean text, without wrapping or padding",
+    "examples": undefined,
+    "id": "terminal.copyClean",
+    "keywords": [
+      "copy",
+      "clean",
+      "plain",
+      "selection",
+    ],
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Copy clean text",
   },
   {
     "category": "terminal",

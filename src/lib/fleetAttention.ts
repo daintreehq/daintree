@@ -4,6 +4,7 @@ import {
   bandForRun,
   canopyPlacingRun,
   isAgentReportedNeed,
+  isDecisionsNeed,
   runCanopyPlacement,
   runUnseenAsk,
   type FleetBand,
@@ -16,6 +17,7 @@ export {
   bandForRun,
   canopyPlacingRun,
   isAgentReportedNeed,
+  isDecisionsNeed,
   runCanopyPlacement,
   runUnseenAsk,
   type FleetBand,
@@ -165,7 +167,8 @@ export function fleetBandForRun(
  * label, the tone and the ordering can never disagree — a seen hand-back
  * must not still say "unread" while sorting as done.
  * `running` and `idle` split on state because they each cover two situations
- * the user can tell apart and would want to.
+ * the user can tell apart and would want to, and so does `needs-you`, where
+ * Decisions places an agent still at work beside the stopped ones.
  *
  * These are STATE names, and they stay narrow. The filter segment above them
  * says "Attention", which is a BUCKET name and deliberately wider: it holds
@@ -179,7 +182,8 @@ export function bandLabel(band: FleetBand, run: Pick<FleetRunRow, "agentState">)
     case "blocked":
       return "Blocked";
     case "needs-you":
-      return "Waiting";
+      if (run.agentState === "working") return "Working";
+      return run.agentState === "directing" ? "Directing" : "Waiting";
     case "review":
       return "Unread";
     case "running":

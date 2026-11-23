@@ -128,7 +128,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
-import type { AgentUsageSnapshot } from "./agentUsage.js";
+import type { AgentUsageSnapshot, AgentUsageTrackingSnapshot } from "./agentUsage.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -1659,8 +1659,6 @@ export interface IpcEventMap {
   "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
   // Open one question in the question view (#17232): a click on its desktop notification. One window only.
   "decisions:open-question": import("../decisionsQuestion.js").DecisionsOpenQuestionRequest;
-  // Open the list of answers needing attention (#17235): a click on a stalled answer's notification. One window only.
-  "decisions:open-attention": import("../decisionsQuestion.js").DecisionsOpenAttentionRequest;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -1866,6 +1864,8 @@ export interface IpcEventMap {
     actionsListWalk?: boolean;
     /** When this unconfirmed dispatch may run unasked (#17917); set only by main. */
     confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
+    /** This machine's global Assistant made the call through `host.call` (#18153); set only by main. */
+    callerOrigin?: "global-assistant";
   };
 
   /**
@@ -2360,6 +2360,7 @@ export interface IpcEventMap {
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
   "agent-usage:changed": AgentUsageSnapshot;
+  "agent-usage:tracking-changed": AgentUsageTrackingSnapshot;
   /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
   "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
@@ -2870,7 +2871,6 @@ export type IpcEventBusMap = Pick<
   | "decisions:status-changed"
   | "decisions:questions-changed"
   | "decisions:open-question"
-  | "decisions:open-attention"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

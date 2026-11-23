@@ -1,7 +1,12 @@
 import type { DecisionsRequirement } from "@shared/types/decisions";
+import { pluralize } from "@/lib/pluralize";
 import type {
+  DecisionClosureNotice,
+  DecisionPreparation,
+  DecisionQuestionClosedReason,
   DecisionQuestionContent,
   DecisionQuestionStatus,
+  DecisionReplyMode,
   DecisionThreadAnswer,
   DecisionThreadEntry,
 } from "@shared/types/decisionsQuestion";
@@ -20,7 +25,8 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
   open: "Waiting for an answer",
   "proxy-answered": "Answered by the decision model",
   "human-answered": "Answered",
-  cancelled: "Cancelled",
+  // Declined or withdrawn, once its reason is read; this is only what's said without one.
+  cancelled: "Closed without an answer",
   expired: "Expired unanswered",
   "publish-failed": "Couldn't be sent",
 };
@@ -28,14 +34,122 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
 /**
  * What the view says of the question's status: a cancelled one the person
  * declined from their phone or tablet (#17234) says so, apart from one
- * withdrawn from the desktop.
+ * withdrawn; and, with its round (#17943), an advisory round's expiry apart
+ * from a blocking one's, and a question whose deadline passed before it ever
+ * reached the relay apart from one the relay refused.
  */
 export function questionStatusText(
-  question: Pick<DecisionQuestionContent, "status" | "closedReason">
+  question: Pick<DecisionQuestionContent, "status" | "closedReason" | "replyMode">
 ): string {
-  return question.closedReason === "declined"
-    ? "You declined to answer"
-    : STATUS_TEXT[question.status];
+  switch (question.closedReason) {
+    case "declined":
+      return "You declined to answer";
+    case "withdrawn":
+      return "Withdrawn";
+    case "never-published":
+      return "Deadline passed before it reached the relay";
+    case "expired":
+      return question.replyMode === "advisory"
+        ? "Expired unanswered, advice only"
+        : STATUS_TEXT.expired;
+    default:
+      return STATUS_TEXT[question.status];
+  }
+}
+
+/**
+ * The round's mode as the deadline line names it (#17943): whether the agent
+ * asked for advice or waits for a reply. Null where its machine didn't say.
+ */
+export function replyModeText(replyMode: DecisionReplyMode | undefined): string | null {
+  if (replyMode === undefined) return null;
+  return replyMode === "advisory" ? "Advisory" : "Reply required";
+}
+
+const PREPARATION_OUTCOME: Record<DecisionPreparation["outcome"], string> = {
+  agreed: "Agreed on a recommendation",
+  split: "Split or inconclusive",
+  "not-run": "Consultation not run",
+};
+
+/**
+ * What the agent says of its preparation (#18042), in its order: how many
+ * other agents it consulted, and how that went. Both always, as reported,
+ * so a count that disagrees with the outcome or the summary stays visible.
+ */
+export function preparationFacts(
+  preparation: Pick<DecisionPreparation, "agentsConsulted" | "outcome">
+): [consulted: string, outcome: string] {
+  const { agentsConsulted } = preparation;
+  const consulted =
+    agentsConsulted === 0
+      ? "No other agents consulted"
+      : `${pluralize(agentsConsulted, "other agent")} consulted`;
+  return [consulted, PREPARATION_OUTCOME[preparation.outcome]];
+}
+
+/** What heads the agent's plan: what it said it would do, while that can still come (#17943). */
+export function planHeading(status: DecisionQuestionStatus): string {
+  return status === "open" || status === "queued"
+    ? "If unanswered, the agent plans to"
+    : "The agent's plan if unanswered";
+}
+
+const NOTICE_NAME: Record<"declined" | "expired" | "never-published", string> = {
+  declined: "Your decline",
+  // Both close a round at its deadline: the list and the notification call it the same (#17944).
+  expired: "The timeout notice",
+  "never-published": "The timeout notice",
+};
+
+const NOTICE_DELIVERY: Record<DecisionClosureNotice["delivery"], string> = {
+  pending: "is waiting to be typed into the terminal",
+  delivered: "was typed into the terminal",
+  uncertain: "may or may not have been typed into the terminal",
+  "needs-attention": "stopped before it was typed into the terminal",
+  stopped: "won't be typed into the terminal",
+};
+
+/** A closing notice and how far it got, as a surface already states it (#18026). */
+export interface ShownNotice {
+  closedReason: DecisionQuestionClosedReason;
+  delivery: DecisionClosureNotice["delivery"];
+}
+
+/**
+ * How far the notice that closed it without an answer got into the asking
+ * terminal (#17943), and, for an advisory round, what that notice says of the
+ * agent's plan. Only what was recorded: typed in is never that the agent
+ * read it or acted on it. `shown`: a notice the surface already states,
+ * which, when it is this one as far as it got, leaves only the plan. Null
+ * with nothing to say.
+ */
+export function closureNoticeText(
+  question: Pick<DecisionQuestionContent, "closedReason" | "closureNotice">,
+  shown: ShownNotice | null = null
+): string | null {
+  const notice = question.closureNotice;
+  const reason = question.closedReason;
+  if (notice == null || reason === null || reason === "withdrawn") return null;
+  if (shown?.closedReason === reason && shown.delivery === notice.delivery) {
+    return noticePlan(notice, NOTICE_NAME[reason]);
+  }
+  const delivery = `${NOTICE_NAME[reason]} ${NOTICE_DELIVERY[notice.delivery]}.`;
+  const plan = noticePlan(notice, "It");
+  return plan === null ? delivery : `${delivery} ${plan}`;
+}
+
+/**
+ * What an advisory notice says of the plan (#17944), led by `lead`: its
+ * words, apart from how far it got, which is said beside it. Typed in is only
+ * that the terminal took it, never that the agent read it or went ahead; one
+ * that will never be typed says nothing of the plan.
+ */
+function noticePlan(notice: DecisionClosureNotice, lead: string): string | null {
+  if (notice.disposition === null || notice.delivery === "stopped") return null;
+  return notice.disposition === "fallback-due"
+    ? `${lead} says the agent may go ahead with its plan.`
+    : `${lead} says the agent isn't cleared to go ahead with its plan.`;
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {

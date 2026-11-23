@@ -1,8 +1,11 @@
 import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions";
 import type {
+  DecisionsAnswerDestination,
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
 } from "@shared/types/decisionsAttention";
 import type {
   AnswerDecisionQuestionPayload,
@@ -20,12 +23,14 @@ import type {
   DecisionQuestionImageResult,
   DecisionQuestionList,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   MarkDecisionQuestionsPayload,
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
 import { DECISION_QUESTION_MARKS_PER_CALL } from "@shared/types/decisionsQuestion";
+import type { DecisionsHostsResult } from "@shared/types/decisionsHosts";
 import type {
   DecisionsInvolvementRead,
   DecisionsInvolvementSaveResult,
@@ -147,13 +152,36 @@ export const decisionsClient = {
   listAnswerDestinations: (questionId: string): Promise<DecisionsAnswerDestinations> =>
     window.electron.decisions.listAnswerDestinations(questionId),
 
-  /** Sends the answer to the pane the person confirmed; recorded in the audit trail. */
-  reassignAnswer: (questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> =>
-    window.electron.decisions.reassignAnswer({ questionId, terminalId }),
+  /**
+   * Sends the answer to the destination the person confirmed, as listed:
+   * refused once its pane runs another agent. Recorded in the audit trail.
+   */
+  reassignAnswer: (
+    questionId: string,
+    destination: Pick<DecisionsAnswerDestination, "terminalId" | "run">,
+    expected?: string
+  ): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.reassignAnswer({
+      questionId,
+      terminalId: destination.terminalId,
+      run: destination.run,
+      ...(expected !== undefined ? { expected } : {}),
+    }),
 
   /** The person dealt with it: it leaves the list and is never typed in. */
-  markAnswerHandled: (questionId: string): Promise<DecisionsAnswerOutcome> =>
-    window.electron.decisions.markAnswerHandled({ questionId }),
+  markAnswerHandled: (questionId: string, expected?: string): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.markAnswerHandled({
+      questionId,
+      ...(expected !== undefined ? { expected } : {}),
+    }),
+
+  /**
+   * One of a Remote Host's stopped deliveries, read or acted on on that Host
+   * by its reference (#18031). A resume or Mark handled names the token of
+   * the item the person saw.
+   */
+  hostAttention: (request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> =>
+    window.electron.decisions.hostAttention(request),
 
   /** This view's whole set of hybrid-input draft keys; an answer waits behind a draft (#16282). */
   reportComposerDrafts: (keys: string[]): Promise<void> =>
@@ -222,6 +250,12 @@ export const decisionsClient = {
   listQuestions: (): Promise<DecisionQuestionList> => window.electron.decisions.listQuestions(),
 
   /**
+   * The Remote Hosts this computer enrolls (#16021), with those whose
+   * questions its inbox lists now (#18049). Asks no Host and no relay.
+   */
+  listHosts: (): Promise<DecisionsHostsResult> => window.electron.decisions.listHosts(),
+
+  /**
    * The person seeing, clearing or restoring questions on this computer
    * (#17895), each named with the ask it was shown with: recorded here only,
    * and the list changes once it is. Nothing is answered, declined or typed
@@ -275,9 +309,9 @@ export const decisionsClient = {
   },
 
   /**
-   * Main asking this window to open one question in its question view: a
-   * click on the question's desktop notification (#17232), or on a
-   * follow-up's, which opens it at that follow-up (#17235).
+   * Main asking this window to open one question: a click on the question's
+   * desktop notification (#17232), on a follow-up's, which opens it at that
+   * follow-up (#17235), or on a stopped delivery's (#18048).
    */
   onOpenQuestion: (
     callback: (reference: DecisionQuestionReference, messageId: string | undefined) => void
@@ -285,13 +319,6 @@ export const decisionsClient = {
     window.electron.events.on("decisions:open-question", ({ reference, messageId }) =>
       callback(reference, messageId)
     ),
-
-  /**
-   * Main asking this window to open the list of answers needing attention at
-   * a pane's: a click on a stalled answer's desktop notification (#17235).
-   */
-  onOpenAttention: (callback: (terminalId: string) => void): (() => void) =>
-    window.electron.events.on("decisions:open-attention", ({ terminalId }) => callback(terminalId)),
 
   /**
    * A question by its reference, from any window on this computer, whatever
@@ -302,6 +329,16 @@ export const decisionsClient = {
     reference: DecisionQuestionReference
   ): Promise<DecisionQuestionContentResult> =>
     window.electron.decisions.getQuestionContentByReference({ reference }),
+
+  /**
+   * The pane that asked a question, as it shows now (#18037), read on the
+   * machine that owns it. Its lines are terminal output: held in memory only,
+   * never logged or kept in a persisted store.
+   */
+  getQuestionPaneByReference: (
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionPaneResult> =>
+    window.electron.decisions.getQuestionPaneByReference({ reference }),
 
   /** One of a question's images, by its reference; held as `getQuestionImage`'s are. */
   getQuestionImageByReference: (

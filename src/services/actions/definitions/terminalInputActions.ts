@@ -1,9 +1,14 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
+import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
+import { noteCopyFlashKeyboard } from "@/lib/copyFlash";
+import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
@@ -28,6 +33,22 @@ import {
 import { notify } from "@/lib/notify";
 
 const NO_FOCUSED_PANEL = "No panel is focused";
+
+/**
+ * The panel whose terminal holds the keyboard, for a shortcut typed into one:
+ * a force-selection drag focuses a pane's xterm without making it the focused
+ * panel, and the Assistant's terminal belongs to no panel at all, so the store's
+ * `focusedId` would copy some other pane's selection. `null` for a terminal
+ * outside any panel; `undefined` when no terminal has the keyboard (a chord's
+ * HUD, the composer), which leaves the focused panel to answer.
+ */
+function keyboardTerminalId(): string | null | undefined {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  if (!active?.closest(".xterm")) return undefined;
+  const id = active.closest("[data-panel-id]")?.getAttribute("data-panel-id");
+  if (!id) return null;
+  return peekTerminalService()?.get(id)?.terminal?.element?.contains(active) ? id : null;
+}
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -205,6 +226,50 @@ export function registerTerminalInputActions(
       }
     },
   }));
+
+  actions.set("terminal.copyClean", () =>
+    defineAction({
+      id: "terminal.copyClean",
+      title: "Copy clean text",
+      description: "Copy the terminal selection as clean text, without wrapping or padding",
+      category: "terminal",
+      kind: "command",
+      danger: "safe",
+      // Same reason as `terminal.copy` (#13155).
+      denyPluginDispatch: true,
+      scope: "renderer",
+      keywords: ["copy", "clean", "plain", "selection"],
+      // A copy is no command to replay, and an empty press would still take the slot.
+      nonRepeatable: true,
+      argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+      run: async (args, ctx) => {
+        const terminalId = args?.terminalId;
+        requireExplicitTerminalIdForAgentDispatch("terminal.copyClean", terminalId, ctx);
+        const state = usePanelStore.getState();
+        const typedInto = ctx.dispatchSource === "keybinding" ? keyboardTerminalId() : undefined;
+        if (!terminalId && typedInto === null) return;
+        const targetId = terminalId ?? typedInto ?? state.focusedId;
+        if (!targetId) return;
+        const managed = peekTerminalService()?.get(targetId);
+        if (!managed?.terminal) return;
+        // Before `copyCleanSelection`, which would also drop a reply-span copy still
+        // waiting on the host.
+        const selection = managed.terminal.getSelection();
+        if (!selection) return;
+        // The window's own keydown listener can run after this dispatch, which
+        // would anchor the flash to wherever the mouse last went down.
+        if (ctx.dispatchSource === "keybinding") noteCopyFlashKeyboard();
+        const panel = state.panelsById[targetId];
+        copyCleanSelection(
+          selection,
+          cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable),
+          panel && isPtyPanel(panel) && getBuiltInRuntimeAgentId(panel) === "claude"
+            ? targetId
+            : null
+        );
+      },
+    })
+  );
 
   actions.set("terminal.paste", () => ({
     id: "terminal.paste",

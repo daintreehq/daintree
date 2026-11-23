@@ -56,6 +56,11 @@ const ClientInfoSchema = z.object({
   // One this side cannot read is dropped rather than refusing the HELLO: the
   // host then sends the lanes every Shell reads.
   assistantSlots: z.number().int().min(1).max(1024).optional().catch(undefined),
+  // One this side cannot read is dropped too: the host then treats the Shell
+  // as one from before it, which wants usage.
+  agentUsage: z.boolean().optional().catch(undefined),
+  // One this side cannot read is dropped too: the host then sends it no stops.
+  agentStopChanges: z.boolean().optional().catch(undefined),
 });
 
 export const HelloSchema = z.object({

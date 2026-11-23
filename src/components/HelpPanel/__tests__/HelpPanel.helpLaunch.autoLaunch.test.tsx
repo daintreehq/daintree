@@ -270,6 +270,9 @@ vi.mock("@/components/Terminal/MissingCliGate", () => ({
   ),
 }));
 
+vi.mock("@/components/Plugin/AssistantPluginMenuItems", () => ({
+  AssistantPluginMenuItems: () => null,
+}));
 vi.mock("@shared/config/agentIds", () => {
   const ids = ["claude", "gemini", "codex"];
   return {

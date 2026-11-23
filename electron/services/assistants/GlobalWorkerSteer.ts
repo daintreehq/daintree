@@ -56,6 +56,8 @@ export interface GlobalCloseTarget {
   lastTypedInputAt?: number;
   /** The panel's title, for the question put to the person. */
   title?: string;
+  /** The worktree the panel sits in, whose git state the question reports (#18151). */
+  worktreeId?: string;
 }
 
 /** The pty-host record fields a steer reads. */
@@ -170,6 +172,7 @@ interface ReachWording {
 }
 const STEERING: ReachWording = { doing: "Steering", undone: NOTHING_SENT };
 const SHOWING: ReachWording = { doing: "Showing the person", undone: "Nothing was shown." };
+const UPDATING: ReachWording = { doing: "Applying an update to", undone: NOTHING_SENT };
 
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
@@ -586,6 +589,17 @@ export class GlobalWorkerSteer {
   }
 
   /**
+   * Run `apply`, a Claude Code update's request (#17908), once the run passes
+   * the gate and the caller's `authorize`. The request makes its own checks
+   * of the pane, and asks `authorize` again right before it types.
+   */
+  async applyUpdate<T>(target: WorkerSteerTarget, apply: () => Promise<T>): Promise<T> {
+    await this.requireWorker(target, UPDATING);
+    target.authorize();
+    return apply();
+  }
+
+  /**
    * The global Assistant closing an agent it didn't launch (#16750): the run
    * now under `terminalId`, if it is an agent worker of `projectId` whose stop
    * handed its work back, or stopped on an error, with nothing in its input
@@ -668,6 +682,7 @@ export class GlobalWorkerSteer {
       ...(record.title !== undefined && record.title.trim().length > 0
         ? { title: record.title.trim() }
         : {}),
+      ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
     };
   }
 

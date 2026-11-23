@@ -34,7 +34,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { itemInArchive, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { canopyScreenGapWords, searchPasteText } from "./canopySearch";
 import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
@@ -530,6 +530,17 @@ const DOCKED_GLOBAL_DICTATION: CanopyReplyDictation = {
   message: "Dictation goes to an agent's reply. Click the reply to dictate into it.",
 };
 
+const DIALOG_DICTATION: CanopyReplyDictation = {
+  ok: false,
+  message: "Dictation goes to an agent's reply. Close the dialog to dictate into it.",
+};
+
+/** A dialog over Canopy holds the keyboard, as the Decisions inbox does (#18048); one Canopy sits in doesn't. */
+function dialogOverCanopy(): boolean {
+  const dialog = document.activeElement?.closest('[role="dialog"], [role="alertdialog"]');
+  return dialog != null && dialog.querySelector("[data-canopy-standalone]") === null;
+}
+
 function CanopyInbox({
   hostId,
   hostRow,
@@ -641,6 +652,7 @@ function CanopyInbox({
     assistantAsks,
     globalDocked,
     globalItem,
+    globalItems,
     workOf,
     showWorkOf,
     workPartial,
@@ -841,6 +853,8 @@ function CanopyInbox({
       // Typing to the docked global assistant: a dictation there must not
       // land in the agent's reply beside it.
       if (document.activeElement?.closest("[data-canopy-global]")) return DOCKED_GLOBAL_DICTATION;
+      // Typing in a dialog over Canopy (an answer in the Decisions inbox): the words aren't the reply's.
+      if (dialogOverCanopy()) return DIALOG_DICTATION;
       return (
         (selectedAssistant === null && focusedItem !== null
           ? detailRef.current?.dictation()
@@ -1075,7 +1089,7 @@ function CanopyInbox({
   // below the bar, so they are never that row.
   const leaveArchivedUp = () => {
     const above = projection.navigation.filter(
-      (entry) => entry.role === "assistant" || !itemArchived(entry.item)
+      (entry) => entry.role === "assistant" || !itemInArchive(entry.item)
     );
     if (assistantsBarLast(above.length)) return;
     focusEntryOrSearch(above[above.length - 1]);
@@ -2306,6 +2320,8 @@ function CanopyInbox({
                 globalPaneShown ? (
                   <CanopyGlobalAssistant
                     item={selectedGlobal ? selectedAssistant : globalItem}
+                    followsRow={selectedGlobal}
+                    candidates={globalItems}
                     refusal={assistantRefusal}
                     workOf={workOf?.assistantId ?? null}
                     // Docked, the agent beside it stays selected.
@@ -2499,6 +2515,7 @@ function CanopyInbox({
         entries={bulkTrash?.entries ?? NO_BULK_TRASH}
         more={bulkTrash?.more ?? 0}
         readInputLines={api.readInputLines}
+        readWorktrees={api.readWorktrees}
         onTrash={trashMany}
         // The selected row, where Z takes the trash back; once it leaves with
         // the trash, the panel moves the keyboard on as for any row that goes.

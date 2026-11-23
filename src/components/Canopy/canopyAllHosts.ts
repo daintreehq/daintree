@@ -448,6 +448,20 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       );
       return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
     },
+    // A host that can't read its worktrees, or doesn't know how, leaves its runs unread.
+    readWorktrees: async (targets) => {
+      const groups = groupByHost(targets, (target) => target.runId);
+      const settled = await mapLimited(
+        [...groups].filter(([hostId]) => known.has(hostId)),
+        SEARCH_CONCURRENCY,
+        aliveNow(),
+        ([hostId, group]) =>
+          apiFor(hostId)
+            .readWorktrees(group.map(({ item, id }) => ({ ...item, runId: id })))
+            .then((readings) => readings.map((reading) => keyed(hostId, reading)))
+      );
+      return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+    },
     setMode: () => Promise.reject(new Error("Canopy is turned on one host at a time.")),
     // Each host trashes its own runs; a host that refuses or can't be reached
     // says so for each of its runs, and the others' still go.

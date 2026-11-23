@@ -10,7 +10,7 @@ import {
   writeHostRecord,
 } from "../hostRecord.js";
 import { ownerStateOf } from "../../../remote/decisions/clientInstall.js";
-import { DEFAULT_QUESTION_EXPIRY_MS } from "../../../../shared/config/decisionsQuestionExpiry.js";
+import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "../../../../shared/config/decisionsQuestionExpiry.js";
 
 const RECORD = {
   relayOrigin: "https://relay.example.com",
@@ -22,6 +22,12 @@ const RECORD = {
   revokedAt: null,
   credentialsRemovedAt: null,
   ownerTerminalSnapshots: false,
+};
+
+/** How the Host's lifetime asks its agents' questions (#17942). */
+const POLICY = {
+  advisoryQuestions: true,
+  defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
 };
 
 function memoryStore(initial?: unknown) {
@@ -77,32 +83,36 @@ describe("an enrolled Host's record (#16022)", () => {
       deviceId: RECORD.deviceId,
       hostId: RECORD.hostId,
       proxyAllowlisted: false,
-      // The owner's default expiry isn't sent to a Host, so its questions keep the library's.
-      defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+      // The owner's default expiry isn't sent to a Host: its questions wait the Host's own (#17942).
+      defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
       revokedAt: null,
     });
     expect(hostLifetimeSettings({ ...RECORD, revokedAt: 4 }).revokedAt).toBe(4);
   });
 
-  it("reports what it saw: stopped by its owner or the relay first, then its connection", () => {
-    expect(hostRuntimeOf(null, null)).toEqual({ state: "not-enrolled" });
-    expect(hostRuntimeOf({ ...RECORD, ownerOffAt: 7 }, { state: "connected" })).toEqual({
+  it("reports what it saw: stopped by its owner or the relay first, then its connection and how it asks", () => {
+    expect(hostRuntimeOf(null, null, POLICY)).toEqual({ state: "not-enrolled" });
+    expect(hostRuntimeOf({ ...RECORD, ownerOffAt: 7 }, { state: "connected" }, POLICY)).toEqual({
       state: "owner-off",
       deviceId: RECORD.deviceId,
       since: 7,
     });
     expect(
-      hostRuntimeOf({ ...RECORD, revokedAt: 8, credentialsRemovedAt: 9 }, { state: "off" })
+      hostRuntimeOf({ ...RECORD, revokedAt: 8, credentialsRemovedAt: 9 }, { state: "off" }, POLICY)
     ).toEqual({ state: "revoked", deviceId: RECORD.deviceId, since: 8, credentialsRemoved: true });
     expect(
-      hostRuntimeOf(RECORD, { state: "reconnecting", nextAttemptAt: 40, relayOrigin: "x" })
+      hostRuntimeOf(RECORD, { state: "reconnecting", nextAttemptAt: 40, relayOrigin: "x" }, POLICY)
     ).toEqual({
       state: "running",
       deviceId: RECORD.deviceId,
       connection: "reconnecting",
       nextAttemptAt: 40,
+      questionPolicy: POLICY,
     });
-    expect(hostRuntimeOf(RECORD, null)).toMatchObject({ connection: "not-connected" });
+    expect(hostRuntimeOf(RECORD, null, POLICY)).toMatchObject({
+      connection: "not-connected",
+      questionPolicy: POLICY,
+    });
   });
 });
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useCanopyStore } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import {
-  itemArchived,
+  itemInArchive,
   itemAwaitsPermission,
   itemNeedsAttention,
   itemPriority,
@@ -154,7 +154,7 @@ export function useCanopyInboxOrder({
       priorities,
       urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
       needsYou,
-      archived: baseItems.filter(itemArchived).map((item) => item.runId),
+      archived: baseItems.filter(itemInArchive).map((item) => item.runId),
       refreshedAt,
       now,
       opening,

@@ -32,12 +32,8 @@ import {
   FIELD_CONTROL_SIZE,
   FIELD_INPUT,
 } from "@/components/Worktree/views/WorktreeFormLayout";
-import {
-  EMOJI_SLOT_CLASS,
-  SlottedInputField,
-  PathCaption,
-  ProjectGroupField,
-} from "./projectDialogFields";
+import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
+import { ProjectGroupField } from "./ProjectGroupField";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
@@ -219,7 +215,7 @@ export function GitInitDialog({
   const templateHintId = useId();
 
   // Keyed on the folder like the identity seed below, for the same reason.
-  const { groups, groupId, setGroupId } = useProjectCreationGroup(
+  const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(
     isOpen,
     initialGroupId,
     directoryPath
@@ -681,10 +677,14 @@ export function GitInitDialog({
               </FormRow>
 
               <ProjectGroupField
+                // A new folder starts the field over, closing a half-typed new
+                // group meant for the last one.
+                key={directoryPath}
                 id="git-init-group"
                 groups={groups}
                 value={groupId}
                 onChange={setGroupId}
+                onCreate={createGroup}
                 disabled={configDisabled}
               />
 

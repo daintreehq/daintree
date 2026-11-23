@@ -54,11 +54,16 @@ function useDriverName(terminalId: string): string | null {
   );
 }
 
-/** Whether the global assistant is running now; false when it can't be asked. */
+/**
+ * Whether the global assistant session that coordinates is running now, the
+ * one a terminal is handed to (#18143); false when it can't be asked.
+ */
 function readGlobalAssistantRunning(): Promise<boolean> {
   return Promise.resolve()
-    .then(() => window.electron.help.getGlobalAssistantState())
-    .then((state) => state.phase === "running")
+    .then(() => window.electron.help.listGlobalAssistantSessions())
+    .then((sessions) =>
+      sessions.some((session) => session.coordinating && session.phase === "running")
+    )
     .catch(() => false);
 }
 

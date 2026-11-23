@@ -81,9 +81,15 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["agent-toolbar-pins:set"]["result"]>;
   };
   agentUsage: {
+    getTracking(
+      ...args: IpcInvokeMap["agent-usage:get-tracking"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:get-tracking"]["result"]>;
     setFollowing(
       ...args: IpcInvokeMap["agent-usage:set-following"]["args"]
     ): Promise<IpcInvokeMap["agent-usage:set-following"]["result"]>;
+    setTracking(
+      ...args: IpcInvokeMap["agent-usage:set-tracking"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:set-tracking"]["result"]>;
   };
   app: {
     getVersionInfo(
@@ -147,6 +153,9 @@ export interface GeneratedElectronAPI {
     readInputLines(
       ...args: IpcInvokeMap["canopy:read-input-lines"]["args"]
     ): Promise<IpcInvokeMap["canopy:read-input-lines"]["result"]>;
+    readWorktrees(
+      ...args: IpcInvokeMap["canopy:read-worktrees"]["args"]
+    ): Promise<IpcInvokeMap["canopy:read-worktrees"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
@@ -581,6 +590,9 @@ export interface GeneratedElectronAPI {
     getQuestionImageByReference(
       ...args: IpcInvokeMap["decisions:get-question-image-by-reference"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-image-by-reference"]["result"]>;
+    getQuestionPaneByReference(
+      ...args: IpcInvokeMap["decisions:get-question-pane-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-pane-by-reference"]["result"]>;
     getQuestionSummaries(
       ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;
@@ -593,6 +605,9 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    hostAttention(
+      ...args: IpcInvokeMap["decisions:host-attention"]["args"]
+    ): Promise<IpcInvokeMap["decisions:host-attention"]["result"]>;
     listAnswerDestinations(
       ...args: IpcInvokeMap["decisions:list-answer-destinations"]["args"]
     ): Promise<IpcInvokeMap["decisions:list-answer-destinations"]["result"]>;
@@ -620,6 +635,9 @@ export interface GeneratedElectronAPI {
     reassignAnswer(
       ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;
+    removeSettledQuestions(
+      ...args: IpcInvokeMap["decisions:remove-settled-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:remove-settled-questions"]["result"]>;
     reportComposerDrafts(
       ...args: IpcInvokeMap["decisions:report-composer-drafts"]["args"]
     ): Promise<IpcInvokeMap["decisions:report-composer-drafts"]["result"]>;
@@ -641,6 +659,9 @@ export interface GeneratedElectronAPI {
     setAgentAskHuman(
       ...args: IpcInvokeMap["decisions:set-agent-ask-human"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-agent-ask-human"]["result"]>;
+    setAgentStoppedPushes(
+      ...args: IpcInvokeMap["decisions:set-agent-stopped-pushes"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-agent-stopped-pushes"]["result"]>;
     setAutoEnrollHosts(
       ...args: IpcInvokeMap["decisions:set-auto-enroll-hosts"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-auto-enroll-hosts"]["result"]>;
@@ -662,9 +683,6 @@ export interface GeneratedElectronAPI {
     setModelThreshold(
       ...args: IpcInvokeMap["decisions:set-model-threshold"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-model-threshold"]["result"]>;
-    setProxyAllowlisted(
-      ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
-    ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
     setTerminalSnapshots(
       ...args: IpcInvokeMap["decisions:set-terminal-snapshots"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-terminal-snapshots"]["result"]>;
@@ -961,6 +979,9 @@ export interface GeneratedElectronAPI {
     cancelGlobalAssistantLaunch(
       ...args: IpcInvokeMap["help:global-assistant-cancel-launch"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-cancel-launch"]["result"]>;
+    canRunGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-can-run"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-can-run"]["result"]>;
     claimGlobalAssistantInput(
       ...args: IpcInvokeMap["help:global-assistant-claim-input"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-claim-input"]["result"]>;
@@ -991,6 +1012,9 @@ export interface GeneratedElectronAPI {
     getWindowGlobalAssistantPanel(
       ...args: IpcInvokeMap["help:window-global-assistant-panel"]["args"]
     ): Promise<IpcInvokeMap["help:window-global-assistant-panel"]["result"]>;
+    listGlobalAssistantSessions(
+      ...args: IpcInvokeMap["help:global-assistant-list"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-list"]["result"]>;
     listPastSessions(
       ...args: IpcInvokeMap["help:list-past-sessions"]["args"]
     ): Promise<IpcInvokeMap["help:list-past-sessions"]["result"]>;
@@ -1012,6 +1036,9 @@ export interface GeneratedElectronAPI {
     releaseGlobalAssistantInput(
       ...args: IpcInvokeMap["help:global-assistant-release-input"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-release-input"]["result"]>;
+    replaceGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-replace"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-replace"]["result"]>;
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
@@ -1027,9 +1054,15 @@ export interface GeneratedElectronAPI {
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;
+    setGlobalAssistantCoordinator(
+      ...args: IpcInvokeMap["help:global-assistant-set-coordinator"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-set-coordinator"]["result"]>;
     setGlobalAssistantInputEligible(
       ...args: IpcInvokeMap["help:global-assistant-input-eligible"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-input-eligible"]["result"]>;
+    startNewGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-start-new"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-start-new"]["result"]>;
     takePendingHibernation(
       ...args: IpcInvokeMap["help:take-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:take-pending-hibernation"]["result"]>;

@@ -6,13 +6,23 @@ import type {
   DecisionsHostRuntimeObservation,
   DecisionsHostsResult,
 } from "@shared/types/decisionsHosts";
+import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
+import { questionWaitText } from "./policyCopy";
+
+/** The switch's own words: what enrolling gives a Host, and what it lets the Host read. */
+export const AUTO_ENROLL_SUBTITLE =
+  "Each Remote Host you connect to gets its own keys, so its agents can ask you while this computer sleeps. An enrolled Host can read every question and answer.";
 
 /**
- * The switch's own words: what enrolling gives a Host, how turning Decisions
- * off reaches it (#16022), and what turning this off leaves.
+ * A remote window's one note on whose settings these are (#18066): every
+ * Decisions setting is this computer's, while a Host this computer enrolled
+ * gives `ask_human` to every supported agent launched there, whatever this
+ * computer's Agents switches say, and asks under its own default expiry. A
+ * Host with a Decisions setup of its own runs under that instead.
  */
-export const AUTO_ENROLL_SUBTITLE =
-  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turning Decisions off here turns it off on each Host when this computer next connects to it. Turn this off to enroll Hosts one at a time.";
+export function remoteWindowText(hostName: string, device: string): string {
+  return `These settings are saved on ${device}. On ${hostName}, once ${device} enrolls it, every agent that supports ask_human gets it, and a question waits ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} unless its agent sets a time. Choose which agents on ${device} can ask from a local window.`;
+}
 
 /** A Remote Host device the relay lists that no Host this computer knows claims (#16222). */
 export const RELAY_ONLY_HOST_TEXT =
@@ -101,6 +111,38 @@ function runtimeState(runtime: DecisionsHostRuntime): string | null {
 }
 
 /**
+ * How a running Host said it asks its agents' questions (#17942), to follow
+ * what it reports, only where that isn't what every current Host does: a
+ * Host from before it, whose agents can't ask for advice; one connected to
+ * the relay whose agents still can't, as its delivery didn't start; and a
+ * default expiry other than a Host's own. Empty otherwise, and for a Host
+ * that isn't running Decisions. A Host that is still connecting hasn't
+ * settled advice yet, so its "no" says nothing.
+ */
+function questionPolicyText(runtime: DecisionsHostRuntime, live: boolean): string {
+  if (runtime.state !== "running") return "";
+  const policy = runtime.questionPolicy;
+  if (policy === undefined) {
+    return " Its Daintree is too old for its agents to ask for advice; update it there to let them.";
+  }
+  const says = live ? "says" : "said";
+  const noAdvice = !policy.advisoryQuestions && runtime.connection === "connected";
+  const expiry = policy.defaultQuestionExpiryMs;
+  const wait =
+    expiry === HOST_DEFAULT_QUESTION_EXPIRY_MS
+      ? null
+      : expiry === null
+        ? "waits until it's answered or withdrawn"
+        : `waits ${questionWaitText(expiry)}`;
+  if (noAdvice && wait !== null) {
+    return ` It ${says} its agents can't ask for advice now, and a question asked there without a deadline ${wait}.`;
+  }
+  if (noAdvice) return ` It ${says} its agents can't ask for advice now.`;
+  if (wait !== null) return ` It ${says} a question asked there without a deadline ${wait}.`;
+  return "";
+}
+
+/**
  * What the Host itself last reported of its own Decisions (#16022), in a
  * sentence to follow its row; empty when it has said nothing to show. A
  * report from before its link closed says so: it may have changed since.
@@ -109,9 +151,10 @@ export function hostRuntimeText(observation: DecisionsHostRuntimeObservation | u
   if (observation === undefined) return "";
   const state = runtimeState(observation.runtime);
   if (state === null) return "";
+  const policy = questionPolicyText(observation.runtime, observation.live);
   return observation.live
-    ? ` It reports Decisions ${state}.`
-    : ` Before its connection closed, it reported Decisions ${state}.`;
+    ? ` It reports Decisions ${state}.${policy}`
+    : ` Before its connection closed, it reported Decisions ${state}.${policy}`;
 }
 
 /** One Host's row, in words: what was last observed of it, and what it last reported. */
@@ -132,7 +175,7 @@ function enrollmentText(host: DecisionsHost, autoEnroll: boolean): string {
     case "enrolling":
       return "Enrolling…";
     case "enrolled":
-      return `Enrolled as its own device.${offline}`;
+      return `Enrolled.${offline}`;
     case "not-enrolled":
       return `Not enrolled.${offline}`;
     case "revoked":

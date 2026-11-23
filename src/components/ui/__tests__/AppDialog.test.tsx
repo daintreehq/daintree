@@ -12,6 +12,7 @@ import {
 } from "../dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../select";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../tooltip";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
@@ -1587,6 +1588,91 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     pressEscape();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppDialog Escape over an open tooltip", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    mockPrevOpen = false;
+    _resetForTests();
+    _resetBackstopForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  function pressEscape(): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(event);
+    });
+    return event;
+  }
+
+  // A row caption showing while the row has focus (TruncatedTooltip in a
+  // Settings tab): Radix dismisses it on Escape, and the dialog must not close
+  // on the same keypress.
+  it("dismisses only the tooltip, then closes on the next Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <Tooltip defaultOpen autoDismiss={false} dismissOnDialogTransition={false}>
+          <TooltipTrigger asChild>
+            <button type="button">Row</button>
+          </TooltipTrigger>
+          <TooltipContent>Full row text</TooltipContent>
+        </Tooltip>
+      </AppDialog>
+    );
+    const tooltip = await screen.findByRole("tooltip", { hidden: true });
+    expect(tooltip.getAttribute("data-state")).toMatch(/-open$/);
+    screen.getByText("Row").focus();
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("tooltip", { hidden: true })).toBeNull());
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // The terminal find bar's invalid-regex hint pins `open` with no handler and
+  // survives the dialog transition. Radix's dismiss reaches nobody, so counting
+  // it as the layer taking Escape would leave the dialog unclosable.
+  it("closes over a pinned tooltip that Escape cannot dismiss", async () => {
+    const onClose = vi.fn();
+    const ui = (isOpen: boolean) => (
+      <>
+        <Tooltip open>
+          <TooltipTrigger asChild>
+            <span>Find in terminal</span>
+          </TooltipTrigger>
+          <TooltipContent>Invalid regular expression</TooltipContent>
+        </Tooltip>
+        <AppDialog isOpen={isOpen} onClose={onClose}>
+          <button type="button">Confirm</button>
+        </AppDialog>
+      </>
+    );
+    const { rerender } = render(ui(false));
+    await screen.findByRole("tooltip", { hidden: true });
+    rerender(ui(true));
+    screen.getByText("Confirm").focus();
+
+    const event = pressEscape();
+
+    // Radix's layer for the hint took the keypress and its dismiss went nowhere.
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip", { hidden: true }).getAttribute("data-state")).toMatch(
+      /-open$/
+    );
   });
 });
 

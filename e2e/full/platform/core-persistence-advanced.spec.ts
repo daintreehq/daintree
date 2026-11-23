@@ -224,7 +224,7 @@ test.describe.serial("Persistence: layout, window and preferences across restart
     await recordShortcut(window, "Open settings", REBOUND_OPEN_SETTINGS);
     await recordShortcut(window, TOGGLE_DOCK_LABEL, REBOUND_TOGGLE_DOCK);
 
-    await window.keyboard.press("Escape");
+    await window.locator(SEL.settings.closeButton).click();
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 
     // Both rebinds take effect in the running session and retire the defaults.

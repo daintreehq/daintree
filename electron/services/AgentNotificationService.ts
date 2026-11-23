@@ -40,7 +40,8 @@ import type {
 } from "../../shared/types/decisionsQuestion.js";
 import {
   deliveryReasonText,
-  deliverySubject,
+  deliverySubjectPlural,
+  stallSubject,
 } from "../../shared/utils/decisionsDeliveryReasons.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
@@ -1454,37 +1455,43 @@ class AgentNotificationService {
   }
 
   /**
-   * Delivery stopped on a Decisions answer, or a follow-up after it, and a
-   * person decides what happens to it (#17235): one native notification
-   * giving the reason in the words the list of answers needing attention
-   * uses, under the same settings as a question's own. A click opens that list.
+   * Delivery stopped on a Decisions answer, a timeout notice in its place
+   * (#17944), or a follow-up after either, and a person decides what happens
+   * to it (#17235): one native notification giving the reason in the words
+   * the list of answers needing attention uses, under the same settings as a
+   * question's own, naming the Host that asked when it isn't this computer.
+   * Never the question's words or the agent's plan. A click opens the
+   * question in the inbox (#18048), which resolves this computer's stopped
+   * delivery in place and reads a Host's through its Host.
    */
   notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
-    const { reference, stall, standing } = question;
-    if (stall === null) return;
+    const { reference, stall, standing, remoteHost } = question;
+    const subject = stallSubject(question);
+    if (stall === null || subject === null) return;
     const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
     if (settings.enabled === false) return;
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     const { agent, project } = decisionQuestionSource(question);
-    const subject = deliverySubject(stall.answerRevision !== null, stall.followUpIds.length);
-    const plural = subject !== "answer" && subject !== "follow-up";
+    const notice = subject.startsWith("timeout notice");
+    const plural = deliverySubjectPlural(subject);
     const uncertain =
       standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
     const what =
       `${subject.charAt(0).toUpperCase()}${subject.slice(1)}` +
-      (agent ? ` to ${agent}` : "") +
-      (project ? ` in ${project}` : "");
+      (agent ? ` ${notice ? "for" : "to"} ${agent}` : "") +
+      (project ? ` in ${project}` : "") +
+      (remoteHost ? ` on ${remoteHost.name}` : "");
     notificationService.showNativeNotification(
       uncertain
         ? `${what} may or may not have been delivered`
         : `${what} ${plural ? "need" : "needs"} attention`,
-      deliveryReasonText(stall.reason, subject) ??
+      deliveryReasonText(stall.reason, subject, "away", remoteHost?.name ?? null) ??
         `Daintree won't type ${plural ? "them" : "it"} in on its own.`,
       {
         silent: true,
         category: "waiting",
         replaceKey: decisionQuestionReplaceKey(key),
-        onClick: () => notificationService.openDecisionAttention(reference),
+        onClick: () => notificationService.openDecisionQuestion(reference),
       }
     );
   }

@@ -33,6 +33,7 @@ import {
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
   AGENT_LAUNCH_ACTION_ID,
+  ASSISTANT_HANDOFF_ACTION_IDS,
   elevatedDangerRationale,
   resolveEffectiveActionDanger,
 } from "./actions/effectiveDanger";
@@ -732,11 +733,17 @@ export class ActionService {
       // names what to drop rather than pointing at a dialog it can't reach.
       const pluginLaunchConfig =
         source === "plugin" && actionId === AGENT_LAUNCH_ACTION_ID && definition.danger === "safe";
+      const pluginHandoff =
+        source === "plugin" &&
+        ASSISTANT_HANDOFF_ACTION_IDS.has(actionId) &&
+        definition.danger === "safe";
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
         message: pluginLaunchConfig
           ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId, or a prompt or model starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
-          : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
+          : pluginHandoff
+            ? `Action "${actionId}" can't take a prompt starting with "-" from a plugin: the agent would read it as an option, not a first turn.`
+            : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }
@@ -807,7 +814,11 @@ export class ActionService {
         // which may let an operator-only step through on them. A person's
         // approval needs the confirmation the gate above already required.
         hostCallerOrigin:
-          source === "agent" && options?.hostCallerOrigin === "assistant" ? "assistant" : undefined,
+          source === "agent" &&
+          (options?.hostCallerOrigin === "assistant" ||
+            options?.hostCallerOrigin === "global-assistant")
+            ? options.hostCallerOrigin
+            : undefined,
         hostPersonApproved:
           source === "agent" && options?.confirmed === true && options.hostPersonApproved === true
             ? true

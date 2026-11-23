@@ -1091,7 +1091,8 @@
                   "terminal",
                   "file",
                   "browser",
-                  "project"
+                  "project",
+                  "assistant"
                 ]
               },
               "label": {
@@ -1129,6 +1130,10 @@
                   "minLength": 1,
                   "maxLength": 256
                 }
+              },
+              "availability": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
               }
             },
             "required": [

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1325,28 +1326,74 @@ describe("registerPluginHandlers", () => {
 
   // ── #16751: plugin:actions-invoke carries a dispatch context beside the args ──
 
-  it("PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the context, apart from the args", async () => {
-    mockDispatchHandler.mockResolvedValue({ resumed: true });
-    const handler = getHandler("plugin:actions-invoke");
-    const sent = { dispatchSource: "agent", origin: "assistant", approval: "person" };
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the %s context, apart from the args",
+    async (origin) => {
+      const uninstall = setPluginAssistantReachSource({
+        has: (id) => id === "acme.my-plugin.resume",
+        ids: () => ["acme.my-plugin.resume"],
+      });
+      onTestFinished(uninstall);
+      mockDispatchHandler.mockResolvedValue({ resumed: true });
+      const handler = getHandler("plugin:actions-invoke");
+      const sent = { dispatchSource: "agent", origin, approval: "person" };
 
-    const result = await handler(
+      const result = await handler(
+        { sender: { id: 33 } },
+        "acme.my-plugin",
+        "acme.my-plugin.resume",
+        { approval: "forged" },
+        sent
+      );
+
+      expect(result).toEqual({ resumed: true });
+      const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
+      expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
+      expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
+      // The args stay the plugin's payload, whatever they say.
+      expect(args).toEqual([{ approval: "forged" }]);
+      expect(actionContext).toEqual(sent);
+      expect(actionContext).not.toBe(sent);
+      expect(Object.isFrozen(actionContext)).toBe(true);
+    }
+  );
+
+  // #18153: the plugin may drop the opt-in between admission and the handler running.
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE refuses a %s call to an action no longer offered to it",
+    async (origin) => {
+      const handler = getHandler("plugin:actions-invoke");
+      await expect(
+        handler(
+          { sender: { id: 33 } },
+          "acme.my-plugin",
+          "acme.my-plugin.resume",
+          {},
+          {
+            dispatchSource: "agent",
+            origin,
+            approval: "person",
+          }
+        )
+      ).rejects.toThrow(/no longer offered to the assistant/);
+      expect(mockDispatchHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_ACTIONS_INVOKE still runs an agent call that names no assistant", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    const handler = getHandler("plugin:actions-invoke");
+    await handler(
       { sender: { id: 33 } },
       "acme.my-plugin",
       "acme.my-plugin.resume",
-      { approval: "forged" },
-      sent
+      {},
+      {
+        dispatchSource: "agent",
+        approval: "person",
+      }
     );
-
-    expect(result).toEqual({ resumed: true });
-    const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
-    expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
-    expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
-    // The args stay the plugin's payload, whatever they say.
-    expect(args).toEqual([{ approval: "forged" }]);
-    expect(actionContext).toEqual(sent);
-    expect(actionContext).not.toBe(sent);
-    expect(Object.isFrozen(actionContext)).toBe(true);
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -1355,6 +1402,10 @@ describe("registerPluginHandlers", () => {
     ["an origin other than the assistant", { dispatchSource: "agent", origin: "pane" }],
     ["an approval other than a person", { dispatchSource: "agent", approval: "grant" }],
     ["an assistant origin off the agent source", { dispatchSource: "user", origin: "assistant" }],
+    [
+      "a global Assistant origin off the agent source",
+      { dispatchSource: "menu", origin: "global-assistant" },
+    ],
     ["a person's approval on a plugin dispatch", { dispatchSource: "plugin", approval: "person" }],
     ["no context at all", undefined],
   ])("PLUGIN_ACTIONS_INVOKE refuses %s without dispatching", async (_label, context) => {
@@ -4423,6 +4474,23 @@ describe("plugin:invoke over the link", () => {
     expect(call[3]).toEqual([{ id: "n1" }]);
     expect(call[4]).toEqual({ dispatchSource: "user", approval: "person" });
     expect(Object.isFrozen(call[4])).toBe(true);
+  });
+
+  // #18153: main marks the global Assistant only on a send to this machine's own view.
+  it("refuses a window on another machine claiming this machine's global Assistant", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:actions-invoke",
+      [
+        "acme.graph",
+        "acme.graph.resume",
+        { id: "n1" },
+        { dispatchSource: "agent", origin: "global-assistant", approval: "person" },
+      ]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 
   it("refuses another project's plugin by the endpoint's own binding", async () => {

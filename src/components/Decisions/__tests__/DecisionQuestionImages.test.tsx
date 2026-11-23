@@ -400,6 +400,61 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 
+  it("reads the images again from the start when the question lists other ones", async () => {
+    // The reference image's first read is held, to land after the images change.
+    let releaseOld: (() => void) | undefined;
+    getQuestionImage.mockImplementation(({ attachmentId }) =>
+      attachmentId === REFERENCE.attachmentId && releaseOld === undefined
+        ? new Promise((resolve) => {
+            releaseOld = () => resolve(served(attachmentId));
+          })
+        : Promise.resolve(served(attachmentId))
+    );
+    openView();
+    await openImage("Before image 1");
+    const first = createObjectURL.mock.results.map((result) => String(result.value));
+    // The same image id under another digest: a replaced screenshot.
+    current = {
+      ...question([{ ...BEFORE, sha256: "e".repeat(64) }, AFTER, REFERENCE]),
+      revision: 1,
+    };
+
+    act(() => {
+      for (const listener of [...paneListeners]) {
+        listener({
+          terminalId: "t1",
+          openQuestions: [],
+          waitingAnswers: [],
+          needsAttention: [],
+          revision: 2,
+        });
+      }
+    });
+
+    // The viewer showed the image that was replaced, so it goes with it.
+    await waitFor(() => expect(screen.queryByTestId("decision-image-viewer")).toBeNull());
+    await screen.findByRole("button", { name: "Open Reference image 3" });
+    // Checked against the digest the question lists now, not the one it listed before.
+    await screen.findByRole("button", { name: "Open Before image 1" });
+    expect(screen.queryByTestId("decision-question-image-failed")).toBeNull();
+    expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(first.sort());
+    expect(
+      getQuestionImage.mock.calls.filter(
+        ([payload]) => payload.attachmentId === BEFORE.attachmentId
+      )
+    ).toHaveLength(2);
+
+    // The first read of the reference image lands late, and is dropped unseen.
+    const made = createObjectURL.mock.calls.length;
+    await act(async () => releaseOld!());
+    expect(createObjectURL.mock.calls.length).toBe(made);
+
+    act(() => useDecisionsQuestionViewStore.getState().close());
+    await waitFor(() => expect(screen.queryByTestId("decision-question-content")).toBeNull());
+    const created = createObjectURL.mock.results.map((result) => String(result.value));
+    expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(created.sort());
+  });
+
   it("lets go of every image once the question closes", async () => {
     openView();
     await screen.findByRole("button", { name: "Open Reference image 3" });
@@ -423,5 +478,75 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     });
 
     await waitFor(() => expect(reviewed()).toEqual({}));
+  });
+});
+
+describe("an approval whose image couldn't be shown (#18043)", () => {
+  const OPTIONS = [
+    { id: "approve", label: "Approve", description: null },
+    { id: "reject", label: "Reject", description: null },
+  ];
+
+  function choice(label: string): HTMLInputElement {
+    return screen.getByRole("radio", { name: label }) as HTMLInputElement;
+  }
+
+  function send() {
+    return screen.getByTestId("decision-answer-send");
+  }
+
+  function seen(image: DecisionQuestionAttachment) {
+    act(() =>
+      useDecisionsImageReviewStore
+        .getState()
+        .markShown("t1", "qa", image.attachmentId, image.sha256)
+    );
+  }
+
+  it("takes Reject once the rest are seen, and waits again while a retry shows the image", async () => {
+    current = { ...question([BEFORE, AFTER]), options: OPTIONS };
+    getQuestionImage.mockImplementation(async ({ attachmentId }) =>
+      attachmentId === AFTER.attachmentId
+        ? { result: "unavailable", reason: "fetch-failed" }
+        : served(attachmentId)
+    );
+    openView();
+    const failed = await screen.findByTestId("decision-question-image-failed");
+    // The image that did load is opened first, Reject or not.
+    expect(choice("Reject").disabled).toBe(true);
+
+    seen(BEFORE);
+    expect(choice("Approve").disabled).toBe(true);
+    expect(choice("Reject").disabled).toBe(false);
+    expect(screen.getByTestId("decision-answer-composer").textContent).toContain(
+      "After image 2 couldn't be shown"
+    );
+    fireEvent.click(choice("Reject"));
+    expect(send().getAttribute("aria-disabled")).toBeNull();
+
+    getQuestionImage.mockImplementation(async ({ attachmentId }) => served(attachmentId));
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+
+    // Shown after all: it is opened before anything goes, as every image is.
+    await screen.findByRole("button", { name: "Open After image 2" });
+    expect(choice("Reject").checked).toBe(true);
+    expect(choice("Reject").disabled).toBe(true);
+    expect(send().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("takes Reject past a thumbnail that turns out not to draw", async () => {
+    current = { ...question([BEFORE, AFTER]), options: OPTIONS };
+    openView();
+    const thumbnail = await screen.findByRole("button", { name: "Open After image 2" });
+    seen(BEFORE);
+    expect(choice("Reject").disabled).toBe(true);
+
+    fireEvent.error(thumbnail.querySelector("img")!);
+
+    await waitFor(() => expect(choice("Reject").disabled).toBe(false));
+    expect(choice("Approve").disabled).toBe(true);
+    expect(screen.getByTestId("decision-answer-composer").textContent).toContain(
+      "After image 2 couldn't be shown"
+    );
   });
 });

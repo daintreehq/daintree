@@ -14,6 +14,7 @@ import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
 } from "../../../shared/types/agentLastMessage.js";
+import { CLAUDE_UPDATE_NOT_SENT_REASONS } from "../../../shared/types/claudeUpdateApply.js";
 
 /**
  * Host-owned reductions of a tool's result for the audit record, applied
@@ -270,6 +271,12 @@ function auditWatchId(value: unknown): string | null {
   return typeof value === "string" && WATCH_ID_PATTERN.test(value) ? value : null;
 }
 
+const NOTIFICATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function auditNotificationId(value: unknown): string | null {
+  return typeof value === "string" && NOTIFICATION_ID_PATTERN.test(value) ? value : null;
+}
+
 /** A watch's id, host, kind of condition and where it stands. */
 function projectHostWatch(value: unknown): Record<string, unknown> {
   const watch = asRecord(value);
@@ -284,10 +291,32 @@ function projectHostWatch(value: unknown): Record<string, unknown> {
           ? "connection"
           : condition.agentsWaiting != null
             ? "agents"
-            : "capacity",
+            : condition.pluginNotifications != null
+              ? "plugins"
+              : "capacity",
     status: fromSet(watch?.status, WATCH_STATUSES),
     lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
     delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
+  };
+}
+
+const CLAUDE_UPDATE_STATUSES: ReadonlySet<string> = new Set(["sent", "not-sent", "unconfirmed"]);
+const CLAUDE_UPDATE_REASONS: ReadonlySet<string> = new Set(CLAUDE_UPDATE_NOT_SENT_REASONS);
+const CLAUDE_UPDATE_OUTPUTS: ReadonlySet<string> = new Set(["read", "lost", "unavailable"]);
+
+/**
+ * Whether `/restart` went in and whether Claude refused it (#17908), never
+ * the refusal's words: it is terminal output, and can name the project's folder.
+ */
+function projectClaudeUpdate(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    terminalId: auditId(record.terminalId),
+    status: fromSet(record.status, CLAUDE_UPDATE_STATUSES),
+    reason: fromSet(record.reason, CLAUDE_UPDATE_REASONS),
+    refusalSeen: typeof record.refusal === "string",
+    output: fromSet(record.output, CLAUDE_UPDATE_OUTPUTS),
   };
 }
 
@@ -296,6 +325,7 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   (result: unknown) => unknown
 >([
   ["terminal.readLastMessageOwned", projectLastMessage],
+  ["terminal.applyClaudeUpdateOwned", projectClaudeUpdate],
   ["terminal.getStatus", projectHandbackCarrier],
   ["terminal.waitUntilIdle", projectHandbackCarrier],
   ["terminal.waitUntilIdleBatch", projectHandbackCarrier],
@@ -364,15 +394,24 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ],
   [
     "host.watch",
-    // Which watches and where each stands, never the note or what the host's figures were (#14463).
+    // Which watches and where each stands, never the note or what the host's figures were (#14463),
+    // nor a plugin notification's words, key or plugin (#18154): only which ones were handed over.
     (result) => {
       const record = asRecord(result);
       if (record === null) return { status: "unrecognized" };
       const listed = Array.isArray(record.watches) ? record.watches : [];
+      const handed = asRecord(record.notifications);
+      const matches = Array.isArray(handed?.matches) ? handed.matches : null;
       return {
         outcome: fromSet(record.outcome, HOST_OUTCOMES),
         armed: record.armed === true,
         watches: listed.map(projectHostWatch),
+        notificationIds:
+          matches === null
+            ? null
+            : matches.map((match) => auditNotificationId(asRecord(match)?.notificationId)),
+        omittedNotifications: finiteNumber(handed?.omitted),
+        read: auditNotificationId(asRecord(record.notification)?.notificationId),
       };
     },
   ],
@@ -425,7 +464,8 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         operation:
           record?.operation === "arm" ||
           record?.operation === "cancel" ||
-          record?.operation === "list"
+          record?.operation === "list" ||
+          record?.operation === "read"
             ? record.operation
             : null,
         hostId: auditHostId(record?.hostId),
@@ -439,10 +479,13 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
               WATCH_WAITING_REASONS.has(reason as string)
             )
           : null,
+        pluginNotifications: record?.pluginNotifications === true,
+        pluginNamed: typeof record?.pluginId === "string",
         projectId: typeof record?.projectId === "string" ? record.projectId : null,
         expiresInSeconds: finiteNumber(record?.expiresInSeconds),
         noted: typeof record?.note === "string",
         watchId: auditWatchId(record?.watchId),
+        notificationId: auditNotificationId(record?.notificationId),
       };
     },
   ],

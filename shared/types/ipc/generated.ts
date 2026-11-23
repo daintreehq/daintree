@@ -146,9 +146,17 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string, pinned: boolean];
     result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
   };
+  "agent-usage:get-tracking": {
+    args: [];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
+  };
   "agent-usage:set-following": {
     args: [payload: { following: boolean }];
     result: import("./agentUsage.js").AgentUsageSnapshot | null;
+  };
+  "agent-usage:set-tracking": {
+    args: [payload: { enabled: boolean }];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
   };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
@@ -223,6 +231,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
         | "canopy:read-input-lines"
+        | "canopy:read-worktrees"
         | "canopy:refresh"
         | "canopy:remove-trashed"
         | "canopy:rename"
@@ -266,6 +275,7 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopyInputLineReading[]
       | import("./canopy.js").CanopyTrashOutcome[]
       | import("./canopy.js").CanopyUntrashOutcome[]
+      | import("./canopy.js").CanopyWorktreeReading[]
       | null;
   };
   "canopy-host:list-assistants": {
@@ -444,6 +454,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:read-input-lines": {
     args: [targets: import("./canopy.js").CanopyRunTarget[]];
     result: import("./canopy.js").CanopyInputLineReading[];
+  };
+  "canopy:read-worktrees": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyWorktreeReading[];
   };
   "canopy:refresh": {
     args: [];
@@ -931,7 +945,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisionsQuestion.js").DecisionQuestionDeclineResult;
   };
   "decisions:delete-local-data": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsLocalDeleteResult;
   };
   "decisions:delete-relay-data": {
@@ -939,7 +953,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisions.js").DecisionsRelayDeleteResult;
   };
   "decisions:disconnect-relay": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsStatus;
   };
   "decisions:enroll-host": {
@@ -1002,6 +1016,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImageByReferencePayload];
     result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
   };
+  "decisions:get-question-pane-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionPaneResult;
+  };
   "decisions:get-question-summaries": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
@@ -1019,6 +1037,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:host-attention": {
+    args: [request: import("../decisionsAttention.js").DecisionsHostAttentionRequest];
+    result: import("../decisionsAttention.js").DecisionsHostAttentionResult;
   };
   "decisions:list-answer-destinations": {
     args: [questionId: string];
@@ -1056,6 +1078,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
   };
+  "decisions:remove-settled-questions": {
+    args: [];
+    result: import("../decisions.js").DecisionsHistoryRemoveResult;
+  };
   "decisions:report-composer-drafts": {
     args: [keys: string[]];
     result: void;
@@ -1084,6 +1110,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").SetDecisionsAgentAskHumanPayload];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:set-agent-stopped-pushes": {
+    args: [enabled: boolean];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "decisions:set-auto-enroll-hosts": {
     args: [enabled: boolean];
     result: import("../decisionsHosts.js").DecisionsHostsResult;
@@ -1111,10 +1141,6 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-model-threshold": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
-  };
-  "decisions:set-proxy-allowlisted": {
-    args: [allowed: boolean];
-    result: import("../decisions.js").DecisionsPolicy;
   };
   "decisions:set-terminal-snapshots": {
     args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];
@@ -2549,43 +2575,68 @@ export interface GeneratedIpcInvokeMap {
     result: string[];
   };
   "help:global-assistant-attach": {
-    args: [eligible?: boolean | undefined];
+    args: [eligible?: boolean | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
+  "help:global-assistant-can-run": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "help:global-assistant-cancel-launch": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-claim-input": {
-    args: [attachmentId: string, from?: string | undefined];
+    args: [attachmentId: string, from?: string | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
     result: void;
   };
   "help:global-assistant-discard": {
-    args: [expectedGeneration?: number | undefined];
+    args: [
+      expectedGeneration?: number | undefined,
+      slot?: number | undefined,
+      expectedRunning?: boolean | undefined,
+      expectedHandsTo?: number | undefined,
+    ];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-ensure": {
-    args: [];
+    args: [slot?: number | undefined, launchGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-input-eligible": {
-    args: [attachmentId: string, eligible: boolean];
+    args: [attachmentId: string, eligible: boolean, slot?: number | undefined];
     result: void;
   };
+  "help:global-assistant-list": {
+    args: [];
+    result: import("./help.js").GlobalAssistantView[];
+  };
   "help:global-assistant-release-input": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-replace": {
+    args: [replacement: import("./help.js").GlobalAssistantReplacement];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-restart": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-set-coordinator": {
+    args: [slot: number];
+    result: import("./help.js").GlobalAssistantView[];
+  };
+  "help:global-assistant-start-new": {
+    args: [agentId: string];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-state": {
-    args: [];
+    args: [slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {

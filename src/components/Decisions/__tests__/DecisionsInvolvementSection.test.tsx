@@ -8,7 +8,8 @@ import type {
   SetDecisionsInvolvementPayload,
 } from "@shared/types/decisionsInvolvement";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsInvolvementSection, INVOLVEMENT_READ_MS } from "../DecisionsInvolvementSection";
+import { DecisionsInvolvementSection } from "../DecisionsInvolvementSection";
+import { INVOLVEMENT_READ_MS } from "../useInvolvementPreference";
 import { localDateTime } from "../decisionsInvolvementModel";
 
 const NOW = Date.parse("2026-11-18T10:00:00.000Z");
@@ -85,6 +86,10 @@ function byId(testId: string): HTMLElement {
   return screen.getByTestId(testId);
 }
 
+function count(): string {
+  return (byId("decisions-involvement-consult-count") as HTMLInputElement).value;
+}
+
 beforeEach(() => {
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
@@ -102,12 +107,18 @@ afterEach(() => {
 });
 
 describe("DecisionsInvolvementSection", () => {
-  it("shows a recommendation, how many agents it consults, where it was set and when this computer confirmed it", async () => {
+  it("rests on one line naming the mode and how many agents it consults, and shows where it was set and when this computer confirmed it only while it's changed", async () => {
     show();
     await settle();
 
-    expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
-    expect(text("decisions-involvement-detail")).toContain("consult 2 other agents first");
+    expect(text("decisions-involvement-mode")).toBe(
+      "Bring a recommendation, consulting 2 other agents"
+    );
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
+
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-hint")).toContain("consult other agents first");
+    expect(count()).toBe("2");
     const facts = byId("decisions-involvement-facts");
     expect(facts.textContent).toContain("Set on a phone or tablet");
     expect(facts.textContent).toContain("Confirmed by this computer");
@@ -132,13 +143,20 @@ describe("DecisionsInvolvementSection", () => {
     show();
     await settle();
 
-    expect(text("decisions-involvement-mode")).toBe("Ask while exploring");
-    expect(text("decisions-involvement-detail")).toContain("while they explore");
+    // Something keeps it from applying, so why, and where it came from, show unasked.
+    // Unconfirmed, it reads as the last one known rather than the one in force.
+    expect(text("decisions-involvement-mode")).toBe("Last known: Ask while exploring");
+    expect(text("decisions-involvement-stale")).toContain("Agents use their usual behaviour");
     expect(text("decisions-involvement-facts")).toContain("Set on this computer");
-    expect(text("decisions-involvement-stale")).toContain("agents use their usual behaviour");
+    expect(text("decisions-involvement-facts")).toContain("Last confirmed by this computer");
+
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-hint")).toContain("while they explore");
+    // No mode it could choose consults, so there is no count to set.
+    expect(screen.queryByTestId("decisions-involvement-consult-count")).toBeNull();
   });
 
-  it("shows a temporary mode, then what follows it with the count it consults, and flips at its end without waiting on a read", async () => {
+  it("shows a temporary mode with its end, what follows it only while it's changed, and flips at its end without waiting on a read", async () => {
     // Ends before the next regular read, so only its own end can flip it.
     const until = new Date(NOW + 2_000).toISOString();
     getInvolvement.mockResolvedValueOnce(
@@ -156,16 +174,25 @@ describe("DecisionsInvolvementSection", () => {
 
     const mode = byId("decisions-involvement-mode");
     expect(mode.textContent).toContain("Ask while exploring until");
-    expect(mode.textContent).toContain("then bring a recommendation, consulting 4 other agents");
+    expect(mode.textContent).not.toContain("then");
     expect(mode.querySelector("time")?.getAttribute("datetime")).toBe(until);
+    expect(mode.querySelector("time")?.textContent).toMatch(/\d/);
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-mode")).toContain(
+      "then bring a recommendation, consulting 4 other agents"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(getInvolvement).toHaveBeenCalledTimes(1);
 
     // The read the end starts never lands: the display flips on the time alone.
     getInvolvement.mockReturnValue(new Promise(() => {}));
     await settle(2_000);
-    expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
-    expect(text("decisions-involvement-detail")).toContain("consult 4 other agents first");
+    expect(text("decisions-involvement-mode")).toBe(
+      "Bring a recommendation, consulting 4 other agents"
+    );
     expect(getInvolvement).toHaveBeenCalledTimes(2);
+    fireEvent.click(byId("decisions-involvement-change"));
+    expect(count()).toBe("4");
   });
 
   it("reads again while open, picking up a phone's change with no status push, and stops once closed", async () => {
@@ -194,19 +221,21 @@ describe("DecisionsInvolvementSection", () => {
     expect(getInvolvement).toHaveBeenCalledTimes(2);
   });
 
-  it("saves a change with the revision the person reviewed, shows what was saved, and hands the keyboard back to Change", async () => {
+  it("saves a change with the revision the person reviewed, leaving out a count no mode uses, shows what was saved, and hands the keyboard back to Change", async () => {
     show();
     await settle();
 
     fireEvent.click(byId("decisions-involvement-change"));
-    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
+    // A count edited and then left behind by a mode that doesn't consult is not what gets saved.
     fireEvent.change(byId("decisions-involvement-consult-count"), { target: { value: "4" } });
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
+    expect(screen.queryByTestId("decisions-involvement-consult-count")).toBeNull();
     getInvolvement.mockResolvedValue(
       reads(
         available({
           normalMode: "involve-early",
           mode: "involve-early",
-          consultCount: 4,
+          consultCount: 2,
           revision: 4,
           setOn: "computer",
         })
@@ -219,13 +248,13 @@ describe("DecisionsInvolvementSection", () => {
     expect(setInvolvement).toHaveBeenCalledExactlyOnceWith({
       expectedRevision: 3,
       normalMode: "involve-early",
-      consultCount: 4,
+      consultCount: 2,
       override: null,
     });
     expect(screen.queryByTestId("decisions-involvement-editor")).toBeNull();
     expect(screen.queryByTestId("decisions-involvement-notice")).toBeNull();
     expect(text("decisions-involvement-mode")).toBe("Ask while exploring");
-    expect(text("decisions-involvement-facts")).toContain("Set on this computer");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
     expect(document.activeElement).toBe(byId("decisions-involvement-change"));
   });
 
@@ -236,8 +265,10 @@ describe("DecisionsInvolvementSection", () => {
     fireEvent.click(byId("decisions-involvement-change"));
     getInvolvement.mockResolvedValue(reads(available({ consultCount: 3, revision: 5 })));
     await settle(INVOLVEMENT_READ_MS);
-    expect(text("decisions-involvement-detail")).toContain("3 other agents");
+    expect(text("decisions-involvement-mode")).toContain("3 other agents");
     setInvolvement.mockResolvedValue({ result: "conflict", latestRevision: 5 });
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
 
@@ -246,7 +277,7 @@ describe("DecisionsInvolvementSection", () => {
     );
   });
 
-  it("changes a temporary mode to the other mode and a new end", async () => {
+  it("moves a temporary mode's end, the mode staying the other one", async () => {
     const until = new Date(NOW + 2 * HOUR).toISOString();
     getInvolvement.mockResolvedValue(
       reads(
@@ -261,7 +292,9 @@ describe("DecisionsInvolvementSection", () => {
     await settle();
 
     fireEvent.click(byId("decisions-involvement-change"));
-    fireEvent.click(byId("decisions-involvement-temporary-mode-recommend"));
+    expect(
+      (byId("decisions-involvement-temporary") as HTMLButtonElement).getAttribute("aria-checked")
+    ).toBe("true");
     const end = localDateTime(NOW + 3 * HOUR);
     fireEvent.change(byId("decisions-involvement-until"), { target: { value: end } });
     fireEvent.click(byId("decisions-involvement-save"));
@@ -271,7 +304,7 @@ describe("DecisionsInvolvementSection", () => {
       expectedRevision: 3,
       normalMode: "recommend",
       consultCount: 2,
-      override: { mode: "recommend", until: new Date(NOW + 3 * HOUR).toISOString() },
+      override: { mode: "involve-early", until: new Date(NOW + 3 * HOUR).toISOString() },
     });
   });
 
@@ -331,6 +364,7 @@ describe("DecisionsInvolvementSection", () => {
     setInvolvement.mockReturnValue(pending.promise);
 
     fireEvent.click(byId("decisions-involvement-change"));
+    fireEvent.change(byId("decisions-involvement-consult-count"), { target: { value: "3" } });
     fireEvent.submit(byId("decisions-involvement-editor"));
     fireEvent.submit(byId("decisions-involvement-editor"));
     await settle();
@@ -348,6 +382,7 @@ describe("DecisionsInvolvementSection", () => {
     setInvolvement.mockReturnValueOnce(pending.promise);
 
     fireEvent.click(byId("decisions-involvement-change"));
+    fireEvent.change(byId("decisions-involvement-consult-count"), { target: { value: "3" } });
     act(() => byId("decisions-involvement-consult-count").focus());
     fireEvent.submit(byId("decisions-involvement-editor"));
     await settle();
@@ -355,11 +390,13 @@ describe("DecisionsInvolvementSection", () => {
     expect(byId("decisions-involvement-consult-count").closest("fieldset")?.disabled).toBe(true);
     expect(document.activeElement).toBe(byId("decisions-involvement-save"));
     fireEvent.submit(byId("decisions-involvement-editor"));
+    // A change on its way can't be called back, so Cancel doesn't put the form away under it.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(byId("decisions-involvement-editor")).not.toBeNull();
     // A change from the revision the pending one replaces would only be refused: none is offered.
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
     await settle();
-    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+    expect(document.activeElement).toBe(byId("decisions-involvement-save"));
     expect(setInvolvement).toHaveBeenCalledTimes(1);
 
     pending.resolve({ result: "conflict", latestRevision: null });
@@ -394,6 +431,8 @@ describe("DecisionsInvolvementSection", () => {
     fireEvent.click(byId("decisions-involvement-change"));
     setInvolvement.mockResolvedValue({ result: "conflict", latestRevision: 9 });
     getInvolvement.mockReturnValue(new Promise(() => {}));
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
@@ -410,6 +449,8 @@ describe("DecisionsInvolvementSection", () => {
 
     fireEvent.click(byId("decisions-involvement-change"));
     setInvolvement.mockResolvedValue({ result: "conflict", latestRevision: 9 });
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
@@ -441,10 +482,13 @@ describe("DecisionsInvolvementSection", () => {
       reads(available({ consultCount: 3, revision: 5, setOn: "phone" }))
     );
     await settle(INVOLVEMENT_READ_MS);
-    expect(text("decisions-involvement-detail")).toContain("3 other agents");
+    expect(screen.queryByTestId("decisions-involvement-read-only")).toBeNull();
     fireEvent.click(byId("decisions-involvement-change"));
     expect(screen.queryByTestId("decisions-involvement-notice")).toBeNull();
+    expect(count()).toBe("3");
     setInvolvement.mockResolvedValue({ result: "saved", revision: 6 });
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
     expect(setInvolvement).toHaveBeenLastCalledWith(
@@ -458,6 +502,8 @@ describe("DecisionsInvolvementSection", () => {
     setInvolvement.mockRejectedValue(new Error("the window went away"));
 
     fireEvent.click(byId("decisions-involvement-change"));
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
 
@@ -498,6 +544,8 @@ describe("DecisionsInvolvementSection", () => {
 
     fireEvent.click(byId("decisions-involvement-change"));
     setInvolvement.mockResolvedValue(refusal);
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
 
@@ -521,7 +569,9 @@ describe("DecisionsInvolvementSection", () => {
     show();
     await settle();
 
-    expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
+    expect(text("decisions-involvement-mode")).toBe(
+      "Bring a recommendation, consulting 2 other agents"
+    );
     expect(text("decisions-involvement-facts")).toContain("Set on the owner computer");
     expect(text("decisions-involvement-facts")).not.toContain("Set on this computer");
     expect(text("decisions-involvement-read-only")).toContain("Remote Host");
@@ -541,10 +591,12 @@ describe("DecisionsInvolvementSection", () => {
     show();
     await settle();
 
-    expect(text("decisions-involvement-summary")).toContain("No involvement preference is set");
-    expect(text("decisions-involvement-facts")).toContain("Confirmed by this computer");
+    expect(text("decisions-involvement-summary")).toBe("Not set");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
     expect(text("decisions-involvement-change")).toBe("Set preference");
     fireEvent.click(byId("decisions-involvement-change"));
+    expect(text("decisions-involvement-summary")).toContain("No involvement preference is set");
+    expect(text("decisions-involvement-facts")).toContain("Confirmed by this computer");
     fireEvent.click(byId("decisions-involvement-save"));
     await settle();
     expect(setInvolvement).toHaveBeenCalledExactlyOnceWith(
@@ -577,6 +629,83 @@ describe("DecisionsInvolvementSection", () => {
     expect(text("decisions-involvement-summary")).toContain("isn't connected to the relay");
     expect(text("decisions-involvement-summary")).toContain("usual behaviour");
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
+  });
+
+  it("names a preference set by a removed device in a few words, and offers to set another", async () => {
+    getInvolvement.mockResolvedValue(
+      reads({
+        status: "unavailable",
+        reason: "signer-revoked",
+        revision: 4,
+        lastSyncedAt: "2026-11-18T09:59:00.000Z",
+        stale: false,
+      })
+    );
+    show();
+    await settle();
+
+    expect(text("decisions-involvement-summary")).toBe("Set by a device that was removed");
+    expect(screen.queryByTestId("decisions-involvement-facts")).toBeNull();
+    expect(text("decisions-involvement-change")).toBe("Set preference");
+  });
+
+  it("says why it can't be changed until this computer reconnects, with where it came from", async () => {
+    getInvolvement.mockResolvedValue(reads(available(), { settable: false }));
+    show();
+    await settle();
+
+    expect(text("decisions-involvement-mode")).toBe(
+      "Bring a recommendation, consulting 2 other agents"
+    );
+    expect(text("decisions-involvement-read-only")).toContain("reconnects");
+    expect(text("decisions-involvement-facts")).toContain("Set on a phone or tablet");
+    expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
+  });
+
+  it("offers Retry when the first read fails, and shows the preference once one lands", async () => {
+    getInvolvement.mockRejectedValueOnce(new Error("no bridge"));
+    show();
+    await settle();
+
+    expect(byId("decisions-involvement-failed")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(text("decisions-involvement-mode")).toBe(
+      "Bring a recommendation, consulting 2 other agents"
+    );
+    expect(screen.queryByTestId("decisions-involvement-failed")).toBeNull();
+  });
+
+  it("moves the keyboard from Change to the form's first field as it opens", async () => {
+    show();
+    await settle();
+
+    act(() => byId("decisions-involvement-change").focus());
+    fireEvent.click(byId("decisions-involvement-change"));
+    await settle();
+    // The selected mode is the group's one stop.
+    expect(document.activeElement).toBe(byId("decisions-involvement-normal-mode-recommend"));
+  });
+
+  it("leaves the keyboard where the person moved it when a change settles", async () => {
+    show();
+    await settle();
+    const pending = deferred<DecisionsInvolvementSaveResult>();
+    setInvolvement.mockReturnValueOnce(pending.promise);
+
+    fireEvent.click(byId("decisions-involvement-change"));
+    // Save waits for a change: switching the usual mode is one that keeps the count.
+    fireEvent.click(byId("decisions-involvement-normal-mode-involve-early"));
+    fireEvent.click(byId("decisions-involvement-save"));
+    await settle();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    act(() => elsewhere.focus());
+    pending.resolve({ result: "saved", revision: 4 });
+    await settle();
+
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
   });
 
   it("reads nothing while inactive", async () => {

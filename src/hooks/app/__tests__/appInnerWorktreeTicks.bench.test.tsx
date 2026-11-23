@@ -29,10 +29,27 @@ vi.mock("@/lazyPanels", async (importOriginal) => ({
 
 vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: "/home/user" }) }));
 
+// What the shared resume would launch: it runs the caller's spawn-only checks
+// first, as the real one does when no live pane holds the session.
+const spawned = vi.hoisted(() => vi.fn());
 const resumeSessionIntoPanel = vi.hoisted(() =>
-  vi.fn(async (_session: unknown, _target: unknown, _hooks: unknown) => ({ terminalId: "t-1" }))
+  vi.fn(
+    async (
+      _session: unknown,
+      target: { worktreeId?: string },
+      hooks?: { validateSpawn?: () => void; onBeforeSpawn?: () => void }
+    ) => {
+      hooks?.validateSpawn?.();
+      hooks?.onBeforeSpawn?.();
+      spawned(target);
+      return { terminalId: "t-1", outcome: "created", worktreeId: target.worktreeId ?? null };
+    }
+  )
 );
-vi.mock("@/services/agentResume", () => ({ resumeSessionIntoPanel }));
+vi.mock("@/services/agentResume", () => ({
+  resumeSessionIntoPanel,
+  bringResumedPaneForward: vi.fn(),
+}));
 
 // Every other bridge namespace the palette hooks touch on mount: listeners hand
 // back an unsubscribe, requests resolve empty.
@@ -236,6 +253,7 @@ describe("AppInner worktree-tick re-renders", () => {
     shown.worktreePalette = null;
     shown.overview = null;
     resumeSessionIntoPanel.mockClear();
+    spawned.mockClear();
     request.mockClear();
     _resetHostAppliedActivationForTesting();
     usePaletteStore.setState({ activePaletteId: null });
@@ -316,7 +334,8 @@ describe("AppInner worktree-tick re-renders", () => {
     };
 
     await act(() => resume(session));
-    expect(resumeSessionIntoPanel).not.toHaveBeenCalled();
+    // Not a worktree this view lists yet, so nothing launches.
+    expect(spawned).not.toHaveBeenCalled();
 
     act(() => {
       const next = new Map(store.getState().worktrees);
@@ -325,6 +344,8 @@ describe("AppInner worktree-tick re-renders", () => {
     });
     expect(host().resumeSession).toBe(resume);
     await act(() => resume(session));
+    expect(spawned).toHaveBeenCalledTimes(1);
+    expect(spawned).toHaveBeenCalledWith({ cwd: "/repo/wt-new", worktreeId: "wt-new" });
     expect(resumeSessionIntoPanel).toHaveBeenCalledWith(
       session,
       { cwd: "/repo/wt-new", worktreeId: "wt-new" },

@@ -1465,7 +1465,7 @@ describe("one assistant addressing another (#13496)", () => {
         { terminalIds: [GLOBAL_TERMINAL] },
         "proj-1",
         new Set([GLOBAL_TERMINAL]),
-        GLOBAL_TERMINAL
+        new Set([GLOBAL_TERMINAL])
       );
 
       vi.mocked(deps.handleTerminalGetStatusViewless).mockClear();

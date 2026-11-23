@@ -23,6 +23,8 @@ import type { AgentLastMessageResult } from "../../../../shared/types/agentLastM
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
 import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE, type DispatchEnvelope } from "../shared.js";
 import { RendererBridgeUnavailableError } from "../rendererBridge.js";
+import { AssistantTargetError } from "../../assistants/AssistantTerminalControl.js";
+import { CLAUDE_UPDATE_NOT_OFFERED } from "../../../../shared/types/claudeUpdateApply.js";
 import {
   toolErrorPayload,
   fakeDeps,
@@ -1398,6 +1400,182 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
   });
 
+  describe("terminal.applyClaudeUpdateOwned (#17908)", () => {
+    const PIN = { terminalId: "terminal-1", generation: 4, observedAt: 900 };
+    const APPLIED = {
+      terminalId: "terminal-1",
+      status: "sent" as const,
+      refusal: null,
+      output: "read" as const,
+      message: "typed",
+    };
+
+    function updateHarness(
+      sessionId: string,
+      approval: DispatchEnvelope = { result: { ok: true, result: { terminalId: "terminal-1" } } }
+    ) {
+      const store = makeStore();
+      // An agent pane's tool set: the update is on core, like the preset move.
+      seedLiveSession(store, sessionId, "core");
+      store.sessionOriginMap.set(sessionId, "external");
+      const manifest: ActionManifestEntry[] = [
+        ...ownedManifest(),
+        {
+          ...makeManifestEntry("terminal.applyClaudeUpdateOwned"),
+          kind: "command",
+          danger: "confirm",
+        },
+      ];
+      const dispatchAction = vi.fn(async (actionId: string) =>
+        actionId === "terminal.applyClaudeUpdate"
+          ? approval
+          : { result: { ok: true as const, result: null } }
+      );
+      type Service = NonNullable<SessionServerDeps["claudeUpdate"]>;
+      const claudeUpdate = {
+        exclusive: vi.fn<Service["exclusive"]>(async (_terminalId, run) => run()),
+        preflight: vi.fn<Service["preflight"]>(async () => PIN),
+        apply: vi.fn<Service["apply"]>(async () => APPLIED),
+      };
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        requestManifest: vi.fn().mockResolvedValue(manifest),
+        getCachedManifest: vi.fn(() => manifest),
+        // The lock's generic signature is beyond `vi.fn`'s inference.
+        claudeUpdate: claudeUpdate as unknown as Service,
+      });
+      store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return { store, dispatchAction, claudeUpdate, server: createSessionServer(sessionId, deps) };
+    }
+
+    // The approval is the delegate's dialog: `confirmed`, text or anything
+    // else the model sends never reaches it, so the model can't approve it.
+    it("asks through the delegate with the id alone, unconfirmed, then applies", async () => {
+      const { server, dispatchAction, claudeUpdate } = updateHarness("s-update");
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1", confirmed: true, command: "/restart --force" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.applyClaudeUpdate",
+        { terminalId: "terminal-1" },
+        false
+      );
+      expect(claudeUpdate.preflight).toHaveBeenCalledWith("terminal-1", undefined, "s-update");
+      expect(claudeUpdate.apply).toHaveBeenCalledWith(
+        PIN,
+        expect.objectContaining({ inputOwner: "s-update" })
+      );
+      // Read before the person is asked, and applied only after.
+      expect(claudeUpdate.preflight.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+      expect(dispatchAction.mock.invocationCallOrder[0]).toBeLessThan(
+        claudeUpdate.apply.mock.invocationCallOrder[0]!
+      );
+      expect(payloadOf<typeof APPLIED>(result)).toEqual(APPLIED);
+    });
+
+    it("holds the pane for one request at a time, from before anyone is asked", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-lock");
+
+      await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(claudeUpdate.exclusive).toHaveBeenCalledWith("terminal-1", expect.any(Function));
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        claudeUpdate.preflight.mock.invocationCallOrder[0]!
+      );
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("refuses a misspelled run rather than taking the run there now", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-generation");
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1", generation: "4" },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(claudeUpdate.preflight).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("applies nothing when the person declines", async () => {
+      const { server, claudeUpdate } = updateHarness("s-update-declined", {
+        result: { ok: false, error: { code: "USER_REJECTED", message: "The user declined." } },
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("USER_REJECTED");
+      expect(claudeUpdate.apply).not.toHaveBeenCalled();
+    });
+
+    it("asks nobody when the pane doesn't offer /restart", async () => {
+      const { server, dispatchAction, claudeUpdate } = updateHarness("s-update-not-offered");
+      claudeUpdate.preflight.mockRejectedValueOnce(
+        new AssistantTargetError(CLAUDE_UPDATE_NOT_OFFERED, "No footer. Nothing was sent.")
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe(CLAUDE_UPDATE_NOT_OFFERED);
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(claudeUpdate.apply).not.toHaveBeenCalled();
+    });
+
+    it("refuses a panel the session did not create, without reading or asking", async () => {
+      const { store, server, dispatchAction, claudeUpdate } = updateHarness("s-update-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(claudeUpdate.preflight).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("holds the pane to the session at the moment of the send", async () => {
+      const { store, server, claudeUpdate } = updateHarness("s-update-released");
+      let authorize: (() => void) | undefined;
+      claudeUpdate.apply.mockImplementationOnce(async (_pin, request) => {
+        authorize = request.authorize;
+        return APPLIED;
+      });
+
+      await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(() => authorize!()).not.toThrow();
+      store.resourceOwnership.release("s-update-released", "terminal", "terminal-1");
+      expect(() => authorize!()).toThrow(/no longer this session's/);
+    });
+  });
   describe("terminal.restartOnAccountOwned (#17079)", () => {
     const RESTART_RESULT = {
       terminalId: "terminal-1",

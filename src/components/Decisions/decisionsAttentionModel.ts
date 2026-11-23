@@ -3,10 +3,14 @@ import type {
   DecisionsAnswerDestination,
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
+  DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectOf,
+  deliverySubjectPlural,
+  deliveryUncertainText,
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
 
@@ -24,49 +28,67 @@ import {
  */
 export const reasonText = deliveryReasonText;
 
+/**
+ * What opens the list of answers needing attention, wherever it is offered:
+ * the pane's chip, the inbox and Canopy (#18054).
+ */
+export const REVIEW_ATTENTION_LABEL = "Review answers";
+
 export function aliasLabel(alias: number): string {
   return `q-${alias}`;
 }
 
 export type AttentionSubject = DeliverySubject;
 
-type SubjectFields = Pick<DecisionsAttentionItem, "answer" | "answerUnavailable" | "followUps">;
+type SubjectFields = Pick<
+  DecisionsAttentionItem,
+  "answer" | "answerUnavailable" | "notice" | "followUps"
+>;
 
+/** What of the question needs a person; a timeout notice (#17944) stands in the answer's place. */
 export function subjectOf(item: SubjectFields): AttentionSubject {
+  const notice = item.answer === null && item.answerUnavailable === null && item.notice !== null;
   return deliverySubject(
-    item.answer !== null || item.answerUnavailable !== null,
-    item.followUps.length
+    item.answer !== null || item.answerUnavailable !== null || notice,
+    item.followUps.length,
+    notice
   );
 }
 
-function isPlural(subject: AttentionSubject): boolean {
-  return subject !== "answer" && subject !== "follow-up";
+const isPlural = deliverySubjectPlural;
+
+function isNotice(subject: AttentionSubject): boolean {
+  return subject.startsWith("timeout notice");
 }
 
 function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-const UNCERTAIN_STATUS: Record<AttentionSubject, string> = {
-  answer: "This answer may or may not have been delivered",
-  "follow-up": "This follow-up may or may not have been delivered",
-  "follow-ups": "These follow-ups may or may not have been delivered",
-  "answer and follow-up": "This answer or its follow-up may or may not have been delivered",
-  "answer and follow-ups": "This answer or its follow-ups may or may not have been delivered",
-};
-
+/**
+ * What stopped, ahead of why: the dialog's title already says these need
+ * attention, so the row says what wasn't typed in, or may have been.
+ */
 export function statusText(item: Pick<DecisionsAttentionItem, "status"> & SubjectFields): string {
   const subject = subjectOf(item);
-  if (item.status === "delivery-uncertain") return UNCERTAIN_STATUS[subject];
-  return `${capitalized(subject)} ${isPlural(subject) ? "need" : "needs"} attention`;
+  return item.status === "delivery-uncertain"
+    ? deliveryUncertainText(subject, true)
+    : `${capitalized(subject)} not typed in`;
 }
 
-/** What the copy button copies, in its label's words. */
+/**
+ * What the copy button copies, in its label's words. A timeout notice is
+ * Daintree's to type into the agent that asked, never a person's to paste,
+ * so only the follow-ups beside one are copied.
+ */
 export function copyLabel(item: SubjectFields): string {
-  return `Copy ${subjectOf(item)}`;
+  return `Copy ${subjectOf({ ...item, notice: null })}`;
 }
 
-/** Whether everything that needs a person is here to copy: the answer, if it does, and each follow-up. */
+/**
+ * Whether everything a person can copy is here to copy: the answer, if it
+ * needs a person, and each follow-up. A timeout notice alone has nothing to copy.
+ */
 export function canCopy(item: SubjectFields): boolean {
   const answerHeld = item.answer !== null || item.answerUnavailable !== null;
   if (answerHeld && item.answer === null) return false;
@@ -95,6 +117,15 @@ export function handledConfirmTitle(alias: number): string {
 export function handledConfirmBody(subject: AttentionSubject): string {
   const plural = isPlural(subject);
   const it = plural ? "them" : "it";
+  if (isNotice(subject)) {
+    // Nothing of a notice is copied or sent to another agent: Try resume is all it offers.
+    const offered = plural ? "Copy and Try resume go" : "Try resume goes";
+    return (
+      `Its ${subject} ${plural ? "leave" : "leaves"} this list, the pane's chip and Canopy, and ` +
+      `Daintree won't type ${it} in. ${offered} with ${it}. ` +
+      `The Decisions audit trail records the question as handled.`
+    );
+  }
   return (
     `Its ${subject} ${plural ? "leave" : "leaves"} this list, the pane's chip and Canopy, and ` +
     `Daintree won't type ${it} in. Copy, Try resume and Choose destination go with ${it}, so ` +
@@ -103,6 +134,53 @@ export function handledConfirmBody(subject: AttentionSubject): string {
   );
 }
 
+/**
+ * The list as an opening for a pane shows it (#18055): that terminal's items
+ * first, then the rest apart below, each in main's order. Only an item this
+ * computer asked belongs to the pane: a Host's terminal can share its id.
+ * Null for an opening that named no pane, which shows one list.
+ */
+export function groupForPane<
+  T extends { origin: Pick<DecisionsAttentionItem["origin"], "paneId" | "otherHost"> },
+>(items: readonly T[], terminalId: string | null): { forPane: T[]; elsewhere: T[] } | null {
+  if (terminalId === null) return null;
+  const forPane: T[] = [];
+  const elsewhere: T[] = [];
+  for (const item of items) {
+    const own = item.origin.otherHost === null && item.origin.paneId === terminalId;
+    (own ? forPane : elsewhere).push(item);
+  }
+  return { forPane, elsewhere };
+}
+
+/** What sets the rest apart below the opening pane's items. */
+export const ELSEWHERE_HEADING = "Elsewhere";
+/** In the opening pane's place, once none of its items is left. */
+export const NONE_FOR_PANE = "Nothing from this terminal needs attention now.";
+
+/**
+ * Whether the question view can open the question, with its notes and
+ * images: one asked on this computer, or on a Remote Host this computer
+ * knows. Another machine's question it has no route to reads only in place.
+ */
+export function canOpenQuestion(item: {
+  reference: DecisionsAttentionItem["reference"];
+  origin: Pick<DecisionsAttentionItem["origin"], "otherHost">;
+}): boolean {
+  const { otherHost } = item.origin;
+  return item.reference !== null && (otherHost === null || otherHost.name !== null);
+}
+
+/** Whether the whole question says more than the row's heading, its first line. */
+export function hasFullerQuestion(
+  item: Pick<DecisionsAttentionItem, "question" | "fullQuestion">
+): boolean {
+  return item.fullQuestion !== null && item.fullQuestion !== item.question;
+}
+
+/** The plan an advisory round states, as the question view names it once the question has closed. */
+export const PLAN_CAPTION = "The agent's plan if unanswered";
+
 /** The agent's name, falling back to its id. */
 export function agentLabel(origin: { agentId: string; agentName: string | null }): string {
   return origin.agentName ?? origin.agentId;
@@ -110,9 +188,81 @@ export function agentLabel(origin: { agentId: string; agentName: string | null }
 
 /** The dialog's opening line, which also tells a screen reader what the list is. */
 export const LIST_DESCRIPTION =
-  "Daintree won't type these answers and follow-ups in on its own. Choose what happens to each one.";
+  "Daintree won't type these answers, timeout notices and follow-ups in on its own. Choose what happens to each one.";
 export const EMPTY_DESCRIPTION =
-  "Nothing needs attention right now. Answers and follow-ups Daintree won't type in on its own show up here.";
+  "Nothing needs attention right now. Answers, timeout notices and follow-ups Daintree won't type in on its own show up here.";
+
+/**
+ * How the question itself ended, apart from what became of its notice
+ * (#17944): its deadline passed, with no answer or before it reached the relay.
+ */
+export function noticeOutcomeText(notice: Pick<DecisionsTimeoutNotice, "kind">): string {
+  return notice.kind === "never-published"
+    ? "Its deadline passed before it reached the relay, so no answer was recorded."
+    : "Its deadline passed without an answer.";
+}
+
+/**
+ * What the notice says of the agent's stated plan, for an advisory round: its
+ * words, apart from how far typing it got. Never that the agent read it or
+ * acted on it, and never a decision anyone made. Null for a question that
+ * waited for a reply, or when it can't be told.
+ */
+export function noticePlanText(notice: Pick<DecisionsTimeoutNotice, "disposition">): string | null {
+  switch (notice.disposition) {
+    case "fallback-due":
+      return "The notice says the agent may go ahead with its stated plan. Nothing was decided or approved.";
+    case "fallback-withheld":
+      return "The notice says the agent isn't cleared to go ahead with its plan.";
+    default:
+      return null;
+  }
+}
+
+/** How far typing the notice got, in its own right: beside an answer or follow-ups, the status line speaks for them all. */
+export function noticeDeliveryText(notice: Pick<DecisionsTimeoutNotice, "delivery">): string {
+  return notice.delivery === "delivery-uncertain"
+    ? "may or may not have been typed in"
+    : "not typed in";
+}
+
+/**
+ * Whether two reads of a question's item ask the same of the person, by the
+ * token main minted for each: the same answer, notice round, follow-ups and
+ * run, in the same state. A confirmation asked about one read is dropped
+ * once the list no longer shows it so, as main would refuse it.
+ */
+export function sameAttention(
+  a: Pick<DecisionsAttentionItem, "questionId" | "token">,
+  b: Pick<DecisionsAttentionItem, "questionId" | "token">
+): boolean {
+  return a.questionId === b.questionId && a.token === b.token;
+}
+
+/**
+ * What of the question list bears on this list: the questions that need a
+ * person, with what delivery stopped on. A list change that leaves it the
+ * same (a new question, a Host's, a mark) is no reason to read this list again.
+ */
+export function attentionFingerprint(
+  questions: readonly {
+    reference: { hostId: string; projectId: string; terminalId: string; questionId: string };
+    standing: { kind: string; deliveryStatus?: string };
+    stall: { answerRevision: number | null; followUpIds: string[]; reason: string } | null;
+    closureNotice?: { delivery: string; disposition: string | null } | null;
+  }[]
+): string {
+  return JSON.stringify(
+    questions
+      .filter((question) => question.standing.kind === "needs-attention")
+      .map((question) => [
+        question.reference,
+        question.standing.deliveryStatus ?? null,
+        question.stall,
+        question.closureNotice ?? null,
+      ])
+  );
+}
 
 /** Why an item shows no answer: there is none waiting, or this computer can't open it. */
 export function missingAnswerText(unavailable: "none" | "unreadable" | null): string {
@@ -137,7 +287,11 @@ export function originParts(
   const { origin } = item;
   const agent = agentLabel(origin);
   const pane =
-    origin.paneTitle !== null ? `${agent} in “${origin.paneTitle}”` : `${agent}, terminal closed`;
+    origin.otherHost !== null
+      ? `${agent} on ${origin.otherHost.name ?? "another computer"}`
+      : origin.paneTitle !== null
+        ? `${agent} in “${origin.paneTitle}”`
+        : `${agent}, terminal closed`;
   const place = [origin.projectName, worktreeName].filter((part) => part !== null).join(" · ");
   return { pane, place: place === "" ? null : place };
 }
@@ -152,7 +306,12 @@ export interface PaneLines {
 export function fromLines(item: DecisionsAttentionItem, worktreeName: string | null): PaneLines {
   const { origin } = item;
   return {
-    primary: origin.paneTitle !== null ? `“${origin.paneTitle}”` : "Terminal closed",
+    primary:
+      origin.otherHost !== null
+        ? (origin.otherHost.name ?? "Another computer")
+        : origin.paneTitle !== null
+          ? `“${origin.paneTitle}”`
+          : "Terminal closed",
     detail: [agentLabel(origin), origin.projectName, worktreeName]
       .filter((part) => part !== null)
       .join(" · "),
@@ -186,6 +345,69 @@ export function destinationDetail(
   return parts.join(" · ");
 }
 
+/** A destination's second line in the menu, under its project's label: its agent, then its worktree. */
+export function destinationRowDetail(
+  destination: DecisionsAnswerDestination,
+  worktreeName: string | null
+): string {
+  return [agentLabel(destination), worktreeName].filter((part) => part !== null).join(" · ");
+}
+
+/** One project's agents in the destination menu, under the label that names it. */
+export interface DestinationGroup {
+  projectId: string;
+  label: string;
+  destinations: DecisionsAnswerDestination[];
+}
+
+/**
+ * The destination menu's sections (#18056): the asking project's agents
+ * first, then each other project's, each in the order main listed them, so
+ * an agent in another project is a visible choice. Grouped by id, so two
+ * projects of one name, or of none, keep a section each.
+ */
+export function destinationGroups(
+  destinations: readonly DecisionsAnswerDestination[],
+  askingProjectId: string
+): DestinationGroup[] {
+  const ordered = [
+    ...destinations.filter((d) => d.projectId === askingProjectId),
+    ...destinations.filter((d) => d.projectId !== askingProjectId),
+  ];
+  const groups = new Map<string, DestinationGroup>();
+  for (const destination of ordered) {
+    let group = groups.get(destination.projectId);
+    if (group === undefined) {
+      const kind = destination.projectId === askingProjectId ? "Asking project" : "Other project";
+      group = {
+        projectId: destination.projectId,
+        label: destination.projectName !== null ? `${kind} · ${destination.projectName}` : kind,
+        destinations: [],
+      };
+      groups.set(destination.projectId, group);
+    }
+    group.destinations.push(destination);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * What the move's confirmation promises (#18056): what the chosen agent's
+ * delivery waits for, as main read that agent, and that nothing is typed
+ * twice. Never a moment: a selector, a draft or a startup still hold it.
+ */
+export function moveConfirmBody(
+  subject: AttentionSubject,
+  waitsFor: DecisionsAnswerDestination["waitsFor"]
+): string {
+  const when =
+    waitsFor === "composer"
+      ? "when that agent can take input and its composer is empty, even while it's working"
+      : "when that agent is at its prompt with its composer empty, never while it's working";
+  const twice = isPlural(subject) ? "They're never typed in twice" : "It's never typed in twice";
+  return `Daintree types the ${subject} in ${when}. ${twice}, and the Decisions audit trail records the move.`;
+}
+
 /** A pane as a confirmation names it: its title, or its agent when it has none. */
 export function paneName(title: string | null, agent: string): string {
   return title !== null && title.trim() !== "" ? `“${title}”` : agent;
@@ -199,10 +421,18 @@ export function paneName(title: string | null, agent: string): string {
 export function outcomeText(
   alias: number,
   outcome: DecisionsAnswerOutcome,
-  subject: AttentionSubject = "answer"
+  asked: AttentionSubject = "answer"
 ): string {
+  // Only the follow-ups are left when the notice sent with them was replaced (#17944).
+  const subject: AttentionSubject =
+    (outcome.result === "waiting" || outcome.result === "needs-attention") &&
+    outcome.followUpsOnly === true
+      ? asked.endsWith("follow-ups")
+        ? "follow-ups"
+        : "follow-up"
+      : asked;
   const q = aliasLabel(alias);
-  const what = `${capitalized(subject)} to ${q}`;
+  const what = deliverySubjectOf(subject, q);
   const plural = isPlural(subject);
   const needs = plural ? "need" : "needs";
   switch (outcome.result) {
@@ -237,6 +467,12 @@ export function outcomeText(
           return `No answer is kept for ${q}`;
         case "destination-gone":
           return `That terminal is no longer running an agent, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
+        case "destination-changed":
+          return `That terminal is running another agent now, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
+        case "asker-only":
+          return `${q} asked for advice, so only the agent that asked it can take its ${subject}`;
+        case "changed":
+          return `${q} changed after this list was read, so nothing was done`;
       }
   }
 }

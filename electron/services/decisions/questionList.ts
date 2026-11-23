@@ -2,11 +2,14 @@ import {
   isPendingMessage,
   parseAnswers,
   parseMessages,
+  type AnswerEntry,
   type QuestionRow,
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import { threadAwaitsHuman } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionAskerPresence,
+  DecisionPendingDelivery,
   DecisionQuestionListItem,
   DecisionQuestionStall,
   DecisionQuestionStanding,
@@ -17,10 +20,11 @@ import {
   heldFollowUps,
   isHandled,
   pendingEntries,
+  reasonOf,
   type HandledAnswers,
 } from "./attentionList.js";
-import { reasonOf } from "./paneDecisionState.js";
 import { closedReasonOf, declineOf } from "./questionClosed.js";
+import { NO_ADVISORY_HOST, roundOf, type AdvisoryHost } from "./questionRound.js";
 
 type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
 
@@ -38,46 +42,127 @@ function attentionStatus(status: QuestionRow["delivery_status"]): boolean {
  * questions another machine asked aren't this computer's, and show nowhere.
  * Only ids, labels, times and statuses are copied, field by field: a row's
  * content and its answers' and follow-ups' sealed text are never read.
+ * `askerFor` gives what was last observed of the run that asked (#18029),
+ * which an open or queued question carries once there is any.
  */
 export function projectDecisionQuestions(
   rows: readonly QuestionRow[],
   handled: HandledAnswers,
-  hostId: string | null
+  hostId: string | null,
+  advisory: AdvisoryHost = NO_ADVISORY_HOST,
+  askerFor?: (origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined,
+  memo?: QuestionListMemo
 ): DecisionQuestionListItem[] {
   if (hostId === null) return [];
   return rows
-    .filter(
-      (row) =>
-        !row.history_only &&
-        row.origin.host_id === hostId &&
-        row.origin.project_id !== "" &&
-        row.origin.pane_id !== ""
-    )
+    .filter((row) => listedHere(row, hostId))
     .sort(byAlias)
     .map((row) => {
-      const { origin } = row;
-      const standing = standingOf(row, handled);
-      return {
-        reference: {
-          hostId,
-          projectId: origin.project_id,
-          terminalId: origin.pane_id,
-          questionId: row.question_id,
-        },
-        alias: row.alias,
-        agentKind: origin.agent_kind,
-        projectLabel: origin.project_label?.trim() || null,
-        worktreeId: origin.worktree_id,
-        worktreeRoot: origin.worktree_root,
-        requirement: row.requirement,
-        askedAt: row.origin_created_at,
-        expiresAt: row.expires_at ?? null,
-        settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
-        standing,
-        replyRequest: replyRequestOf(row),
-        stall: stallOf(row, handled),
-      };
+      if (memo === undefined) return projectQuestion(row, handled, hostId, advisory, askerFor);
+      // A row object is replaced whenever its row changes, so only what it is read with can differ.
+      const key = `${hostId}\u0000${handled.get(row.question_id) ?? ""}\u0000${advisory.outcomes}\u0000${advisory.allowed}`;
+      const held = memo.get(row);
+      if (held?.key === key && sameAsker(held.item, row.origin, askerFor)) return held.item;
+      const item = projectQuestion(row, handled, hostId, advisory, askerFor);
+      memo.set(row, { key, item });
+      return item;
     });
+}
+
+/**
+ * Whether the run that asked is observed for a question in this standing: an
+ * open or queued one, which an answer can still be given to. Later standings
+ * say how delivery went instead.
+ */
+export function asksAboutAsker(standing: DecisionQuestionStanding): boolean {
+  return (standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued";
+}
+
+/** Whether what is observed of the run that asked is still what `item` carries. */
+function sameAsker(
+  item: DecisionQuestionListItem,
+  origin: QuestionRow["origin"],
+  askerFor: ((origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined) | undefined
+): boolean {
+  const now = asksAboutAsker(item.standing) ? askerFor?.(origin) : undefined;
+  const was = item.asker;
+  if (now === undefined || was === undefined) return now === was;
+  return now.target === was.target && now.directory === was.directory && now.resume === was.resume;
+}
+
+/**
+ * The list items already projected, by the row object they were projected
+ * from, so a feed that keeps its unchanged rows' objects projects only the
+ * rows that changed. Entries go with their rows.
+ */
+export type QuestionListMemo = WeakMap<
+  QuestionRow,
+  { key: string; item: DecisionQuestionListItem }
+>;
+
+/** Whether this computer's list shows the row: its own, asked from a project's terminal, not imported. */
+function listedHere(row: QuestionRow, hostId: string): boolean {
+  return (
+    !row.history_only &&
+    row.origin.host_id === hostId &&
+    row.origin.project_id !== "" &&
+    row.origin.pane_id !== ""
+  );
+}
+
+/**
+ * Whether removing settled history (#18033) takes the row: this computer's
+ * list shows it under History (settled, or never sent), and no answer or
+ * notice is still marked to be typed in. The store vetoes what it alone can
+ * see: a queued send, an injection not yet settled, a follow-up still owed,
+ * an event not yet applied.
+ */
+export function removableFromHistory(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  hostId: string
+): boolean {
+  if (!listedHere(row, hostId)) return false;
+  const standing = standingOf(row, handled);
+  if (standing.kind !== "settled" && standing.kind !== "send-failed") return false;
+  return pendingEntries(row).length === 0;
+}
+
+function projectQuestion(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  hostId: string,
+  advisory: AdvisoryHost,
+  askerFor: ((origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined) | undefined
+): DecisionQuestionListItem {
+  const { origin } = row;
+  const standing = standingOf(row, handled);
+  const round = roundOf(row, undefined, advisory);
+  const asker = asksAboutAsker(standing) ? askerFor?.(origin) : undefined;
+  return {
+    reference: {
+      hostId,
+      projectId: origin.project_id,
+      terminalId: origin.pane_id,
+      questionId: row.question_id,
+    },
+    alias: row.alias,
+    agentKind: origin.agent_kind,
+    projectLabel: origin.project_label?.trim() || null,
+    worktreeId: origin.worktree_id,
+    worktreeRoot: origin.worktree_root,
+    requirement: row.requirement,
+    askedAt: row.origin_created_at,
+    expiresAt: row.expires_at ?? null,
+    replyMode: round.replyMode,
+    closedReason: round.closedReason,
+    closureNotice: round.closureNotice,
+    settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
+    standing,
+    replyRequest: replyRequestOf(row),
+    stall: stallOf(row, handled),
+    ...(asker !== undefined ? { asker } : {}),
+  };
 }
 
 /**
@@ -129,9 +214,68 @@ function answeredStanding(
   const messages = parseMessages(row.messages_json);
   if (awaitsReply(row, status, messages)) return { kind: "waiting", reason: "reply" };
   // An answer delivery stopped on and a person handled is never typed in.
-  const answerPending = !attentionStatus(row.delivery_status) && pendingEntries(row).length > 0;
-  if (answerPending || messages.some(isPendingMessage)) return { kind: "to-type" };
+  const entries = attentionStatus(row.delivery_status) ? [] : pendingEntries(row);
+  const followUps = messages.filter(isPendingMessage);
+  if (entries.length > 0 || followUps.length > 0) {
+    const delivery = pendingDelivery(row, entries, followUps);
+    return delivery === null ? { kind: "to-type" } : { kind: "to-type", delivery };
+  }
   return { kind: "settled", outcome: "answered", handled: isHandled(row, handled) };
+}
+
+interface Waiting {
+  kind: DecisionPendingDelivery["first"];
+  at: string;
+  /** Its place in the thread; an answer stored before threads comes before every message. */
+  seq: number;
+}
+
+function instant(iso: string): number {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
+function recordedBefore(a: Waiting, b: Waiting): boolean {
+  const order = instant(a.at) - instant(b.at);
+  return order < 0 || (order === 0 && a.seq < b.seq);
+}
+
+/**
+ * What a question waiting to be typed in has waiting (#18032), from the
+ * entries that put it there. Only an answer counts as the answer, so a notice
+ * of a round since replaced never reads as one; null when nothing else waits.
+ */
+function pendingDelivery(
+  row: QuestionRow,
+  entries: readonly AnswerEntry[],
+  followUps: readonly StoredMessage[]
+): DecisionPendingDelivery | null {
+  const answers = entries.filter((entry) => entry.kind === "answer");
+  const waiting: Waiting[] = [
+    ...answers.map((entry) => ({
+      kind: "answer" as const,
+      at: entry.created_at,
+      seq: entry.event_seq ?? -1,
+    })),
+    ...followUps.map((message) => ({
+      kind: "follow-up" as const,
+      at: message.created_at,
+      seq: message.event_seq,
+    })),
+  ];
+  let first: Waiting | null = null;
+  for (const candidate of waiting) {
+    if (first === null || recordedBefore(candidate, first)) first = candidate;
+  }
+  if (first === null) return null;
+  return {
+    answer: answers.length > 0,
+    followUps: followUps.length,
+    first: first.kind,
+    recordedAt: first.at,
+    // The library records only an answer's wait for its host; a follow-up waits in its own state.
+    hostAway: answers.length > 0 && row.delivery_status === "pending-host",
+  };
 }
 
 function awaitsReply(
@@ -147,12 +291,16 @@ function awaitsReply(
  * which `threadAwaitsHuman` reads the request from. Whatever the question's
  * standing shows first, an answered one can ask for a reply.
  */
-function replyRequestOf(row: QuestionRow): string | null {
+export function replyRequestMessage(row: QuestionRow): StoredMessage | null {
   const status = row.local_status;
   if (status !== "human-answered" && status !== "proxy-answered") return null;
   const messages = parseMessages(row.messages_json);
   if (!awaitsReply(row, status, messages)) return null;
-  return latestAgentMessage(messages)?.message_id ?? null;
+  return latestAgentMessage(messages);
+}
+
+function replyRequestOf(row: QuestionRow): string | null {
+  return replyRequestMessage(row)?.message_id ?? null;
 }
 
 /** The agent's latest message on the thread, by ledger seq; null before it sent one. */

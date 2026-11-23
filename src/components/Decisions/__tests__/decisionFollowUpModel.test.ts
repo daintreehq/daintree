@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { LIMITS } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionQuestionReference,
+  DecisionQuestionStanding,
   DecisionQuestionStatus,
   DecisionThreadAnswer,
   DecisionThreadEntry,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
+  DECLINE_REPLY_TEXT,
+  deliveryStalled,
   FOLLOW_UP_TEXT_BYTES,
+  declinableReplyRequest,
   followUpAttemptText,
+  followUpHoldText,
   followUpProgressText,
   followUpVerdict,
   replyRequest,
@@ -76,6 +82,46 @@ describe("takesFollowUp (#17238)", () => {
   });
 });
 
+describe("deliveryStalled (#18028)", () => {
+  const reference: DecisionQuestionReference = {
+    hostId: "host_1",
+    projectId: "project-a",
+    terminalId: "t1",
+    questionId: "q1",
+  };
+  const stopped: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "needs-attention",
+  };
+  const uncertain: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "delivery-uncertain",
+  };
+  const handled: DecisionQuestionStanding = { kind: "settled", outcome: "answered", handled: true };
+
+  it("holds while the list says the same question's delivery needs a person, stopped or uncertain", () => {
+    // The list's own copy of the reference, as a read and a list never share one.
+    const listed = { ...reference };
+    expect(deliveryStalled({ reference }, { reference: listed, standing: stopped })).toBe(true);
+    expect(deliveryStalled({ reference }, { reference: listed, standing: uncertain })).toBe(true);
+  });
+
+  it("ends once the list stops saying so, and holds nothing without the list", () => {
+    expect(deliveryStalled({ reference }, { reference, standing: handled })).toBe(false);
+    expect(deliveryStalled({ reference }, { reference, standing: { kind: "to-type" } })).toBe(
+      false
+    );
+    expect(deliveryStalled({ reference }, null)).toBe(false);
+  });
+
+  it("never takes another question's stall, even one with the same id on another machine", () => {
+    const elsewhere = { ...reference, hostId: "host_2" };
+    expect(deliveryStalled({ reference }, { reference: elsewhere, standing: stopped })).toBe(false);
+    const another = { ...reference, questionId: "q2" };
+    expect(deliveryStalled({ reference }, { reference: another, standing: stopped })).toBe(false);
+  });
+});
+
 describe("replyRequest", () => {
   const thread = (...entries: DecisionThreadEntry[]) => ({ thread: entries });
 
@@ -95,6 +141,44 @@ describe("replyRequest", () => {
     expect(replyRequest(thread(asking, answer({ entryId: "a2", correction: true })))).toBeNull();
     expect(replyRequest(thread(asking, answer({ entryId: "a2", confirmsModel: true })))).toBeNull();
     expect(replyRequest(thread(asking, answer({ entryId: "a2", from: "model" })))).toBe(asking);
+  });
+});
+
+describe("declinableReplyRequest (#18030)", () => {
+  const asking = message({ messageId: "m2", expectsReply: true });
+
+  it.each<[DecisionQuestionStatus, boolean]>([
+    ["human-answered", true],
+    ["proxy-answered", true],
+    // An open question's request goes with the question, which the person dismisses instead.
+    ["open", false],
+    ["queued", false],
+    ["publish-failed", false],
+    ["cancelled", false],
+    ["expired", false],
+  ])("offers declining a request on a question %s: %s", (status, offered) => {
+    expect(declinableReplyRequest({ status, thread: [answer(), asking] })).toBe(
+      offered ? asking : null
+    );
+  });
+
+  it("reads the request as the protocol does: answered, replaced, or never made", () => {
+    const declinable = (...thread: DecisionThreadEntry[]) =>
+      declinableReplyRequest({ status: "human-answered", thread });
+    expect(declinable(answer(), asking, message({ messageId: "m3", from: "person" }))).toBeNull();
+    expect(declinable(answer(), asking, answer({ entryId: "a2", correction: true }))).toBeNull();
+    // The model's answer answers nothing; the agent's next message replaces the request.
+    expect(declinable(answer(), asking, answer({ entryId: "a2", from: "model" }))).toBe(asking);
+    expect(declinable(answer(), asking, message({ messageId: "m3" }))).toBeNull();
+    expect(declinable(answer(), message())).toBeNull();
+  });
+
+  it("sends words a message can carry", () => {
+    expect(followUpVerdict(DECLINE_REPLY_TEXT).canSend).toBe(true);
+  });
+
+  it("says nothing was sent when the request moved before the decline went", () => {
+    expect(followUpHoldText("request-moved")).toMatch(/answered or replaced.*nothing was sent/);
   });
 });
 
@@ -149,6 +233,14 @@ describe("what the composer says", () => {
         "m1"
       )
     ).toMatch(/couldn't be typed in/);
+    // Its terminal may be gone: the way out is the inbox, never that terminal's menu.
+    const held = followUpProgressText(
+      sent,
+      { thread: [message({ from: "person", deliveryStatus: "needs-attention" })] },
+      "m1"
+    );
+    expect(held).toMatch(/under Needs attention in the Decisions inbox/);
+    expect(held).not.toMatch(/terminal's/);
     // Withdrawn with its question, or handled: kept in the thread, never typed.
     expect(
       followUpProgressText(

@@ -92,6 +92,11 @@ export interface HostCallContext {
    * preference (#15698), never anything the host said: for its audit record.
    */
   noteSkipPreference?: () => void;
+  /**
+   * The calling request's own abort (#17985): a `host.call` cancelled by its
+   * MCP client is cancelled on the host too.
+   */
+  signal?: AbortSignal;
 }
 
 /** What a `host.settings` call carries from the calling session beyond its arguments. */
@@ -188,7 +193,8 @@ function settingsArgsFit(args: HostSettingsArgs): boolean {
 
 /**
  * An arm names one kind of condition, and a host unless it watches agents,
- * which may cover every host; cancel and list take only their own.
+ * which may cover every host, or plugins' notifications, which are this
+ * machine's; cancel, list and read take only their own.
  */
 function watchArgsFit(args: HostWatchArgs): boolean {
   const capacity =
@@ -196,25 +202,56 @@ function watchArgsFit(args: HostWatchArgs): boolean {
     args.cpuIdleCoresAtLeast !== undefined ||
     args.memoryPressureAtMost !== undefined;
   const agents = args.agentsWaiting === true;
-  const agentFilters = args.waitingReasons !== undefined || args.projectId !== undefined;
+  const plugins = args.pluginNotifications === true;
   const armOnly =
     capacity ||
     agents ||
-    agentFilters ||
+    plugins ||
+    args.waitingReasons !== undefined ||
+    args.projectId !== undefined ||
+    args.pluginId !== undefined ||
     args.connection !== undefined ||
     args.expiresInSeconds !== undefined ||
     args.note !== undefined;
   switch (args.operation) {
     case "arm":
-      if (args.watchId !== undefined) return false;
-      if (agents) return args.connection === undefined && !capacity;
+      if (args.watchId !== undefined || args.notificationId !== undefined) return false;
+      if (agents) {
+        return (
+          !plugins && args.pluginId === undefined && args.connection === undefined && !capacity
+        );
+      }
+      if (plugins) {
+        return (
+          args.hostId === undefined &&
+          args.waitingReasons === undefined &&
+          args.connection === undefined &&
+          !capacity
+        );
+      }
       return (
-        args.hostId !== undefined && !agentFilters && (args.connection !== undefined) !== capacity
+        args.hostId !== undefined &&
+        args.waitingReasons === undefined &&
+        args.projectId === undefined &&
+        args.pluginId === undefined &&
+        (args.connection !== undefined) !== capacity
       );
     case "cancel":
-      return args.watchId !== undefined && args.hostId === undefined && !armOnly;
+      return (
+        args.watchId !== undefined &&
+        args.hostId === undefined &&
+        args.notificationId === undefined &&
+        !armOnly
+      );
     case "list":
-      return args.watchId === undefined && !armOnly;
+      return args.watchId === undefined && args.notificationId === undefined && !armOnly;
+    case "read":
+      return (
+        args.notificationId !== undefined &&
+        args.watchId === undefined &&
+        args.hostId === undefined &&
+        !armOnly
+      );
   }
 }
 

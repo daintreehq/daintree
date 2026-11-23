@@ -229,8 +229,8 @@ function CodexQuotaGroup({
   );
 }
 
-function CodexQuota() {
-  const { profiles, refresh } = useCodexQuota(true);
+function CodexQuota({ isActive }: { isActive: boolean }) {
+  const { profiles, refresh } = useCodexQuota(isActive);
   const now = useGlobalMinuteClock();
   const unreadProjectPresets = useUnreadProjectCodexPresets();
   const defaultLoginName = useAgentSettingsStore(
@@ -407,8 +407,8 @@ export function claudeUsageGroupLabels(
  * so this is never a live figure: each row is the latest message a pane showed
  * for one limit, under the login that pane ran on.
  */
-function ClaudeUsage() {
-  const { accounts, failed, refresh } = useClaudeUsage(true);
+function ClaudeUsage({ isActive }: { isActive: boolean }) {
+  const { accounts, failed, refresh } = useClaudeUsage(isActive);
   const now = useGlobalMinuteClock();
   const hasSavedAccounts = useAgentSettingsStore(
     (s) => (s.settings?.agents?.claude?.accounts?.length ?? 0) > 0
@@ -490,8 +490,15 @@ function ClaudeUsage() {
  * never read, so its section shows what its panes printed (#16370) beside
  * "View usage".
  */
-export function AgentQuotaSection({ agentId }: { agentId: string }) {
-  if (agentId === "codex") return <CodexQuota />;
-  if (agentId === "claude") return <ClaudeUsage />;
+export function AgentQuotaSection({
+  agentId,
+  isActive = true,
+}: {
+  agentId: string;
+  /** False while Settings shows another page: read only while it can be seen (#17981). */
+  isActive?: boolean;
+}) {
+  if (agentId === "codex") return <CodexQuota isActive={isActive} />;
+  if (agentId === "claude") return <ClaudeUsage isActive={isActive} />;
   return null;
 }

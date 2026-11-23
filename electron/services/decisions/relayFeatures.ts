@@ -24,7 +24,15 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * relay's to advertise in `/info`, never a desktop's to declare: presence
  * (#17240) is reported only to a relay that lists it. Setting the involvement
  * preference from this computer (#17237) has no token of its own: it rides
- * `involvement-v1`.
+ * `involvement-v1`. `advisory-deadlines-v1` says three things by who
+ * declares it: in a relay's `/info`, that it takes advisory creates; on a
+ * phone's ticket, that it shows the deadline and the plan; on a desktop's,
+ * that its host delivers advisory outcomes to its agents. It joins with the
+ * work that types the advisory notice into the pane that asked (#17941), and
+ * only a bridge given `advisoryDeadlines` asks to declare it: the owner's and
+ * each Remote Host's (#17942), once its delivery runs.
+ * `agent-stopped-push-v1`, like presence, is a relay's to advertise: the owner
+ * desktop asks for that push (#17319) only of a relay that lists it.
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
@@ -35,7 +43,20 @@ export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "owner-desktop-messages-v1",
   "person-declines-v1",
   "owner-desktop-declines-v1",
+  "advisory-deadlines-v1",
 ];
+
+/**
+ * Whether this Daintree delivers an advisory question's outcome to the agent
+ * that asked it (protocol section 21): the host support a bridge needs before
+ * it signs one (`BridgeOptions.advisoryDeadlines`). The terminal sink reads
+ * and types the advisory notice, a reopen or deletion stored for its question
+ * keeps it off a pane it hasn't reached yet, and it goes only to the run that
+ * asked or a resume of its session (#17941). Given to every lifetime, the
+ * owner's and a Remote Host's, which settles its own panes' questions from
+ * the relay while its owner sleeps (#17942), and only once its delivery runs.
+ */
+export const DAINTREE_DELIVERS_ADVISORY_OUTCOMES: boolean = true;
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
   return features.filter((feature) => DAINTREE_PROTOCOL_FEATURES.includes(feature));
@@ -50,14 +71,16 @@ export class DaintreeRelayClient extends RelayClient {
   override events(
     after: number,
     limit?: number,
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["events"]>[3]
   ): Promise<EventsPage> {
-    return super.events(after, limit, declared(features));
+    return super.events(after, limit, declared(features), opts);
   }
 
   override socketTicket(
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["socketTicket"]>[1]
   ): ReturnType<RelayClient["socketTicket"]> {
-    return super.socketTicket(declared(features));
+    return super.socketTicket(declared(features), opts);
   }
 }

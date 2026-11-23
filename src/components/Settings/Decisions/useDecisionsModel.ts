@@ -13,6 +13,12 @@ export interface DecisionsModelFailure {
   payload?: SetDecisionsModelPayload;
   /** The run a cancel named, so Retry can't cancel a newer one. */
   runId?: string;
+  /**
+   * A threshold save that asked to stop automatic answers (#18062): main
+   * stops them in memory even when it can't save that, so Retry asks again
+   * rather than only reading what main holds.
+   */
+  withdrawal?: boolean;
 }
 
 export interface UseDecisionsModelResult {
@@ -110,7 +116,7 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
   const act = (
     action: DecisionsModelAction,
     call: () => Promise<DecisionsModelState>,
-    retry: Pick<DecisionsModelFailure, "payload" | "runId"> = {}
+    retry: Pick<DecisionsModelFailure, "payload" | "runId" | "withdrawal"> = {}
   ): Promise<boolean> => {
     const payload = retry.payload;
     if (busyRef.current) return Promise.resolve(false);
@@ -167,8 +173,10 @@ export function useDecisionsModel(active: boolean): UseDecisionsModelResult {
         runId,
       }).then(() => {}),
     setThreshold: (threshold, evaluatedAt) =>
-      act("threshold", () =>
-        window.electron.decisions.setModelThreshold({ threshold, evaluatedAt })
+      act(
+        "threshold",
+        () => window.electron.decisions.setModelThreshold({ threshold, evaluatedAt }),
+        threshold === null ? { withdrawal: true } : {}
       ).then(() => {}),
     clearHistory: () => act("clear", () => window.electron.decisions.clearModelHistory()),
   };

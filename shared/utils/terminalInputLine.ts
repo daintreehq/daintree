@@ -447,6 +447,31 @@ export function observeInputLine(
   return { inputLine: reading.inputLine, marked: rebuild(reading.screen, rows) };
 }
 
+export interface InputBoxScreen {
+  /** The rows on view as plain text: cursor moves as spaces, styling and line ends dropped. */
+  rows: string[];
+  /**
+   * The first row below the input box's bottom edge, or null when `rule` finds
+   * no box. Rows from here on are drawn under the box, which reading the box
+   * itself never looks at.
+   */
+  belowBox: number | null;
+}
+
+/** The rows on view of `serialized`, and where the input box `rule` finds there ends. */
+export function readInputBoxScreen(
+  serialized: string,
+  rule: AgentInputSuggestionConfig | undefined
+): InputBoxScreen {
+  const screen = readRows(serialized);
+  const box = rule === undefined ? null : findBox(screen, compile(rule));
+  return {
+    rows: screen.rows.map((_, i) => screen.plain(i).trimEnd()),
+    // A box's last row is its last content row, with its closing edge under it.
+    belowBox: box === null ? null : box[box.length - 1]!.row + 2,
+  };
+}
+
 /**
  * The serialized screen with the input box's suggestion taken out, for a
  * reader that wants only what is on screen for certain (Canopy). By `rule`

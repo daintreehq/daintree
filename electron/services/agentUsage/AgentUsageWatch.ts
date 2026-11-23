@@ -42,8 +42,14 @@ export interface AgentUsageWatchDeps {
   canonicalCodexHome(home: string): Promise<string>;
   /** The key `readClaudeAccounts` groups a folder's readings under. */
   claudeAccountKey(configDir: string): Promise<string>;
-  /** Canonical home key to the home as a pane's env named it. */
-  readCodexHomes(homes: ReadonlyMap<string, string>): Promise<CodexHomeQuota[]>;
+  /**
+   * Canonical home key to the home as a pane's env named it. A read still
+   * queued when `stillWanted` turns false never starts, and is left out.
+   */
+  readCodexHomes(
+    homes: ReadonlyMap<string, string>,
+    stillWanted: () => boolean
+  ): Promise<CodexHomeQuota[]>;
   readClaudeAccounts(): Promise<ClaudeUsageAccount[]>;
   /** The names the user gave this host's Codex and Claude Code default logins (#17080). */
   readDefaultLoginNames?(): Promise<DefaultLoginNames>;
@@ -170,6 +176,8 @@ export class AgentUsageWatch {
   private readonly codexByHome = new Map<string, CodexHomeQuota>();
   /** Per home, when it was last asked. Kept across stops, so hiding and showing a window can't beat the cadence. */
   private readonly codexAskedAt = new Map<string, number>();
+  /** Bumped when tracking goes off, so a read from before then keeps nothing (#17981). */
+  private trackingEpoch = 0;
 
   constructor(private readonly deps: AgentUsageWatchDeps) {}
 
@@ -197,6 +205,18 @@ export class AgentUsageWatch {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * Tracking was turned off on this machine (#17981): what Codex answered
+   * before is forgotten with when it was asked, so turning it back on reads
+   * afresh rather than showing, or falling back to, an answer from before.
+   * The quota service's own short cache still bounds a quick off and on.
+   */
+  trackingTurnedOff(): void {
+    this.trackingEpoch++;
+    this.codexByHome.clear();
+    this.codexAskedAt.clear();
   }
 
   dispose(): void {
@@ -266,6 +286,7 @@ export class AgentUsageWatch {
   }
 
   private async refresh(generation: number): Promise<void> {
+    const epoch = this.trackingEpoch;
     let live = await this.readLive();
     if (generation !== this.generation) return;
     if (!live) {
@@ -293,7 +314,12 @@ export class AgentUsageWatch {
         if (!live.codexHomes.has(home)) continue;
       }
       this.codexAskedAt.set(home, this.deps.monotonic());
-      const answers = await this.deps.readCodexHomes(new Map([[home, live.codexHomes.get(home)!]]));
+      const answers = await this.deps.readCodexHomes(
+        new Map([[home, live.codexHomes.get(home)!]]),
+        () => generation === this.generation
+      );
+      // Tracking went off meanwhile: what was read before then isn't kept.
+      if (epoch !== this.trackingEpoch) return;
       // Kept even when the watch stopped meanwhile: the read was made and counted.
       for (const answer of answers) {
         const kept = this.codexByHome.get(answer.homeKey);
@@ -302,6 +328,8 @@ export class AgentUsageWatch {
         this.codexByHome.set(answer.homeKey, answer);
       }
       if (generation !== this.generation) {
+        // A read dropped before it started was never asked, so it isn't due later.
+        if (answers.length === 0) this.codexAskedAt.delete(home);
         // Wanted again since: the look that skipped this read as asked shows its answer.
         if (this.demand > 0) void this.tick();
         return;
@@ -413,9 +441,9 @@ function defaultDeps(): AgentUsageWatchDeps {
       const { claudeLiveAccountKey } = await import("../claude/ClaudeUsageService.js");
       return claudeLiveAccountKey(configDir);
     },
-    async readCodexHomes(homes) {
+    async readCodexHomes(homes, stillWanted) {
       const { readCodexQuotaForHomes } = await import("../codex/CodexQuotaService.js");
-      return readCodexQuotaForHomes(homes);
+      return readCodexQuotaForHomes(homes, stillWanted);
     },
     async readClaudeAccounts() {
       const { readClaudeUsageAccountsWithoutPanes } =

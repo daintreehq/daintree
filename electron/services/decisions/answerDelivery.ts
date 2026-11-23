@@ -1,6 +1,9 @@
 import {
   DecisionsBridge,
   DeliveryEngine,
+  closureInForce,
+  isAdvisoryNotice,
+  isClosure,
   isUndeliveredMessage,
   messageSentOn,
   openAnswerContent,
@@ -19,6 +22,7 @@ import {
   type OpenAnswerEntry,
   type PhoneImageCarrier,
   type PhoneImageStore,
+  type PolicyRegistry,
   type QuestionOrigin,
   type QuestionRow,
   type RelayClient,
@@ -26,7 +30,8 @@ import {
   type StoredMessage,
   type TerminalSink,
 } from "@daintreehq/decisions-client";
-import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { ADVISORY_ROUND_REVISION, type PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
@@ -37,10 +42,13 @@ import type {
   DecisionsAnswerOrigin,
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
+  DecisionsTimeoutNotice,
 } from "../../../shared/types/decisionsAttention.js";
 import type {
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionReference,
+  DecisionQuestionPaneResult,
   DecisionQuestionSummary,
 } from "../../../shared/types/decisionsQuestion.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
@@ -49,20 +57,28 @@ import {
   answerNeedsAttention,
   answerPreviewOf,
   answerRevision,
+  attentionQuestion,
+  attentionToken,
+  closedUnanswered,
   copiedAnswerText,
   heldFollowUps,
+  heldTimeoutNotice,
   markAnswerHandled,
   needsAttention,
   pendingEntries,
-  questionLine,
+  questionReference,
   readHandledAnswers,
+  readableText,
+  reasonOf,
   resumableReason,
   threadNeedsAttention,
+  type HandledAnswers,
   type OpenFollowUp,
 } from "./attentionList.js";
 import { sanitizeAnswerText } from "./answerNotice.js";
 import {
   inScope,
+  questionDetail,
   readQuestionContent,
   readQuestionImage,
   readQuestionSummary,
@@ -76,8 +92,11 @@ import {
   type SessionResumeDeps,
 } from "./daintreeResumeAdapter.js";
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
-import { reasonOf } from "./paneDecisionState.js";
+import type { AdvisoryHost } from "./questionRound.js";
+import { closedReasonOf } from "./questionClosed.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
+import type { PaneSnapshotPtyClient } from "./paneSnapshots.js";
+import { readQuestionPane } from "./questionPane.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
 
 /** A hold on the wake engine's queue (#15999), which takes wakes with the MCP server off. */
@@ -108,7 +127,10 @@ export interface DiagnosticTerminals {
 }
 
 /** What delivery needs from the rest of main; the lazy entry supplies the real ones. */
-export interface AnswerDeliveryDeps extends Omit<DaintreeTerminalSinkDeps, "queueWake" | "now"> {
+export interface AnswerDeliveryDeps extends Omit<
+  DaintreeTerminalSinkDeps,
+  "queueWake" | "now" | "originOf"
+> {
   /** Takes a hold on the wake engine. Called before the first delivery, and again after a failure. */
   holdWakes(): DecisionWakeHold | Promise<DecisionWakeHold>;
   /** Calls `onPane` on each pane signal; returns the unsubscribe. */
@@ -150,6 +172,10 @@ export interface AttentionLabelDeps {
   projectName(projectId: string): Promise<string | null>;
   /** Every pane the pty host holds now. */
   listTerminals(): Promise<AttentionTerminal[]>;
+  /** One pane, asked of only the host that holds it; null when it holds none by that id. */
+  getTerminal(terminalId: string): Promise<AttentionTerminal | null>;
+  /** An enrolled Remote Host's name, by the id its questions carry; null for one this computer doesn't know. */
+  hostName?(hostId: string): string | null;
 }
 
 /**
@@ -175,12 +201,118 @@ export interface AnswerDeliveryOptions {
    * takes its turns under too; delivery's own when there is none.
    */
   lock?: BridgeLock;
+  /**
+   * The lifetime's trusted policy, which decides whether an advisory
+   * question's plan may go ahead when its notice is typed. The library's
+   * default, which allows no advice, when there is none.
+   */
+  policy?: PolicyRegistry;
+  /** Advisory outcomes are typed as their own notice (`RelayConnectionOptions.advisoryDeadlines`). */
+  advisoryDeadlines?: boolean;
+  /**
+   * The bridge reading the relay's ledger now: the connection's current
+   * attempt, null between attempts. An advisory notice waits while the
+   * ledger may hold a later event for its round (#17941), and only a bridge
+   * that reads the relay knows; delivery's own never does.
+   */
+  ledger?: () => DecisionsBridge | null;
   /** The keys couldn't be reloaded: the connection stops, and nothing more is written. */
   onKeysUnusable(): void;
 }
 
 /** A phone image's path as delivery keeps it with its answer or follow-up. */
 type StoredImage = { attachment_id: string; path: string };
+
+/** The pinned library's read of the ledger for an advisory notice (`DeliveryOptions.replaying`). */
+type LedgerState = "unapplied" | "reading" | null;
+interface LedgerReader {
+  ledgerUnsettled(questionId: string): Promise<LedgerState>;
+}
+
+/** The library's `ledgerUnsettled` on `bridge`, kept private in its types; null if a later library drops it. */
+function ledgerReader(bridge: DecisionsBridge): LedgerReader["ledgerUnsettled"] | null {
+  const read = (bridge as unknown as Partial<LedgerReader>).ledgerUnsettled;
+  return typeof read === "function" ? read.bind(bridge) : null;
+}
+
+/**
+ * A question in its advisory round (#17941), read as the library's `adopt`
+ * reads it: asked for advice, with the round still the one asked. Whatever
+ * reaches the agent in it may let the plan that run stated go ahead, so it
+ * goes to that run or a resume of its own session, never a pane a person
+ * picks.
+ */
+function inAdvisoryRound(row: QuestionRow): boolean {
+  if (row.question_revision !== ADVISORY_ROUND_REVISION) return false;
+  if (parseAnswers(row.answers_json).some((e) => isAdvisoryNotice(e) || e.fallback_due === true)) {
+    return true;
+  }
+  if (!row.content_sealed) return false;
+  try {
+    const envelope = JSON.parse(row.content_sealed) as { aad?: { reply_mode?: unknown } } | null;
+    return envelope?.aad?.reply_mode === "advisory";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What delivery waits for before typing into a live pane of `agentId`: an
+ * empty composer for an agent that takes a line mid-turn, else its prompt.
+ * The confirmation that moves an answer and the outcome after it both say this.
+ */
+function waitsForAgent(agentId: string | undefined): "composer" | "prompt" {
+  return wakeGateOptionsFor(agentId).acceptWorking === true ? "composer" : "prompt";
+}
+
+/** What a retry of `row` sends back to delivery: its notices (expiry, decline, never published) and held follow-ups, by id. */
+interface Tried {
+  notices: string[];
+  followUps: string[];
+}
+
+/** As `retryPatch` sends them back: the answer slot's notices only while that slot needs a person. */
+function triedOf(row: QuestionRow, handled: HandledAnswers): Tried {
+  return {
+    notices: answerNeedsAttention(row, handled)
+      ? pendingEntries(row)
+          .filter((entry) => entry.kind !== "answer")
+          .map((entry) => entry.entry_id)
+      : [],
+    followUps: heldFollowUps(row).map((message) => message.message_id),
+  };
+}
+
+const NOTHING_TRIED: Tried = { notices: [], followUps: [] };
+
+/** The panes and project names attention items are labelled with. */
+interface ItemLabels {
+  terminals(): Promise<AttentionTerminal[]>;
+  projectName(projectId: string): Promise<string | null>;
+}
+
+/**
+ * What an action from the owner's Shell on this Remote Host's question
+ * (#18031) was confirmed against: the question it read, and its token then.
+ */
+export interface AttentionGuard {
+  reference: DecisionQuestionReference;
+  expected: string;
+}
+
+/** A worktree folder looked for before the lock (#18031), and whether it was there. */
+interface WorktreeLook {
+  path: string;
+  present: boolean;
+}
+
+/** No folder looked for: no resume can be offered from it. */
+const NOTHING_LOOKED: WorktreeLook = { path: "", present: false };
+
+type Eligibility = Pick<
+  DecisionsAttentionItem,
+  "status" | "answer" | "answerUnavailable" | "notice" | "followUps" | "canResume" | "canReassign"
+> & { code: string | null };
 
 export const DELIVERY_CHECK_INTERVAL_MS = 60_000;
 /** Past the wake's settle grace, so a pane that just settled reads as idle when delivery looks. */
@@ -247,6 +379,32 @@ function sameRun(a: QuestionOrigin, b: QuestionOrigin): boolean {
   );
 }
 
+/** A pane's run as delivery would record it: what `sameRun` compares. */
+interface PaneRun {
+  hostId: string;
+  generation: number;
+  principal: string;
+  incarnation: string;
+  agentId: string;
+}
+
+/**
+ * An opaque token of the run in `paneId` (#18093): listed with a destination
+ * and sent back with the move, so a pane whose agent was replaced in between
+ * is refused. A digest, so the principal never reaches the renderer.
+ */
+function runTokenOf(paneId: string, run: PaneRun): string {
+  const key = JSON.stringify([
+    run.hostId,
+    paneId,
+    run.generation,
+    run.principal,
+    run.incarnation,
+    run.agentId,
+  ]);
+  return createHash("sha256").update(key).digest("hex");
+}
+
 function runKey(o: QuestionOrigin): string {
   return JSON.stringify([
     o.host_id,
@@ -256,6 +414,8 @@ function runKey(o: QuestionOrigin): string {
     o.agent_incarnation,
     o.agent_session_id,
     o.worktree_id,
+    // Located against the asker's kind (#18116), so two kinds never share a reading.
+    o.agent_kind,
   ]);
 }
 
@@ -292,6 +452,10 @@ export class AnswerDelivery {
   private readonly resumeAbort = new AbortController();
   private hold: DecisionWakeHold | null = null;
   private holding: Promise<DecisionWakeHold | null> | null = null;
+  /** Closure writes a reopen waits for (`closureWrite`), each its engine's own promise. */
+  private readonly yieldedWrites = new WeakSet<Promise<void>>();
+  /** Questions with a reopen waiting on a write, until it is asked about again. */
+  private readonly reopening = new Set<string>();
   private started = false;
   private stopped = false;
   /** A pane signalled since sessions were last looked for; see `learnSessions`. */
@@ -320,6 +484,8 @@ export class AnswerDelivery {
       getPtyClient: deps.getPtyClient,
       ...(deps.hasComposerDraft ? { hasComposerDraft: deps.hasComposerDraft } : {}),
       queueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake),
+      closureSuperseded: (questionIds) => this.closureSuperseded(questionIds),
+      originOf: async (questionId) => (await this.store.getQuestion(questionId))?.origin ?? null,
       ...(deps.now ? { now: deps.now } : {}),
     });
     this.resume = deps.resume
@@ -338,19 +504,51 @@ export class AnswerDelivery {
       store: this.resume ? withResumeReasons(this.store, this.resume) : this.store,
       sink: this.routed,
       client: options.client,
+      ...(options.policy ? { policy: options.policy } : {}),
+      ...(options.advisoryDeadlines ? { advisoryDeadlines: true } : {}),
       ...(options.phoneImages ? { phoneImages: options.phoneImages } : {}),
       ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
     if (options.lock) this.owner.ctx.lock = options.lock;
     this.engine = this.owner.delivery;
+    if (options.ledger) this.followLedger(options.ledger);
+  }
+
+  /**
+   * Has the engine's advisory notices wait on what the connection's current
+   * attempt has read of the ledger (#17941), rather than on this never-started
+   * bridge, which has read nothing and so holds every one for the library's
+   * longest wait. Between attempts, and for a read an attempt that has since
+   * ended made, this bridge's own answer stands: an event of the question
+   * stored and not applied still holds the notice, and anything else holds it
+   * for that bounded wait, as for a relay that can't be reached.
+   */
+  private followLedger(current: () => DecisionsBridge | null): void {
+    const own = ledgerReader(this.owner);
+    if (own === null) return;
+    (this.owner as unknown as LedgerReader).ledgerUnsettled = async (questionId) => {
+      const live = current();
+      const read = live === null ? null : ledgerReader(live);
+      if (read === null) return own(questionId);
+      let state: LedgerState;
+      try {
+        state = await read(questionId);
+      } catch (error) {
+        // A store retired with its attempt refuses the read: that says nothing now.
+        if (current() === live) throw error;
+        return own(questionId);
+      }
+      return current() === live ? state : own(questionId);
+    };
   }
 
   /**
    * The answers a person has to decide about (#16020), and the follow-ups
    * after them (#16231), oldest question first, without what was marked
-   * handled. Each is opened here, in memory: the question's first line, the
-   * answer waiting to be typed in, and each follow-up's words.
+   * handled. Each is opened here, in memory: the question, whole and as its
+   * first line, any plan its round states, the answer waiting to be typed
+   * in, and each follow-up's words.
    */
   async attentionItems(): Promise<DecisionsAttentionItem[]> {
     const handled = await readHandledAnswers(this.store);
@@ -358,60 +556,196 @@ export class AnswerDelivery {
       .filter((row) => threadNeedsAttention(row, handled))
       .sort((a, b) => a.alias - b.alias);
     if (rows.length === 0) return [];
-    const terminals = await this.terminals();
-    const projects = new Map<string, Promise<string | null>>();
-    const projectName = (projectId: string) => {
-      let name = projects.get(projectId);
-      if (name === undefined) {
-        name =
-          this.o.deps.labels?.projectName(projectId).catch(() => null) ?? Promise.resolve(null);
-        projects.set(projectId, name);
-      }
-      return name;
-    };
+    const labels = this.itemLabels();
     const items: DecisionsAttentionItem[] = [];
-    for (const row of rows) {
-      const answerHeld = answerNeedsAttention(row, handled);
-      const opened = answerHeld ? await this.openPending(row) : [];
-      const answer = opened === null ? null : answerPreviewOf(opened);
-      const answerUnavailable =
-        answer !== null || !answerHeld ? null : opened === null ? "unreadable" : "none";
-      const followUps = await this.followUpPreviews(row);
-      let question: string | null;
-      try {
-        const content = await openQuestionContent(this.owner.ctx, row);
-        question = content === null ? null : questionLine(content.question);
-      } catch {
-        question = null;
-      }
-      const uncertain =
-        (answerHeld && row.delivery_status === "delivery-uncertain") ||
-        followUps.some((followUp) => followUp.status === "delivery-uncertain");
-      const status = uncertain ? "delivery-uncertain" : "needs-attention";
-      const code = answerHeld
-        ? row.error_code
-        : (heldFollowUps(row)[0]?.delivery?.error_code ?? null);
-      const reassignable =
-        status === "needs-attention" &&
-        (answerHeld ? answer !== null : followUps.length > 0) &&
-        followUps.every((followUp) => !followUp.unreadable) &&
-        this.ownHostId(row.origin);
-      items.push({
-        questionId: row.question_id,
-        alias: row.alias,
-        status,
-        reason: reasonOf(code),
-        question,
-        askedAt: row.origin_created_at,
-        origin: await this.originOf(row.origin, terminals, projectName),
-        answer,
-        answerUnavailable,
-        followUps,
-        canResume: reassignable && (await this.resumable(row, code)),
-        canReassign: reassignable,
-      });
-    }
+    for (const row of rows) items.push(await this.attentionItemOf(row, handled, labels));
     return items;
+  }
+
+  /**
+   * One of this machine's own questions as the list shows it, by its
+   * reference (#18031): for the owner's Shell to act on a Remote Host's
+   * stopped delivery with exactly what this machine would offer. Null when
+   * nothing of it needs a person, or the reference names another pane,
+   * project or machine.
+   */
+  async attentionItem(
+    reference: DecisionQuestionReference
+  ): Promise<DecisionsAttentionItem | null> {
+    const row = await this.store.getQuestion(reference.questionId);
+    if (row === null || !this.referenced(row, reference)) return null;
+    const handled = await readHandledAnswers(this.store);
+    if (!threadNeedsAttention(row, handled)) return null;
+    return this.attentionItemOf(row, handled, this.itemLabels());
+  }
+
+  /** The row is the question `reference` names: asked here, in its project and pane. */
+  private referenced(row: QuestionRow, reference: DecisionQuestionReference): boolean {
+    return (
+      row.question_id === reference.questionId &&
+      inScope(
+        row,
+        this.readScope({
+          hostId: reference.hostId,
+          projectId: reference.projectId,
+          terminalId: reference.terminalId,
+        })
+      )
+    );
+  }
+
+  /** The panes and project names items are labelled with, each read once per list. */
+  private itemLabels(): ItemLabels {
+    let terminals: Promise<AttentionTerminal[]> | null = null;
+    const projects = new Map<string, Promise<string | null>>();
+    return {
+      terminals: () => (terminals ??= this.terminals()),
+      projectName: (projectId) => {
+        let name = projects.get(projectId);
+        if (name === undefined) {
+          name =
+            this.o.deps.labels?.projectName(projectId).catch(() => null) ?? Promise.resolve(null);
+          projects.set(projectId, name);
+        }
+        return name;
+      },
+    };
+  }
+
+  /**
+   * What a person can do about `row` now, by the rules the list shows: each
+   * action offered only while it can work. Read again under the lock before
+   * an action from another machine is taken (#18031), so a resume offered
+   * there is never taken once it no longer could be here.
+   */
+  private async eligibility(
+    row: QuestionRow,
+    handled: HandledAnswers,
+    looked: WorktreeLook | null = null
+  ): Promise<Eligibility> {
+    const answerHeld = answerNeedsAttention(row, handled);
+    const opened = answerHeld ? await this.openPending(row) : [];
+    const answer = opened === null ? null : answerPreviewOf(opened);
+    const notice = answerHeld ? this.heldNotice(row) : null;
+    const answerUnavailable =
+      answer !== null || !answerHeld
+        ? null
+        : opened === null
+          ? "unreadable"
+          : notice !== null
+            ? null
+            : "none";
+    const followUps = await this.followUpPreviews(row);
+    const uncertain =
+      (answerHeld && row.delivery_status === "delivery-uncertain") ||
+      followUps.some((followUp) => followUp.status === "delivery-uncertain");
+    const status = uncertain ? "delivery-uncertain" : "needs-attention";
+    const code = answerHeld
+      ? row.error_code
+      : (heldFollowUps(row)[0]?.delivery?.error_code ?? null);
+    const readable =
+      status === "needs-attention" &&
+      followUps.every((followUp) => !followUp.unreadable) &&
+      this.ownHostId(row.origin);
+    const actionable = readable && (answerHeld ? answer !== null : followUps.length > 0);
+    // A timeout notice has no answer to show, but its own session can still be resumed for it.
+    const noticeHeld = readable && notice !== null && notice.delivery === "needs-attention";
+    return {
+      status,
+      code,
+      answer,
+      answerUnavailable,
+      notice,
+      followUps,
+      canResume: (actionable || noticeHeld) && (await this.resumable(row, code, looked)),
+      canReassign: actionable && !inAdvisoryRound(row),
+    };
+  }
+
+  /**
+   * Whether the folder `questionId` would resume in is there now, read without
+   * the lock, and only for the question the owner read as it read it: one that
+   * has changed since is refused under the lock without waiting on any folder.
+   */
+  private async worktreeLook(
+    questionId: string,
+    guard: AttentionGuard
+  ): Promise<WorktreeLook | null> {
+    const row = await this.store.getQuestion(questionId);
+    const isDirectory = this.o.deps.resume?.isDirectory;
+    if (row === null || isDirectory === undefined || !this.referenced(row, guard.reference)) {
+      return null;
+    }
+    if (attentionToken(row, await readHandledAnswers(this.store)) !== guard.expected) return null;
+    const path = row.origin.worktree_root;
+    if (path.trim() === "") return null;
+    return { path, present: await isDirectory(path).catch(() => false) };
+  }
+
+  /** One row as the list shows it, opened here, in memory. */
+  private async attentionItemOf(
+    row: QuestionRow,
+    handled: HandledAnswers,
+    labels: ItemLabels
+  ): Promise<DecisionsAttentionItem> {
+    const { status, code, answer, answerUnavailable, notice, followUps, canResume, canReassign } =
+      await this.eligibility(row, handled);
+    // Only what the question view would show: content it refuses shows nothing here either.
+    let detail: ReturnType<typeof questionDetail> = null;
+    try {
+      detail = questionDetail(row, await openQuestionContent(this.owner.ctx, row));
+    } catch {
+      // Unopened, the row says so: nothing of the question shows.
+    }
+    const asked = attentionQuestion(detail?.question);
+    return {
+      questionId: row.question_id,
+      alias: row.alias,
+      status,
+      reason: reasonOf(code),
+      question: asked.line,
+      fullQuestion: asked.whole,
+      plan: readableText(detail?.plan),
+      reference: questionReference(row),
+      askedAt: row.origin_created_at,
+      origin: await this.originOf(row.origin, await labels.terminals(), labels.projectName),
+      answer,
+      answerUnavailable,
+      notice,
+      followUps,
+      canResume,
+      canReassign,
+      token: attentionToken(row, handled),
+    };
+  }
+
+  /**
+   * Whether this delivery types advisory outcomes and its policy allows
+   * advice (#17944): what an advisory notice not yet typed would say follows
+   * them, as the engine reads them before typing it.
+   */
+  private get advisoryHost(): AdvisoryHost {
+    return {
+      outcomes: this.o.advisoryDeadlines === true,
+      allowed: this.o.policy?.advisoryQuestions === true,
+    };
+  }
+
+  /**
+   * The current round's timeout notice when it is what of the answer needs a
+   * person (#17944): still to be typed, its typing stopped or possibly done.
+   * Null for a notice of a round since replaced, which is never typed again.
+   */
+  private heldNotice(row: QuestionRow): DecisionsTimeoutNotice | null {
+    const notice = heldTimeoutNotice(row, this.advisoryHost);
+    if (notice === null) return null;
+    return {
+      kind: notice.kind,
+      revision: notice.revision,
+      deadline: notice.deadline,
+      delivery: notice.delivery === "uncertain" ? "delivery-uncertain" : "needs-attention",
+      disposition: notice.disposition,
+    };
   }
 
   /**
@@ -425,7 +759,7 @@ export class AnswerDelivery {
   ): Promise<DecisionQuestionContentResult> {
     const row = await this.store.getQuestion(questionId);
     if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
-    return readQuestionContent(this.owner.ctx, row);
+    return readQuestionContent(this.owner.ctx, row, this.advisoryHost);
   }
 
   /**
@@ -442,6 +776,33 @@ export class AnswerDelivery {
     const row = await this.store.getQuestion(questionId);
     if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
     return readQuestionImage(this.owner.ctx, row, attachmentId, offset);
+  }
+
+  /**
+   * The pane that asked one of this machine's questions, as it shows now
+   * (#18037), whatever the question's status, through `getPtyClient`, which
+   * reads its screen. An imported question names no pane of this run.
+   */
+  async questionPane(
+    scope: QuestionReadRequest,
+    questionId: string,
+    getPtyClient: () => PaneSnapshotPtyClient | null
+  ): Promise<DecisionQuestionPaneResult> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null || row.history_only || !inScope(row, this.readScope(scope))) {
+      return { result: "not-found" };
+    }
+    const { deps } = this.o;
+    return readQuestionPane(
+      {
+        hostId: () => deps.hostId(),
+        principalFor: (paneId) => deps.principalFor(paneId),
+        getPtyClient,
+      },
+      getPtyClient(),
+      row,
+      () => this.clock()
+    );
   }
 
   /** Each question's opening line, in the order asked for, each id once (#17097). */
@@ -475,15 +836,22 @@ export class AnswerDelivery {
   /**
    * The delimited blocks a person pastes in themselves, the answer and the
    * follow-ups after it in thread order; null when nothing is waiting to be
-   * typed, or part of it can't be opened here.
+   * typed, or part of it can't be opened here. With `reference`, for the
+   * owner's Shell (#18031), only while the row is the question it names.
    */
-  async copiedAnswer(questionId: string): Promise<string | null> {
+  async copiedAnswer(
+    questionId: string,
+    reference?: DecisionQuestionReference
+  ): Promise<string | null> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return null;
+    if (reference !== undefined && !this.referenced(row, reference)) return null;
     const handled = await readHandledAnswers(this.store);
-    const opened = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
+    const pending = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
     const followUps = await this.openFollowUps(row);
-    if (opened === null || followUps === null) return null;
+    if (pending === null || followUps === null) return null;
+    // A notice (expiry, decline, never published) is Daintree's to type into the run that asked, never a person's to paste (#17944).
+    const opened = pending.filter((entry) => entry.kind === "answer");
     return copiedAnswerText(
       row,
       opened,
@@ -602,13 +970,35 @@ export class AnswerDelivery {
    * reopened and the answer typed in, as delivery would on its own (#16019),
    * past the guard that stops a run it already reopened being reopened again.
    * Resolves once delivery has had its go, with what became of the answer.
+   *
+   * With `guard`, for the owner's Shell acting on this Remote Host's question
+   * (#18031): only while the row is the question it read, still asks what it
+   * was read asking, and would still be offered a resume here, all checked
+   * under the lock, so a window here acting first leaves nothing to resume.
    */
-  async resumeAnswer(questionId: string): Promise<DecisionsAnswerOutcome> {
+  async resumeAnswer(questionId: string, guard?: AttentionGuard): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
+    // Its worktree is looked for before the lock, never under it: a mount that doesn't answer
+    // would hold every delivery here. Under the lock it counts only for the folder looked at.
+    const looked =
+      guard === undefined ? null : ((await this.worktreeLook(questionId, guard)) ?? NOTHING_LOOKED);
+    let tried = NOTHING_TRIED;
     const refused = await this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
+      if (row !== null && guard !== undefined && !this.referenced(row, guard.reference)) {
+        return { result: "resolved" as const };
+      }
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      const handled = await readHandledAnswers(this.store);
+      if (
+        guard !== undefined &&
+        (attentionToken(row, handled) !== guard.expected ||
+          !(await this.eligibility(row, handled, looked)).canResume)
+      ) {
+        return { result: "refused" as const, reason: "changed" as const };
+      }
+      tried = triedOf(row, handled);
       this.resume?.allowAgain(row.origin);
       await this.store.updateQuestion(questionId, await this.retryPatch(row));
       await this.owner.ctx.audit.log({
@@ -621,18 +1011,21 @@ export class AnswerDelivery {
     });
     if (refused !== null) return refused;
     await this.deliverNow();
-    return this.outcomeOf(questionId);
+    return this.outcomeOf(questionId, tried);
   }
 
   /** The panes `questionId`'s answer could be typed into instead: agents running here now. */
   async answerDestinations(questionId: string): Promise<DecisionsAnswerDestinations> {
     if (this.stopped) return { result: "not-running" };
     const row = await this.store.getQuestion(questionId);
-    if ((await this.actionable(row)) !== null || row === null) return { result: "unavailable" };
+    if ((await this.actionable(row)) !== null || row === null || inAdvisoryRound(row)) {
+      return { result: "unavailable" };
+    }
     const destinations: DecisionsAnswerDestination[] = [];
     const projects = new Map<string, string | null>();
     for (const terminal of await this.terminals()) {
-      if (this.runOf(terminal) === null) continue;
+      const run = this.runOf(terminal);
+      if (run === null) continue;
       const projectId = terminal.projectId!;
       if (!projects.has(projectId)) {
         projects.set(
@@ -643,6 +1036,7 @@ export class AnswerDelivery {
       const agentId = (terminal.detectedAgentId ?? terminal.launchAgentId)!;
       destinations.push({
         terminalId: terminal.id,
+        run: runTokenOf(terminal.id, run),
         title: terminal.title?.trim() || (agentNameOf(agentId) ?? agentId),
         agentId,
         agentName: agentNameOf(agentId),
@@ -651,11 +1045,16 @@ export class AnswerDelivery {
         worktreeId: terminal.worktreeId ?? NO_WORKTREE,
         worktreeName: folderName(terminal.cwd),
         askedHere: terminal.id === row.origin.pane_id,
+        waitsFor: waitsForAgent(agentId),
       });
     }
     // The pane that asked, then its worktree, then its project, then the rest.
-    const rank = (d: DecisionsAnswerDestination) =>
-      d.askedHere ? 0 : d.projectId === row.origin.project_id ? 1 : 2;
+    const askingWorktree = row.origin.worktree_id;
+    const rank = (d: DecisionsAnswerDestination) => {
+      if (d.askedHere) return 0;
+      if (d.projectId !== row.origin.project_id) return 3;
+      return askingWorktree !== NO_WORKTREE && d.worktreeId === askingWorktree ? 1 : 2;
+    };
     destinations.sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title));
     return { result: "listed", destinations };
   }
@@ -664,19 +1063,36 @@ export class AnswerDelivery {
    * "Choose destination" (#16020): the person confirmed another live pane
    * for the answer. Its origin becomes that pane's run, recorded in the
    * audit trail with both panes, and it is typed in there through the usual
-   * gate: never while that agent is working.
+   * gate: never while that agent is working. Refused in a question's
+   * advisory round (#17941): only the run that stated the plan, or a resume
+   * of its session, takes what is typed for it. Refused too once the pane
+   * runs another agent than `to.run`, its run as listed (#18093): the person
+   * confirmed that agent, not the pane.
    */
-  async reassignAnswer(questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> {
+  async reassignAnswer(
+    questionId: string,
+    to: Pick<DecisionsAnswerDestination, "terminalId" | "run">,
+    expected?: string
+  ): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
-    const terminal = (await this.terminals()).find((candidate) => candidate.id === terminalId);
-    const run = terminal === undefined ? null : this.runOf(terminal);
-    if (terminal === undefined || run === null) {
-      return { result: "refused", reason: "destination-gone" };
-    }
     const refused = await this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      if (await this.changedSince(row, expected)) {
+        return { result: "refused" as const, reason: "changed" as const };
+      }
+      if (inAdvisoryRound(row))
+        return { result: "refused" as const, reason: "asker-only" as const };
+      // Read under the lock, so a run replaced while it waited is refused, not recorded.
+      const terminal = await this.terminal(to.terminalId);
+      const run = terminal === undefined ? null : this.runOf(terminal);
+      if (terminal === undefined || run === null) {
+        return { result: "refused" as const, reason: "destination-gone" as const };
+      }
+      if (runTokenOf(terminal.id, run) !== to.run) {
+        return { result: "refused" as const, reason: "destination-changed" as const };
+      }
       const origin: QuestionOrigin = {
         ...row.origin,
         host_id: run.hostId,
@@ -723,16 +1139,25 @@ export class AnswerDelivery {
    * became of them, but nothing it holds for a person is delivered any more
    * (#16231): the answers waiting and the follow-ups that needed a person.
    * The library holds a thread's later follow-ups behind both, so they then
-   * go on.
+   * go on. With `reference`, for the owner's Shell (#18031), only while the
+   * row is the question it names.
    */
-  async markHandled(questionId: string): Promise<DecisionsAnswerOutcome> {
+  async markHandled(
+    questionId: string,
+    expected?: string,
+    reference?: DecisionQuestionReference
+  ): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
     return this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
       if (row === null) return { result: "resolved" };
+      if (reference !== undefined && !this.referenced(row, reference)) {
+        return { result: "resolved" };
+      }
       const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
       const held = new Set(heldFollowUps(row).map((message) => message.message_id));
       if (!answerHeld && held.size === 0) return { result: "resolved" };
+      if (await this.changedSince(row, expected)) return { result: "refused", reason: "changed" };
       if (answerHeld) await markAnswerHandled(this.store, row);
       const patch: Partial<QuestionRow> = answerHeld ? undelivered(row) : {};
       if (held.size > 0) {
@@ -751,6 +1176,15 @@ export class AnswerDelivery {
       });
       return { result: "handled" };
     });
+  }
+
+  /**
+   * Whether `row` asks something else than the token the person confirmed
+   * against (#17944). No token, from a caller that showed none, checks nothing.
+   */
+  private async changedSince(row: QuestionRow, expected: string | undefined): Promise<boolean> {
+    if (expected === undefined) return false;
+    return attentionToken(row, await readHandledAnswers(this.store)) !== expected;
   }
 
   /** Null when a person can act on `row`'s answer and follow-ups; otherwise why not. */
@@ -784,6 +1218,11 @@ export class AnswerDelivery {
     if (answerNeedsAttention(row, handled) && pendingEntries(row).length > 0) {
       patch.delivery_status = "desktop-received";
       patch.error_code = null;
+      // As the library's own retry: a refused advisory write is tried again, so it no longer stands.
+      const entries = parseAnswers(row.answers_json);
+      if (entries.some((e) => e.write_refused)) {
+        patch.answers_json = serializeAnswers(entries.map(({ write_refused: _w, ...e }) => e));
+      }
     }
     const held = new Set(heldFollowUps(row).map((message) => message.message_id));
     if (held.size > 0) {
@@ -803,9 +1242,34 @@ export class AnswerDelivery {
     await this.running;
   }
 
-  private async outcomeOf(questionId: string): Promise<DecisionsAnswerOutcome> {
+  /**
+   * What became of `questionId` once delivery had its go. `tried`, what the
+   * action sent back: a notice of it neither typed nor still to be typed (a
+   * reopen replaced its round, or a person handled it meanwhile) no longer
+   * needs attention, and is never reported delivered, nor waiting unless
+   * something else the action sent back still waits (#17944).
+   */
+  private async outcomeOf(
+    questionId: string,
+    tried: Tried = NOTHING_TRIED
+  ): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
+    // Withdrawn meanwhile (#18021): nothing of it is typed any more, and nothing here says what was.
+    if (closedReasonOf(row) === "withdrawn") return { result: "resolved" };
+    // Over with only its notice stopped (#18021): delivery holds that notice and nothing of the
+    // person's waits, so nothing is promised, and nothing here says what was typed.
+    if (needsAttention(row) && closedUnanswered(row)) return { result: "resolved" };
+    // As the engine's own test: a closure notice of a round since replaced is never typed.
+    const live = pendingEntries(row).filter(
+      (entry) => !isClosure(entry) || closureInForce(entry, row)
+    );
+    const left = new Set(live.map((entry) => entry.entry_id));
+    for (const entry of parseAnswers(row.answers_json)) {
+      if (entry.delivered) left.add(entry.entry_id);
+    }
+    // A notice sent back that is neither typed nor still to be typed was replaced or handled meanwhile.
+    const lost = tried.notices.some((id) => !left.has(id));
     const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
     const held = heldFollowUps(row);
     if (answerHeld || held.length > 0) {
@@ -816,22 +1280,33 @@ export class AnswerDelivery {
         result: "needs-attention",
         status: uncertain ? "delivery-uncertain" : "needs-attention",
         reason: reasonOf(answerHeld ? row.error_code : (held[0]?.delivery?.error_code ?? null)),
+        // Only its follow-ups stopped: the notice sent with them was replaced, and says nothing now.
+        ...(lost && !answerHeld ? { followUpsOnly: true as const } : {}),
       };
+    }
+    const undelivered = parseMessages(row.messages_json).filter(isUndeliveredMessage);
+    const followUpsWait = undelivered.some((message) =>
+      tried.followUps.includes(message.message_id)
+    );
+    if (lost && !followUpsWait && !live.some((entry) => tried.notices.includes(entry.entry_id))) {
+      return { result: "resolved" };
     }
     const terminalId = row.origin.pane_id;
     const title =
       (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
       null;
-    const waiting =
-      pendingEntries(row).length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
+    const waiting = live.length > 0 || undelivered.length > 0;
     if (!waiting) return { result: "delivered", terminalId, title };
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
-    const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
     return {
       result: "waiting",
       terminalId,
       title,
-      waitsFor: row.delivery_status === "pending-host" ? "host" : queues ? "composer" : "prompt",
+      waitsFor:
+        row.delivery_status === "pending-host"
+          ? "host"
+          : waitsForAgent(row.origin.agent_kind || undefined),
+      ...(lost && followUpsWait ? { followUpsOnly: true as const } : {}),
     };
   }
 
@@ -890,7 +1365,11 @@ export class AnswerDelivery {
   }
 
   /** What a resume needs that can be checked without launching anything. */
-  private async resumable(row: QuestionRow, code: string | null): Promise<boolean> {
+  private async resumable(
+    row: QuestionRow,
+    code: string | null,
+    looked: WorktreeLook | null = null
+  ): Promise<boolean> {
     const { origin } = row;
     const isDirectory = this.o.deps.resume?.isDirectory;
     if (this.resume === null || isDirectory === undefined) return false;
@@ -898,6 +1377,7 @@ export class AnswerDelivery {
     if ((origin.agent_session_id?.trim() ?? "") === "") return false;
     if (origin.project_id === "" || origin.worktree_id === NO_WORKTREE) return false;
     if (origin.worktree_root.trim() === "") return false;
+    if (looked !== null) return looked.present && looked.path === origin.worktree_root;
     return isDirectory(origin.worktree_root).catch(() => false);
   }
 
@@ -909,18 +1389,22 @@ export class AnswerDelivery {
     }
   }
 
+  /** One pane, asked of its own host only, so a stalled other host holds nothing up. */
+  private async terminal(terminalId: string): Promise<AttentionTerminal | undefined> {
+    try {
+      const found = await this.o.deps.labels?.getTerminal(terminalId);
+      return found?.id === terminalId ? found : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * The run in `terminal` an answer could be typed into: an agent running
    * here now, holding a Decisions principal, every part of its identity
    * observed. Null for anything else.
    */
-  private runOf(terminal: AttentionTerminal): {
-    hostId: string;
-    generation: number;
-    principal: string;
-    incarnation: string;
-    agentId: string;
-  } | null {
+  private runOf(terminal: AttentionTerminal): PaneRun | null {
     if (terminal.isAssistantTerminal === true) return null;
     if (
       terminal.isExited === true ||
@@ -977,11 +1461,28 @@ export class AnswerDelivery {
       agentName: agentNameOf(origin.agent_kind),
       paneId: origin.pane_id,
       paneTitle: pane?.title?.trim() || null,
+      otherHost: this.ownHostId(origin) ? null : this.otherHostOf(origin.host_id),
     };
+  }
+
+  private otherHostOf(hostId: string): { hostId: string; name: string | null } {
+    try {
+      return { hostId, name: this.o.deps.labels?.hostName?.(hostId)?.trim() || null };
+    } catch {
+      return { hostId, name: null };
+    }
   }
 
   private ownHostId(origin: QuestionOrigin): boolean {
     return origin.host_id === this.o.deps.hostId();
+  }
+
+  /**
+   * Whether a resume already handed an answer to the run `origin` names this
+   * lifetime, and it went away, so delivery won't reopen it again (#18029).
+   */
+  resumeEnded(origin: QuestionOrigin): boolean {
+    return this.resume?.resumeEnded(origin) ?? false;
   }
 
   /** The lock every bridge over this store must use, so answer appends and delivery marks never interleave. */
@@ -1007,6 +1508,49 @@ export class AnswerDelivery {
     );
     this.timer.unref?.();
     this.request();
+  }
+
+  /**
+   * The closure notice for `questionId` this delivery is typing now, if any;
+   * it settles once recorded. Only a socket attempt's inbox asks, with a
+   * verified reopen of the question waiting on the answer (#17941), so the
+   * write yields: a wake not yet on its line ends untyped (`closureSuperseded`)
+   * and the reopen applies at once. Asked again once nothing is being typed,
+   * inside the lock turn that applies the reopen, it has delivery try again
+   * after that turn, whether the reopen applied or was refused.
+   */
+  closureWrite(questionId: string): Promise<void> | null {
+    const writing = this.engine.closureWrite(questionId);
+    if (writing !== null) {
+      this.yieldedWrites.add(writing);
+      this.reopening.add(questionId);
+    } else if (this.reopening.delete(questionId)) {
+      void this.lock
+        .run(async () => {})
+        .then(
+          () => this.request(),
+          () => {}
+        );
+    }
+    return writing;
+  }
+
+  /** Whether `questionId`'s advisory notice would wait for the ledger now, on the engine's own clock. */
+  ledgerHolds(questionId: string, opts?: { start?: boolean }): Promise<boolean> {
+    return this.engine.ledgerHolds(questionId, opts);
+  }
+
+  /** Whether a reopen waits for the closure write being typed for any of `questionIds`. */
+  private closureSuperseded(questionIds: readonly string[]): boolean {
+    return questionIds.some((questionId) => {
+      const writing = this.engine.closureWrite(questionId);
+      return writing !== null && this.yieldedWrites.has(writing);
+    });
+  }
+
+  /** An advisory notice waited for the ledger in the latest pass: the connection's next read wakes delivery. */
+  get replayHeld(): boolean {
+    return this.engine.replayHeld;
   }
 
   /** Tries delivery as soon as the attempt running now, if any, is done. */
@@ -1115,7 +1659,14 @@ export class AnswerDelivery {
       this.sessionsToLearn = false;
       await this.learnSessions();
     }
-    if (this.store.hasPendingDelivery && !(await this.store.hasPendingDelivery())) return;
+    // A pass that held a notice for the ledger runs once more though nothing waits now, so it lets that go.
+    if (
+      this.store.hasPendingDelivery &&
+      !this.engine.replayHeld &&
+      !(await this.store.hasPendingDelivery())
+    ) {
+      return;
+    }
     try {
       await this.engine.drain();
     } finally {
@@ -1241,7 +1792,7 @@ export class AnswerDelivery {
       if (where.state === "alive" && where.target) {
         const found = this.o.deps.diagnostics?.handles(where.target.paneId)
           ? await this.routed.hasMarker(where.target, intent.injection_id)
-          : await this.sink.readMarker(where.target, intent.injection_id);
+          : await this.sink.readMarker(where.target, intent.injection_id, typedInto.agent_kind);
         if (found === null && !giveUp) {
           complete = false;
           continue;

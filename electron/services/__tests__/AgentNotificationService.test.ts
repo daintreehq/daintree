@@ -35,7 +35,6 @@ const notificationServiceMock = vi.hoisted(() => ({
   isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
   closeNotificationByKey: vi.fn(),
   openDecisionQuestion: vi.fn(),
-  openDecisionAttention: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -4905,7 +4904,7 @@ describe("Decisions questions (#17232)", () => {
       expect(body).toBe("Open the question to read the follow-up.");
     });
 
-    it("gives a stalled answer's reason in the attention list's words, and opens that list", () => {
+    it("gives a stalled answer's reason in the attention list's words, and opens its question in the inbox (#18048)", () => {
       const stalled = question("term-1", Date.now(), {
         standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
         stall: { answerRevision: 2, followUpIds: [], reason: "pane_gone" },
@@ -4916,9 +4915,11 @@ describe("Decisions questions (#17232)", () => {
       const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
       expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
       expect(body).toBe("The terminal that asked was closed.");
-      options.onClick();
-      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(stalled.reference);
       expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+        stalled.reference
+      );
     });
 
     it("names held follow-ups, an uncertain delivery, and a reason it has no words for", () => {
@@ -4947,6 +4948,107 @@ describe("Decisions questions (#17232)", () => {
       expect(uncertainBody).toBe("The terminal refused the follow-ups.");
       expect(title).toBe(`Answer and follow-up to ${agentName()} in Daintree need attention`);
       expect(body).toBe("Daintree won't type them in on its own.");
+    });
+
+    it("names a timeout notice in the answer's place, and the Host that asked, never the question or its plan (#17944)", () => {
+      const closed = {
+        closedReason: "expired" as const,
+        replyMode: "advisory" as const,
+        closureNotice: {
+          delivery: "needs-attention" as const,
+          disposition: "fallback-due" as const,
+        },
+        standing: { kind: "needs-attention" as const, deliveryStatus: "needs-attention" as const },
+        // The expiry closes round 0: the stall carries that revision.
+        stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+      };
+      agentNotificationService.notifyDecisionStall(question("term-1", Date.now(), closed), "k-1");
+      const remote = question("term-2", Date.now(), {
+        ...closed,
+        closureNotice: { delivery: "uncertain", disposition: "fallback-due" },
+        standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+        stall: { answerRevision: 0, followUpIds: [], reason: "crash_unreconciled" },
+        remoteHost: { hostId: "host-2", name: "Atlas", connected: true },
+      });
+      agentNotificationService.notifyDecisionStall(remote, "k-2");
+
+      const [[title, body, options], [remoteTitle, remoteBody, remoteOptions]] =
+        notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Timeout notice for ${agentName()} in Daintree needs attention`);
+      expect(body).toBe("The terminal that asked was closed.");
+      expect(remoteTitle).toBe(
+        `Timeout notice for ${agentName()} in Daintree on Atlas may or may not have been delivered`
+      );
+      expect(remoteBody).toBe(
+        "Daintree stopped while typing it in, so it isn't typed again on its own."
+      );
+      for (const text of [title, body, remoteTitle, remoteBody]) expect(text).not.toMatch(/plan/i);
+
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+        question("term-1", Date.now(), closed).reference
+      );
+      // The Host's question opens too, its stall read and resolved through its Host.
+      remoteOptions.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledTimes(2);
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
+        remote.reference
+      );
+      expect(remote.reference).not.toEqual(question("term-1", Date.now(), closed).reference);
+    });
+
+    it("plays and shows nothing without a stall, and names the Remote Host where the reason would say this computer (#18026)", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: null,
+        }),
+        "k-0"
+      );
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      agentNotificationService.notifyDecisionStall(
+        question("term-2", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: [], reason: "answer_unreadable" },
+          remoteHost: { hostId: "host-2", name: "Atlas", connected: true },
+        }),
+        "k-1"
+      );
+      expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+      const [[, body]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(body).toBe("The answer couldn't be decrypted on Atlas.");
+    });
+
+    it("names only the follow-up when a follow-up alone stopped beside a notice that may have been typed", () => {
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          closedReason: "expired",
+          closureNotice: { delivery: "uncertain", disposition: "fallback-due" },
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: null, followUpIds: ["m-1"], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      const [[title]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Follow-up to ${agentName()} in Daintree needs attention`);
+    });
+
+    it("names the follow-up, not the notice, once the notice was typed", () => {
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          closedReason: "expired",
+          closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: null, followUpIds: ["m-1"], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      const [[title]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Follow-up to ${agentName()} in Daintree needs attention`);
     });
 
     it("plays this computer's waiting sound for each, with sound on", () => {

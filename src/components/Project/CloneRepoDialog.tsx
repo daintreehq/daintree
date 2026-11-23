@@ -33,9 +33,9 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
-  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { ProjectGroupField } from "./ProjectGroupField";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import { join as joinPath } from "@shared/utils/path";
 import {
@@ -251,7 +251,7 @@ export function CloneRepoDialog({
   const hasFinalizedRef = useRef(false);
   // The running clone's operation id, so Stop cancels this clone and no other.
   const cloneOpIdRef = useRef<string | null>(null);
-  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
+  const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(isOpen);
 
   const suggestedEmoji = useMemo(() => {
     const trimmed = folderName.trim();
@@ -916,6 +916,7 @@ export function CloneRepoDialog({
                   groups={groups}
                   value={groupId}
                   onChange={setGroupId}
+                  onCreate={createGroup}
                   disabled={isBusy}
                 />
                 <FormRow label="Open in" selfLabelled>

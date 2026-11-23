@@ -2,6 +2,7 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionsOpenQuestionRequest } from "@shared/types/decisionsQuestion";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { DecisionQuestionHost } from "../DecisionQuestionHost";
 
@@ -36,6 +37,7 @@ beforeEach(() => {
     },
   });
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
+  useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
 });
 
 afterEach(() => {
@@ -44,21 +46,28 @@ afterEach(() => {
 });
 
 describe("DecisionQuestionHost", () => {
-  it("opens the question a notification's click sends this view, by its reference", () => {
+  it("opens the inbox at the question a notification's click sends this view, by its reference (#18047)", () => {
     render(<DecisionQuestionHost followsOpenRequests />);
 
     act(() => send("decisions:open-question", { reference }));
-    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
       isOpen: true,
-      request: { questions: [{ scope: "reference", reference }], index: 0 },
+      request: {
+        terminalId: null,
+        question: { terminalId: "term-closed", questionId: "q-1", reference },
+      },
     });
+    const opening = useDecisionsInboxStore.getState().request.seq;
 
+    // A second click while the inbox is open shows its question in the same opening.
     const next = { ...reference, hostId: "host-2", questionId: "q-2" };
     act(() => send("decisions:open-question", { reference: next }));
-    expect(useDecisionsQuestionViewStore.getState().request).toEqual({
-      questions: [{ scope: "reference", reference: next }],
-      index: 0,
+    expect(useDecisionsInboxStore.getState().request).toMatchObject({
+      seq: opening,
+      question: { terminalId: "term-closed", questionId: "q-2", reference: next },
     });
+    // Never the question view stacked over it.
+    expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
   });
 
   it("opens a follow-up's question at that follow-up (#17235)", () => {
@@ -66,14 +75,22 @@ describe("DecisionQuestionHost", () => {
 
     act(() => send("decisions:open-question", { reference, messageId: "ask-1" }));
 
-    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
       isOpen: true,
-      request: {
-        questions: [{ scope: "reference", reference }],
-        index: 0,
-        threadMessageId: "ask-1",
-      },
+      request: { question: { reference, threadMessageId: "ask-1" } },
     });
+  });
+
+  it("opens the inbox in a Remote Host window too: the question is this computer's", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<DecisionQuestionHost followsOpenRequests />);
+      act(() => send("decisions:open-question", { reference }));
+      expect(useDecisionsInboxStore.getState().request.question?.reference).toEqual(reference);
+      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
   });
 
   it("stops following them once it unmounts", () => {
@@ -84,7 +101,7 @@ describe("DecisionQuestionHost", () => {
     act(() => send("decisions:open-question", { reference }));
 
     expect(handlers.get("decisions:open-question")?.size).toBe(0);
-    expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
   });
 
   it("follows none where it isn't asked to", () => {

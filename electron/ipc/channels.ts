@@ -319,6 +319,7 @@ export const CHANNELS = {
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_READ_INPUT_LINES: "canopy:read-input-lines",
+  CANOPY_READ_WORKTREES: "canopy:read-worktrees",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
   CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",
@@ -694,12 +695,17 @@ export const CHANNELS = {
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
   HELP_GLOBAL_ASSISTANT_ENSURE: "help:global-assistant-ensure",
   HELP_GLOBAL_ASSISTANT_STATE: "help:global-assistant-state",
+  HELP_GLOBAL_ASSISTANT_LIST: "help:global-assistant-list",
+  HELP_GLOBAL_ASSISTANT_START_NEW: "help:global-assistant-start-new",
+  HELP_GLOBAL_ASSISTANT_SET_COORDINATOR: "help:global-assistant-set-coordinator",
   HELP_GLOBAL_ASSISTANT_ATTACH: "help:global-assistant-attach",
   HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
   HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
   HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
+  HELP_GLOBAL_ASSISTANT_CAN_RUN: "help:global-assistant-can-run",
+  HELP_GLOBAL_ASSISTANT_REPLACE: "help:global-assistant-replace",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
@@ -1514,6 +1520,9 @@ export const CHANNELS = {
   // The sidebar's agent usage readout (#17318)
   AGENT_USAGE_SET_FOLLOWING: "agent-usage:set-following",
   AGENT_USAGE_CHANGED: "agent-usage:changed",
+  AGENT_USAGE_GET_TRACKING: "agent-usage:get-tracking",
+  AGENT_USAGE_SET_TRACKING: "agent-usage:set-tracking",
+  AGENT_USAGE_TRACKING_CHANGED: "agent-usage:tracking-changed",
 
   // The person's own prompt templates, from a folder on this machine (#16398)
   USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",
@@ -1629,6 +1638,7 @@ export const CHANNELS = {
   // reference from any of its windows (#17229). This computer's own.
   DECISIONS_LIST_QUESTIONS: "decisions:list-questions",
   DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE: "decisions:get-question-content-by-reference",
+  DECISIONS_GET_QUESTION_PANE_BY_REFERENCE: "decisions:get-question-pane-by-reference",
   DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
   DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
   DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
@@ -1669,19 +1679,22 @@ export const CHANNELS = {
   DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
   DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
   // Exporting the decision history, and deleting the relay's stored content
-  // or this computer's Decisions data (#16025), all in main.
+  // or this computer's Decisions data (#16025), all in main; removing this
+  // computer's settled questions (#18033).
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
-  // The trusted workflow gates, read-only, the proxy allowlist (#16013) and
-  // the default question expiry (#16122).
+  DECISIONS_REMOVE_SETTLED_QUESTIONS: "decisions:remove-settled-questions",
+  // The trusted workflow gates, read-only (#16013), and the default question
+  // expiry (#16122). Automatic answers are the decision model's (#18062).
   DECISIONS_GET_POLICY: "decisions:get-policy",
-  DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
   DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
   DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Whether the phone may show the asking pane's title, state and last lines (#16228).
   DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
   DECISIONS_SET_HOLD_PHONE_PUSHES: "decisions:set-hold-phone-pushes",
+  // Whether the phone is told when one of this computer's agents stops while the person is away (#17319).
+  DECISIONS_SET_AGENT_STOPPED_PUSHES: "decisions:set-agent-stopped-pushes",
   // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
   DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
@@ -1709,6 +1722,7 @@ export const CHANNELS = {
   DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
   DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
   DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
+  DECISIONS_HOST_ATTENTION: "decisions:host-attention",
   // The decision model's settings, evaluation and history (#16027).
   DECISIONS_GET_MODEL: "decisions:get-model",
   DECISIONS_SET_MODEL: "decisions:set-model",

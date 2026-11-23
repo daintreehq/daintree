@@ -128,7 +128,12 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
       trigger: "pattern",
       waitingReason: "prompt",
       rereadAt: expect.any(Number),
+      promptDrawnAt: expect.any(Number),
+      inputRowEmpty: true,
     });
+    const [, , , metadata] = onStateChange.mock.calls[0]!;
+    // Read off the screen it re-read: the empty input row in its frame (#18018).
+    expect(metadata.promptDrawnAt).toBe(metadata.rereadAt);
   });
 
   it("keeps the error after Escape while the limit banner is still in view", () => {
@@ -333,5 +338,135 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
       ],
       "prompt"
     );
+  });
+});
+
+describe("ActivityMonitor and a selector drawn short of the pane's bottom (#18014)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const monitor of monitors.splice(0)) monitor.dispose();
+    vi.useRealTimers();
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+  });
+
+  // A resumed Claude on a fresh pane: its trust prompt at the top, nothing under it.
+  const TRUST = [
+    "Accessing workspace:",
+    "",
+    " /repo/wt-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust?",
+    "",
+    " ❯ 1. Yes, I trust this folder",
+    "   2. No, exit",
+    "",
+    " Enter to confirm · Esc to cancel",
+  ];
+  /** `drawn` at the top of a pane `rows` tall. */
+  const fresh = (drawn: string[], rows = 48) => [
+    ...drawn,
+    ...Array.from({ length: rows - drawn.length }, () => ""),
+  ];
+
+  it("settles on a fresh pane's trust prompt as an approval wait", () => {
+    settleOn("fresh-trust", fresh(TRUST), "approval");
+  });
+
+  it("settles on it as an approval wait with only its key hint in the classifier's window", () => {
+    // The hint is the one drawn row in the bottom WAITING_REASON_SCAN_LINE_COUNT rows.
+    settleOn(
+      "fresh-trust-hint",
+      fresh(TRUST, TRUST.length + WAITING_REASON_SCAN_LINE_COUNT - 1),
+      "approval"
+    );
+  });
+
+  it("settles on another startup selector the same way, whatever it asks", () => {
+    const theme = [
+      " Choose the text style that looks best with your terminal",
+      "",
+      " ❯ 1. Dark mode ✔",
+      "   2. Light mode",
+      "   3. Dark mode (colorblind-friendly)",
+    ];
+    settleOn("fresh-theme", fresh(theme), "approval");
+  });
+
+  it("still settles at its prompt on a fresh pane, and under a dialog answered above", () => {
+    settleOn("fresh-prompt", fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, FOOTER]), "prompt");
+    settleOn("fresh-answered", fresh([...TRUST, "FAKE_CLAUDE_READY"]), "prompt");
+  });
+
+  it("re-reads a selector drawn after the agent settled, though it never went busy", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-late-trust",
+      fresh(["$ claude --resume 0199f8c1"]),
+      "prompt"
+    );
+
+    monitor.onData("trust prompt");
+    show(fresh(TRUST));
+    vi.advanceTimersByTime(5000);
+
+    expect(monitor.getState()).toBe("idle");
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+  });
+
+  it("re-reads its prompt once the trust prompt gives way to its empty input row, drawn as high", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-answered-quiet",
+      fresh(TRUST),
+      "approval"
+    );
+
+    // Answered, and redrawn without going busy: the input row is where the dialog was.
+    monitor.onData("composer");
+    show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, FOOTER]));
+    vi.advanceTimersByTime(5000);
+
+    expect(reasonUpdates(onStateChange)).toEqual(["prompt"]);
+  });
+
+  it("never re-reads a prompt off an input row with a selector drawn under it", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-selector-under-composer",
+      fresh(TRUST),
+      "approval"
+    );
+
+    monitor.onData("selector under the input row");
+    show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, " ❯ 1. Allow", "   2. Deny"]));
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual([]);
+
+    // Boxed, with the ASCII highlight, or lettered.
+    for (const selector of [
+      ["│ > 1. Continue │", "│   2. Cancel   │"],
+      ["  a) keep", "  b) drop"],
+    ]) {
+      monitor.onData("another selector under the input row");
+      show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, ...selector]));
+      vi.advanceTimersByTime(5000);
+    }
+    expect(reasonUpdates(onStateChange)).toEqual([]);
+  });
+
+  it("never re-reads a prompt off an input row left above a newer dialog", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-old-composer",
+      fresh(TRUST),
+      "approval"
+    );
+
+    // A layout no selector check knows, under a frame it left behind.
+    monitor.onData("dialog under an old composer");
+    show(fresh([RULE, INPUT_ROW, RULE, "", " Pick one:", "   a) keep", "   b) drop"]));
+    vi.advanceTimersByTime(5000);
+
+    expect(reasonUpdates(onStateChange)).toEqual([]);
   });
 });

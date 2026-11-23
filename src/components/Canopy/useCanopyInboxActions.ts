@@ -7,8 +7,14 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
+import { openStoppedAnswers } from "@/components/Decisions/openStoppedAnswers";
+import {
+  decisionsAttentionHolds,
+  itemAnswerAttention,
+  itemArchived,
+  itemSubject,
+  type CanopyItem,
+} from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
@@ -200,8 +206,9 @@ export function useCanopyInboxActions({
         }
         // The cursor moves on before the run leaves, as archiving does in mail —
         // only off the run it is on: a row archived from its hover button
-        // leaves the user where they were.
-        if (isSelected(item.runId)) {
+        // leaves the user where they were. A run Decisions holds something for
+        // stays listed, so the cursor stays with it.
+        if (isSelected(item.runId) && !decisionsAttentionHolds(item)) {
           const next = nextAfter(item.runId);
           if (next) focusCardNow(next.runId);
         }
@@ -563,14 +570,20 @@ export function useCanopyInboxActions({
     itemAnswerAttention(item) > 0 && placeOf(item, hostId, ownHostId).hostId === null;
   const answers: CanopyAnswerActions = {
     canReviewAnswers,
-    // Its first answer for the run takes the focus; once the run's last
-    // answer has gone, and the control that opened the list with it, the
-    // close returns to the run's row.
+    // In the inbox at the run's first stopped delivery (#18048), or the attention
+    // list for one the inbox can't list; once the run's last answer has gone, and
+    // the control that opened it with it, the close returns to the run's row.
     onReviewAnswers: (item) => {
       if (!canReviewAnswers(item)) return;
-      useDecisionsAttentionStore.getState().open(placeOf(item, hostId, ownHostId).runId, {
-        returnFocusTo: canopyCardDomId(item.runId),
-      });
+      const { runId, workspaceId } = placeOf(item, hostId, ownHostId);
+      void openStoppedAnswers(
+        { terminalId: runId, projectId: workspaceId },
+        {
+          returnFocusTo: canopyCardDomId(item.runId),
+          // Shown another host by the time the reads land, the list behind it isn't this one.
+          stillWanted: () => showsHost(hostId),
+        }
+      );
     },
   };
 

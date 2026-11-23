@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { LanguageDescription } from "@codemirror/language";
-import { CODEMIRROR_LANGUAGES, loadMarkdownSupport } from "../codeMirrorLanguages";
+import {
+  CODEMIRROR_LANGUAGES,
+  loadMarkdownSupport,
+  matchCodeMirrorLanguage,
+} from "../codeMirrorLanguages";
+import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 
 // Wraps the real `markdown()` so the configuration it receives is observable
 // while the parse-tree assertions below still exercise the real grammar.
@@ -38,6 +43,15 @@ describe("loadMarkdownSupport — the one Markdown configuration (#12323)", () =
     const support = await desc!.load();
     const names = nodeNames(support.language.parser.parse("~~x~~"));
     expect(names).toContain("Strikethrough");
+  });
+
+  // Source mode is MarkdownViewer's for every file the hosts call Markdown, and
+  // its links and highlighting come from this grammar.
+  it("gives the Markdown grammar to every file the hosts render as Markdown", () => {
+    for (const path of ["a.md", "a.markdown", "a.mdx", "a.mkd"]) {
+      expect(isMarkdownFilePath(path)).toBe(true);
+      expect(matchCodeMirrorLanguage(path)?.name).toBe("Markdown");
+    }
   });
 
   it("hands fences the viewer registry and turns off the two rewriting options", async () => {

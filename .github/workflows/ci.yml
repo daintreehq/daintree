@@ -141,8 +141,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # One compiler at a time: on 4 cores three at once peaked at 17.6-19 GB
+      # summed RSS against the runner's 16 GB, and ran no faster than one at a
+      # time (41 s, 9.1 GB peak). Past that the VM swap-thrashes, stops
+      # answering, and the job is cancelled at 25 minutes with no log (#18000).
+      # The script's deadline and memory floor stop it with a report of every
+      # unfinished project while the runner can still write one; the step
+      # timeout is the backstop, leaving the guard and format steps their time.
       - name: Typecheck
+        timeout-minutes: 8
         run: npm run typecheck
+        env:
+          TYPECHECK_CONCURRENCY: "1"
+          TYPECHECK_TIMEOUT_MINUTES: "6"
+          TYPECHECK_MIN_AVAILABLE_MB: "1024"
 
       - name: Codegen and drift guards
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

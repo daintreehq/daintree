@@ -96,7 +96,7 @@ export const ContextMenuContributionSchema = z
     // `"panel"` removed (#10512) — no renderer surface consumed it, so a
     // contributed panel context-menu item was dead. Reject it at the manifest
     // gate so authors get a clear error instead of a silently-ignored item.
-    location: z.enum(["worktree", "terminal", "file", "browser", "project"]),
+    location: z.enum(["worktree", "terminal", "file", "browser", "project", "assistant"]),
     label: z.string().min(1),
     when: z.string().min(1).optional(),
     // Host-evaluated row match for `location: "file"`, AND-ed with `when`.
@@ -107,6 +107,14 @@ export const ContextMenuContributionSchema = z
       .array(FileEditorPathPatternSchema)
       .min(1)
       .max(FILE_EDITOR_MAX_PATH_PATTERNS)
+      .optional(),
+    // The id handed to the plugin's availability handler (#18141). Plugin-local
+    // and never a command name: the host invokes one fixed channel with it.
+    availability: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/, {
+        message: "availability must be 1-64 letters, digits, '_' or '-'",
+      })
       .optional(),
   })
   .strict()

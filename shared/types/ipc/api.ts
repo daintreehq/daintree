@@ -1171,10 +1171,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot) => void
     ): () => void;
   };
-  // setFollowing comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  // setFollowing / getTracking / setTracking come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   agentUsage: GeneratedElectronAPI["agentUsage"] & {
     onChanged(
       callback: (snapshot: import("./agentUsage.js").AgentUsageSnapshot) => void
+    ): () => void;
+    onTrackingChanged(
+      callback: (snapshot: import("./agentUsage.js").AgentUsageTrackingSnapshot) => void
     ): () => void;
   };
   // start / getJob / stop / retry come from GeneratedElectronAPI; onJobUpdated is a renderer-only subscription.
@@ -2757,6 +2760,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * by main; the view settles it from the pane's own state.
          */
         confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
+        /**
+         * This machine's global Assistant made the call, through `host.call`
+         * into this project (#18153), set only by main on a local send. An
+         * action's handler is told so; it grants nothing.
+         */
+        callerOrigin?: "global-assistant";
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

@@ -61,12 +61,30 @@ export type TerminalSubmissionPhase =
    */
   | "unknown";
 
+/**
+ * Where a `cancelled` guarded line stopped, when the host saw it (#18157).
+ *
+ * - `admission`: its guard refused it as it took the lane. Nothing of it was
+ *   written.
+ * - `enter`: its whole body was written and the host held its own Enter back,
+ *   for a dialog drawn while the body waited, a screen it couldn't read, or
+ *   input since the body. The body is in the composer unsent, as a draft that
+ *   whoever is at the pane may still submit.
+ */
+export type TerminalSubmissionStop = "admission" | "enter";
+
 /** One submission's correlation record, as `terminal.getStatus` publishes it. */
 export interface TerminalSubmissionRecord {
   token: string;
   phase: TerminalSubmissionPhase;
   /** Epoch milliseconds the phase was entered. Absent for `unknown`. */
   at?: number;
+  /**
+   * `cancelled` only: where it stopped, when the host knows (#18157). Absent
+   * says nothing either way. Main's own reading: `terminal.getStatus` leaves
+   * it out.
+   */
+  cancelledAt?: TerminalSubmissionStop;
   /**
    * `pty_written` only: epoch milliseconds of the terminal's latest viewport
    * change, when that change was stamped more than one progress sample after

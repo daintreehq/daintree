@@ -8,6 +8,36 @@ import {
 const ORIGIN = "https://decisions.example.workers.dev";
 
 describe("revoke and rotate copy (#16010)", () => {
+  it("asks for a new recovery kit once a revocation or rotation put a new key in force (#18063)", () => {
+    const revoked = describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel");
+    const rotated = describeRotateResult({ result: "rotated", keyEpoch: 2 });
+    for (const { message } of [revoked, rotated]) {
+      expect(message).toMatch(/recovery kit saved earlier doesn't cover the new key/);
+      expect(message).toMatch(/save a new one under Data, below, and verify it/);
+    }
+    // No new key is in force for these yet, or at all.
+    for (const { message } of [
+      describeRevokeResult({ result: "not-found" }, "Pixel"),
+      describeRevokeResult({ result: "unconfirmed", origin: ORIGIN }, "Pixel"),
+      describeRotateResult({ result: "unconfirmed", origin: ORIGIN }),
+      describeRotateResult({ result: "unsaved", reason: "The keychain is locked" }),
+    ]) {
+      expect(message).not.toMatch(/recovery kit/);
+    }
+  });
+
+  it("says encrypted, as the rest of the page does, never sealed (#18066)", () => {
+    const messages = [
+      describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel").message,
+      describeRotateResult({ result: "rotated", keyEpoch: 2 }).message,
+      describeRotateResult({ result: "unverified" }).message,
+    ];
+    for (const message of messages) expect(message).not.toMatch(/seal/i);
+    expect(messages[0]).toContain("encrypted for each device that remains");
+    expect(messages[1]).toContain("encrypted for each paired device");
+    expect(messages[2]).toContain("wasn't given a new key and nothing was changed");
+  });
+
   it("finishes a revocation the relay took, or one for a device it no longer lists", () => {
     expect(describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel").finished).toBe(true);
     expect(describeRevokeResult({ result: "not-found" }, "Pixel")).toEqual({

@@ -1,6 +1,10 @@
 import type { WaitingReason } from "../../../shared/types/agent.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
-import { endsOnChoiceDialog, endsOnFooteredChoice } from "../../../shared/utils/terminalChoice.js";
+import {
+  endsOnChoiceDialog,
+  endsOnDrawnChoiceDialog,
+  endsOnFooteredChoice,
+} from "../../../shared/utils/terminalChoice.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js";
 
@@ -240,6 +244,21 @@ export function endsOnChoiceSelector(
   );
   return (
     endsOnChoiceDialog(stripped) || endsOnFooteredChoice(stripped, choiceDialogFootersFor(agentId))
+  );
+}
+
+/**
+ * Whether what is drawn on the screen ends on a selector, wherever it stops
+ * (#18014), with `lines` the whole viewport. A freshly started agent draws its
+ * trust prompt or another startup selector at the top of the pane, leaving
+ * only blank rows, or only the dialog's key hint, in the window
+ * `classifyWaitingReason` reads. Structure only, as for `endsOnChoiceSelector`.
+ */
+export function endsOnDrawnSelector(lines: string[], agentId?: string): boolean {
+  const stripped = lines.map((l) => stripAnsi(l));
+  return endsOnDrawnChoiceDialog(
+    withoutTrailingChecklist(stripped, stripped.length),
+    choiceDialogFootersFor(agentId)
   );
 }
 

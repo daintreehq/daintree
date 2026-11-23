@@ -4,7 +4,7 @@ import { useState } from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
-import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR, ESCAPE_TOOLTIP_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
@@ -2485,6 +2485,39 @@ describe("useGlobalKeybindings — layers open inside the plugin manager (#16942
     expect(event.defaultPrevented).toBe(true);
   });
 
+  /** A control in the manager whose keyboard-opened tooltip is showing. */
+  function controlWithTooltip(escapeClosable: boolean): HTMLButtonElement {
+    const tooltip = document.createElement("div");
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.setAttribute("data-state", "instant-open");
+    if (escapeClosable) tooltip.setAttribute(ESCAPE_TOOLTIP_LAYER_ATTR, "");
+    document.body.appendChild(tooltip);
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    return control;
+  }
+
+  it("forwards Escape past the manager while a closable tooltip is open", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    const { reachedDocument } = pressEscapeOn(controlWithTooltip(true));
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+  });
+
+  it("closes the manager over a pinned tooltip that Escape cannot dismiss", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    pressEscapeOn(controlWithTooltip(false));
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores a layer left open behind the manager in the inert workspace", () => {
     const closeManager = vi.fn();
     registerEscape(closeManager);
@@ -2927,5 +2960,104 @@ describe("useGlobalKeybindings — bare scoped keys", () => {
     } finally {
       button.remove();
     }
+  });
+});
+
+// Held down, xterm would send each repeat of Ctrl+Shift+Alt+C as Alt+Ctrl+C: an
+// interrupt the user never typed (#18132).
+describe("useGlobalKeybindings — Copy clean text held in a terminal", () => {
+  function pressInTerminal(helper: HTMLElement, repeat: boolean): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  function mountTerminal(): { xterm: HTMLElement; helper: HTMLTextAreaElement } {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    return { xterm, helper };
+  }
+
+  it("copies once and keeps the key's repeats from the terminal", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    const reachedTerminal = vi.fn();
+    helper.addEventListener("keydown", reachedTerminal);
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(reachedTerminal).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("terminal.copyClean", undefined, {
+      source: "keybinding",
+    });
+    xterm.remove();
+  });
+
+  it("keeps swallowing the repeats through a modifier pressed again and a trip out of the window", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Shift",
+          code: "ShiftLeft",
+          ctrlKey: true,
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      window.dispatchEvent(new Event("blur"));
+    });
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    xterm.remove();
+  });
+
+  it("leaves the repeats of other bindings alone", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.new" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    xterm.remove();
   });
 });

@@ -222,8 +222,9 @@ function toSyntheticDefinition(
       try {
         return await window.electron.plugin.invokeAction(pluginId, id, args, {
           dispatchSource,
-          ...(dispatchSource === "agent" && ctx?.hostCallerOrigin === "assistant"
-            ? { origin: "assistant" as const }
+          ...(dispatchSource === "agent" &&
+          (ctx?.hostCallerOrigin === "assistant" || ctx?.hostCallerOrigin === "global-assistant")
+            ? { origin: ctx.hostCallerOrigin }
             : {}),
           ...(personApproved ? { approval: "person" as const } : {}),
         });

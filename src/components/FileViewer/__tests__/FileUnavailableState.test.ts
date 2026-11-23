@@ -57,6 +57,22 @@ describe("unavailableCopy in a remote window", () => {
   });
 });
 
+describe("unavailableCopy for a file a plugin viewer still shows (#17336)", () => {
+  it("points a file too large for Source at Rendered, here and on a host alike", () => {
+    for (const remote of [null, SSH]) {
+      const copy = unavailableCopy("FILE_TOO_LARGE", "", remote, "CSV viewer");
+      expect(copy.action).toBe("rendered");
+      expect(copy.description).toContain("CSV viewer");
+    }
+  });
+
+  it("keeps the outside-Daintree way out without a viewer, or for any other failure", () => {
+    expect(unavailableCopy("FILE_TOO_LARGE", "", null).action).toBe("open");
+    expect(unavailableCopy("FILE_TOO_LARGE", "", SSH).action).toBe("save");
+    expect(unavailableCopy("BINARY_FILE", "", null, "CSV viewer").action).toBe("reveal");
+  });
+});
+
 describe("refusalReason", () => {
   it("maps a host refusal to its reason and leaves file failures alone", () => {
     expect(refusalReason({ title: "", refusal: "driven-elsewhere" })).toBe("DRIVEN_ELSEWHERE");

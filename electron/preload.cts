@@ -2014,6 +2014,12 @@ function buildElectronApi(): ElectronAPI {
       onChanged: (
         callback: (snapshot: import("../shared/types/ipc/agentUsage.js").AgentUsageSnapshot) => void
       ) => _typedOn(CHANNELS.AGENT_USAGE_CHANGED, callback),
+
+      onTrackingChanged: (
+        callback: (
+          snapshot: import("../shared/types/ipc/agentUsage.js").AgentUsageTrackingSnapshot
+        ) => void
+      ) => _typedOn(CHANNELS.AGENT_USAGE_TRACKING_CHANGED, callback),
     },
 
     // An agent's accounts (#16040)
@@ -3469,6 +3475,7 @@ function buildElectronApi(): ElectronAPI {
           dispatchDeadlineAt?: number;
           actionsListWalk?: boolean;
           confirmationCondition?: "next-own-fallback";
+          callerOrigin?: "global-assistant";
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

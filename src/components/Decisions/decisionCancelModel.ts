@@ -4,6 +4,7 @@ import type {
   DecisionQuestionCancelResult,
   DecisionQuestionLastRead,
   DecisionQuestionStatus,
+  DecisionReplyMode,
 } from "@shared/types/decisionsQuestion";
 import type { DismissAttempt } from "./decisionDeclineSend";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -28,6 +29,12 @@ export interface DecisionCancelTarget {
    * then. Absent or null for a question read just now.
    */
   lastReadAt?: number | null;
+  /**
+   * The mode of the round `revision` names (#17943), as read with it, so the
+   * confirmation says what declining means for it; absent or null when that
+   * read didn't say, and never taken from a read of another revision.
+   */
+  replyMode?: DecisionReplyMode | null;
 }
 
 /** A Remote Host's question dismissed from what was last read of it: there's no withdrawing it. */
@@ -67,23 +74,40 @@ export function hostAwayNote(
     case undefined:
       return null;
     case "read":
-      return `This computer last read it ${formatRelativeTime(lastRead.readAt, now)}, so you can still dismiss it as it was then.`;
+      return `This computer last read it ${formatRelativeTime(lastRead.readAt, now)}, so you can still decline it as it was then.`;
     case "not-sent":
-      return "It hadn't reached the relay when this computer last read it, so it can't be dismissed until the Host is back.";
+      return "It hadn't reached the relay when this computer last read it, so it can't be declined until the Host is back.";
     case "not-read":
-      return "This computer has no recent read of it to dismiss it by, so it can't be dismissed until the Host is back.";
+      return "This computer has no recent read of it to decline it by, so it can't be declined until the Host is back.";
   }
 }
 
 export function dismissTitle(target: DecisionCancelTarget): string {
-  return `Dismiss question ${target.label}?`;
+  return `Decline question ${target.label}?`;
 }
 
+/**
+ * What declining means for a plan the agent stated (#17943): it never lets
+ * one go ahead. Said unless the round being signed is known to be one that
+ * waits for a reply, so a confirmation that couldn't read the mode (a row's
+ * Decline, a Host away) never leaves it out.
+ */
+function planConsequence(target?: DecisionCancelTarget | null): string {
+  return target?.replyMode === "blocking"
+    ? ""
+    : ", and declining doesn't let the agent go ahead with any plan it stated";
+}
+
+/**
+ * One sentence: unlike Clear, a decline is sent, and the outcome reads as
+ * Declined everywhere once the relay takes it. A queued or refused one says
+ * so in its own progress or outcome.
+ */
 export function dismissBody(target?: DecisionCancelTarget | null): string {
   if (target != null && isAway(target)) {
-    return "The Remote Host that asked it isn't connected, so it's dismissed as this computer last read it. If it hasn't changed since, it's declined for you, as Dismiss on your phone does: your phones show it declined on this computer, and once the Host is back, an agent still listening is told you chose not to answer. Nothing is decided or approved.";
+    return `If it hasn't changed since this computer last read it, your phones show it declined once the relay takes it, and an agent still listening is told you chose not to answer when its Remote Host is back; nothing is approved${planConsequence(target)}.`;
   }
-  return "It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer, and it leaves Needs you.";
+  return `Once the relay takes it, your phones show it declined and an agent still listening is told you chose not to answer; nothing is approved${planConsequence(target)}.`;
 }
 
 export function cancelTitle(target: DecisionCancelTarget): string {
@@ -95,7 +119,7 @@ export function cancelBody(queued: boolean): string {
   const where = queued
     ? "It hasn't been sent to your phones yet."
     : "It's withdrawn on every paired phone and leaves Needs you once the relay confirms.";
-  return `${where} Nothing is typed into this terminal, and the agent sees the question cancelled when it checks.`;
+  return `${where} Nothing is typed into this terminal, and the agent sees the question withdrawn when it checks.`;
 }
 
 /** Shown when the row stopped waiting while the dialog was open. */
@@ -103,7 +127,7 @@ export function noLongerWaiting(
   target: DecisionCancelTarget,
   mode: DecisionCancelMode = "withdraw"
 ): DecisionCancelProblem {
-  const verb = mode === "dismiss" ? "dismiss" : "withdraw";
+  const verb = mode === "dismiss" ? "decline" : "withdraw";
   return {
     severity: "info",
     message: `${target.label} isn't waiting for an answer any more, so there's nothing to ${verb}.`,
@@ -113,8 +137,8 @@ export function noLongerWaiting(
 
 function unsupportedText(label: string, by: "relay" | "asking-desktop"): string {
   return by === "relay"
-    ? `Your relay needs an update before it takes a dismissal from this computer, so ${label} wasn't dismissed.`
-    : `Daintree on the computer that asked ${label} needs an update before it takes a dismissal from this computer, so it wasn't dismissed.`;
+    ? `Your relay needs an update before it takes a decline from this computer, so ${label} wasn't declined.`
+    : `Daintree on the computer that asked ${label} needs an update before it takes a decline from this computer, so it wasn't declined.`;
 }
 
 /**
@@ -137,7 +161,7 @@ export function dismissFallback(
   if (!withdrawable) return null;
   const instead = "You can withdraw it instead.";
   if (phase.kind === "refused" && phase.reason === "not-owner") {
-    return `This computer doesn't sign for you, so ${label} can't be dismissed here. Dismiss it on your phone, or withdraw it instead.`;
+    return `This computer doesn't sign for you, so ${label} can't be declined here. Decline it on your phone, or withdraw it instead.`;
   }
   if (phase.kind !== "settled") return null;
   const outcome = phase.outcome;
@@ -149,7 +173,7 @@ export function dismissFallback(
     outcome.reason === "not-found" &&
     (status === undefined || status === "queued")
   ) {
-    return `The relay doesn't hold ${label} yet, so it wasn't dismissed. ${instead}`;
+    return `The relay doesn't hold ${label} yet, so it wasn't declined. ${instead}`;
   }
   return null;
 }
@@ -163,26 +187,26 @@ export function dismissFallback(
 export function dismissProgressText(phase: DeclinePhase, away = false): string | null {
   switch (phase.kind) {
     case "sending":
-      return "Dismissing…";
+      return "Declining…";
     case "checking":
-      return "Checking whether it was dismissed…";
+      return "Checking whether it was declined…";
     case "lost":
-      return "Couldn't confirm whether it was dismissed.";
+      return "Couldn't confirm whether it was declined.";
     case "refused":
       return null;
     case "settled":
       if (phase.outcome.status === "queued") {
-        return "Dismissal queued. It's sent once the relay can be reached.";
+        return "Decline queued. It's sent once the relay can be reached.";
       }
       if (phase.outcome.status !== "declined") return null;
       return away
-        ? "Dismissed. It closes here once its Remote Host is back."
-        : "Dismissed. Waiting for it to close here…";
+        ? "Declined. It closes here once its Remote Host is back."
+        : "Declined. Waiting for it to close here…";
   }
 }
 
 /**
- * What the dialog does with a Dismiss: `done` once it's taken or queued (the
+ * What the dialog does with a Decline: `done` once it's taken or queued (the
  * question closes on its own), `withdraw` to offer withdrawing instead, with
  * why, or a `problem` to show.
  */
@@ -199,7 +223,7 @@ function problem(
   return { kind: "problem", problem: { severity, message, retry } };
 }
 
-/** A Dismiss that stopped before anything was signed, because the question couldn't be read again. */
+/** A Decline that stopped before anything was signed, because the question couldn't be read again. */
 function failedVerdict(
   label: string,
   reason: Extract<DismissAttempt, { kind: "failed" }>["reason"]
@@ -208,25 +232,25 @@ function failedVerdict(
     case "not-running":
       return problem(
         "warning",
-        `Decisions isn't connected to its relay right now, so ${label} wasn't dismissed. Try again once it's connected.`,
+        `Decisions isn't connected to its relay right now, so ${label} wasn't declined. Try again once it's connected.`,
         true
       );
     case "off":
-      return problem("info", `Decisions is off, so ${label} wasn't dismissed.`, false);
+      return problem("info", `Decisions is off, so ${label} wasn't declined.`, false);
     case "host-not-connected":
       return problem(
         "warning",
-        `The Remote Host that asked ${label} isn't connected, so it wasn't dismissed. Try again once it's back.`,
+        `The Remote Host that asked ${label} isn't connected, so it wasn't declined. Try again once it's back.`,
         true
       );
     case "unreadable":
       return problem(
         "info",
-        `${label} couldn't be opened on this computer, so it wasn't dismissed.`,
+        `${label} couldn't be opened on this computer, so it wasn't declined.`,
         false
       );
     case "failed":
-      return problem("error", `${label} couldn't be read again, so it wasn't dismissed.`, true);
+      return problem("error", `${label} couldn't be read again, so it wasn't declined.`, true);
   }
 }
 
@@ -236,19 +260,19 @@ export function dismissVerdict(
 ): DismissVerdict {
   const { label } = target;
   const away = isAway(target);
-  // A view that read a revision shows the update itself; a row's Dismiss reads it again.
+  // A view that read a revision shows the update itself; a row's Decline reads it again.
   // One last read while its Host was away can be read again only once the Host is back.
   const changed = away
     ? problem(
         "info",
-        `${label} changed after this computer last read it, so it wasn't dismissed. Review it once its Remote Host is back.`,
+        `${label} changed after this computer last read it, so it wasn't declined. Review it once its Remote Host is back.`,
         false
       )
     : problem(
         "info",
         target.revision === null
-          ? `${label} changed before it was dismissed. Try again to dismiss it as it is now.`
-          : `${label} changed since you opened it, so it wasn't dismissed. Review it, then dismiss it again.`,
+          ? `${label} changed, so it wasn't declined. Try again to decline it as it is now.`
+          : `${label} changed since you opened it, so it wasn't declined. Review it, then decline it again.`,
         target.revision === null
       );
   switch (attempt.kind) {
@@ -261,7 +285,7 @@ export function dismissVerdict(
     case "busy":
       return problem(
         "info",
-        `An answer to ${label} from this computer is under way, so it can't be dismissed.`,
+        `An answer to ${label} from this computer is under way, so it can't be declined.`,
         false
       );
     case "submitted":
@@ -277,19 +301,19 @@ export function dismissVerdict(
     case "lost":
       return problem(
         "warning",
-        `Couldn't confirm whether ${label} was dismissed. Try again to check.`,
+        `Couldn't confirm whether ${label} was declined. Try again to check.`,
         true
       );
     case "refused":
       switch (phase.reason) {
         case "off":
-          return problem("info", `Decisions is off, so ${label} wasn't dismissed.`, false);
+          return problem("info", `Decisions is off, so ${label} wasn't declined.`, false);
         case "invalid":
-          return problem("error", `This computer couldn't sign a dismissal of ${label}.`, true);
+          return problem("error", `This computer couldn't sign the decline for ${label}.`, true);
         case "not-owner":
           return problem(
             "info",
-            `This computer doesn't sign for you, so ${label} can't be dismissed here. Dismiss it on your phone.`,
+            `This computer doesn't sign for you, so ${label} can't be declined here. Decline it on your phone.`,
             false
           );
         default:
@@ -304,17 +328,17 @@ export function dismissVerdict(
     case "declined":
       return { kind: "done", key: attempt.key };
     case "already-answered":
-      return problem("info", `${label} was answered first, so it wasn't dismissed.`, false);
+      return problem("info", `${label} was answered first, so it wasn't declined.`, false);
     case "changed":
       return changed;
     case "closed":
       return problem(
         "info",
         outcome.reason === "expired"
-          ? `${label} expired first, so it wasn't dismissed.`
+          ? `${label} expired first, so it wasn't declined.`
           : outcome.reason === "not-found"
-            ? `The relay doesn't hold ${label}, so it wasn't dismissed.`
-            : `${label} was withdrawn or dismissed first.`,
+            ? `The relay doesn't hold ${label}, so it wasn't declined.`
+            : `${label} was withdrawn or declined first.`,
         false
       );
     case "unsupported":
@@ -323,7 +347,7 @@ export function dismissVerdict(
     case "rejected":
       return problem(
         "error",
-        `The relay refused the dismissal of ${label} (${outcome.code}).`,
+        `The relay refused the decline for ${label} (${outcome.code}).`,
         true
       );
   }
@@ -356,7 +380,7 @@ export function cancelProblem(
       return {
         severity: "warning",
         message:
-          "The Remote Host that asked this question isn't connected, so it may not have been cancelled. Try again once it's back.",
+          "The Remote Host that asked this question isn't connected, so it may not have been withdrawn. Try again once it's back.",
         retry: true,
       };
     case "refused":
@@ -392,7 +416,7 @@ export function cancelProblem(
 /**
  * Why a dismissal from here ended without being taken, once it settled out
  * of the dialog (a queued one read again, or a Retry), for the view to say
- * beside Dismiss; null while it's under way, once taken, and where
+ * beside Decline; null while it's under way, once taken, and where
  * withdrawing is offered instead.
  */
 export function dismissOutcomeText(

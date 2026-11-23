@@ -5,7 +5,7 @@ const base = { actionId: "acme.plugin.action", label: "Do it" };
 
 describe("ContextMenuContributionSchema location", () => {
   it("accepts every live location", () => {
-    for (const location of ["worktree", "terminal", "file", "browser", "project"]) {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
       expect(ContextMenuContributionSchema.safeParse({ ...base, location }).success).toBe(true);
     }
   });
@@ -37,10 +37,11 @@ describe("ContextMenuContributionSchema file match", () => {
     ["extensions", ["json"]],
     ["paths", ["a/**"]],
   ])("rejects %s on a non-file location", (key, value) => {
-    expect(
-      ContextMenuContributionSchema.safeParse({ ...base, location: "worktree", [key]: value })
-        .success
-    ).toBe(false);
+    for (const location of ["worktree", "assistant"]) {
+      expect(
+        ContextMenuContributionSchema.safeParse({ ...base, location, [key]: value }).success
+      ).toBe(false);
+    }
   });
 
   it("rejects extensions on a folder item", () => {
@@ -64,4 +65,41 @@ describe("ContextMenuContributionSchema file match", () => {
       false
     );
   });
+});
+
+describe("ContextMenuContributionSchema availability", () => {
+  it("accepts an availability id on every location", () => {
+    for (const location of ["worktree", "terminal", "file", "browser", "project", "assistant"]) {
+      expect(
+        ContextMenuContributionSchema.safeParse({
+          ...base,
+          location,
+          availability: "continue-session_2",
+        }).success
+      ).toBe(true);
+    }
+  });
+
+  it.each(["Continue_Session-2", "a".repeat(64)])("accepts availability %j", (availability) => {
+    expect(
+      ContextMenuContributionSchema.safeParse({ ...base, location: "terminal", availability })
+        .success
+    ).toBe(true);
+  });
+
+  it("keeps an item without one valid", () => {
+    expect(ContextMenuContributionSchema.safeParse({ ...base, location: "terminal" }).success).toBe(
+      true
+    );
+  });
+
+  it.each(["", "a".repeat(65), "acme.continue", "has space", "colon:id", 3])(
+    "rejects availability %j",
+    (availability) => {
+      expect(
+        ContextMenuContributionSchema.safeParse({ ...base, location: "terminal", availability })
+          .success
+      ).toBe(false);
+    }
+  );
 });

@@ -1411,6 +1411,8 @@ export interface PtyHostTerminalInfo {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
+  promptUnseen?: true;
   /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.
@@ -1705,6 +1707,11 @@ export interface ExactPromptGuard {
   /** The agent session main read, when known. One learned since is still that run. */
   agentSessionId?: string;
   /**
+   * The agent main read as detected in the PTY (#18116): another one detected
+   * there since, or none, is another run, though nothing respawned it.
+   */
+  agentId?: string;
+  /**
    * Mid-turn too, when the host's own record says the agent's CLI queues
    * input (`capabilities.queuesInputWhileWorking`), never on input typed
    * since the turn began.
@@ -1712,6 +1719,12 @@ export interface ExactPromptGuard {
   acceptWorking?: true;
   /** At a question the agent asked in prose as well as at its prompt. */
   acceptQuestion?: true;
+  /**
+   * Only while the terminal still reports the Claude Code update observation
+   * main read (#17908), by its `observedAt`, and it still names `/restart`: a
+   * footer seen anew or cleared since is not what the person approved.
+   */
+  updateObservedAt?: number;
 }
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */

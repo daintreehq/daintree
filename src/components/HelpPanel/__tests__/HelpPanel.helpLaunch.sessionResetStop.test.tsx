@@ -402,6 +402,13 @@ vi.mock("@/components/Terminal/MissingCliGate", () => ({
   ),
 }));
 
+const assistantMenuSubjects = vi.hoisted(() => [] as unknown[]);
+vi.mock("@/components/Plugin/AssistantPluginMenuItems", () => ({
+  AssistantPluginMenuItems: ({ subject }: { subject: unknown }) => {
+    assistantMenuSubjects.push(subject);
+    return null;
+  },
+}));
 vi.mock("@shared/config/agentIds", () => {
   const ids = ["claude", "gemini", "codex"];
   return {
@@ -1585,6 +1592,47 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
+
+  it("names the picker's plugin rows by the selected lane's workspace, slot and terminal (#18138)", () => {
+    setupTwoLanes();
+    helpPanelState.sessions[1] = { ...helpPanelState.sessions[1]!, agentId: "codex" };
+    assistantMenuSubjects.length = 0;
+    renderPanel();
+    expect(assistantMenuSubjects.at(-1)).toStrictEqual({
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 0,
+      terminalId: "term-1",
+      agentId: "claude",
+    });
+
+    selectLane(1);
+    expect(assistantMenuSubjects.at(-1)).toStrictEqual({
+      assistantScope: "project",
+      projectId: "proj-1",
+      slot: 1,
+      terminalId: "term-2",
+      agentId: "codex",
+    });
+  });
+
+  it.each([
+    ["reserved with no panel yet", undefined],
+    ["a spawning placeholder", "spawning"],
+    ["a failed spawn", "failed"],
+  ] as const)("holds back a lane's terminal id while it is %s (#18138)", (_, spawnStatus) => {
+    setupTwoLanes();
+    if (spawnStatus === undefined) delete panelStoreState.panelsById["term-2"];
+    else
+      panelStoreState.panelsById["term-2"] = {
+        ...(panelStoreState.panelsById["term-2"] as Record<string, unknown>),
+        spawnStatus,
+      };
+    assistantMenuSubjects.length = 0;
+    renderPanel();
+    selectLane(1);
+    expect(assistantMenuSubjects.at(-1)).toMatchObject({ slot: 1, terminalId: undefined });
+  });
 
   it("gives each session its own composer across a switch and back (#16571)", async () => {
     setupTwoLanes();

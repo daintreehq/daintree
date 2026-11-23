@@ -1,28 +1,34 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { DecisionsDisclosure } from "./DecisionsDisclosure";
+import { DecisionsDisclosureToggle } from "./DecisionsDisclosureToggle";
 import { DecisionsRecoveryKit } from "./DecisionsRecoveryKit";
 import { DecisionsExportDialog } from "./DecisionsExportDialog";
 import { DecisionsDeleteRelayDialog } from "./DecisionsDeleteRelayDialog";
 import { DecisionsDeleteLocalDialog } from "./DecisionsDeleteLocalDialog";
+import { DecisionsRemoveHistoryDialog } from "./DecisionsRemoveHistoryDialog";
 import { useDecisionsData, type DecisionsDataOutcome } from "./useDecisionsData";
+import { useLinkedDisclosure } from "./useLinkedDisclosure";
 import {
   describeExportResult,
+  describeHistoryRemoveResult,
   describeLocalDeleteResult,
   describeRelayDeleteResult,
 } from "./decisionsDataCopy";
 import type { RelayObservation } from "./relayCheckCopy";
 
-type OpenDialog = "export" | "delete-relay" | "delete-local" | null;
+type OpenDialog = "export" | "remove-history" | "delete-relay" | "delete-local" | null;
 
 function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null {
   switch (outcome.action) {
     case "export":
       return describeExportResult(outcome.result);
+    case "remove-history":
+      return describeHistoryRemoveResult(outcome.result);
     case "delete-relay":
       return describeRelayDeleteResult(outcome.result);
     case "delete-local":
@@ -33,9 +39,11 @@ function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null
 /**
  * Data: once a relay is set up, its recovery kit to save and verify at any
  * time (#16007); what's sent and where, the same list the consent dialog
- * showed; then exporting the decision history and deleting the relay's
- * stored content or this computer's Decisions data (#16025). Each action says what main
- * observed it do, on its own row; the deletions sit last, apart.
+ * showed, folded away until asked for, with the note on dictating answers
+ * beside it; then exporting the decision history, removing this computer's
+ * settled questions (#18033) and deleting the relay's stored content or this
+ * computer's Decisions data (#16025). Each action says what main observed it
+ * do, on its own row; the removal and the deletions sit last, apart.
  */
 export function DecisionsDataSection({
   status,
@@ -58,10 +66,18 @@ export function DecisionsDataSection({
   onKitFocused?: () => void;
 }) {
   const relayOrigin = status.relayOrigin ?? null;
-  const keysStored = status.keysStored === true;
+  // Keys an interrupted deletion set aside are keys too: deleting puts them back, then deletes them.
+  const keysStored = status.keysStored === true || status.keysVersion !== undefined;
   const data = useDecisionsData((next) => onChanged?.(next));
   const [open, setOpen] = useState<OpenDialog>(null);
   const busy = locked || data.pending !== null;
+  const sentPanelId = useId();
+  // Only a search for it opens the list: the relay-removal banner links to this
+  // section to retry the deletions below, which the list would push down.
+  const [sentOpen, setSentOpen] = useLinkedDisclosure(["decisions-data"], {
+    initial: false,
+    searchOnly: true,
+  });
 
   // A relay set up or removed since leaves the last relay outcome about another relay.
   const forget = useEffectEvent(() => {
@@ -87,13 +103,15 @@ export function DecisionsDataSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {data.pending === "export"
           ? "Exporting the decision history…"
-          : data.pending === "delete-relay"
-            ? "Deleting the relay's data…"
-            : data.pending === "delete-local"
-              ? "Deleting this computer's Decisions data…"
-              : observation
-                ? `${observation.label}. ${observation.detail}`
-                : ""}
+          : data.pending === "remove-history"
+            ? "Removing settled questions…"
+            : data.pending === "delete-relay"
+              ? "Deleting the relay's data…"
+              : data.pending === "delete-local"
+                ? "Deleting this computer's Decisions data…"
+                : observation
+                  ? `${observation.label}. ${observation.detail}`
+                  : ""}
       </span>
       {relayOrigin !== null && (
         <DecisionsRecoveryKit
@@ -109,7 +127,25 @@ export function DecisionsDataSection({
           id="decisions-data-sent"
           layout="stacked"
           label="What's sent, and where"
-          description={<DecisionsDisclosure className="mt-2" />}
+          description="What Decisions sends to your relay, and what the relay can read"
+          control={({ labelId }) => (
+            <div>
+              <DecisionsDisclosureToggle
+                open={sentOpen}
+                onToggle={() => setSentOpen(!sentOpen)}
+                controls={sentPanelId}
+                labelId={labelId}
+              >
+                Details
+              </DecisionsDisclosureToggle>
+              <div id={sentPanelId}>{sentOpen && <DecisionsDisclosure className="mt-3" />}</div>
+            </div>
+          )}
+        />
+        <SettingsRow
+          id="decisions-voice"
+          label="Dictating answers"
+          description="Set in the phone app. It isn't end-to-end encrypted: a speech provider hears what you say and a correction provider reads the transcript with the question. The answer you send is still encrypted."
         />
         <SettingsRow
           id="decisions-data-export"
@@ -148,6 +184,26 @@ export function DecisionsDataSection({
         )}
       </SettingsGroup>
       <SettingsGroup>
+        <SettingsRow
+          id="decisions-data-remove-history"
+          label="Remove settled questions"
+          description="Removes the questions in History whose deliveries are finished from this computer, with their answers. Open questions, keys, the relay and enrolled Hosts stay."
+          disabled={busy}
+          control={({ descriptionId, disabled }) => (
+            <Button
+              variant="ghost-danger"
+              size="sm"
+              disabled={disabled}
+              aria-describedby={descriptionId}
+              onClick={() => {
+                data.reset();
+                setOpen("remove-history");
+              }}
+            >
+              Remove settled questions
+            </Button>
+          )}
+        />
         {relayOrigin !== null && (
           <SettingsRow
             id="decisions-data-delete-relay"
@@ -200,6 +256,15 @@ export function DecisionsDataSection({
           data.exportHistory(passphrase).then(finish, () => {});
         }}
       />
+      <DecisionsRemoveHistoryDialog
+        isOpen={open === "remove-history"}
+        removing={data.pending === "remove-history"}
+        error={errorFor("remove-history")}
+        onCancel={close}
+        onConfirm={() => {
+          data.removeSettledQuestions().then(finish, () => {});
+        }}
+      />
       {relayOrigin !== null && (
         <DecisionsDeleteRelayDialog
           isOpen={open === "delete-relay"}
@@ -216,11 +281,15 @@ export function DecisionsDataSection({
         isOpen={open === "delete-local"}
         relayOrigin={relayOrigin}
         keysStored={keysStored}
+        keysVersion={status.keysVersion}
+        kitCurrent={status.recoveryKitCurrent === true}
         deleting={data.pending === "delete-local"}
         error={errorFor("delete-local")}
         onCancel={close}
-        onConfirm={() => {
-          data.deleteLocalData().then(finish, () => {});
+        onConfirm={(oneClick) => {
+          data
+            .deleteLocalData({ oneClick, relayOrigin, keys: status.keysVersion ?? null })
+            .then(finish, () => {});
         }}
       />
     </SettingsSection>

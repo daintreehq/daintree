@@ -983,8 +983,11 @@ export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
 // was silently dead. Only `worktree` / `terminal` / `file` / `browser` /
-// `project` have live consumers (`project` is the toolbar project pill).
-export type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
+// `project` / `assistant` have live consumers (`project` is the toolbar project
+// pill; `assistant` is the Assistant panel's session menus, kept apart from
+// `terminal` so an item written for worker panes never lands on an assistant).
+export type ContextMenuLocation =
+  "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
@@ -1169,6 +1172,74 @@ export interface ContextMenuContribution {
   extensions?: string[];
   /** `location: "file"` only: worktree-relative globs, any of which must match. */
   paths?: string[];
+  /**
+   * Opts the item into an availability check (#18141). Each time a menu shows
+   * the item, the host asks the plugin's {@link CONTEXT_MENU_AVAILABILITY_CHANNEL}
+   * handler with this id and the clicked subject, and keeps the item visible but
+   * disabled, with the answer beside it, when the plugin names a reason. Letters,
+   * digits, `_` and `-`, at most 64 characters. Omitted, the item is offered as
+   * soon as its `when` holds, without asking.
+   */
+  availability?: string;
+}
+
+/**
+ * The handler channel a plugin registers with {@link PluginHostApi.registerHandler}
+ * to answer for its `contributes.contextMenus` items that set `availability`
+ * (#18141). The handler receives one {@link ContextMenuAvailabilityRequest} and
+ * returns `null` when the item can run on that subject, or a short reason when
+ * it can't. A reason is one line of at most
+ * {@link CONTEXT_MENU_AVAILABILITY_REASON_MAX} characters.
+ *
+ * The answer is advisory: the item is disabled while the menu waits (up to
+ * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} from opening, starting the
+ * plugin included), and when the handler is missing, throws, answers late or
+ * answers anything else, the item is offered as it would be without the check.
+ * The host separately stops waiting for the handler that long after it
+ * starts, whatever longer `timeoutMs` it was registered with.
+ */
+export const CONTEXT_MENU_AVAILABILITY_CHANNEL = "@daintree/context-menu-availability";
+
+/** Max length of a reason a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler returns. */
+export const CONTEXT_MENU_AVAILABILITY_REASON_MAX = 120;
+
+/**
+ * How long a menu waits for a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} answer
+ * before offering the item anyway, and the longest the host waits for the handler.
+ */
+export const CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS = 3000;
+
+/**
+ * What a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is asked: the
+ * item's `availability` id, its `location`, and the subject the menu was
+ * opened on. Only the subject fields that location carries are present.
+ */
+export interface ContextMenuAvailabilityRequest {
+  /** The item's manifest `availability` id. */
+  availability: string;
+  location: ContextMenuLocation;
+  /** `terminal` and `browser`: the panel the menu was opened on. */
+  panelId?: string;
+  /** `terminal` and `browser`: that panel's kind. */
+  panelKind?: string;
+  /** `terminal` (when the panel has one) and `worktree`: the worktree. */
+  worktreeId?: string;
+  /** `project`, and `assistant` on a project session: the project. */
+  projectId?: string;
+  /** `file`: the row's path relative to its worktree root, when it is inside one. */
+  relativePath?: string;
+  /** `file`: whether the row is a folder. */
+  isDirectory?: boolean;
+  /** `assistant`: a project assistant session or the global assistant. */
+  assistantScope?: "project" | "global";
+  /** `assistant`: the session's terminal, when it is up. */
+  terminalId?: string;
+  /** `assistant`: the agent the session runs, when known. */
+  agentId?: string;
+  /** `assistant`, project sessions: the lane's zero-based slot. */
+  slot?: number;
+  /** `assistant`, global: which launch of that terminal. */
+  incarnation?: number;
 }
 
 /**
@@ -1321,6 +1392,11 @@ interface PluginHostedViewDescriptorBase {
   componentPath: string;
   /** For a `location: "fileEditor"` view, the file editors it backs (#13809). */
   fileEditors?: readonly HostedFileEditorDescriptor[];
+  /**
+   * The plugin ships with Daintree. Carried on the view so whoever chooses
+   * between views learns it from the same snapshot, never a later one.
+   */
+  builtin?: boolean;
 }
 
 export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {
@@ -1828,11 +1904,13 @@ export interface PanelViewProps {
   /**
    * Present only for a `location: "fileEditor"` view (#13809): the file it was
    * opened for, owned by the host. Read it with a revision, save against the
-   * revision you read, and report your unsaved text with `setDraft` so the
-   * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
-   * on close all apply. The draft is the host's, not the view's: it survives
-   * the user switching to Source and back, and the close prompt can save it
-   * after your view has unmounted.
+   * revision you read, and report your unsaved text with `setDraft`, naming the
+   * revision it started from, so the host's dirty indicator, Rendered preview
+   * and Save / Discard / Cancel prompt on close all apply. The draft is the
+   * host's, not the view's: it survives the user switching to Source and back,
+   * and the close prompt can save it after your view has unmounted. Calls made
+   * after your view unmounts change nothing, so flush a pending (debounced)
+   * draft in your unmount cleanup.
    */
   readonly fileDocument?: PluginFileDocument;
   /**
@@ -4990,7 +5068,9 @@ export interface PluginHandlerOptions {
    * Deadline, in milliseconds, for one invoke of this channel. When it passes,
    * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
    * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
-   * `0` disables the deadline for handlers that legitimately run longer.
+   * `0` disables the deadline for handlers that legitimately run longer. A
+   * {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is always held to
+   * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} or less.
    */
   timeoutMs?: number;
 }
@@ -6103,6 +6183,16 @@ export interface PluginNotifyOptions {
    * inbox row and its OS banner — instead of stacking beside it.
    */
   dedupeKey?: string;
+  /**
+   * `"assistant"` also offers it to one Daintree Assistant that is watching for
+   * plugins' notifications, in a project where the user lets the Assistant use
+   * this plugin's tools. The Assistant is told this plugin's id, the project,
+   * severity, time and a short plain key; it reads the title and body with a
+   * call of its own, and acts only through this plugin's tools. The person's
+   * toast, inbox row and banner are unchanged. Needs a project: a project
+   * plugin's own, or for an installed plugin a `worktreeId` target.
+   */
+  audience?: "assistant";
 }
 
 /** What {@link PluginHostApi.notify} resolves with. */
@@ -6323,8 +6413,10 @@ export interface PluginConfirmOptions {
  *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
  *   a call from a panel through `plugin.invoke`, or an event route).
  * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
- *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
- *   and that includes other agents' replies.
+ *   call, and `origin: "global-assistant"` that their global Assistant made it
+ *   through `host.call` from outside the project. Provenance, not proof: an
+ *   assistant acts on what its pane is sent, and that includes other agents'
+ *   replies.
  * - `approval: "person"` means someone answered the host's confirm dialog for
  *   this very dispatch. It is never set by a standing answer: an automation
  *   grant, "Allow for this session", or the Assistant's Never ask leave it
@@ -6334,7 +6426,7 @@ export interface PluginConfirmOptions {
  */
 export interface PluginActionContext {
   readonly dispatchSource: ActionSource;
-  readonly origin?: "assistant";
+  readonly origin?: "assistant" | "global-assistant";
   readonly approval?: "person";
 }
 
@@ -8872,8 +8964,10 @@ export interface PluginActionContribution {
    * call the Assistant makes goes through the host's confirm dialog unless the
    * person has told Daintree not to ask (an automation grant, or the
    * Assistant's Never ask). The handler's {@link PluginActionContext} then says
-   * which: `approval: "person"` only when the dialog was answered. Agent panes
-   * and the global Assistant never reach it.
+   * which: `approval: "person"` only when the dialog was answered. The global
+   * Assistant reaches it too, through `host.call` on this machine while a view
+   * of the project is open, and always meets that view's dialog. Agent panes
+   * never reach it.
    */
   assistantReach?: "confirm-only";
   keywords?: string[];

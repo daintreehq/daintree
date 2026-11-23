@@ -3,15 +3,34 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { IpcContext } from "../types.js";
 import type {
   GlobalAssistantAttachment,
+  GlobalAssistantReplacement,
   GlobalAssistantView,
   WindowGlobalAssistantPanel,
 } from "../../../shared/types/ipc/help.js";
+import {
+  AssistantHandoffPromptSchema,
+  isUsableHandoff,
+} from "../../../shared/utils/assistantHandoff.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
 import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import { events } from "../../services/events.js";
 import type { GlobalAssistantService } from "../../services/GlobalAssistantService.js";
-import { getGlobalAssistantService } from "../../services/globalAssistant.js";
+import {
+  getGlobalAssistantService,
+  globalAssistantCoordinatorSlot,
+  handGlobalAssistantCoordination,
+  joinNewGlobalAssistantLaunch,
+  startNewGlobalAssistantSession,
+  stopGlobalAssistantSession,
+  whenGlobalAssistantSessionsReadable,
+} from "../../services/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_SLOT,
+  GLOBAL_ASSISTANT_SLOTS,
+  isGlobalAssistantSlot,
+  type GlobalAssistantSlot,
+} from "../../../shared/config/globalAssistant.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
@@ -23,6 +42,9 @@ import { broadcastToRenderer } from "../utils.js";
  * a window; none can name another window's attachment, and none returns the
  * session's credentials. Attaching to a session that is not running is
  * allowed — the panel shows the empty state and asks to start it.
+ *
+ * Every call names the session it is for by its slot (#18142), the first one
+ * when it names none, so a window acts only on the session it shows.
  */
 
 /**
@@ -79,8 +101,8 @@ const published = new WeakSet<GlobalAssistantService>();
  * watching; a run already going when this is first wired, or respawned by a
  * PTY host recovery, is read once off its terminal to start from.
  */
-function service(): GlobalAssistantService {
-  const instance = getGlobalAssistantService();
+function service(slot: GlobalAssistantSlot = GLOBAL_ASSISTANT_SLOT): GlobalAssistantService {
+  const instance = getGlobalAssistantService(slot);
   if (!published.has(instance)) {
     published.add(instance);
     const publish = () =>
@@ -154,6 +176,14 @@ function requireId(value: unknown): string {
   return value;
 }
 
+function requireSlot(value: unknown): GlobalAssistantSlot {
+  if (value === undefined) return GLOBAL_ASSISTANT_SLOT;
+  if (!isGlobalAssistantSlot(value)) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant session." });
+  }
+  return value;
+}
+
 function requireEligible(value: unknown): boolean {
   if (typeof value !== "boolean") {
     throw new AppError({ code: "VALIDATION", message: "Whether the view can type is required." });
@@ -161,15 +191,66 @@ function requireEligible(value: unknown): boolean {
   return value;
 }
 
-export async function handleEnsureGlobalAssistant(ctx: IpcContext): Promise<GlobalAssistantView> {
+/**
+ * Start the session, or resume the conversation it last left. With
+ * `launchGeneration`, only join the launch a new session began then (#18142):
+ * one that ended or was stopped meanwhile is never started again here.
+ */
+export async function handleEnsureGlobalAssistant(
+  ctx: IpcContext,
+  slot?: number,
+  launchGeneration?: number
+): Promise<GlobalAssistantView> {
   requireWindow(ctx);
-  const instance = service();
-  await instance.ensureSession();
+  const at = requireSlot(slot);
+  const instance = service(at);
+  if (launchGeneration === undefined) {
+    await instance.ensureSession();
+  } else {
+    if (!Number.isSafeInteger(launchGeneration)) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid generation" });
+    }
+    await joinNewGlobalAssistantLaunch(at, launchGeneration);
+    // Joined late, after a clear or stop moved the session on: that run isn't the one asked about.
+    if (instance.getState().generation !== launchGeneration) {
+      throw new AppError({
+        code: "CANCELLED",
+        message: "The global assistant session moved on since it started.",
+      });
+    }
+  }
   return globalAssistantView(instance);
 }
 
-export async function handleGetGlobalAssistantState(): Promise<GlobalAssistantView> {
-  return globalAssistantView(service());
+export async function handleGetGlobalAssistantState(slot?: number): Promise<GlobalAssistantView> {
+  const at = requireSlot(slot);
+  // Answered once a kept conversation can be read, so the session isn't told free when it isn't.
+  await whenGlobalAssistantSessionsReadable();
+  return globalAssistantView(service(at));
+}
+
+/** Every session the machine may hold, first session first, running or not. */
+export async function handleListGlobalAssistantSessions(): Promise<GlobalAssistantView[]> {
+  await whenGlobalAssistantSessionsReadable();
+  return GLOBAL_ASSISTANT_SLOTS.map((slot) => globalAssistantView(service(slot)));
+}
+
+/**
+ * Start a new session on the agent the person chose (#18142), in the first
+ * the machine has free; refused with the reason once two are in use. Answers
+ * as soon as the session is claimed: the window shows it starting, and joins
+ * its launch with an ensure quoting that session and generation.
+ */
+export async function handleStartNewGlobalAssistant(
+  ctx: IpcContext,
+  agentId: string
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  if (typeof agentId !== "string" || !agentId) {
+    throw new AppError({ code: "VALIDATION", message: "An agent is required." });
+  }
+  const instance = await startNewGlobalAssistantSession(agentId);
+  return globalAssistantView(service(instance.slot));
 }
 
 /**
@@ -178,11 +259,14 @@ export async function handleGetGlobalAssistantState(): Promise<GlobalAssistantVi
  */
 export async function handleAttachGlobalAssistant(
   ctx: IpcContext,
-  eligible?: boolean
+  eligible?: boolean,
+  slot?: number
 ): Promise<GlobalAssistantAttachment> {
   const { webContentsId, windowId } = requireWindow(ctx);
   const canType = eligible === undefined ? true : requireEligible(eligible);
-  const instance = service();
+  // Attached at once, with no await a closing view could slip through: the
+  // session says its state again once its kept conversation can be read.
+  const instance = service(requireSlot(slot));
   const attachmentId = instance.attach(webContentsId, windowId, canType);
   return { attachmentId, state: globalAssistantView(instance) };
 }
@@ -191,28 +275,35 @@ export async function handleAttachGlobalAssistant(
 export async function handleSetGlobalAssistantInputEligible(
   ctx: IpcContext,
   attachmentId: string,
-  eligible: boolean
+  eligible: boolean,
+  slot?: number
 ): Promise<void> {
   const { webContentsId } = requireWindow(ctx);
-  service().setEligible(requireId(attachmentId), webContentsId, requireEligible(eligible));
+  service(requireSlot(slot)).setEligible(
+    requireId(attachmentId),
+    webContentsId,
+    requireEligible(eligible)
+  );
 }
 
 export async function handleDetachGlobalAssistant(
   ctx: IpcContext,
-  attachmentId: string
+  attachmentId: string,
+  slot?: number
 ): Promise<void> {
   const { webContentsId } = requireWindow(ctx);
-  service().detach(requireId(attachmentId), webContentsId);
+  service(requireSlot(slot)).detach(requireId(attachmentId), webContentsId);
 }
 
 export async function handleClaimGlobalAssistantInput(
   ctx: IpcContext,
   attachmentId: string,
   /** Move it only from this attachment of the same view, while it still holds it. */
-  from?: string
+  from?: string,
+  slot?: number
 ): Promise<GlobalAssistantView> {
   const { webContentsId } = requireWindow(ctx);
-  const instance = service();
+  const instance = service(requireSlot(slot));
   instance.claimInput(
     requireId(attachmentId),
     webContentsId,
@@ -223,10 +314,11 @@ export async function handleClaimGlobalAssistantInput(
 
 export async function handleReleaseGlobalAssistantInput(
   ctx: IpcContext,
-  attachmentId: string
+  attachmentId: string,
+  slot?: number
 ): Promise<GlobalAssistantView> {
   const { webContentsId } = requireWindow(ctx);
-  const instance = service();
+  const instance = service(requireSlot(slot));
   instance.releaseInput(requireId(attachmentId), webContentsId);
   return globalAssistantView(instance);
 }
@@ -251,24 +343,150 @@ function requireGeneration(instance: GlobalAssistantService, expected: unknown):
 
 export async function handleRestartGlobalAssistant(
   ctx: IpcContext,
-  expectedGeneration?: number
+  expectedGeneration?: number,
+  slot?: number
 ): Promise<GlobalAssistantView> {
   requireWindow(ctx);
-  const instance = service();
+  const instance = service(requireSlot(slot));
   requireGeneration(instance, expectedGeneration);
   await instance.restart();
   return globalAssistantView(instance);
 }
 
-export async function handleDiscardGlobalAssistant(
+/**
+ * Whether a hand-off to `agentId` could replace the run (#18140), asked before
+ * the person is, so they're never asked about one main would refuse.
+ */
+export async function handleCanRunGlobalAssistant(
   ctx: IpcContext,
-  expectedGeneration?: number
+  agentId: string
+): Promise<boolean> {
+  requireWindow(ctx);
+  if (typeof agentId !== "string" || !agentId || agentId.length > 64) return false;
+  return service().canRun(agentId);
+}
+
+const GlobalAssistantReplacementSchema = z.object({
+  agentId: z.string().min(1).max(64),
+  prompt: AssistantHandoffPromptSchema.refine(isUsableHandoff),
+  expected: z.object({
+    generation: z.number().int().nonnegative(),
+    phase: z.enum(["absent", "launching", "running"]),
+  }),
+  slot: z.union([z.literal(0), z.literal(1)]).optional(),
+});
+
+/**
+ * Replace the run with one on another agent that starts from a hand-off
+ * (#18140), once the person approved it in this window. The run they were
+ * shown is named, so an answer given after it changed replaces nothing.
+ */
+export async function handleReplaceGlobalAssistant(
+  ctx: IpcContext,
+  replacement: GlobalAssistantReplacement
 ): Promise<GlobalAssistantView> {
   requireWindow(ctx);
-  const instance = service();
-  requireGeneration(instance, expectedGeneration);
-  await instance.discard();
+  const parsed = GlobalAssistantReplacementSchema.safeParse(replacement);
+  if (!parsed.success) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant replacement." });
+  }
+  const { agentId, prompt, expected } = parsed.data;
+  // The session that coordinated when the person was asked (#18143): one
+  // handed coordination over since is no longer the one they were shown.
+  const at = parsed.data.slot ?? GLOBAL_ASSISTANT_SLOT;
+  const instance = service(at);
+  try {
+    await instance.replace(
+      { agentId, prompt },
+      expected,
+      () => globalAssistantCoordinatorSlot() === at
+    );
+  } catch (err) {
+    if (err instanceof AppError && err.code === "STALE_GENERATION") {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: err.message,
+        userMessage: "The global assistant changed since you were asked. Nothing was replaced.",
+      });
+    }
+    if (err instanceof AppError && err.code === "INTERNAL") {
+      throw new AppError({
+        code: "INTERNAL",
+        message: err.message,
+        userMessage:
+          "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    }
+    throw err;
+  }
   return globalAssistantView(instance);
+}
+
+/**
+ * `expectedRunning` says whether the session was running when the person was
+ * asked: a session started since (same generation, no longer idle), or one
+ * that stopped since, is not the one they agreed to stop. `expectedHandsTo`
+ * is the session they were told takes over coordination and the workers
+ * (#18143): one that no longer would is not what they agreed to either.
+ */
+export async function handleDiscardGlobalAssistant(
+  ctx: IpcContext,
+  expectedGeneration?: number,
+  slot?: number,
+  expectedRunning?: boolean,
+  expectedHandsTo?: number
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  const at = requireSlot(slot);
+  const instance = service(at);
+  if (expectedRunning !== undefined && typeof expectedRunning !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "Invalid expected phase" });
+  }
+  if (
+    expectedHandsTo !== undefined &&
+    (!isGlobalAssistantSlot(expectedHandsTo) || expectedHandsTo === at)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant session." });
+  }
+  // Checked again just before the stop: a coordinator's stop first loads what
+  // hands its work over, and the session may move on meanwhile.
+  const changed = () =>
+    new AppError({
+      code: "STALE_GENERATION",
+      message: "The global assistant changed since this was asked",
+      userMessage: "The global assistant changed since you asked. Nothing was stopped.",
+    });
+  await stopGlobalAssistantSession(at, () => {
+    requireGeneration(instance, expectedGeneration);
+    if (
+      expectedHandsTo !== undefined &&
+      isGlobalAssistantSlot(expectedHandsTo) &&
+      (globalAssistantCoordinatorSlot() !== at || !service(expectedHandsTo).isOccupied())
+    ) {
+      throw changed();
+    }
+    if (expectedRunning === undefined) return;
+    const phase = instance.getState().phase;
+    if ((phase === "running") !== expectedRunning || phase === "launching") throw changed();
+  });
+  return globalAssistantView(instance);
+}
+
+/**
+ * Hand coordination to the session at `slot`, as the person asked in this
+ * window (#18143). Answers with both sessions, each saying whether it
+ * coordinates now.
+ */
+export async function handleSetGlobalAssistantCoordinator(
+  ctx: IpcContext,
+  slot: number
+): Promise<GlobalAssistantView[]> {
+  requireWindow(ctx);
+  if (!isGlobalAssistantSlot(slot)) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant session." });
+  }
+  await handGlobalAssistantCoordination(slot);
+  return GLOBAL_ASSISTANT_SLOTS.map((at) => globalAssistantView(service(at)));
 }
 
 /**
@@ -277,10 +495,11 @@ export async function handleDiscardGlobalAssistant(
  */
 export async function handleCancelGlobalAssistantLaunch(
   ctx: IpcContext,
-  expectedGeneration?: number
+  expectedGeneration?: number,
+  slot?: number
 ): Promise<GlobalAssistantView> {
   requireWindow(ctx);
-  const instance = service();
+  const instance = service(requireSlot(slot));
   requireGeneration(instance, expectedGeneration);
   await instance.cancelLaunch();
   return globalAssistantView(instance);
@@ -289,6 +508,7 @@ export async function handleCancelGlobalAssistantLaunch(
 const WindowGlobalAssistantPanelSchema = z.object({
   showing: z.boolean(),
   target: AgentDirectorySubjectSchema.nullable(),
+  slot: z.union([z.literal(0), z.literal(1)]).optional(),
 });
 
 /** The sender's own window's view manager, when the sender is one of that window's views. */

@@ -394,40 +394,43 @@ describe("usePluginActions", () => {
     );
   });
 
-  it("passes the Assistant origin and a person's MCP approval to the handler (#16751)", async () => {
-    const { actionService } = await import("@/services/ActionService");
-    const { usePluginActions } = await import("../usePluginActions");
-    const { usePluginConfirmStore } = await import("@/store/pluginConfirmStore");
+  it.each(["assistant", "global-assistant"] as const)(
+    "passes the %s origin and a person's MCP approval to the handler (#16751, #18153)",
+    async (origin) => {
+      const { actionService } = await import("@/services/ActionService");
+      const { usePluginActions } = await import("../usePluginActions");
+      const { usePluginConfirmStore } = await import("@/store/pluginConfirmStore");
 
-    const action = descriptor({ danger: "confirm", effectiveDanger: "confirm" });
-    getActionsMock.mockResolvedValue([action]);
-    invokeMock.mockResolvedValue({ ok: true });
+      const action = descriptor({ danger: "confirm", effectiveDanger: "confirm" });
+      getActionsMock.mockResolvedValue([action]);
+      invokeMock.mockResolvedValue({ ok: true });
 
-    renderHook(() => usePluginActions());
-    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+      renderHook(() => usePluginActions());
+      await waitFor(() => expect(actionService.has(action.id)).toBe(true));
 
-    await actionService.dispatch(
-      action.id,
-      { y: 2 },
-      {
-        source: "agent",
-        confirmed: true,
-        hostCallerOrigin: "assistant",
-        hostPersonApproved: true,
-      }
-    );
-    expect(usePluginConfirmStore.getState().current).toBeNull();
-    expect(invokeMock).toHaveBeenCalledWith(
-      "acme.my-plugin",
-      action.id,
-      { y: 2 },
-      {
-        dispatchSource: "agent",
-        origin: "assistant",
-        approval: "person",
-      }
-    );
-  });
+      await actionService.dispatch(
+        action.id,
+        { y: 2 },
+        {
+          source: "agent",
+          confirmed: true,
+          hostCallerOrigin: origin,
+          hostPersonApproved: true,
+        }
+      );
+      expect(usePluginConfirmStore.getState().current).toBeNull();
+      expect(invokeMock).toHaveBeenCalledWith(
+        "acme.my-plugin",
+        action.id,
+        { y: 2 },
+        {
+          dispatchSource: "agent",
+          origin,
+          approval: "person",
+        }
+      );
+    }
+  );
 
   it("never reports a person's approval or an Assistant origin it wasn't given (#16751)", async () => {
     const { actionService } = await import("@/services/ActionService");
@@ -453,6 +456,29 @@ describe("usePluginActions", () => {
     expect(invokeMock.mock.calls.map((call) => call[3])).toEqual([
       { dispatchSource: "keybinding" },
       { dispatchSource: "plugin" },
+    ]);
+  });
+
+  // #18153: a standing answer lets the global Assistant's call through with no
+  // dialog, so the handler hears who asked and no approval.
+  it("passes the global Assistant's origin without an approval nobody gave", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor({ danger: "confirm", effectiveDanger: "confirm" });
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockResolvedValue({ ok: true });
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    await actionService.dispatch(
+      action.id,
+      {},
+      { source: "agent", confirmed: true, hostCallerOrigin: "global-assistant" }
+    );
+    expect(invokeMock.mock.calls.map((call) => call[3])).toEqual([
+      { dispatchSource: "agent", origin: "global-assistant" },
     ]);
   });
 

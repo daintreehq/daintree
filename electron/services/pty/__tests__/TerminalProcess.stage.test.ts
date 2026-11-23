@@ -41,6 +41,7 @@ interface Internals {
     agentIncarnation: number;
     isExited?: boolean;
     lastOutputTime: number;
+    promptUnseen?: true;
   };
 }
 
@@ -66,6 +67,14 @@ function createAgentTerminal(agentId: string): TerminalProcess {
 
 function info(terminal: TerminalProcess): Internals["terminalInfo"] {
   return (terminal as unknown as Internals).terminalInfo;
+}
+
+/** Settled at its prompt 5s ago, as the state service publishes it: the run's prompt seen (#18014). */
+function settleAtPrompt(t: Internals["terminalInfo"]): void {
+  t.agentState = "waiting";
+  t.waitingReason = "prompt";
+  t.lastStateChange = Date.now() - 5_000;
+  delete t.promptUnseen;
 }
 
 function writes(): string[] {
@@ -329,9 +338,7 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
   it("still reads as typed text to a guarded submission queued behind it", async () => {
     const terminal = createAgentTerminal("claude");
     const t = info(terminal);
-    t.agentState = "waiting";
-    t.waitingReason = "prompt";
-    t.lastStateChange = Date.now() - 5_000;
+    settleAtPrompt(t);
 
     terminal.submit("first prompt");
     terminal.stage(DRAFT);
@@ -347,9 +354,7 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
   it("lets an in-flight guarded submission finish before the draft is written", async () => {
     const terminal = createAgentTerminal("claude");
     const t = info(terminal);
-    t.agentState = "waiting";
-    t.waitingReason = "prompt";
-    t.lastStateChange = Date.now() - 5_000;
+    settleAtPrompt(t);
 
     terminal.submit("wake", "tok-guarded", undefined, "settled-prompt");
     expect(writes()).toEqual(["wake"]);

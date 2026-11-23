@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { isMac } from "@/lib/platform";
@@ -16,11 +17,16 @@ import type { DecisionQuestionContent } from "@shared/types/decisionsQuestion";
 import {
   awaitsConfirmation,
   confirmFollowUpInThread,
+  declineReply,
   followFollowUp,
   isFollowUpCommitted,
   sendFollowUp,
 } from "./decisionFollowUpSend";
 import {
+  DECLINE_REPLY_BODY,
+  DECLINE_REPLY_TEXT,
+  declinableReplyRequest,
+  declineReplyTitle,
   followUpAttemptText,
   followUpHoldText,
   followUpProgressText,
@@ -28,7 +34,10 @@ import {
   replyRequest,
   takesFollowUp,
 } from "./decisionFollowUpModel";
+import { aliasLabel } from "./decisionQuestionModel";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
+import { contentDeadlineElapsed } from "./decisionDeadline";
+import { useDeadlineClock } from "./useDecisionsClock";
 
 /** A place focus is sent to when what held it goes; never tabbed to. */
 const FOCUS_TARGET =
@@ -37,32 +46,37 @@ const FOCUS_TARGET =
 /** While a follow-up is queued, how long after one read of its standing the next starts. */
 const QUEUED_READ_MS = 2_000;
 
-/** The longest a browser timer waits; a later expiry is checked again after this. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
-
 const CLOSED_TEXT = "This question no longer takes follow-ups.";
 
-/** The time, moved on when an open question's expiry passes, so it stops offering a follow-up then. */
-function useExpiryClock(expiresAt: string | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (expiresAt === null) return;
-    const at = Date.parse(expiresAt);
-    if (Number.isNaN(at) || now >= at) return;
-    const delay = Math.max(0, at - Date.now()) + 1;
-    const timer = setTimeout(() => setNow(Date.now()), Math.min(delay, MAX_TIMER_MS));
-    return () => clearTimeout(timer);
-  }, [expiresAt, now]);
-  return now;
-}
+/** Said while only this computer's clock has an open question's deadline passed (#17943). */
+const ELAPSED_TEXT =
+  "The deadline has passed, so this can't be sent. Your words stay here while Daintree waits to hear how the question closed.";
+
+/** Said while typing into the asking terminal stopped and nobody has resolved it (#18028). */
+const PAUSED_TEXT =
+  "Delivery to the terminal that asked needs attention. You can't send a new follow-up until it's resolved.";
 
 export interface DecisionFollowUpComposerProps {
   question: DecisionQuestionContent;
   target: DecisionQuestionTarget;
-  /** The view's main action: nothing else on it takes an answer now. */
+  /**
+   * The view's main action: nothing else on it takes an answer now. Otherwise
+   * the answer leads (#18040), and an untouched follow-up waits behind a
+   * compact control.
+   */
   primary: boolean;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
+  /**
+   * Typing into the asking terminal stopped on this question and nobody has
+   * resolved it (#18028): a new follow-up would only wait behind it.
+   */
+  stalled: boolean;
+  /**
+   * Whether the surface is open. One closing starts nothing: as it closes it
+   * no longer hears of the stall, but its field still has the keyboard.
+   */
+  active: boolean;
 }
 
 /**
@@ -76,25 +90,63 @@ export function DecisionFollowUpComposer({
   target,
   primary,
   onMoved,
+  stalled,
+  active,
 }: DecisionFollowUpComposerProps) {
   const key = answerKey(question.reference);
   const record = useFollowUpRecord(key);
   const update = useDecisionsFollowUpStore((state) => state.update);
   const announce = useAnnouncerStore((state) => state.announce);
-  const now = useExpiryClock(question.status === "open" ? question.expiresAt : null);
+  const now = useDeadlineClock(question.status === "open" ? question.expiresAt : null);
   const available = takesFollowUp(question, now);
+  // Open by the store, past its deadline by the clock: nothing has said how it closed yet.
+  const elapsed = contentDeadlineElapsed(question, now) && question.status === "open";
+  // It would take one, but no new one starts until the stall is resolved. One already on its
+  // way, and its Retry, go on: only `takesFollowUp` lets one go.
+  const paused = available && stalled;
   const inFlight = isFollowUpInFlight(record);
   const verdict = followUpVerdict(record.draft);
-  const ready = available && verdict.canSend && !inFlight;
+  const ready = active && available && !paused && verdict.canSend && !inFlight;
   const submission = record.submission;
   const messageId = submission?.messageId ?? null;
   const queued =
     submission?.phase.kind === "settled" && submission.phase.outcome.status === "queued";
   const asked = replyRequest(question) !== null;
+  // The request a decline would answer (#18030): offered until one sent from here for it is taken.
+  const declinable = declinableReplyRequest(question);
+  const declineSent =
+    declinable !== null &&
+    submission?.declines === declinable.messageId &&
+    isFollowUpCommitted(submission.phase);
+  const offersDecline = available && declinable !== null && !declineSent;
+  // A decline is a follow-up too: none starts while paused, or from a surface closing.
+  const declineReady = active && offersDecline && !paused && !inFlight;
+  // Consent covers the request it was asked about, on an open surface: a replaced or answered
+  // request, or the surface closing, closes the dialog.
+  const [confirming, setConfirming] = useState<{ key: string; requestId: string } | null>(null);
+  const confirmOpen =
+    declineReady &&
+    confirming !== null &&
+    confirming.key === key &&
+    confirming.requestId === declinable.messageId;
+  const [declining, setDeclining] = useState(false);
+  // Closed by anything but the person (a stall, the surface closing, the request moving): let go,
+  // so it never reopens by itself.
+  useEffect(() => {
+    if (!confirmOpen && confirming !== null) setConfirming(null);
+  }, [confirmOpen, confirming]);
   const hintId = useId();
+  const pausedId = useId();
   const statusRef = useRef<HTMLDivElement>(null);
   // Once the person has been in here, the section stays to say the question closed, and to hold focus.
   const [engaged, setEngaged] = useState(false);
+  // Opened from its compact control, or its own controls used, so it stays open even once emptied.
+  const [opened, setOpened] = useState(false);
+  // Its compact control had focus: passing it is no one writing here.
+  const [passedControl, setPassedControl] = useState(false);
+  const unfoldRef = useRef<HTMLButtonElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const focusField = useRef(false);
 
   // A follow-up not yet confirmed (lost, or queued with a missed receipt), now in the question's
   // thread: the relay took it.
@@ -146,31 +198,67 @@ export function DecisionFollowUpComposer({
   const hold = record.hold !== null ? followUpHoldText(record.hold) : null;
   // Unsent words, or a person writing here, once it stopped taking them: say so rather than vanish.
   const closed =
-    !available && !inFlight && (engaged || record.draft.trim() !== "") ? CLOSED_TEXT : null;
+    !available && !inFlight && (engaged || record.draft.trim() !== "")
+      ? elapsed
+        ? ELAPSED_TEXT
+        : CLOSED_TEXT
+      : null;
+  // A draft past the deadline stays in its field, read-only, so focus and words stay put. While
+  // paused, the field stays only for what is already in it: words, one on its way, or a person
+  // writing.
+  // A person writing: one who opened it or used its controls, or was in it, but never one who
+  // only passed its compact control.
+  const writing = opened || (engaged && !passedControl);
+  const keepField =
+    (available && (!paused || record.draft !== "" || inFlight || writing)) ||
+    (elapsed && closed !== null && (record.draft.trim() !== "" || writing));
   const notice = attempt ?? hold ?? closed;
+  // Apart from the notice, so neither hides the other: a failed attempt still says nothing was sent.
+  const pausedNote = paused ? PAUSED_TEXT : null;
+  // While the answer leads, a follow-up nobody has started waits behind one control; words,
+  // a send on its way or one that stopped keep the field out, and a pause says why there's none.
+  const folded =
+    !primary &&
+    available &&
+    !paused &&
+    !opened &&
+    record.draft === "" &&
+    !inFlight &&
+    record.hold === null &&
+    attempt === null;
 
-  // Each said once as it changes, never for what was already so when the view opened. Both
+  // Each said once as it changes, never for what was already so when the view opened. All
   // count: a closed question never keeps where the last follow-up got to from being heard, and
-  // two that change together go in one announcement, which the live region keeps whole.
-  const saidRef = useRef({ notice, progress });
+  // those that change together go in one announcement, which the live region keeps whole.
+  const saidRef = useRef({ notice, progress, pausedNote });
   useEffect(() => {
     const said = saidRef.current;
-    if (notice === said.notice && progress === said.progress) return;
+    if (notice === said.notice && progress === said.progress && pausedNote === said.pausedNote) {
+      return;
+    }
     const changed = [
       notice !== said.notice ? notice : null,
       progress !== said.progress ? progress : null,
+      pausedNote !== said.pausedNote ? pausedNote : null,
     ].filter((text): text is string => text !== null);
-    saidRef.current = { notice, progress };
+    saidRef.current = { notice, progress, pausedNote };
     if (changed.length > 0) announce(changed.join(" "));
-  }, [notice, progress, announce]);
+  }, [notice, progress, pausedNote, announce]);
 
   // Send and Retry go as the follow-up moves on; focus that was on one goes
   // to where it stands rather than to the page.
   const focusedInside = useRef(false);
   const trackFocus = {
-    onFocus: () => {
+    onFocus: (event: React.FocusEvent<HTMLElement>) => {
+      // The decline's dialog is portalled out, but its focus still bubbles here through React.
+      if (!event.currentTarget.contains(event.target)) return;
       focusedInside.current = true;
       if (!engaged) setEngaged(true);
+      if (event.target === unfoldRef.current) {
+        if (!passedControl) setPassedControl(true);
+      } else if (event.target !== statusRef.current && !opened) {
+        setOpened(true);
+      }
     },
     onBlur: (event: React.FocusEvent<HTMLElement>) => {
       const next = event.relatedTarget;
@@ -179,6 +267,25 @@ export function DecisionFollowUpComposer({
       }
     },
   };
+  // Before the effect below: the control that opened the field, or one that went with focus on it
+  // as the field came out, hands focus to the field rather than to the status.
+  const wasFolded = useRef(folded);
+  useLayoutEffect(() => {
+    const unfolded = wasFolded.current && !folded;
+    wasFolded.current = folded;
+    const field = fieldRef.current;
+    if (field === null) {
+      // Pressed as the field went: nothing to hand focus to, now or on some later render.
+      focusField.current = false;
+      return;
+    }
+    const active = document.activeElement;
+    const dropped = focusedInside.current && (active === null || active === document.body);
+    // Only into a field that takes a follow-up; otherwise the status says why, and holds focus.
+    if (!focusField.current && !(unfolded && dropped && available && !paused)) return;
+    focusField.current = false;
+    field.focus();
+  });
   useEffect(() => {
     const active = document.activeElement;
     if (focusedInside.current && (active === null || active === document.body)) {
@@ -189,6 +296,22 @@ export function DecisionFollowUpComposer({
   const send = () => {
     if (!ready) return;
     void sendFollowUp(key, target).finally(onMoved);
+  };
+
+  const askDecline = () => {
+    if (!declineReady) return;
+    setConfirming({ key, requestId: declinable.messageId });
+  };
+
+  const decline = () => {
+    if (!confirmOpen) return;
+    const requestId = confirming.requestId;
+    setConfirming(null);
+    setDeclining(true);
+    void declineReply(key, target, requestId).finally(() => {
+      setDeclining(false);
+      onMoved();
+    });
   };
 
   if (!available && progress === null && notice === null) return null;
@@ -204,7 +327,7 @@ export function DecisionFollowUpComposer({
       data-testid="decision-follow-up-composer"
       {...trackFocus}
     >
-      <h3 className="text-xs font-medium text-text-secondary">{heading}</h3>
+      {!folded && <h3 className="text-xs font-medium text-text-secondary">{heading}</h3>}
       <div ref={statusRef} tabIndex={-1} className={cn("flex flex-col gap-2", FOCUS_TARGET)}>
         {progress !== null && (
           <Callout
@@ -231,20 +354,49 @@ export function DecisionFollowUpComposer({
             {notice}
           </Callout>
         )}
+        {pausedNote !== null && (
+          <Callout
+            id={pausedId}
+            severity="neutral"
+            size="compact"
+            data-testid="decision-follow-up-paused"
+          >
+            {pausedNote}
+          </Callout>
+        )}
       </div>
-      {available && (
+      {folded && (
+        <Button
+          ref={unfoldRef}
+          variant="ghost"
+          size="xs"
+          className="self-start"
+          onClick={() => {
+            focusField.current = true;
+            setOpened(true);
+          }}
+          data-testid="decision-follow-up-open"
+        >
+          {asked ? "Reply without answering" : "Follow up without answering"}
+        </Button>
+      )}
+      {keepField && !folded && (
         <>
           <Field>
             <FieldLabel className="sr-only">{asked ? "Your reply" : "Your follow-up"}</FieldLabel>
-            <FieldDescription>
-              Typed into the terminal that asked, as sent from this computer. It never changes the
-              answer.
-            </FieldDescription>
+            {/* Never promised while what was typed in last stopped there, deadline or not. */}
+            {!stalled && (
+              <FieldDescription>
+                Typed into the terminal that asked, as sent from this computer. It never changes the
+                answer.
+              </FieldDescription>
+            )}
             <Textarea
+              ref={fieldRef}
               rows={2}
               value={record.draft}
               // Kept while it is on its way, so focus stays here and the words can't change under it.
-              readOnly={inFlight}
+              readOnly={inFlight || !available}
               aria-keyshortcuts={shortcut}
               onChange={(event) => {
                 const text = event.target.value;
@@ -276,11 +428,28 @@ export function DecisionFollowUpComposer({
                 {verdict.hint}
               </p>
             )}
+            {offersDecline && (
+              <Button
+                variant="ghost"
+                aria-disabled={!declineReady || undefined}
+                loading={record.preparing && declining}
+                aria-describedby={paused ? pausedId : undefined}
+                onClick={askDecline}
+                className="shrink-0"
+                data-testid="decision-follow-up-decline"
+              >
+                Decline to reply
+              </Button>
+            )}
             <Button
-              variant={primary ? "contrast" : "outline"}
+              variant={primary && !paused ? "contrast" : "outline"}
               aria-disabled={!ready || undefined}
-              loading={record.preparing}
-              aria-describedby={verdict.hint !== null ? hintId : undefined}
+              loading={record.preparing && !declining}
+              aria-describedby={
+                [paused ? pausedId : null, verdict.hint !== null ? hintId : null]
+                  .filter((id) => id !== null)
+                  .join(" ") || undefined
+              }
               onClick={send}
               className="shrink-0"
               data-testid="decision-follow-up-send"
@@ -290,6 +459,33 @@ export function DecisionFollowUpComposer({
           </div>
         </>
       )}
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        onClose={() => setConfirming(null)}
+        variant="default"
+        zIndex="nested"
+        title={declineReplyTitle(aliasLabel(question.alias))}
+        description={<span className="[text-wrap:pretty]">{DECLINE_REPLY_BODY}</span>}
+        confirmLabel="Send decline"
+        initialFocus="cancel"
+        onConfirm={decline}
+        restoreFocusTo={() => statusRef.current}
+      >
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">
+          {declinable !== null && !declinable.unreadable && declinable.text !== null && (
+            <>
+              <dt className="text-text-secondary">Agent asked</dt>
+              <dd className="line-clamp-4 min-w-0 break-words text-text-primary [text-wrap:pretty]">
+                {declinable.text}
+              </dd>
+            </>
+          )}
+          <dt className="text-text-secondary">You send</dt>
+          <dd className="min-w-0 break-words text-text-primary" data-testid="decision-decline-text">
+            {DECLINE_REPLY_TEXT}
+          </dd>
+        </dl>
+      </ConfirmDialog>
     </section>
   );
 }

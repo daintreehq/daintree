@@ -771,6 +771,20 @@ export const helpNamespace = defineIpcNamespace({
       HELP_METHOD_CHANNELS.getGlobalAssistantState,
       globalAssistant.handleGetGlobalAssistantState
     ),
+    listGlobalAssistantSessions: op(
+      HELP_METHOD_CHANNELS.listGlobalAssistantSessions,
+      globalAssistant.handleListGlobalAssistantSessions
+    ),
+    startNewGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.startNewGlobalAssistant,
+      globalAssistant.handleStartNewGlobalAssistant,
+      { withContext: true }
+    ),
+    setGlobalAssistantCoordinator: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantCoordinator,
+      globalAssistant.handleSetGlobalAssistantCoordinator,
+      { withContext: true }
+    ),
     attachGlobalAssistant: op(
       HELP_METHOD_CHANNELS.attachGlobalAssistant,
       globalAssistant.handleAttachGlobalAssistant,
@@ -799,6 +813,16 @@ export const helpNamespace = defineIpcNamespace({
     restartGlobalAssistant: op(
       HELP_METHOD_CHANNELS.restartGlobalAssistant,
       globalAssistant.handleRestartGlobalAssistant,
+      { withContext: true }
+    ),
+    canRunGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.canRunGlobalAssistant,
+      globalAssistant.handleCanRunGlobalAssistant,
+      { withContext: true }
+    ),
+    replaceGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.replaceGlobalAssistant,
+      globalAssistant.handleReplaceGlobalAssistant,
       { withContext: true }
     ),
     discardGlobalAssistant: op(

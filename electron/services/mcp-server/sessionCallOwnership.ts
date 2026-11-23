@@ -149,6 +149,18 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: false,
   },
+  // A Claude Code update (#17908): the delegate is only the person's approval,
+  // asked with the panel's id alone, so neither `confirmed` nor any text can
+  // ride along; main types `/restart` itself once it answers. Refused on a
+  // handed pane like the preset move: the agent restarts either way.
+  "terminal.applyClaudeUpdateOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.applyClaudeUpdate",
+    idArg: "terminalId",
+    releasesOwnership: false,
+    acceptsAdoption: false,
+  },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     executor: "renderer",

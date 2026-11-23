@@ -11,7 +11,13 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const state = vi.hoisted(() => ({
-  runs: [] as Array<{ runId: string; spawnedAt: number; workspaceId?: string; cwd?: string }>,
+  runs: [] as Array<{
+    runId: string;
+    spawnedAt: number;
+    workspaceId?: string;
+    cwd?: string;
+    worktreeId?: string;
+  }>,
   views: [] as Array<{ send: (channel: string, payload: unknown) => void }>,
   record: null as {
     spawnedAt: number;
@@ -189,9 +195,10 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     },
   },
 }));
-vi.mock("../../../services/globalAssistant.js", () => ({
-  peekGlobalAssistantService: () =>
+vi.mock("../../../services/globalAssistant.js", () => {
+  const globalService = () =>
     assistants.global && {
+      slot: 0,
       getState: () => ({
         phase: "running",
         generation: assistants.global?.generation ?? 0,
@@ -202,14 +209,25 @@ vi.mock("../../../services/globalAssistant.js", () => ({
       canWrite: (attachmentId: string, epoch: number) =>
         assistants.global?.holder?.attachmentId === attachmentId &&
         assistants.global.holder.epoch === epoch,
+    };
+  return {
+    peekGlobalAssistantServices: () => {
+      const service = globalService();
+      return service ? [service] : [];
     },
-}));
+    peekGlobalAssistantServiceForTerminal: (terminalId: string) => {
+      const service = globalService();
+      return service && assistants.global?.terminalId === terminalId ? service : null;
+    },
+  };
+});
 const saved = vi.hoisted(() => ({
   state: null as {
     terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
   } | null,
 }));
 const projectStore = vi.hoisted(() => ({
+  getProjectById: vi.fn((_projectId: string): { path: string } | null => null),
   enqueueProjectStateUpdate: vi.fn(
     async (_projectId: string, updater: (state: unknown) => unknown) => {
       const next = await updater(saved.state);
@@ -1646,6 +1664,29 @@ describe("canopy IPC", () => {
         ])
       );
       expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
+
+    it("reads worktrees only for runs the fleet holds in the incarnation named, never as clean unchecked", async () => {
+      state.runs = [
+        { runId: "run-0", spawnedAt: 100, workspaceId: "project-1" },
+        { runId: "run-1", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-1" },
+        { runId: "run-2", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-2" },
+      ];
+      const readings = answer<Array<{ runId: string; work: { kind: string } }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readWorktrees, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 99 },
+          // Named only in an incarnation the fleet doesn't hold.
+          { runId: "run-2", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      // run-1's project isn't known here, so its worktree can't be checked against it.
+      expect(readings).toEqual([
+        { runId: "run-0", work: { kind: "not-applicable" } },
+        { runId: "run-1", work: { kind: "unreadable" } },
+      ]);
     });
   });
 
@@ -4115,10 +4156,12 @@ describe("where Open in Assistant from the Canopy window finds a lane's view (#1
   });
 
   it("names the view with the global session's input, and none without one", async () => {
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: 9 };
-    expect(await globalAssistantInputOwner()).toBe(9);
+    expect(await globalAssistantInputOwner("g")).toBe(9);
+    // Another session's terminal names that session's owner, never this one's (#18142).
+    expect(await globalAssistantInputOwner("other")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: null };
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
   });
 });

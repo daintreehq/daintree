@@ -200,9 +200,7 @@ export class WindowRegistry {
       });
     // Only its readers go; the global assistant belongs to the installation.
     import("../services/globalAssistant.js")
-      .then(({ peekGlobalAssistantService }) =>
-        peekGlobalAssistantService()?.detachWindow(windowId)
-      )
+      .then(({ detachGlobalAssistantWindow }) => detachGlobalAssistantWindow(windowId))
       .catch((err) => {
         console.warn("[WindowRegistry] Detaching the global assistant failed:", err);
       });

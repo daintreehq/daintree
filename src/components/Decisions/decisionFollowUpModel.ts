@@ -2,6 +2,7 @@ import type { FollowUpHold, FollowUpPhase, FollowUpRefusal } from "@/store/decis
 import type {
   DecisionFollowUpOutcome,
   DecisionQuestionContent,
+  DecisionQuestionListItem,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import { formatTextExcess, isAnswerable, textBytes } from "./decisionComposeModel";
@@ -36,6 +37,25 @@ export function takesFollowUp(
 }
 
 /**
+ * Whether typing into the asking terminal stopped on this question and nobody
+ * has resolved it (#18028), as this computer's list says of the same
+ * question: a follow-up sent now would only wait behind what stopped. The
+ * list's standing, never the question's own delivery status, which Mark
+ * handled leaves as it was. Never a reason to drop a follow-up already on its
+ * way: `takesFollowUp` alone decides that.
+ */
+export function deliveryStalled(
+  question: Pick<DecisionQuestionContent, "reference">,
+  listed: Pick<DecisionQuestionListItem, "reference" | "standing"> | null
+): boolean {
+  if (listed === null || listed.standing.kind !== "needs-attention") return false;
+  return (
+    listed.reference.hostId === question.reference.hostId &&
+    listed.reference.questionId === question.reference.questionId
+  );
+}
+
+/**
  * The agent's latest request for a reply, when nothing has answered it: a
  * follow-up sent now is the reply it waits for. Read along the thread as the
  * protocol reads it: the person's message or answer after the request
@@ -55,6 +75,34 @@ export function replyRequest(
   }
   return request;
 }
+
+/**
+ * What declining a reply request sends (#18030): the person's own follow-up,
+ * typed into the terminal that asked. Protocol 0.9.0 has no record of a
+ * declined request, so a message is what ends the wait on every device.
+ */
+export const DECLINE_REPLY_TEXT = "I won't reply to this, so don't wait for a reply from me.";
+
+/**
+ * The agent's request for a reply that the person can decline (#18030): one
+ * on an answered question, which nothing ends but the person's own message
+ * or answer, or the agent's next message. An open question's is declined by
+ * dismissing the question.
+ */
+export function declinableReplyRequest(
+  question: Pick<DecisionQuestionContent, "status" | "thread">
+): DecisionThreadMessage | null {
+  if (question.status !== "human-answered" && question.status !== "proxy-answered") return null;
+  return replyRequest(question);
+}
+
+export function declineReplyTitle(label: string): string {
+  return `Decline to reply on ${label}?`;
+}
+
+/** What sending the decline does, everywhere it reaches; the message itself is shown beside it. */
+export const DECLINE_REPLY_BODY =
+  "This follow-up is sent as yours. Once the relay takes it, the question stops waiting for your reply here and on your phones, and your answer stays as it is. Daintree then tries to type it into the terminal that asked. If that terminal has closed, Daintree may reopen the agent's session to type it in, or list the follow-up under Needs attention.";
 
 export interface FollowUpVerdict {
   canSend: boolean;
@@ -110,6 +158,8 @@ const HOLDS: Record<FollowUpHold, string> = {
   "not-running":
     "Decisions isn't connected to its relay right now, so nothing was sent. Reconnect it in Settings → Decisions.",
   failed: "This question couldn't be read again before sending, so nothing was sent.",
+  "request-moved":
+    "The agent's request for a reply was answered or replaced before this was sent, so nothing was sent. Review the thread first.",
 };
 
 /** Why a Send stopped before anything was signed. */
@@ -148,7 +198,8 @@ export function followUpProgressText(
       case "terminal-delivered":
         return "Follow-up sent and typed into the terminal";
       case "needs-attention":
-        return "Follow-up sent, but it couldn't be typed in. Review it from the terminal's Decisions menu.";
+        // Its terminal may have closed, so never send the person to that terminal's menu.
+        return "Follow-up sent, but it couldn't be typed in. Review it under Needs attention in the Decisions inbox.";
       case "delivery-uncertain":
         return "Follow-up sent. It may or may not have been typed in.";
       default:

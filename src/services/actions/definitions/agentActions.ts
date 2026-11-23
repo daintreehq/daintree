@@ -516,7 +516,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.resume",
     title: "Resume agent session",
     description:
-      "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live panel forward, not a second agent. Opens off-screen unless that worktree is active.",
+      "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A live panel already holding it is returned, wherever it is filed. Opens off-screen unless that worktree is active.",
     category: "agent",
     kind: "command",
     danger: "safe",

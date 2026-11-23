@@ -236,8 +236,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     workspaceId: string,
     /** Assistant terminals an assistant caller named and may read (#13496). */
     admittedAssistants?: ReadonlySet<string>,
-    /** This machine's global Assistant, when the caller named it and may read its status (#16410). */
-    admittedGlobal?: string
+    /** This machine's global Assistant sessions the caller named and may read the status of (#16410, #18142). */
+    admittedGlobals?: ReadonlySet<string>
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   /**
    * Whether a terminal with this id is already live anywhere in the app, read
@@ -304,6 +304,18 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     signal: AbortSignal
   ) => Promise<import("./worktreeRetirementGit.js").WorktreeGitObservation>;
   /**
+   * What each worktree named holds that exists only on this machine (#18151),
+   * for the global Assistant's close question, one answer per id in order:
+   * `undefined` for a panel with no worktree. Never rejects; whatever git
+   * couldn't report is unreadable. Absent, a panel in a worktree reads as
+   * unreadable.
+   */
+  readCloseWorktrees?: (
+    projectId: string,
+    worktreeIds: ReadonlyArray<string | undefined>,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/worktreeLocalWork.js").WorktreeLocalWork[]>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already
@@ -363,7 +375,16 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   globalSteer?: Pick<
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
-    "prompt" | "keys" | "interrupt" | "reveal" | "closeTarget"
+    "prompt" | "keys" | "interrupt" | "reveal" | "applyUpdate" | "closeTarget"
+  >;
+  /**
+   * A Claude Code update an assistant asked to apply (#17908): the pane's
+   * preflight and, once the person approved, the single `/restart`. Absent,
+   * the tool is refused with nothing sent.
+   */
+  claudeUpdate?: Pick<
+    import("../assistants/ClaudeUpdateApply.js").ClaudeUpdateApply,
+    "exclusive" | "preflight" | "apply"
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
@@ -381,6 +402,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     shellName: string;
     /** The calling Shell's global Assistant (#14545), as its relay caller recorded it. */
     global?: true;
+    /**
+     * One of this machine's own assistants calling in process (#14024), never
+     * set for a call that arrived over a link.
+     */
+    local?: true;
     /**
      * Asked right before a change this process makes itself rather than
      * through a view: why it may not, or null while the requesting Shell's own

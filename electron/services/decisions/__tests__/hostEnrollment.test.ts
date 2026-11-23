@@ -171,8 +171,16 @@ class FakePort implements DecisionsHostsPort {
     return null;
   }
 
+  hostAttention() {
+    return null;
+  }
+
   lastHostRead() {
     return null;
+  }
+
+  onAgentStopChanges() {
+    return () => {};
   }
 
   /** The host's link comes up, as the Remote Hosts client says it. */

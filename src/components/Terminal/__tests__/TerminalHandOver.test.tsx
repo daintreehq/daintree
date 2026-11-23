@@ -180,13 +180,16 @@ describe("useOrchestratorCandidates", () => {
     await waitFor(() => expect(result.current.candidateIds).toEqual(["pane-orch"]));
   });
 
-  it("offers the global assistant after the panes, only while it runs (#14161)", async () => {
+  it("offers the global assistant after the panes, only while the one that coordinates runs (#14161, #18143)", async () => {
     listOrchestratorPanes.mockResolvedValue(["pane-orch"]);
-    const getGlobalAssistantState = vi.fn().mockResolvedValue({ phase: "running" });
+    const listGlobalAssistantSessions = vi.fn().mockResolvedValue([
+      { slot: 0, coordinating: true, phase: "running" },
+      { slot: 1, coordinating: false, phase: "absent" },
+    ]);
     Object.defineProperty(window, "electron", {
       value: {
         mcpServer: { adoptTerminal, releaseTerminalAdoption, listOrchestratorPanes },
-        help: { getGlobalAssistantState },
+        help: { listGlobalAssistantSessions },
       },
       writable: true,
       configurable: true,
@@ -198,7 +201,11 @@ describe("useOrchestratorCandidates", () => {
       expect(result.current.candidateIds).toEqual(["pane-orch", GLOBAL_ASSISTANT_CANDIDATE])
     );
 
-    getGlobalAssistantState.mockResolvedValue({ phase: "absent" });
+    // Only the session that isn't coordinating runs: nothing is handed to it.
+    listGlobalAssistantSessions.mockResolvedValue([
+      { slot: 0, coordinating: true, phase: "absent" },
+      { slot: 1, coordinating: false, phase: "running" },
+    ]);
     act(() => result.current.refresh());
     await waitFor(() => expect(result.current.candidateIds).toEqual(["pane-orch"]));
   });

@@ -25,8 +25,14 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
     : undefined;
 }
 
-/** Coerce a persisted file view mode, dropping unknown on-disk values. */
+/**
+ * Coerce a persisted file view mode, dropping unknown on-disk values. Edit is
+ * never restored and comes back as Source, as it always has: an unset mode now
+ * opens a built-in viewer where one fits (#17336), which a panel left editing
+ * never chose.
+ */
 function sanitizeFileViewMode(value: string | undefined): FileViewMode | undefined {
+  if (value === "edit") return "source";
   return value === "rendered" || value === "source" || value === "diff" ? value : undefined;
 }
 

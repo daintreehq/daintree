@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
  * consent, which shows `TerminalSnapshotsDisclosure` too. Phone photos are
  * #16233's: stored in the asking pane's folder so its agent can open them.
  * Presence is #17240's: a yes or no the relay reads, so it isn't encrypted.
+ * The agent-stopped push is #17319's: a request that carries nothing.
  */
 export function DecisionsDisclosure({ className }: { className?: string }) {
   return (
@@ -47,7 +48,9 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
       <li>
         <span className="font-medium text-text-primary">Push endpoints.</span> Each phone you pair
         registers one with the relay. A push says only that a question needs you, never the
-        question.
+        question. If you turn on phone notifications when an agent stops, under Questions, this
+        computer also asks your relay to tell your phone that an agent stopped while you were away,
+        here or on a Remote Host it&apos;s connected to, never which agent, where or how many.
       </li>
       <li>
         <span className="font-medium text-text-primary">Whether you&apos;re at this computer.</span>{" "}

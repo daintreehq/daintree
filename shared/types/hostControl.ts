@@ -312,6 +312,9 @@ export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 export const HostListResultSchema = z.object({ hosts: z.array(HostListEntrySchema) });
 export type HostListResult = z.infer<typeof HostListResultSchema>;
 
+/** The longest tool id a host's link carries. */
+const MAX_LINK_TOOL_ID_CHARS = 128;
+
 /** A call names exactly one target: one of the host's projects, or a throwaway agent (#14444). */
 function namesOneTarget(args: { projectId?: string; throwaway?: true }): boolean {
   return (args.projectId === undefined) !== (args.throwaway === undefined);
@@ -327,10 +330,12 @@ export const HostCallArgsSchema = z
       .describe(
         "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, status, output, sendCommand, sendKeys, close."
       ),
+    // Longer on this machine, where a project plugin's action id carries its
+    // 64-character project id (#18153); a host's link still takes 128.
     tool: z
       .string()
       .min(1)
-      .max(128)
+      .max(256)
       .describe("A Daintree tool on the host, by id. Search the host's own tools through this."),
     args: z.record(z.string(), z.unknown()).optional().describe("The tool's own arguments."),
     callId: idSchema
@@ -345,6 +350,7 @@ export const HostCallArgsSchema = z
   // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
   .refine((args) => args.callId === undefined || args.newCallId === undefined)
   .refine(namesOneTarget)
+  .refine((args) => args.hostId === "local" || args.tool.length <= MAX_LINK_TOOL_ID_CHARS)
   // A throwaway target takes only its own tools, with their own arguments.
   .refine(
     (args) =>
@@ -560,14 +566,16 @@ export const HOST_WATCH_DEFAULT_WAITING_REASONS = ["approval", "question"] as co
 export const HOST_WATCH_AGENTS_MAX = 8;
 /** Agents already waiting that one arm names; the rest are counted. */
 export const HOST_WATCH_MATCHES_MAX = 16;
+/** Longest plugin instance id a plugin-notification watch names, as the plugin settings take one. */
+export const HOST_WATCH_PLUGIN_ID_MAX = 512;
 
 const waitingReasonSchema = z.enum(HOST_WATCH_WAITING_REASONS);
 
 export const HostWatchArgsSchema = z.object({
   operation: z
-    .enum(["arm", "cancel", "list"])
+    .enum(["arm", "cancel", "list", "read"])
     .describe(
-      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
+      "arm: one notice when first observed. cancel: end one. list: yours. read: a notification's text."
     ),
   hostId: hostIdSchema
     .optional()
@@ -603,7 +611,18 @@ export const HostWatchArgsSchema = z.object({
     .min(1)
     .max(256)
     .optional()
-    .describe("With agentsWaiting: only that project."),
+    .describe("Only that project's agents or notifications."),
+  pluginNotifications: z
+    .literal(true)
+    .optional()
+    .describe("Arm on plugin notifications for assistants. Arm returns untaken ones."),
+  pluginId: z
+    .string()
+    .min(1)
+    .max(HOST_WATCH_PLUGIN_ID_MAX)
+    .optional()
+    .describe("Only that plugin."),
+  notificationId: z.string().max(64).optional().describe("For read."),
   expiresInSeconds: z
     .number()
     .int()
@@ -627,6 +646,10 @@ const hostWatchConditionSchema = z.object({
       waitingReasons: z.array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"])),
       projectId: z.string().nullable(),
     })
+    .nullable(),
+  /** A plugin-notification watch (#18154): its one project and one plugin, if any. */
+  pluginNotifications: z
+    .object({ projectId: z.string().nullable(), pluginId: z.string().nullable() })
     .nullable(),
 });
 export type HostWatchCondition = z.infer<typeof hostWatchConditionSchema>;
@@ -653,6 +676,22 @@ export const HostWatchAgentSchema = z.object({
   seenAt: z.number().nullable(),
 });
 export type HostWatchAgent = z.infer<typeof HostWatchAgentSchema>;
+
+/**
+ * A plugin's notification for an assistant (#18154), as Daintree recorded it:
+ * which plugin raised it, for which project, and when. Never its text, which
+ * only `read` returns.
+ */
+export const HostWatchNotificationSchema = z.object({
+  notificationId: z.string(),
+  pluginId: z.string(),
+  pluginName: z.string(),
+  projectId: z.string(),
+  dedupeKey: z.string().nullable(),
+  severity: z.enum(["info", "warning", "error"]),
+  createdAt: z.number(),
+});
+export type HostWatchNotification = z.infer<typeof HostWatchNotificationSchema>;
 
 /**
  * How an agent watch hears one host. `events`: every waiting transition, with
@@ -751,6 +790,18 @@ export const HostWatchResultSchema = z.object({
       hosts: z.array(HostWatchHostCoverageSchema),
     })
     .optional(),
+  /**
+   * A plugin-notification arm: those no assistant had taken, now yours; no
+   * notice comes for them. A list: the latest this run was given (#18154).
+   */
+  notifications: z
+    .object({ matches: z.array(HostWatchNotificationSchema), omitted: z.number() })
+    .optional(),
+  /** read only: the plugin's own words, as it sent them. */
+  notification: HostWatchNotificationSchema.extend({
+    title: z.string(),
+    body: z.string(),
+  }).optional(),
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 

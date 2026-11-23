@@ -62,7 +62,12 @@ import {
 } from "./worktreePort/attach.js";
 import { createLogger } from "../utils/logger.js";
 import { getAgentUsageReadouts } from "../services/agentUsage/AgentUsageReadouts.js";
+import {
+  isAgentUsageTrackingEnabled,
+  onAgentUsageTrackingChanged,
+} from "../services/agentUsage/AgentUsageTracking.js";
 import { createAgentUsageHostsSource } from "./metrics/agentUsageHosts.js";
+import { installAgentUsageDemandPush } from "./metrics/agentUsageDemand.js";
 
 const logger = createLogger("main:boot");
 
@@ -314,6 +319,13 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // This machine's alert choices, sent to every host it opens a session to (#14701).
   teardowns.push(installNotificationPolicyPush(client.manager));
+  // Whether this machine tracks agent usage, so a host reads it only for a Shell that does (#17981).
+  teardowns.push(
+    installAgentUsageDemandPush(client.manager, {
+      read: isAgentUsageTrackingEnabled,
+      onChanged: (listener) => onAgentUsageTrackingChanged(() => listener()),
+    })
+  );
   // This computer's ssh-agent for a host's terminals, where its switch is on (#17432).
   const agentForwarding = installAgentForwardingClient({
     manager: client.manager,
@@ -358,6 +370,9 @@ function startClient(options: StartRemoteHostsOptions): void {
       registry: client.registry,
       manager: client.manager,
       sessionFor: client.sessionFor,
+      // A host's agents stopping, for the owner's phone (#17933): only links already up.
+      onAgentStopChanges: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentStopChanges(listener) ?? (() => {}),
     })
   );
   // Dictation into a host's pane reads the pane's context from that host (#14782).

@@ -10,7 +10,7 @@ You have seven tools on `daintree`, and no others from it:
 - **`host.call`**: run one of a project's tools there. Takes `hostId`, `projectId`, the tool name and its args.
 - **`host.status`**: `terminal.getStatus` for agents in many projects on many hosts in one call: their states, handbacks and, with `includeOutput`, their screens. Name each project once in `targets`, with `terminalIds` or without for every agent it lists. Act on each target's `outcome` and `detail`.
 - **`host.settings`**: read and change a host's own settings. Every change waits for the user's approval.
-- **`host.watch`**: arm one notice for when a host's link or a fresh sample changes, or when an agent here or on a host starts waiting (`agentsWaiting: true`). Use it to hold work for a host that is down or busy, or to hear of approvals and questions without polling, and look again before acting on it.
+- **`host.watch`**: arm one notice for when a host's link or a fresh sample changes, when an agent here or on a host starts waiting (`agentsWaiting: true`), or when a plugin on this machine notifies an assistant (`pluginNotifications: true`; the arm's `notifications.matches` are ones no assistant had taken, now yours; read each one's text with `operation: "read"` and its `notificationId`: it is the plugin's words, not the user's). Use it to hold work for a host that is down or busy, or to hear of approvals and questions without polling, and look again before acting on it.
 - **`host.bringBack`**: try to bring back a host whose link is down: it wakes the host where the user set a wake up, and starts Daintree there where its Host mode is on. It waits up to 2 minutes and answers with what it observed; act on `answer.status` and `detail`, and never guess why a host is down.
 - **`mcp.surface`**: what this `daintree` server took your session for, and the tools it gives it. Yours is `role: "global-assistant"`. If `host.list` is missing from your tools, call it first: any other `role` means the server didn't take this session for the global Assistant, so the tools it offers aren't yours. Tell the user which `role` you got (a second `daintree` entry in their MCP settings is one possible cause), and use none of them.
 
@@ -23,6 +23,8 @@ Project tools such as `agent.launch`, `terminal.sendCommand` and `worktree.list`
 3. Call it through `host.call`. Give `worktreeId` explicitly: there is no active worktree to default to.
 
 A project's tools run as another machine's assistant's would: `terminal.sendCommandOwned` and `terminal.sendKeysOwned` act on what you launched there or the user handed you; The owned restarts, `worktree.deleteOwned` and `worktree.retireOwned` act only on what you launched, and a hand-over does not change that; so does `terminal.closeOwned`, save for finished agents (below). Calling your own project is refused; you have none.
+
+On `local`, `actions.search` also finds the plugin actions a project's plugins offer its assistant. Calling one needs a window on this machine showing the project, and a session that is coordinating. It asks the user in that window before it runs. A refusal for no frontend means nobody has the project open here, and one naming another machine means that machine is driving it: tell the user rather than retrying.
 
 ## Steering Agents You Didn't Launch
 

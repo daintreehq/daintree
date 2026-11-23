@@ -65,6 +65,7 @@ import {
   MCP_REMOTE_CONFIRM_MARGIN_MS,
 } from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
+import { isPluginAssistantReachAction } from "../plugin/pluginAssistantReach.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
 
@@ -286,11 +287,13 @@ export interface SessionServerDepsSource {
   readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
   /** The Claude Code usage messages this machine's panes showed, as `agent.readQuota` reports them. */
   readClaudeUsage?: import("./sessionServer.js").SessionServerDeps["readClaudeUsage"];
+  claudeUpdate?: import("./sessionServer.js").SessionServerDeps["claudeUpdate"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
   readTerminalProcesses?: import("./sessionServer.js").SessionServerDeps["readTerminalProcesses"];
   readWorktreeGit?: import("./sessionServer.js").SessionServerDeps["readWorktreeGit"];
+  readCloseWorktrees?: import("./sessionServer.js").SessionServerDeps["readCloseWorktrees"];
   waitForClosedPanelExits?: import("./sessionServer.js").SessionServerDeps["waitForClosedPanelExits"];
   terminalGenerationOf?: import("./sessionServer.js").SessionServerDeps["terminalGenerationOf"];
   trackedTerminalIds?: import("./sessionServer.js").SessionServerDeps["trackedTerminalIds"];
@@ -956,13 +959,22 @@ export function createSessionServerDeps(
       }
       const holdUntil =
         callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
+      // A plugin's opted-in action (#18153) runs only in this machine's own
+      // view, where its dialog is asked, so even a query never counts as a
+      // read another machine's driving view could answer.
+      const relayPluginAction = relay !== undefined && isPluginAssistantReachAction(actionId);
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
             ...(holdUntil !== undefined ? { holdUntil } : {}),
+            ...(relay.local === true && relay.global === true
+              ? { callerOrigin: "global-assistant" as const }
+              : {}),
             relay: {
               linkSessionId: relay.linkSessionId,
               readOnly:
-                relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                !relayPluginAction &&
+                relayEntry !== undefined &&
+                buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
               ...(relayCallId !== undefined
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
@@ -1191,6 +1203,9 @@ export function createSessionServerDeps(
       ? { readTerminalProcesses: deps.readTerminalProcesses }
       : {}),
     ...(deps.readWorktreeGit !== undefined ? { readWorktreeGit: deps.readWorktreeGit } : {}),
+    ...(deps.readCloseWorktrees !== undefined
+      ? { readCloseWorktrees: deps.readCloseWorktrees }
+      : {}),
     ...(deps.waitForClosedPanelExits !== undefined
       ? { waitForClosedPanelExits: deps.waitForClosedPanelExits }
       : {}),
@@ -1215,6 +1230,7 @@ export function createSessionServerDeps(
           relay: {
             shellName: relay.shellName,
             ...(relay.global === true ? { global: true as const } : {}),
+            ...(relay.local === true ? { local: true as const } : {}),
             // Only the global Assistant's: no other caller closes what it didn't launch.
             ...(relay.global === true && relay.requestApproval !== undefined
               ? {
@@ -1314,6 +1330,7 @@ export function createSessionServerDeps(
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
             reveal: async (target, show) => boundSteer(host).reveal(target, show),
+            applyUpdate: async (target, apply) => boundSteer(host).applyUpdate(target, apply),
             // No steer to read with is no agent it may close: the uniform refusal (#16750).
             closeTarget: async (projectId, terminalId) =>
               (await host.assistantControlBinding()?.steer?.closeTarget(projectId, terminalId)) ??
@@ -1324,6 +1341,7 @@ export function createSessionServerDeps(
     assistantCaller: () => assistantCallerFor(),
     ...(deps.readCodexQuota !== undefined ? { readCodexQuota: deps.readCodexQuota } : {}),
     ...(deps.readClaudeUsage !== undefined ? { readClaudeUsage: deps.readClaudeUsage } : {}),
+    ...(deps.claudeUpdate !== undefined ? { claudeUpdate: deps.claudeUpdate } : {}),
     // A pane bearer's own terminal is fixed for the bearer's life and was
     // resolved at handshake; a help lane's is read per call, because its
     // binding follows the PTY that currently serves it.

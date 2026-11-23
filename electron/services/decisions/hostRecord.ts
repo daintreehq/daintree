@@ -1,5 +1,7 @@
+import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "../../../shared/config/decisionsQuestionExpiry.js";
 import type { DecisionsSettings, DecisionsStatus } from "../../../shared/types/decisions.js";
 import type {
+  DecisionsHostQuestionPolicy,
   DecisionsHostRecord,
   DecisionsHostRuntime,
 } from "../../../shared/types/decisionsHosts.js";
@@ -71,12 +73,14 @@ export function hostRecordServes(record: DecisionsHostRecord | null): boolean {
 
 /**
  * The settings a Host's lifetime runs with: its relay identity and host id,
- * and the defaults for everything the owner decides (proxy answers stay
- * off). Never saved: a Host has no switch or relay of its own.
+ * the Host's own default expiry, and the defaults for everything else the
+ * owner decides (proxy answers stay off). Never saved: a Host has no switch
+ * or relay of its own, and the owner's saved expiry stays on the owner.
  */
 export function hostLifetimeSettings(record: DecisionsHostRecord): DecisionsSettings {
   return {
     ...defaultDecisionsSettings(),
+    defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
     enabled: true,
     relayOrigin: record.relayOrigin,
     installationId: record.installationId,
@@ -86,10 +90,14 @@ export function hostLifetimeSettings(record: DecisionsHostRecord): DecisionsSett
   };
 }
 
-/** What the Host reports of its own Decisions, from its record and its lifetime's status. */
+/**
+ * What the Host reports of its own Decisions, from its record, its lifetime's
+ * status and how that lifetime asks its agents' questions (#17942).
+ */
 export function hostRuntimeOf(
   record: DecisionsHostRecord | null,
-  status: DecisionsStatus | null
+  status: DecisionsStatus | null,
+  questionPolicy: DecisionsHostQuestionPolicy
 ): DecisionsHostRuntime {
   if (record === null) return { state: "not-enrolled" };
   const { deviceId } = record;
@@ -109,5 +117,6 @@ export function hostRuntimeOf(
     connection: state,
     ...(status?.nextAttemptAt !== undefined ? { nextAttemptAt: status.nextAttemptAt } : {}),
     ...(status?.problem !== undefined ? { problem: status.problem } : {}),
+    questionPolicy,
   };
 }

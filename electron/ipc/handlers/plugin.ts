@@ -159,6 +159,7 @@ import { UNTRUSTED_URL_MAX_CHARS, safeAppend } from "./plugin/auditAppend.js";
 import { getPluginService } from "./plugin/service.js";
 import { remoteUnsupportedError } from "./plugin/senderScope.js";
 import { parsePluginActionContext } from "../../services/plugin/pluginActionContext.js";
+import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { IpcContext } from "../types.js";
 import type {
@@ -695,6 +696,25 @@ export async function handleActionInvoke(
     throw new AppError({
       code: "VALIDATION",
       message: `plugin:actions-invoke rejected: ${formatErrorMessage(err, "invalid context")}`,
+    });
+  }
+  // Main marks a global Assistant's call only on a send to this machine's own
+  // view (#18153), so another machine's view can never have one to report.
+  if (ctx.event === null && actionContext.origin === "global-assistant") {
+    throw new AppError({
+      code: "VALIDATION",
+      message:
+        "plugin:actions-invoke rejected: another machine's view can't report this machine's global Assistant",
+    });
+  }
+  // An assistant reaches a plugin action only through its opt-in (#16751,
+  // #18153), and the plugin may have dropped it since the call was admitted:
+  // read it again as the handler is about to run, so a replacement without it
+  // never runs under the assistant's name.
+  if (actionContext.origin !== undefined && !isPluginAssistantReachAction(actionId)) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: `plugin:actions-invoke rejected: ${actionId} is no longer offered to the assistant`,
     });
   }
   const result =

@@ -17,11 +17,14 @@ import {
   getDecisionsHostsPort,
   getMcpServerServiceRef,
   getPtyClient,
+  getRunAttentionServiceRef,
   watchDecisionsHostsPort,
 } from "../../window/serviceRefs.js";
+import { readUserPresence } from "../userPresence.js";
+import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
-import { setAnswerAttention } from "../runAnswerAttentionSource.js";
+import { setDecisionAttention } from "../runAnswerAttentionSource.js";
 import {
   getDecisionQuestionList,
   onDecisionQuestionsChanged,
@@ -64,6 +67,8 @@ import {
   type DecisionsExportResult,
   type DecisionsKitExportResult,
   type DecisionsKitVerifyResult,
+  type DecisionsKeyErasurePayload,
+  type DecisionsHistoryRemoveResult,
   type DecisionsLocalDeleteResult,
   type DecisionsPairingApproveResult,
   type DecisionsPairingDeclineResult,
@@ -102,6 +107,7 @@ import type {
 } from "../../../shared/types/decisionsModel.js";
 import type {
   DecisionsHostEnrollResult,
+  DecisionsHostQuestionPolicy,
   DecisionsHostRecord,
   DecisionsHostRuntime,
   DecisionsHostsResult,
@@ -111,6 +117,9 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
@@ -130,6 +139,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   DecisionQuestionSummary,
@@ -152,7 +162,10 @@ import type {
 } from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
+import {
+  HOST_DEFAULT_QUESTION_EXPIRY_MS,
+  isQuestionExpiryChoice,
+} from "../../../shared/config/decisionsQuestionExpiry.js";
 import {
   MAX_ASK_HUMAN_AGENTS,
   isAskHumanAgentId,
@@ -164,10 +177,13 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
+import type { ReportedStop } from "./agentStoppedPushes.js";
 import type {
+  DecisionsAgentStoppedDeps,
   DecisionsDeliveryDeps,
   DecisionsPresenceDeps,
   DecisionsService,
+  DecisionsServiceOptions,
   DecisionsSnapshotDeps,
 } from "./DecisionsService.js";
 import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
@@ -179,7 +195,7 @@ import {
   thresholdSupported,
   type DecisionModelRuntime,
 } from "./decisionModel.js";
-import { decisionsKeyFilePath } from "./keyStore.js";
+import { decisionsKeyFilePath, keyFileVersion, onKeyFileWritten } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import { RelayDeploySessions } from "./relayDeploySession.js";
@@ -197,7 +213,7 @@ import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import { deleteDecisionsRelayData } from "./relayData.js";
-import type { LocalEraseOutcome } from "./localData.js";
+import { erasingKeyFilePath, type LocalEraseOutcome } from "./localData.js";
 import {
   claimDecisionsRelay,
   restoreDecisionsIdentity,
@@ -426,10 +442,11 @@ function publishQuestions(
 }
 
 function refreshQuestionList(): void {
-  const questions = listingQuestions ? listedQuestions() : [];
+  const hosts = listingQuestions ? (getDecisionsHostsPort()?.hostQuestions() ?? []) : [];
+  const questions = listingQuestions ? listedQuestions(hosts) : [];
   // Once quit begins the list only empties, for main's consumers; the windows are going.
   if (shutDown && questions.length > 0) return;
-  const changed = setDecisionQuestions(questions);
+  const changed = setDecisionQuestions(questions, shutDown ? [] : awayHostNames(hosts));
   if (changed === null || shutDown) return;
   sendToLocalViews("decisions:questions-changed", changed);
 }
@@ -467,8 +484,7 @@ function askedAtMs(question: DecisionQuestionListItem): number {
  * own read with its rows, a Host's as it reported them, else as its list
  * shows them.
  */
-function listedQuestions(): DecisionQuestionListItem[] {
-  const hosts = getDecisionsHostsPort()?.hostQuestions() ?? [];
+function listedQuestions(hosts: readonly DecisionsHostQuestions[]): DecisionQuestionListItem[] {
   const ownHostId = service?.getSettings()?.hostId ?? null;
   const asks = new Map<string, string | null>();
   if (ownHostId !== null) {
@@ -483,11 +499,51 @@ function listedQuestions(): DecisionQuestionListItem[] {
     }
   }
   listedAsks = asks;
-  return withInbox(
+  const listed = withInbox(
     withHostQuestions(ownQuestions, hosts, ownHostId),
     asks,
     ownInbox?.marks ?? new Map()
   );
+  const closings = ownInbox?.closings;
+  if (closings === undefined || closings.size === 0) return listed;
+  // A withdrawal or decline queued here, for this computer's question or a Host's, while it is still open.
+  return listed.map((item) => {
+    const closing = closings.get(item.reference.questionId);
+    return closing !== undefined && openStanding(item) ? { ...item, closing } : item;
+  });
+}
+
+/** Still out for an answer, so a withdrawal or decline can be under way for it. */
+function openStanding(item: DecisionQuestionListItem): boolean {
+  const { standing } = item;
+  return (standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued";
+}
+
+/**
+ * The Hosts whose questions the list holds now (#18049), by host-list id,
+ * so a Remote Host's window can tell whether its Host's are among them: none
+ * while it lists none.
+ */
+function inboxHostIds(): string[] {
+  if (!listingQuestions) return [];
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  return (getDecisionsHostsPort()?.hostQuestions() ?? [])
+    .filter((host) => host.questionHostId !== ownHostId)
+    .map((host) => host.hostId);
+}
+
+/**
+ * Each enrolled Host this computer heard from but can't reach now, by name,
+ * whether or not it listed a question (#18022): the inbox can't call itself
+ * clear while one is away. Never this computer's own.
+ */
+function awayHostNames(hosts: readonly DecisionsHostQuestions[]): string[] {
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  const names = new Set<string>();
+  for (const host of hosts) {
+    if (host.questionHostId !== ownHostId && !host.connected) names.add(host.name);
+  }
+  return [...names];
 }
 
 /**
@@ -740,6 +796,11 @@ function publishStatus(): void {
     .catch(() => {});
 }
 
+// Whether a verified kit still holds every key is read from the key file, so
+// each change to the file is pushed to Settings: a rotation's new key, from
+// any route, makes the next erasure ask for the stronger confirmation (#18064).
+onKeyFileWritten(() => publishStatus());
+
 /**
  * The relay revoked the identity a connection ran on. Recorded against that
  * identity alone, so a revocation that lands after a disconnect, or after
@@ -842,6 +903,11 @@ const deliveryDeps: DecisionsDeliveryDeps = {
       return projectStore.getProjectById(projectId)?.name ?? null;
     },
     listTerminals: async () => (await getPtyClient()?.getAllTerminalsAsync()) ?? [],
+    getTerminal: async (terminalId) => (await getPtyClient()?.getTerminalAsync(terminalId)) ?? null,
+    hostName: (hostId) =>
+      getDecisionsHostsPort()
+        ?.hostQuestions()
+        .find((host) => host.questionHostId === hostId)?.name ?? null,
   },
 };
 
@@ -865,6 +931,68 @@ function watchSnapshotPanes(onPane: (terminalId: string, state?: string) => void
 }
 
 /**
+ * Main's pane and worktree events that can change what the run that asked a
+ * question shows (#18029), each naming the pane or worktree it concerns: it
+ * started, exited or was lost with its pty host, went to or came back from
+ * the Trash, moved worktree, its agent came or went, or a worktree was
+ * removed or came back. A pty client created later is followed from the next
+ * subscription.
+ */
+function watchAskerPanes(
+  onPane: (hint?: { paneId: string } | { worktreeId: string; missingOnly?: true }) => void
+): () => void {
+  const pane = (paneId: string | undefined) => {
+    if (paneId) onPane({ paneId });
+  };
+  const offs = [
+    events.on("terminal:lifecycle", ({ type, terminalId }) => {
+      if (type === "spawned" || type === "exited") pane(terminalId);
+    }),
+    events.on("terminal:trashed", ({ id }) => pane(id)),
+    events.on("terminal:restored", ({ id }) => pane(id)),
+    events.on("terminal:trash-cleared", ({ id }) => pane(id)),
+    events.on("terminal:worktree-changed", ({ id }) => pane(id)),
+    events.on("agent:spawned", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:detected", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:exited", ({ terminalId }) => pane(terminalId)),
+    events.on("agent:killed", ({ terminalId }) => pane(terminalId)),
+    events.on("agent-session:attributed", ({ terminalId }) => pane(terminalId)),
+    events.on("sys:worktree:remove", ({ worktreeId }) => onPane({ worktreeId })),
+    events.on("sys:worktree:update", ({ id }) => onPane({ worktreeId: id, missingOnly: true })),
+  ];
+  const client = getPtyClient();
+  if (client !== null && typeof client.on === "function") {
+    const lost = (terminalId: string) => pane(terminalId);
+    const incarnationLost = ({ terminalId }: { terminalId: string }) => pane(terminalId);
+    const spawned = (terminalId: string) => pane(terminalId);
+    // A pty host that gave up restarting names no pane: every asker is read again.
+    const crashed = () => onPane();
+    client.on("terminal-lost", lost);
+    client.on("incarnation-lost", incarnationLost);
+    client.on("spawn-result", spawned);
+    client.on("host-crash", crashed);
+    offs.push(() => {
+      client.off("terminal-lost", lost);
+      client.off("incarnation-lost", incarnationLost);
+      client.off("spawn-result", spawned);
+      client.off("host-crash", crashed);
+    });
+  }
+  return () => {
+    for (const off of offs) off();
+  };
+}
+
+/** What observing the run that asked each open question reaches in the rest of main (#18029). */
+const askerPresenceDeps: DecisionsServiceOptions["askerPresence"] = {
+  hostId: () => service?.getSettings()?.hostId ?? null,
+  principalFor: (paneId) => mcpPaneConfigService.getDecisionsPrincipal(paneId),
+  getPtyClient: () => getPtyClient(),
+  stat: (path) => stat(path),
+  watch: watchAskerPanes,
+};
+
+/**
  * What terminal snapshots reach in the rest of main (#16230). An owner's
  * lifetime shares them under its own switch; a Host's, as its owner's Shell
  * last said.
@@ -875,6 +1003,11 @@ const snapshotDeps: DecisionsSnapshotDeps = {
   getPtyClient: () => getPtyClient(),
   watchPanes: watchSnapshotPanes,
 };
+
+/** Settings → Notifications' own switch: what lets a question show here, and so presence be reported. */
+function desktopNotificationsOn(): boolean {
+  return store.get("notificationSettings")?.enabled !== false;
+}
 
 /**
  * Whether the person's presence may be reported now (#17240): Decisions on in
@@ -890,7 +1023,7 @@ function presenceAllowed(): boolean {
       !shutDown &&
       settings.enabled &&
       settings.holdPhonePushes &&
-      store.get("notificationSettings")?.enabled !== false &&
+      desktopNotificationsOn() &&
       questionNotifier?.following === true &&
       Notification.isSupported()
     );
@@ -901,9 +1034,135 @@ function presenceAllowed(): boolean {
 
 const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
 
-// Turning desktop notifications off ends presence at once, and on starts it.
+/**
+ * Turns off of Decisions asked for and not yet through the queue: the switch
+ * reads on in the store until its turn comes, and no agent-stopped push may
+ * go out after the person turned it off (#17319).
+ */
+let decisionsOffsPending = 0;
+
+/**
+ * Whether the phone may be told that an agent stopped (#17319): Decisions on
+ * in this run with no turn off on its way, and the switch on. Desktop
+ * notifications and their per-event switches don't count: the switch stands
+ * alone. Read each time; a setting that can't be read sends nothing.
+ */
+function agentStoppedPushesAllowed(): boolean {
+  try {
+    const settings = readDecisionsSettings(store);
+    return (
+      !shutDown && decisionsOffsPending === 0 && settings.enabled && settings.agentStoppedPushes
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A Remote Host's agent as the agent-stopped batch names it (#17933): never
+ * one of this computer's terminal ids, which hold no NUL, nor another Host's.
+ */
+function hostStopKey(hostId: string, terminalId: string): string {
+  return `\0host\0${hostId}\0${terminalId}`;
+}
+
+function isHostStopKey(key: string): boolean {
+  return key.startsWith("\0host\0");
+}
+
+/** Host stops kept to take back if the port goes; the oldest go first, taken back as they go. */
+const MAX_HELD_HOST_STOPS = 4000;
+
+/**
+ * Hears connected Hosts' agents' stops through the Remote Hosts port, which
+ * comes and goes with Remote Hosts itself. A port withdrawn takes back every
+ * stop it passed on, as a link that ends does: none of them can be now.
+ */
+function watchHostStops(listener: (report: ReportedStop) => void): () => void {
+  let offPort: (() => void) | null = null;
+  const held = new Set<string>();
+  const release = (): void => {
+    offPort?.();
+    offPort = null;
+    for (const key of held) listener({ key, stopped: false });
+    held.clear();
+  };
+  const unwatch = watchDecisionsHostsPort((port) => {
+    release();
+    if (port === null) return;
+    offPort = port.onAgentStopChanges((hostId, change) => {
+      const key = hostStopKey(hostId, change.terminalId);
+      held.delete(key);
+      if (change.stopped) {
+        held.add(key);
+        if (held.size > MAX_HELD_HOST_STOPS) {
+          const evicted = held.values().next().value!;
+          held.delete(evicted);
+          listener({ key: evicted, stopped: false });
+        }
+      }
+      listener({ key, stopped: change.stopped });
+    });
+  });
+  return () => {
+    unwatch();
+    offPort?.();
+    offPort = null;
+    held.clear();
+  };
+}
+
+const agentStoppedDeps: DecisionsAgentStoppedDeps = {
+  allowed: agentStoppedPushesAllowed,
+  presence: readUserPresence,
+  // The schedule is global: a project's overrides never change it.
+  quiet: () => {
+    try {
+      return isScheduledQuietNow(store.get("notificationSettings"));
+    } catch {
+      // Unreadable, it may say quiet: nothing is sent.
+      return true;
+    }
+  },
+  putAside: (terminalId) => {
+    // The Host judged its own run's park and snooze, and takes the stop back if one comes later.
+    if (isHostStopKey(terminalId)) return false;
+    const attention = getRunAttentionServiceRef();
+    if (!attention) return false;
+    return attention.getParkRecord(terminalId) !== undefined || attention.isSnoozed(terminalId);
+  },
+  watchTransitions: (listener) =>
+    events.on("agent:state-changed", (payload) =>
+      listener({
+        terminalId: payload.terminalId,
+        state: payload.state,
+        previousState: payload.previousState,
+        terminalClosing: payload.terminalClosing === true,
+      })
+    ),
+  // Put aside after its stop was seen: lifting it later brings back no alert for that stop.
+  watchPutAside: (listener) => {
+    const offs = [
+      events.on("terminal:park-changed", (payload) => {
+        if (payload.parked) listener(payload.id);
+      }),
+      events.on("terminal:snooze-changed", (payload) => {
+        if (payload.snoozed) listener(payload.id);
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+  },
+  watchReportedStops: watchHostStops,
+};
+
+// Turning desktop notifications off ends presence at once, and on starts it;
+// Settings shows which (#18061). Every write pushes, since a value remembered
+// here would go stale when a configuration reload changes the store unheard.
 // This module loads only once Decisions is on, so vanilla Daintree never listens.
-onNotificationSettingsWritten(() => service?.presenceChanged());
+onNotificationSettingsWritten(() => {
+  service?.presenceChanged();
+  publishStatus();
+});
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
@@ -923,7 +1182,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
       const sources = mcpRouteSources(() => next);
       const next: DecisionsService = new DecisionsService({
         publishPaneState,
-        publishAnswerAttention: setAnswerAttention,
+        publishAnswerAttention: setDecisionAttention,
         publishQuestions,
         publishHostQuestions,
         notifyQuestions,
@@ -935,9 +1194,12 @@ export function getDecisionsService(): Promise<DecisionsService> {
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
         presence: presenceDeps,
+        askerPresence: askerPresenceDeps,
+        agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
+        onQuestionPolicyChanged: publishHostRuntime,
         checkDiskSpace,
         onStoreReplacing: cancelSetupCheckForStore,
       });
@@ -989,6 +1251,11 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
+  // Only a verification of the keys as the files hold them now covers them (#18064).
+  const files = owned !== null && keyFile !== null ? await readKeyFiles(owned) : undefined;
+  const kitCurrent =
+    kitVerifiedAt !== null && keyFile === true && files !== undefined && filesCovered(files);
+  const keysVersion = files !== undefined ? versionOfKeyFiles(files) : null;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   const deploy = relayDeploys.snapshot();
@@ -998,8 +1265,12 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
     ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
+    ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
+    ...(desktopNotificationsOn() ? {} : { desktopNotifications: false }),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
+    ...(kitCurrent ? { recoveryKitCurrent: true } : {}),
+    ...(keysVersion !== null ? { keysVersion } : {}),
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
@@ -1087,7 +1358,12 @@ export function reassignDecisionsAnswer(
   payload: ReassignDecisionsAnswerPayload
 ): Promise<DecisionsAnswerOutcome> {
   return whileDelivering(
-    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId),
+    (delivery) =>
+      delivery.reassignAnswer(
+        payload.questionId,
+        { terminalId: payload.terminalId, run: payload.run },
+        payload.expected
+      ),
     NOT_RUNNING
   );
 }
@@ -1095,10 +1371,77 @@ export function reassignDecisionsAnswer(
 export function markDecisionsAnswerHandled(
   payload: MarkDecisionsAnswerHandledPayload
 ): Promise<DecisionsAnswerOutcome> {
-  return whileDelivering((delivery) => delivery.markHandled(payload.questionId), NOT_RUNNING);
+  return whileDelivering(
+    (delivery) => delivery.markHandled(payload.questionId, payload.expected),
+    NOT_RUNNING
+  );
 }
 
 const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-running" };
+
+/**
+ * One of a Remote Host's stopped deliveries read or acted on from this
+ * owner computer (#18031): only ever on the Host whose questions name the
+ * reference, never on this computer's own delivery, whatever it holds under
+ * the same id. Never makes or starts the service.
+ */
+export async function actOnHostAttention(
+  request: DecisionsHostAttentionRequest
+): Promise<DecisionsHostAttentionResult> {
+  const onHost = hostRouteFor(request.reference)?.hostAttention(request) ?? null;
+  if (onHost === null) return { result: "no-host" };
+  const answered = await onHost;
+  return answered.ok ? answered.value : { result: "unreachable", failure: answered.failure };
+}
+
+/**
+ * One of this Remote Host's own stopped deliveries read or acted on by
+ * reference for the owner's Shell that enrolled it (#18031): only while this
+ * machine runs as a Host, and through the delivery its own windows act
+ * through, so resolving it from either is done once. A resume or Mark handled
+ * is taken only while the question still asks what the owner read it asking.
+ */
+export function hostServedAttention(
+  request: DecisionsHostAttentionRequest
+): Promise<DecisionsHostAttentionAnswer> {
+  if (!servingAsHost()) return Promise.resolve({ result: "off" });
+  const { reference } = request;
+  const notRunning: DecisionsHostAttentionAnswer = { result: "not-running" };
+  switch (request.action) {
+    case "read":
+      return whileReading<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({ result: "read", item: await delivery.attentionItem(reference) }),
+        notRunning
+      );
+    case "copy":
+      return whileReading<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "copied",
+          text: await delivery.copiedAnswer(reference.questionId, reference),
+        }),
+        notRunning
+      );
+    case "resume":
+      return whileDelivering<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "acted",
+          outcome: await delivery.resumeAnswer(reference.questionId, {
+            reference,
+            expected: request.expected,
+          }),
+        }),
+        notRunning
+      );
+    case "handled":
+      return whileDelivering<DecisionsHostAttentionAnswer>(
+        async (delivery) => ({
+          result: "acted",
+          outcome: await delivery.markHandled(reference.questionId, request.expected, reference),
+        }),
+        notRunning
+      );
+  }
+}
 
 /** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
 export function getDecisionsPaneState(terminalId: string): PaneDecisionState | null {
@@ -1175,6 +1518,29 @@ export async function getDecisionQuestionContentByReference(
     return lastRead === null ? read : { ...read, lastRead };
   }
   return readOwnQuestionContent(reference);
+}
+
+/**
+ * The pane that asked a question, as it shows now (#18037), by its reference,
+ * for any window on this computer: read on the Remote Host that asked it when
+ * the reference names one, and only ever on the machine that owns the pane.
+ * The terminal snapshot switch doesn't apply, since none of it reaches the
+ * relay. A Host too old to read it says so. Never makes or starts the service.
+ */
+export async function getDecisionQuestionPaneByReference(
+  payload: GetDecisionQuestionByReferencePayload
+): Promise<DecisionQuestionPaneResult> {
+  const { reference } = payload;
+  const onHost = hostRouteFor(reference)?.readHostQuestion(reference.hostId, {
+    read: "pane",
+    reference,
+  });
+  if (onHost) {
+    const answered = await onHost;
+    if (!answered.ok && answered.failure === "needs-update") return { result: "needs-update" };
+    return answeredByHost(answered);
+  }
+  return readOwnQuestionPane(reference);
 }
 
 /** Part of one image of a question, by its reference (#17229), on its Host when a Host asked it. Never makes or starts the service. */
@@ -1312,6 +1678,20 @@ function readOwnQuestionContent(
   );
 }
 
+function readOwnQuestionPane(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionPaneResult> {
+  return whileReading<DecisionQuestionPaneResult>(
+    (delivery) =>
+      delivery.questionPane(
+        referenceScope(reference),
+        reference.questionId,
+        snapshotDeps.getPtyClient
+      ),
+    { result: "not-running" }
+  );
+}
+
 function readOwnQuestionImage(
   payload: GetDecisionQuestionImageByReferencePayload
 ): Promise<DecisionQuestionImagePartResult> {
@@ -1361,7 +1741,10 @@ function servingAsHost(): boolean {
 export async function readHostServedQuestion(
   read: DecisionsHostQuestionRead
 ): Promise<
-  DecisionQuestionContentResult | DecisionQuestionImagePartResult | DecisionQuestionSummariesResult
+  | DecisionQuestionContentResult
+  | DecisionQuestionImagePartResult
+  | DecisionQuestionSummariesResult
+  | DecisionQuestionPaneResult
 > {
   if (!servingAsHost()) return { result: "off" };
   switch (read.read) {
@@ -1369,6 +1752,8 @@ export async function readHostServedQuestion(
       return readOwnQuestionContent(read.reference);
     case "image":
       return readOwnQuestionImage(read);
+    case "pane":
+      return readOwnQuestionPane(read.reference);
     case "summaries": {
       const seen = new Set<string>();
       return readOwnQuestionSummaries(
@@ -1697,7 +2082,8 @@ async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyS
 function recordIdentity(
   running: DecisionsService,
   config: RelayConfig,
-  kitVerified: boolean
+  kitVerified: boolean,
+  kitKeys: string | null
 ): DecisionsSettings {
   const current = readDecisionsSettings(store);
   const relayOrigin = normalizeRelayOrigin(config.relayOrigin);
@@ -1719,6 +2105,7 @@ function recordIdentity(
               relayOrigin,
               installationId: config.installationId,
               deviceId: config.deviceId,
+              ...(kitKeys !== null ? { keys: kitKeys } : {}),
             }
           : null,
     });
@@ -1739,6 +2126,17 @@ function recordIdentity(
 
 type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
+/**
+ * The running lifetime's key file version in the key store's turn, or
+ * undefined when it couldn't be read, which no verification is recorded
+ * against (#18064).
+ */
+function keyVersionOf(running: DecisionsService): Promise<string | null | undefined> {
+  return Promise.resolve()
+    .then(() => running.getKeyStore().version())
+    .catch(() => undefined);
+}
+
 /** `stillWanted`, when given, is asked as the setup's turn comes, before anything starts. */
 function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<DecisionsConnectResult> {
   return serialize(async () => {
@@ -1753,10 +2151,21 @@ function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<Decisions
     const controller = new AbortController();
     setups.add(controller);
     try {
+      const before = await keyVersionOf(running);
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
+      // A restore's kit holds the keys it took up unchanged, or the ones it
+      // saved to an empty file while the file is still exactly what it wrote;
+      // no rotation runs before a relay is recorded.
+      const after = outcome.kitVerified ? await keyVersionOf(running) : undefined;
+      const kitKeys =
+        typeof after === "string" &&
+        (before === after ||
+          (before === null && after === running.getKeyStore().lastWrittenVersion()))
+          ? after
+          : null;
       if (shutDown) throw setupRefused();
-      recordIdentity(running, outcome.identity, outcome.kitVerified);
+      recordIdentity(running, outcome.identity, outcome.kitVerified, kitKeys);
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
@@ -1847,23 +2256,108 @@ function stillRecords(record: RemovedRelayRecord): boolean {
  * Removes this computer's Decisions identity: the key file, then the relay's
  * origin and ids in the setting. The switch, consent and stored rows stay,
  * and nothing is sent to the relay, so everything on it is untouched. Keys
- * that can't be removed leave the setting as it was.
+ * that can't be removed leave the setting as it was. A one-click confirm
+ * removes nothing while the keys hold one no current kit covers (#18064).
  */
-export async function disconnectRelay(): Promise<DecisionsStatus> {
-  return (await disconnectRecorded(null))!;
+/**
+ * How an erasure of the keys was confirmed (#18064). Settings always names
+ * the relay it showed; with none named, the erasure isn't bound to one.
+ */
+type KeyErasure = Pick<DecisionsKeyErasurePayload, "oneClick"> &
+  Partial<Pick<DecisionsKeyErasurePayload, "relayOrigin" | "keys">>;
+
+export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsStatus> {
+  return (await disconnectRecorded(null, payload))!;
+}
+
+/**
+ * Whether erasing the key file now loses nothing a verified kit doesn't
+ * hold: there is no file, or the recorded verification is of exactly its
+ * version (#18064).
+ */
+async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> {
+  return filesCovered(await readKeyFiles(running));
+}
+
+/**
+ * The key file's version and that of keys an interrupted deletion set aside,
+ * which come back before that deletion finishes; undefined when either
+ * couldn't be read (#18064).
+ */
+async function readKeyFiles(
+  running: DecisionsService
+): Promise<{ held: string | null; setAside: string | null }> {
+  const path = running.getKeyFilePath();
+  // A file that can't be read is named as such, so a typed confirm of it still matches.
+  const read = (at: string) => keyFileVersion(at).catch(() => "unreadable");
+  const [held, setAside] = await Promise.all([read(path), read(erasingKeyFilePath(path))]);
+  return { held, setAside };
+}
+
+/** Each key file there is is exactly what the recorded verification checked. */
+function filesCovered(files: { held: string | null; setAside: string | null }): boolean {
+  const verified = readDecisionsSettings(store).recoveryKit?.keys;
+  const covered = (version: string | null) =>
+    version === null || (verified !== undefined && version === verified);
+  return covered(files.held) && covered(files.setAside);
+}
+
+/** Both files as one opaque version for Settings to name back; null when neither exists. */
+function versionOfKeyFiles(files: { held: string | null; setAside: string | null }): string | null {
+  if (files.held === null && files.setAside === null) return null;
+  return `${files.held ?? "none"}.${files.setAside ?? "none"}`;
+}
+
+/**
+ * The key files no longer hold what the person confirmed erasing; undefined
+ * `confirmed` binds nothing (#18064).
+ */
+async function keysDifferFromConfirm(
+  running: DecisionsService,
+  confirmed: string | null | undefined
+): Promise<boolean> {
+  if (confirmed === undefined) return false;
+  return versionOfKeyFiles(await readKeyFiles(running)) !== confirmed;
+}
+
+/** Another relay is recorded than the one the person confirmed for (#18064). */
+function relayChangedSinceConfirm(expected: string | null | undefined): AppError | null {
+  if (expected === undefined || readDecisionsSettings(store).relayOrigin === expected) return null;
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message:
+      "The relay set up on this computer changed after you confirmed, so nothing was removed.",
+  });
+}
+
+function keysChangedSinceConfirm(): AppError {
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message:
+      "This computer's keys aren't what you confirmed removing: they changed, or no recovery kit verified here holds them now. Nothing was removed.",
+  });
 }
 
 /**
  * Disconnects, or with `only` set, only while the setting still records that
  * identity, checked before anything is stopped and again in its turn: null
- * when it no longer does, with nothing changed.
+ * when it no longer does, with nothing changed. With `oneClick`, the keys go
+ * only while a current kit covers them, checked once no write can land.
  */
-function disconnectRecorded(only: RemovedRelayRecord | null): Promise<DecisionsStatus | null> {
+function disconnectRecorded(
+  only: RemovedRelayRecord | null,
+  confirmed: KeyErasure
+): Promise<DecisionsStatus | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  // Refused before anything for the relay recorded now is cancelled.
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
+    if (changed) throw changed;
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
     hostEnroller.forget();
@@ -1874,7 +2368,16 @@ function disconnectRecorded(only: RemovedRelayRecord | null): Promise<DecisionsS
     // written after.
     await running.suspendConnection();
     try {
-      await running.getKeyRotations().exclusive(() => keys.clear());
+      await running.getKeyRotations().exclusive(async () => {
+        // A rotation or another setup from another window may have landed while this waited its turn.
+        if (
+          (await keysDifferFromConfirm(running, confirmed.keys)) ||
+          (confirmed.oneClick && !(await keysCoveredOrAbsent(running)))
+        ) {
+          throw keysChangedSinceConfirm();
+        }
+        await keys.clear();
+      });
     } catch (error) {
       running.resumeConnection();
       publishStatus();
@@ -1922,18 +2425,24 @@ export async function exportData(
   }
   const prepared = await serialize(
     async (): Promise<
-      | { archive: DecisionsArchive; running: DecisionsService; from: DaintreeLocalStore }
+      | {
+          archive: DecisionsArchive;
+          running: DecisionsService;
+          from: DaintreeLocalStore;
+          removals: number;
+        }
       | { failure: DecisionsExportResult }
     > => {
       const { service: running, keys } = await setupKeys();
       const localStore = running.getStore();
       if (!localStore) return { failure: { result: "store-unavailable" } };
+      const removals = running.getHistoryRemovals();
       const built = await buildDecisionsArchive({
         store: localStore,
         keys,
         passphrase: payload.passphrase,
       });
-      return "failure" in built ? built : { ...built, running, from: localStore };
+      return "failure" in built ? built : { ...built, running, from: localStore, removals };
     }
   );
   if ("failure" in prepared) return prepared.failure;
@@ -1943,8 +2452,15 @@ export async function exportData(
   // Back behind the transitions, so no deletion runs between the check and the write.
   return serialize(async (): Promise<DecisionsExportResult> => {
     // The store it was read from has closed (turned off, even if on again
-    // since; local data deleted; quit): the history it holds may be gone.
-    if (shutDown || prepared.running.getStore() !== prepared.from) return { result: "cancelled" };
+    // since; local data deleted; quit), or settled questions were removed
+    // from it (#18033): the history it holds may be gone.
+    if (
+      shutDown ||
+      prepared.running.getStore() !== prepared.from ||
+      prepared.running.getHistoryRemovals() !== prepared.removals
+    ) {
+      return { result: "cancelled" };
+    }
     try {
       await resilientAtomicWriteFile(path, archive.text, "utf-8", { mode: 0o600 });
     } catch {
@@ -1994,24 +2510,49 @@ export function deleteRelayData(
 }
 
 /**
+ * Removes this computer's settled questions from its decision history
+ * (#18033), behind the switch's transitions like a deletion, from the open
+ * store. Open questions, stopped deliveries and anything still to be sent or
+ * typed stay, as do the keys, the relay record and enrolled Hosts. Nothing
+ * is sent anywhere.
+ */
+export function removeSettledQuestions(): Promise<DecisionsHistoryRemoveResult> {
+  return serialize(async () => {
+    const removed = await (await runningService()).removeSettledQuestions();
+    // Their notification claims go too, or they would be kept, and written, for good.
+    if (removed.hostId !== null && removed.questionIds.length > 0) {
+      questionNotifier?.forget(removed.hostId, new Set(removed.questionIds));
+    }
+    return removed.result;
+  });
+}
+
+/**
  * Deletes this computer's Decisions data (#16025): its stored history, its
  * keys and its record of the relay. Nothing is sent to the relay, so
- * everything on it stays. The switch and consent stay as they are.
+ * everything on it stays. The switch and consent stay as they are. A
+ * one-click confirm deletes nothing while the key file holds keys no current
+ * kit covers (#18064).
  */
-export async function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
-  return (await deleteLocalDataOf(null))!;
+export async function deleteLocalData(payload: KeyErasure): Promise<DecisionsLocalDeleteResult> {
+  return (await deleteLocalDataOf(null, payload))!;
 }
 
 /** Deletes local data, or with `only` set, only while the setting still records that identity (null otherwise). */
 function deleteLocalDataOf(
-  only: RemovedRelayRecord | null
+  only: RemovedRelayRecord | null,
+  confirmed: KeyErasure
 ): Promise<DecisionsLocalDeleteResult | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
+    if (changed) throw changed;
     let outcome: LocalEraseOutcome;
     // Its terminal closes and its question is cancelled in the store before the rows go.
     await checkStopped;
@@ -2020,8 +2561,15 @@ function deleteLocalDataOf(
     forgetOwnerDevices();
     hostEnroller.forget();
     try {
-      outcome = await (await runningService()).eraseLocalData();
+      const running = await runningService();
+      outcome = await running.eraseLocalData(
+        async () =>
+          !(await keysDifferFromConfirm(running, confirmed.keys)) &&
+          (!confirmed.oneClick || (await keysCoveredOrAbsent(running)))
+      );
     } finally {
+      // A device read while it ran may hold the key store it closed; the next one makes its own.
+      forgetOwnerDevices();
       // The relay record and the keys may have gone, which every window shows.
       publishStatus();
     }
@@ -2046,9 +2594,12 @@ async function forgetRemovedRelay(
   if (shutDown || !readDecisionsSettings(store).enabled) return "off";
   try {
     if (!deleteLocalHistory) {
-      return (await disconnectRecorded(record)) === null ? "changed" : "forgotten";
+      // The guided removal had its own typed confirmation of the Worker's name.
+      return (await disconnectRecorded(record, { oneClick: false })) === null
+        ? "changed"
+        : "forgotten";
     }
-    const deleted = await deleteLocalDataOf(record);
+    const deleted = await deleteLocalDataOf(record, { oneClick: false });
     if (deleted === null) return "changed";
     return deleted.result === "failed" ? "failed" : deleted.result;
   } catch (error) {
@@ -2142,7 +2693,7 @@ export async function listDevices(): Promise<DecisionsDevicesResult> {
 /** The Remote Hosts this computer enrolls, or could (#16021). Asks no Host and no relay. */
 export async function listHosts(): Promise<DecisionsHostsResult> {
   await runningService();
-  return hostEnroller.list();
+  return { ...(await hostEnroller.list()), inboxHostIds: inboxHostIds() };
 }
 
 /** Enroll, from Settings: enrolls one connected Host now, whatever automatic enrollment says. */
@@ -2257,6 +2808,41 @@ export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<Decisions
   });
 }
 
+/** Rises with each turn off of agent-stopped pushes, so a turn on queued before one never lands after it. */
+let agentStoppedPushesOffs = 0;
+
+/**
+ * Turns telling the phone when an agent here stops on or off (#17319). Off is
+ * saved to the store before the queue, as holding pushes' is, so a batch
+ * gathering now is dropped the moment it's turned off; the service hears of
+ * the setting in turn.
+ */
+export function setDecisionsAgentStoppedPushes(enabled: boolean): Promise<DecisionsStatus> {
+  const offs = enabled ? agentStoppedPushesOffs : ++agentStoppedPushesOffs;
+  if (!enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.agentStoppedPushes) {
+      writeDecisionsSettings(store, { ...current, agentStoppedPushes: false });
+      service?.agentStoppedPushesChanged();
+      // Every window shows it off now, not once the queue reaches it.
+      publishStatus();
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== agentStoppedPushesOffs) return getDecisionsStatus();
+    }
+    const saved = writeDecisionsSettings(store, { ...current, agentStoppedPushes: enabled });
+    service?.updateSettings(saved);
+    service?.agentStoppedPushesChanged();
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
 /**
  * Whether a terminal snapshot may be captured or published now (#16228):
  * Decisions on in this run, and snapshots on with the person's agreement.
@@ -2304,14 +2890,14 @@ export async function declinePairing(pairingId: string): Promise<DecisionsPairin
   return devices instanceof OwnerDevices ? devices.decline(pairingId) : devices;
 }
 
-/** The rules questions are asked under (#16013): the trusted gates, and the proxy allowlist as saved. */
+/** The rules questions are asked under (#16013): the trusted gates and the default expiry. */
 export function getDecisionsPolicy(): DecisionsPolicy {
   return decisionsPolicyOf(readDecisionsSettings(store), policyRevision);
 }
 
 /**
  * Saves one field of the policy over the setting as it stands when its turn
- * comes, so a save of the other field queued meanwhile is kept. The running
+ * comes, so a save of another field queued meanwhile is kept. The running
  * lifetime's policy changes in place, so the next question is asked under it;
  * questions already asked keep what they were asked with.
  */
@@ -2327,11 +2913,6 @@ function savePolicy(change: Partial<PolicySettings>): Promise<DecisionsPolicy> {
     publishStatus();
     return decisionsPolicyOf(saved, policyRevision);
   });
-}
-
-/** Lets questions with no workflow gate accept a proxy answer, or stops them. */
-export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
-  return savePolicy({ proxyAllowlisted: allowed });
 }
 
 /**
@@ -2507,8 +3088,24 @@ export function cancelDecisionsModelEvaluation(
 }
 
 /**
+ * Saves whether the person lets the decision model answer in their place
+ * (#18062) over the setting as it stands now, since a relay revocation can be
+ * written outside the transitions and an older read would undo it. The
+ * running model takes a withdrawal at once.
+ */
+function saveAnswerConsent(allowed: boolean): void {
+  const current = readDecisionsSettings(store);
+  if (current.proxyAllowlisted === allowed) return;
+  service?.updateSettings(writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed }));
+}
+
+/**
  * Chooses the confidence the model answers automatically from, for the
- * evaluation it was chosen from, or stops automatic answers with null.
+ * evaluation it was chosen from, or stops automatic answers with null. It is
+ * the one choice that lets the model answer in the person's place (#18062):
+ * a confidence also lets a question without a gate take a proxy answer while
+ * the model is armed, and null withdraws that. A threshold saved before this
+ * choice existed stays unarmed until the person chooses again.
  */
 export function setDecisionsModelThreshold(
   payload: SetDecisionsModelThresholdPayload
@@ -2531,6 +3128,19 @@ export function setDecisionsModelThreshold(
         message: "That confidence isn't one the evaluation supports answering from",
       });
     }
+    if (payload.threshold === null) {
+      // Withdrawn from the running model first, so it stops answering at once,
+      // even if neither the setting nor the file can be written.
+      model.withdrawConsent();
+      try {
+        saveAnswerConsent(false);
+      } catch (error) {
+        console.warn(
+          "[Decisions] Automatic answers weren't withdrawn in the setting:",
+          error instanceof Error ? error.name : typeof error
+        );
+      }
+    }
     try {
       await model.setAutoAnswerThreshold(payload.threshold, payload.evaluatedAt);
     } catch (error) {
@@ -2549,6 +3159,27 @@ export function setDecisionsModelThreshold(
         code: "INTERNAL",
         message: "The choice couldn't be saved. Try again.",
       });
+    }
+    if (payload.threshold !== null) {
+      // After the threshold, so the model arms only at the confidence just
+      // chosen. With consent already saved, the threshold was the whole save.
+      const current = readDecisionsSettings(store);
+      if (!current.proxyAllowlisted) {
+        if (shutDown || !current.enabled) throw setupRefused();
+        try {
+          saveAnswerConsent(true);
+        } catch (error) {
+          console.warn(
+            "[Decisions] Automatic answers weren't allowed in the setting:",
+            error instanceof Error ? error.name : typeof error
+          );
+          throw new AppError({
+            code: "INTERNAL",
+            message: "The choice couldn't be saved. Try again.",
+          });
+        }
+      }
+      await model.grantConsent();
     }
     return getDecisionsModel();
   });
@@ -2743,6 +3374,7 @@ export function verifyRecoveryKit(
 ): Promise<DecisionsKitVerifyResult> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
+    const before = await keyVersionOf(running);
     const checked = await checkRecoveryKit(
       keys,
       readDecisionsSettings(store),
@@ -2750,13 +3382,20 @@ export function verifyRecoveryKit(
       payload.passphrase
     );
     if ("failure" in checked) return checked.failure;
+    // Equal on both sides of the check's load, so it is the version the kit
+    // was checked against; a write between leaves the kit not current.
+    const after = await keyVersionOf(running);
     if (shutDown) throw setupRefused();
     const current = readDecisionsSettings(store);
     let saved: DecisionsSettings;
     try {
       saved = writeDecisionsSettings(store, {
         ...current,
-        recoveryKit: { verifiedAt: Date.now(), ...checked.verified },
+        recoveryKit: {
+          verifiedAt: Date.now(),
+          ...checked.verified,
+          ...(typeof before === "string" && before === after ? { keys: before } : {}),
+        },
       });
     } catch {
       throw new AppError({
@@ -2834,10 +3473,22 @@ export function decisionsHostRuntimeFor(
   ) {
     return { state: "not-enrolled" };
   }
-  const running = service;
-  const status = running !== null && running.getRole() === "host" ? running.getStatus() : null;
-  return hostRuntimeOf(record, status);
+  const running = service !== null && service.getRole() === "host" ? service : null;
+  return hostRuntimeOf(
+    record,
+    running?.getStatus() ?? null,
+    running?.getQuestionPolicy() ?? IDLE_HOST_QUESTION_POLICY
+  );
 }
+
+/**
+ * What a Host reports of how it asks while no Host lifetime runs (#17942):
+ * nothing settles an advisory question then, so its agents can't ask one.
+ */
+const IDLE_HOST_QUESTION_POLICY: DecisionsHostQuestionPolicy = {
+  advisoryQuestions: false,
+  defaultQuestionExpiryMs: HOST_DEFAULT_QUESTION_EXPIRY_MS,
+};
 
 /**
  * Runs the Host lifetime the record calls for while the owner's switch here
@@ -3249,8 +3900,13 @@ export function setDecisionsEnabled(
   // Before the queue, as a disconnect does: an export whose kit is still being
   // made would otherwise reach its dialog before this turn comes round.
   const checkStopped = enabled ? Promise.resolve() : endSetupCheck();
-  if (!enabled) cancelKitExports();
-  return serialize(async () => {
+  if (!enabled) {
+    cancelKitExports();
+    // No agent-stopped push goes out while this waits its turn.
+    decisionsOffsPending += 1;
+    service?.agentStoppedPushesChanged();
+  }
+  const run = serialize(async () => {
     const current = readDecisionsSettings(store);
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
     const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
@@ -3277,6 +3933,12 @@ export function setDecisionsEnabled(
       getDecisionsHostsPort()?.announceOwnerState();
     }
     return getDecisionsStatus();
+  });
+  if (enabled) return run;
+  return run.finally(() => {
+    // Never below none, even across a test's reset with one still waiting.
+    decisionsOffsPending = Math.max(0, decisionsOffsPending - 1);
+    service?.agentStoppedPushesChanged();
   });
 }
 
@@ -3312,6 +3974,8 @@ export function _resetDecisionsForTesting(): void {
   creating = null;
   questionNotifier = null;
   holdPhonePushesOffs = 0;
+  agentStoppedPushesOffs = 0;
+  decisionsOffsPending = 0;
   shutDown = false;
   transitions = Promise.resolve();
   statusRevision = 0;

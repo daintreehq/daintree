@@ -20,7 +20,8 @@ export function closedText(status: DecisionQuestionStatus): string {
     case "proxy-answered":
       return "The decision model answered this question, so your answer wasn't sent.";
     case "cancelled":
-      return "This question was cancelled, so your answer wasn't sent.";
+      // Declined or withdrawn: the view's status says which.
+      return "This question closed, so your answer wasn't sent.";
     case "publish-failed":
       return "This question couldn't be sent, so it can't be answered.";
     // An open one past its time: the store records the expiry once the relay does.
@@ -43,7 +44,7 @@ export function outcomeText(outcome: DecisionAnswerOutcome): string | null {
       return outcome.reason === "expired"
         ? "This question expired before your answer reached it, so it wasn't taken."
         : outcome.reason === "cancelled"
-          ? "This question was cancelled before your answer reached it, so it wasn't taken."
+          ? "This question closed before your answer reached it, so it wasn't taken."
           : "The relay no longer holds this question, so your answer wasn't taken.";
     case "unsupported":
       return outcome.by === "relay"
@@ -97,10 +98,14 @@ export function progressText(
   question: DecisionQuestionContent,
   answerId: string
 ): string {
-  const inThread = question.thread.some(
-    (entry) => entry.type === "answer" && entry.entryId === answerId
-  );
-  if (inThread) {
+  const answers = question.thread.filter((entry) => entry.type === "answer");
+  const mine = answers.find((entry) => entry.entryId === answerId);
+  if (mine !== undefined) {
+    // Its own delivery first (#17943): a later correction's doesn't say what happened to this one.
+    if (mine.delivered === true) return "Answer sent and typed into the terminal";
+    if (mine !== answers.at(-1) && mine.delivered === false) {
+      return "Answer sent. A later answer came after it, and typing this one in wasn't confirmed.";
+    }
     switch (question.deliveryStatus) {
       case "terminal-delivered":
         return "Answer sent and typed into the terminal";

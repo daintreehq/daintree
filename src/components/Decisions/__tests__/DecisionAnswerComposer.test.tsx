@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
@@ -11,6 +11,8 @@ import type {
   DecisionQuestionContentResult,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isMac } from "@/lib/platform";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
@@ -31,6 +33,8 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
+import { DecisionAnswerComposer } from "../DecisionAnswerComposer";
+import { paneQuestion } from "../decisionQuestionTarget";
 
 type Payload = { terminalId: string; questionId: string };
 const getQuestionContent = vi.fn<(payload: Payload) => Promise<DecisionQuestionContentResult>>();
@@ -138,6 +142,18 @@ function option(label: string): HTMLInputElement {
 
 function status() {
   return screen.getByTestId("decision-answer-status").textContent ?? "";
+}
+
+/**
+ * The deadline line runs on its own clock, so it can still read the time left
+ * for a moment after the composer's notice has appeared: wait for it rather
+ * than read it beside the notice.
+ */
+async function passedDeadline() {
+  await waitFor(() =>
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/Deadline passed/)
+  );
+  return screen.getByTestId("decision-question-deadline").textContent ?? "";
 }
 
 beforeEach(() => {
@@ -289,9 +305,49 @@ describe("answering a question from the view (#17102)", () => {
     });
   });
 
+  it("takes a Reject, with a note, when an approval's image can't be shown, but never an Approve (#18043)", async () => {
+    const images = [image("x"), image("y")];
+    decisionsBridge.getQuestionImage = async ({ attachmentId }: { attachmentId: string }) =>
+      attachmentId === "y"
+        ? { result: "unavailable", reason: "digest-mismatch" }
+        : new Promise(() => {});
+    questions.q1 = question("q1", {
+      kind: "approval",
+      options: [
+        { id: "approve", label: "Approve", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+      allowText: true,
+      attachments: images,
+    });
+    await openOn("q1");
+    await screen.findByTestId("decision-question-image-failed");
+    act(() =>
+      useDecisionsImageReviewStore.getState().markShown("t1", "q1", "x", images[0]!.sha256)
+    );
+
+    expect(option("Approve").disabled).toBe(true);
+    expect(option("Reject").disabled).toBe(false);
+    const composer = screen.getByTestId("decision-answer-composer");
+    expect(composer.textContent).toMatch(/After image 2/);
+
+    fireEvent.click(option("Reject"));
+    fireEvent.change(screen.getByLabelText("Note (optional)"), {
+      target: { value: "Image 2 didn't open; send new ones" },
+    });
+    expect(send().getAttribute("aria-disabled")).toBeNull();
+    await act(async () => fireEvent.click(send()));
+    expect(answerQuestion.mock.calls[0]![0]).toMatchObject({
+      selectedOptionIds: ["reject"],
+      text: "Image 2 didn't open; send new ones",
+      explicitApproval: true,
+      reviewedAttachmentDigests: [images[0]!.sha256],
+    });
+  });
+
   it.each([
     ["human-answered", /answered elsewhere/],
-    ["cancelled", /cancelled/],
+    ["cancelled", /^This question closed, so your answer wasn't sent/],
     ["expired", /expired/],
   ] as const)(
     "says a question %s while composing has nothing sent",
@@ -312,17 +368,34 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since the last read, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
-  it("sends nothing past the question's expiry, even before the store records it", async () => {
+  it("keeps a draft, locked, past the question's deadline, and sends nothing before the store records it (#17943)", async () => {
     questions.q1 = question("q1", { expiresAt: new Date(Date.now() + 300).toISOString() });
     await openOn("q1");
     fireEvent.click(option("Ship it"));
+    const notice = await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    // Only the clock says it passed: the draft stays where it was written, unsendable.
+    expect(notice.textContent).toMatch(/deadline has passed/);
+    expect(screen.queryByTestId("decision-answer-composer")).not.toBeNull();
+    expect(option("Ship it").checked).toBe(true);
+    expect(send().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(send());
+    // The platform's own shortcut, from the form: the keyboard can't send it either.
+    const mac = isMac();
+    fireEvent.keyDown(option("Ship it"), { key: "Enter", metaKey: mac, ctrlKey: !mac });
+    // A choice can't be changed past the deadline, though the options stay focusable.
+    expect(option("Hold").disabled).toBe(false);
+    fireEvent.click(option("Hold"));
+    expect(option("Ship it").checked).toBe(true);
+    expect(answerQuestion).not.toHaveBeenCalled();
+
+    // Once the store records the expiry, the form goes and says so.
+    await move(question("q1", { status: "expired", expiresAt: questions.q1.expiresAt }));
     await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
     expect(status()).toMatch(/expired/);
-    expect(answerQuestion).not.toHaveBeenCalled();
   });
 
   it("asks for the changed question to be reviewed before an answer goes", async () => {
@@ -647,7 +720,7 @@ describe("answering a question from the view (#17102)", () => {
     // Cancelled since, with nothing yet telling the view.
     questions.q1 = question("q1", { status: "cancelled" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
-    await waitFor(() => expect(status()).toMatch(/was cancelled, so your answer wasn't sent/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledTimes(2);
   });
 
@@ -683,7 +756,7 @@ describe("answering a question from the view (#17102)", () => {
       return { result: "not-found" };
     });
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    await waitFor(() => expect(status()).toMatch(/closed, so your answer wasn't sent/));
     expect(answerQuestion).toHaveBeenCalledOnce();
   });
 
@@ -704,5 +777,221 @@ describe("answering a question from the view (#17102)", () => {
     await act(async () => fireEvent.click(send()));
     await waitFor(() => expect(screen.queryByTestId("decision-question-dismiss")).toBeNull());
     expect(status()).toMatch(/Sending/);
+  });
+});
+
+/** Long enough after a deadline crossing for any re-render or re-read it starts to land. */
+const SETTLE_AFTER_CROSSING_MS = 200;
+
+describe("a timed question in the view (#17943)", () => {
+  const PHONE_ANSWER = {
+    type: "answer" as const,
+    entryId: "a-phone",
+    revision: 1,
+    from: "person" as const,
+    onComputer: false,
+    correction: false,
+    confirmsModel: false,
+    choices: [{ id: "no", label: "Hold" }],
+    text: null,
+    reason: null,
+    images: [],
+    sentAt: "2026-11-02T10:04:00.000Z",
+    unreadable: false,
+  };
+
+  it("names the mode, when to reply by, the time left and the agent's plan, and what declining means", async () => {
+    questions.q1 = question("q1", {
+      expiresAt: new Date(Date.now() + 8 * 60_000 + 30_000).toISOString(),
+      replyMode: "advisory",
+      plannedFallback: "use the existing fixture",
+    });
+    await openOn("q1");
+    const deadline = screen.getByTestId("decision-question-deadline").textContent ?? "";
+    expect(deadline).toMatch(/^Advisory/);
+    expect(deadline).toMatch(/Reply by .+/);
+    expect(deadline).toMatch(/8 minutes left/);
+    const plan = screen.getByTestId("decision-question-plan").textContent ?? "";
+    expect(plan).toMatch(/If unanswered, the agent plans to/);
+    expect(plan).toMatch(/use the existing fixture/);
+
+    // The consequence is said before anything is signed.
+    fireEvent.click(screen.getByTestId("decision-question-dismiss"));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toMatch(
+      /declining doesn't let the agent go ahead with any plan it stated/
+    );
+  });
+
+  it("lists the options, with no form, for a question opened untouched after its deadline", async () => {
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    act(() => useDecisionsQuestionViewStore.getState().open("t1", ["q1"], "q1"));
+    await screen.findByTestId("decision-question-content");
+    await settle();
+    expect(screen.queryByTestId("decision-answer-composer")).toBeNull();
+    expect(screen.getByText("Ship it")).toBeTruthy();
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+
+  it("keeps the form, and then where the answer stands, for someone in it with nothing written", async () => {
+    questions.q1 = question("q1", {
+      kind: "text",
+      options: [],
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 500).toISOString(),
+    });
+    await openOn("q1");
+    const text = screen.getByTestId("decision-answer-text") as HTMLTextAreaElement;
+    act(() => text.focus());
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(document.activeElement).toBe(text);
+    expect(text.readOnly).toBe(true);
+
+    // Confirmed closed: the form goes, and focus stays with where the answer stands.
+    await move(question("q1", { kind: "text", options: [], allowText: true, status: "expired" }));
+    await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
+    expect(status()).toMatch(/expired/);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("decision-answer-status").contains(document.activeElement) ||
+          document.activeElement === screen.getByTestId("decision-answer-status")
+      ).toBe(true)
+    );
+  });
+
+  it("keeps the form for a question whose deadline passed with a choice made, and hides Clear choice once locked", async () => {
+    questions.q1 = question("q1", {
+      kind: "mixed",
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 400).toISOString(),
+    });
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    expect(screen.queryByRole("button", { name: "Clear choice" })).not.toBeNull();
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(screen.queryByRole("button", { name: "Clear choice" })).toBeNull();
+    expect(option("Ship it").checked).toBe(true);
+  });
+
+  it("says there is no deadline for a question that never expires", async () => {
+    questions.q1 = question("q1", { replyMode: "blocking" });
+    await openOn("q1");
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(/No deadline/);
+  });
+
+  it("names no plan for a question that never expires", async () => {
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      // A blocking question's stray plan is never one.
+      plannedFallback: "use the existing fixture",
+    });
+    await openOn("q1");
+    expect(screen.queryByTestId("decision-question-plan")).toBeNull();
+  });
+
+  it("keeps the focused draft and says so once as the deadline passes with the view open", async () => {
+    const announce = vi.fn();
+    const original = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    onTestFinished(() => useAnnouncerStore.setState({ announce: original }));
+    questions.q1 = question("q1", {
+      kind: "text",
+      options: [],
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 600).toISOString(),
+    });
+    await openOn("q1");
+    const text = screen.getByTestId("decision-answer-text") as HTMLTextAreaElement;
+    text.focus();
+    fireEvent.change(text, { target: { value: "Use the fixture" } });
+
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(document.activeElement).toBe(text);
+    expect(text.value).toBe("Use the fixture");
+    expect(text.readOnly).toBe(true);
+    expect(await passedDeadline()).toMatch(/Awaiting an update/);
+    // Said once as it changes, never again while nothing does: past one more read of the question.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_AFTER_CROSSING_MS));
+    });
+    const said = announce.mock.calls.filter(([words]) => /deadline has passed/.test(String(words)));
+    expect(said).toHaveLength(1);
+  });
+
+  it("shows a phone's answer that came in time once it's read, in place of the passed deadline", async () => {
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 300).toISOString(),
+    });
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    await passedDeadline();
+
+    // Reconnected: the phone's answer committed before the deadline, so it never expired.
+    await move(
+      question("q1", {
+        status: "human-answered",
+        replyMode: "blocking",
+        expiresAt: questions.q1!.expiresAt,
+        thread: [PHONE_ANSWER],
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
+    expect(status()).toMatch(/answered elsewhere/);
+    expect(screen.queryByTestId("decision-question-deadline")).toBeNull();
+    expect(screen.getByTestId("decision-question-thread").textContent).toMatch(
+      /Answer from your phone/
+    );
+    expect(answerQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionAnswerComposer delivery notice (#18029)", () => {
+  it("says nothing can take an answer before one is written, with Send's own hint still showing", () => {
+    const shown = question("q-gone");
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={shown}
+          target={paneQuestion("t1", "q-gone")}
+          unshown={{}}
+          onMoved={() => {}}
+          deliveryNotice="Nothing can take this answer now."
+        />
+      </TooltipProvider>
+    );
+    const notice = screen.getByTestId("decision-answer-delivery");
+    expect(notice.textContent).toBe("Nothing can take this answer now.");
+    // Ahead of the choices, so it is met before anything is chosen.
+    expect(
+      notice.compareDocumentPosition(option("Ship it")) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Advice only: the answer can still be given, and Send keeps its own hint.
+    expect(option("Ship it").disabled).toBe(false);
+    const described = send().getAttribute("aria-describedby");
+    const hint = described === null ? null : document.getElementById(described);
+    expect(hint?.textContent).toBeTruthy();
+    expect(hint?.textContent).not.toContain("Nothing can take this answer now.");
+  });
+
+  it("says nothing when there is no notice", () => {
+    render(
+      <TooltipProvider>
+        <DecisionAnswerComposer
+          question={question("q-live")}
+          target={paneQuestion("t1", "q-live")}
+          unshown={{}}
+          onMoved={() => {}}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("decision-answer-delivery")).toBeNull();
   });
 });

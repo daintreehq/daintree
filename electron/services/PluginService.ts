@@ -4171,6 +4171,9 @@ export class PluginService {
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
       pluginNotificationsBlocked: (pluginId, projectId) =>
         this.pluginNotificationsBlocked(pluginId, projectId),
+      // Loaded only once a plugin marks a notification for an assistant (#18154).
+      assistantNotifications: async () =>
+        (await import("./assistantPluginNotifications.js")).assistantPluginNotifications(),
     };
   }
 
@@ -9063,6 +9066,12 @@ export class PluginService {
           `Plugin "${pluginId}" cannot register action "${rawId}": id must be prefixed with the plugin's own id.`
         );
       }
+    }
+    // A plugin whose id spells a built-in action's namespace (`worktree.resource`)
+    // would otherwise shadow it here, as the manifest path already refuses: an
+    // assistant admitted for the plugin's action would run the built-in.
+    if (BUILT_IN_ACTION_ID_SET.has(id)) {
+      throw new Error(`Plugin "${pluginId}" action id "${id}" collides with a built-in action id`);
     }
 
     if (typeof title !== "string" || !title.trim()) {

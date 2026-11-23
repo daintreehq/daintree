@@ -65,8 +65,8 @@ async function openSettingsTab(
   return selectTab(window, id);
 }
 
-async function closeSettingsWithEscape(window: Page): Promise<void> {
-  await window.keyboard.press("Escape");
+async function closeSettings(window: Page): Promise<void> {
+  await window.locator(SEL.settings.closeButton).click();
   await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 }
 
@@ -455,7 +455,7 @@ test.describe("Core: Settings", () => {
       for (const id of GLOBAL_SETTINGS_TAB_IDS) {
         await test.step(id, () => expectTabRenders(window, id, GLOBAL_TABS[id]));
       }
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("every project settings tab renders its title and content", async () => {
@@ -469,7 +469,7 @@ test.describe("Core: Settings", () => {
       for (const id of PROJECT_SETTINGS_TAB_IDS) {
         await test.step(id, () => expectTabRenders(window, id, PROJECT_TABS[id]));
       }
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("ThemeBrowser: selecting a theme applies its CSS tokens live", async () => {
@@ -526,7 +526,7 @@ test.describe("Core: Settings", () => {
 
       await window.locator('[aria-label="Close theme browser"]').click();
       await expect(themeBrowser).not.toBeVisible({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("AppThemePicker: accent override shows low-contrast warning, reset clears it", async () => {
@@ -560,7 +560,7 @@ test.describe("Core: Settings", () => {
       await expect(window.locator(SEL.settings.accentContrastWarning)).not.toBeVisible({
         timeout: T_SHORT,
       });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("AppThemePicker: random theme changes the applied scheme", async () => {
@@ -576,7 +576,7 @@ test.describe("Core: Settings", () => {
       await expect
         .poll(async () => html.getAttribute("data-theme"), { timeout: T_MEDIUM })
         .not.toBe(initialTheme);
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("Appearance: terminal font size commits a new value", async () => {
@@ -601,7 +601,7 @@ test.describe("Core: Settings", () => {
           { timeout: T_MEDIUM }
         )
         .toBe(Number(newValue));
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("CLI agents: selector lists General plus agents and switches the active one", async () => {
@@ -635,7 +635,7 @@ test.describe("Core: Settings", () => {
       await expect(
         window.locator("#agents-general").getByRole("heading", { name: "All agents" })
       ).toBeVisible({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("Privacy: telemetry choices are described and selectable", async () => {
@@ -662,7 +662,7 @@ test.describe("Core: Settings", () => {
       await errorsRadio.check();
       await expect(errorsRadio).toBeChecked({ timeout: T_SHORT });
       await expect(offRadio).not.toBeChecked({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("Canopy: hiding it takes its button and shortcut away, and showing it brings them back", async () => {
@@ -703,7 +703,7 @@ test.describe("Core: Settings", () => {
         const read = readingPanel.getByRole("switch", { name: "Read agent terminals" });
         await read.check();
         await expect(read).toBeChecked({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
         await expect(canopyButton).toBeVisible({ timeout: T_MEDIUM });
         // Reading: the shortcut opens the standalone inbox, not an in-project dialog.
         const owned = await pressIntoField();
@@ -739,7 +739,7 @@ test.describe("Core: Settings", () => {
         const panel = await setShown(false);
         await expect(panel.getByRole("switch", { name: "Read agent terminals" })).toBeDisabled();
         await expect(panel.getByText("Show Canopy to turn it on")).toBeVisible();
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
         await expect(canopyButton).toHaveCount(0, { timeout: T_SHORT });
 
         // Hidden: the key is no shortcut, and reaches the field it was typed in.
@@ -748,7 +748,7 @@ test.describe("Core: Settings", () => {
         await expect(canopyDialog).toHaveCount(0);
 
         await setShown(true);
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
         await expect(canopyButton).toBeVisible({ timeout: T_SHORT });
         // Showing it again leaves reading off and offers to turn it on here.
         await pressIntoField();
@@ -790,7 +790,7 @@ test.describe("Core: Settings", () => {
         await expect(
           window.locator(SEL.settings.navSidebar).locator("button", { hasText: "General" })
         ).toBeVisible({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("search results navigate to the right tab via keyboard and click", async () => {
@@ -826,7 +826,7 @@ test.describe("Core: Settings", () => {
           timeout: T_SHORT,
         });
         await expect(searchInput).toHaveValue("");
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("every settings tab points at a panel that exists, in and out of search", async () => {
@@ -861,7 +861,7 @@ test.describe("Core: Settings", () => {
 
         await searchInput.fill("");
         await selectSettingsScope(window, "Global");
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("scope toggle filters nav tabs and remembers the per-scope tab", async () => {
@@ -895,7 +895,7 @@ test.describe("Core: Settings", () => {
         await expect(variablesHeading).toBeVisible({ timeout: T_SHORT });
 
         await selectSettingsScope(window, "Global");
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
     });
 
@@ -916,7 +916,7 @@ test.describe("Core: Settings", () => {
 
         await searchInput.fill("");
         await expect.poll(() => rows.count(), { timeout: T_SHORT }).toBeGreaterThan(filteredCount);
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("click Edit enters edit mode, Cancel exits it", async () => {
@@ -929,7 +929,7 @@ test.describe("Core: Settings", () => {
         );
         await window.locator(SEL.settings.shortcutCancelButton).click();
         await expect(recordPrompt).not.toBeVisible({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("per-shortcut reset button restores default binding", async () => {
@@ -956,7 +956,7 @@ test.describe("Core: Settings", () => {
         await resetBtn.click();
         await row.hover();
         await expect(resetBtn).not.toBeVisible({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("recording a combo bound elsewhere shows a conflict warning", async () => {
@@ -983,7 +983,7 @@ test.describe("Core: Settings", () => {
         // Cancel without saving — leaves all bindings untouched.
         await window.locator(SEL.settings.shortcutCancelButton).click();
         await expect(recordPrompt).not.toBeVisible({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
     });
 
@@ -995,18 +995,18 @@ test.describe("Core: Settings", () => {
 
       await checkbox.click();
       await expect(checkbox).toBeChecked({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
 
       await openSettingsTab(window, "notifications");
       await expect(checkbox).toBeChecked({ timeout: T_MEDIUM });
 
       await checkbox.click();
       await expect(checkbox).not.toBeChecked({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
 
       await openSettingsTab(window, "notifications");
       await expect(checkbox).not.toBeChecked({ timeout: T_MEDIUM });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("MCP server: enabling reveals the connection details, then disable", async () => {
@@ -1030,7 +1030,7 @@ test.describe("Core: Settings", () => {
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
       await expect(connectionMarker).not.toBeVisible({ timeout: T_MEDIUM });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("Pulse, performance mode and font family survive a dialog reopen", async () => {
@@ -1060,7 +1060,7 @@ test.describe("Core: Settings", () => {
       await fontGroup.locator('[role="radio"]', { hasText: "System monospace" }).click();
       await expect(checkedFont).toContainText("System monospace", { timeout: T_MEDIUM });
 
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
 
       await openSettingsTab(window, "general");
       await selectSubtab(window, "General settings sections", "Display");
@@ -1072,7 +1072,7 @@ test.describe("Core: Settings", () => {
       await selectTab(window, "terminalAppearance");
       await selectSubtab(window, "Appearance settings sections", "Terminal");
       await expect(checkedFont).toContainText("System monospace", { timeout: T_MEDIUM });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     test("project switcher opens project settings in project scope", async () => {
@@ -1141,7 +1141,7 @@ test.describe("Core: Settings", () => {
       await expect(deleteButtons).toHaveCount(1, { timeout: T_SHORT });
       await deleteButtons.last().click();
       await expect(emptyState).toBeVisible({ timeout: T_SHORT });
-      await closeSettingsWithEscape(window);
+      await closeSettings(window);
     });
 
     // One journey: each step builds on the environments the previous one left.
@@ -1193,7 +1193,7 @@ test.describe("Core: Settings", () => {
         await expect(selectorBar.getByRole("combobox")).toContainText("production", {
           timeout: T_MEDIUM,
         });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("toggle default worktree mode", async () => {
@@ -1220,7 +1220,7 @@ test.describe("Core: Settings", () => {
 
         await localRadio.click();
         await expect(localRadio).toBeChecked({ timeout: T_SHORT });
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
 
       test("shows an error for a duplicate environment name", async () => {
@@ -1241,7 +1241,7 @@ test.describe("Core: Settings", () => {
         await expect(panel.locator("text=already exists")).toBeVisible({ timeout: T_SHORT });
 
         await form.locator("button", { hasText: "Cancel" }).click();
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
     });
 
@@ -1292,7 +1292,7 @@ test.describe("Core: Settings", () => {
             { timeout: T_MEDIUM }
           )
           .toBe(true);
-        await closeSettingsWithEscape(window);
+        await closeSettings(window);
       });
     });
   });

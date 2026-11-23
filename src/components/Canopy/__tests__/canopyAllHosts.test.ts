@@ -44,6 +44,11 @@ const ownCalls = vi.hoisted(() => ({
   readInputLines: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
     Promise.resolve(targets.map((target) => ({ runId: target.runId, state: "typed" })))
   ),
+  readWorktrees: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
+    Promise.resolve(
+      targets.map((target) => ({ runId: target.runId, work: { kind: "unreadable" } }))
+    )
+  ),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
@@ -602,6 +607,38 @@ describe("createAllHostsRoute", () => {
     ]);
     expect(ownCalls.readInputLines).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1 }]);
     expect(readings).toEqual([{ runId: allHostsKey("own", "o1"), state: "typed" }]);
+  });
+
+  it("reads worktrees on each run's host, leaving a host that can't answer, or doesn't know how, unread", async () => {
+    const dirty = { kind: "observed", unpushedCommits: 0, changedEntries: 1, hiddenFromStatus: 0 };
+    invoke.mockImplementation(async (hostId: string, _channel: string, targets: unknown) =>
+      hostId === "remote"
+        ? (targets as Array<{ runId: string }>).map((target) => ({
+            runId: target.runId,
+            work: dirty,
+          }))
+        : Promise.reject(new Error("No handler registered for 'canopy:read-worktrees'"))
+    );
+    const { api } = createAllHostsRoute("own", ["own", "remote", "old"]);
+    const readings = await api.readWorktrees([
+      { runId: allHostsKey("own", "t1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "t1"), spawnedAt: 2 },
+      { runId: allHostsKey("old", "t1"), spawnedAt: 3 },
+      { runId: allHostsKey("gone", "t1"), spawnedAt: 4 },
+    ]);
+    expect(ownCalls.readWorktrees).toHaveBeenCalledWith([{ runId: "t1", spawnedAt: 1 }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:read-worktrees", [
+      { runId: "t1", spawnedAt: 2 },
+    ]);
+    expect(invoke).not.toHaveBeenCalledWith("gone", expect.anything(), expect.anything());
+    // The same run id on two hosts keeps each host's answer under its own key.
+    expect(readings).toEqual(
+      expect.arrayContaining([
+        { runId: allHostsKey("own", "t1"), work: { kind: "unreadable" } },
+        { runId: allHostsKey("remote", "t1"), work: dirty },
+      ])
+    );
+    expect(readings).toHaveLength(2);
   });
 
   it("refuses a run that isn't on a host shown", async () => {

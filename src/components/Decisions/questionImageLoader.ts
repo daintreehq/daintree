@@ -139,21 +139,31 @@ export class QuestionImageLoader {
   }
 }
 
-/**
- * A question's images for as long as the calling component is mounted. Mount
- * it under a key naming the question as it was opened and its images' ids and
- * digests: the loader is made once, for the images it was first given.
- */
-export function useQuestionImages(
-  question: DecisionQuestionTarget,
-  attachments: readonly DecisionQuestionAttachment[]
-): {
+export interface QuestionImages {
   loads: QuestionImageLoads;
   retry: (attachmentId: string) => void;
   prioritize: (attachmentId: string) => void;
   undecodable: (attachmentId: string) => void;
-} {
-  const [loader] = useState(() => new QuestionImageLoader(question, attachments));
+}
+
+/**
+ * A question's images for as long as the calling component is mounted, read
+ * again from the start whenever the question, the way it's read, or the images
+ * it lists change (`imagesKey`); a read again that lists the same ones keeps
+ * what's loaded.
+ */
+export function useQuestionImages(
+  question: DecisionQuestionTarget,
+  attachments: readonly DecisionQuestionAttachment[]
+): QuestionImages {
+  const key = imagesKey(question, attachments);
+  const [held, setHeld] = useState(() => ({
+    key,
+    loader: new QuestionImageLoader(question, attachments),
+  }));
+  // Other images: a loader of their own, and the effect below stops the last one.
+  if (held.key !== key) setHeld({ key, loader: new QuestionImageLoader(question, attachments) });
+  const loader = held.loader;
   const loads = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
   useEffect(() => {
     loader.start();

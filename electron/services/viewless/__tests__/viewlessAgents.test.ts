@@ -678,6 +678,19 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
     expect(payload.agentSessionId).toBe("conv-8");
     expect(String(payload.command)).toContain("conv-8");
   });
+
+  // The session-file lookup names the transcript of the id on the record
+  // (#18139), so a fresh conversation must be launched under that same id.
+  it("starts a fresh conversation under the id it records", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await spawnHostAssistant(PROJECT, spec, deps);
+
+    const payload = spawned(invoke);
+    const id = String(payload.agentSessionId);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(String(payload.command)).toMatch(new RegExp(`--session-id '?${id}'?(\\s|$)`));
+  });
 });
 
 describe("agent.listAvailable with no frontend", () => {

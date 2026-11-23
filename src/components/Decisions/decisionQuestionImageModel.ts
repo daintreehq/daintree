@@ -47,7 +47,7 @@ export function imageName(attachment: DecisionQuestionAttachment, index: number)
 }
 
 const FAILURE_TEXT: Record<QuestionImageFailure, string> = {
-  "key-unavailable": "This computer doesn't hold the key this image was sealed with.",
+  "key-unavailable": "This computer doesn't hold the key this image was encrypted with.",
   "fetch-failed": "The relay didn't serve this image. It may be past its retention.",
   "size-mismatch": "This image isn't the size the question declares, so it isn't shown.",
   "decrypt-failed": "This image didn't open with the question's key, so it isn't shown.",
@@ -144,4 +144,21 @@ export function unreviewedAttachments(
   reviewed: ReviewedImages
 ): DecisionQuestionAttachment[] {
   return attachments.filter((attachment) => !wasReviewed(attachment, reviewed));
+}
+
+/**
+ * The images this view couldn't show, as they stand: each failed load, by the
+ * digest the question lists it under. A retry takes one off until it fails again.
+ */
+export function unshownImages(
+  attachments: readonly DecisionQuestionAttachment[],
+  loads: Readonly<Record<string, QuestionImageLoad>>
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    attachments.flatMap((attachment) =>
+      loads[attachment.attachmentId]?.status === "failed"
+        ? [[attachment.attachmentId, attachment.sha256]]
+        : []
+    )
+  );
 }

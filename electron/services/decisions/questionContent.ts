@@ -7,6 +7,7 @@ import {
   openQuestionContent,
   parseAnswers,
   parseMessages,
+  unsupportedEntry,
   type QuestionRow,
   type RelayClient,
   type SealContext,
@@ -14,6 +15,7 @@ import {
 import { decryptAttachment, sha256Hex, sniffImageMime } from "@daintreehq/decisions-crypto";
 import { DecisionContentV1, type PhoneImageReference } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionPreparation,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
@@ -24,7 +26,13 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
-import { closedReasonOf } from "./questionClosed.js";
+import {
+  NO_ADVISORY_HOST,
+  PLAN_REFUSED,
+  roundOf,
+  verifiedPlan,
+  type AdvisoryHost,
+} from "./questionRound.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
@@ -64,10 +72,16 @@ export function inScope(row: QuestionRow, scope: QuestionReadScope): boolean {
  */
 export async function readQuestionContent(
   ctx: SealContext,
-  row: QuestionRow
+  row: QuestionRow,
+  host: AdvisoryHost = NO_ADVISORY_HOST
 ): Promise<DecisionQuestionContentResult> {
   const content = await openedQuestion(ctx, row);
   if (content === null) return { result: "unreadable" };
+  const entries = parseAnswers(row.answers_json);
+  const plannedFallback = verifiedPlan(row, entries, content);
+  // Advisory content the protocol refuses is malformed: never shown, as a phone never offers it.
+  if (plannedFallback === PLAN_REFUSED) return { result: "unreadable" };
+  const round = roundOf(row, entries, host);
   const question: DecisionQuestionContent = {
     questionId: row.question_id,
     alias: row.alias,
@@ -92,7 +106,11 @@ export async function readQuestionContent(
     askedAt: row.origin_created_at,
     expiresAt: row.expires_at,
     status: row.local_status,
-    closedReason: closedReasonOf(row),
+    closedReason: round.closedReason,
+    replyMode: round.replyMode,
+    plannedFallback,
+    preparation: preparationOf(content),
+    closureNotice: round.closureNotice,
     deliveryStatus: row.delivery_status,
     attachments: content.attachments.map((attachment) => ({
       attachmentId: attachment.attachment_id,
@@ -105,6 +123,23 @@ export async function readQuestionContent(
     thread: await readThread(ctx, row),
   };
   return { result: "read", question };
+}
+
+/**
+ * The whole question and the plan its round states, from content already
+ * opened (#18055), as the question view would show them: null where it would
+ * refuse the question as unreadable, its content malformed or its advisory
+ * plan refused by the protocol.
+ */
+export function questionDetail(
+  row: QuestionRow,
+  opened: unknown
+): { question: string; plan: string | null } | null {
+  const parsed = DecisionContentV1.safeParse(opened);
+  if (!parsed.success) return null;
+  const plan = verifiedPlan(row, parseAnswers(row.answers_json), parsed.data);
+  if (plan === PLAN_REFUSED) return null;
+  return { question: parsed.data.question, plan };
 }
 
 /** The question's opening line; `unreadable` when its content can't be opened here. */
@@ -280,6 +315,11 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
   const placed: { seq: number; entry: DecisionThreadEntry }[] = [];
   for (const entry of parseAnswers(row.answers_json)) {
     const seq = entry.event_seq ?? 0;
+    // A question that never reached the relay (0.9.0) says so by its status;
+    // the notice its agent is typed is no entry of the thread.
+    if (entry.kind === "unpublished") continue;
+    // A decline from a source the library doesn't know is no one's (#17943), as the bridge reads it.
+    if (entry.kind === "declined" && unsupportedEntry(entry) !== null) continue;
     // Content-free notices: nothing to open, and never an answer.
     if (entry.kind === "expired" || entry.kind === "declined") {
       placed.push({
@@ -314,6 +354,7 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
         images: (opened?.images ?? []).map(threadImage),
         sentAt: entry.created_at,
         unreadable: opened === null,
+        delivered: entry.delivered,
       },
     });
   }
@@ -361,6 +402,17 @@ function threadImage(image: PhoneImageReference): DecisionThreadImage {
     alt: image.alt ?? null,
     mime: image.mime,
     size: image.size,
+  };
+}
+
+/** The agent's account of its preparation; the content parse has already dropped a malformed one. */
+function preparationOf(content: DecisionContentV1): DecisionPreparation | null {
+  const report = content.preparation;
+  if (report === undefined) return null;
+  return {
+    agentsConsulted: report.agents_consulted,
+    outcome: report.outcome,
+    summary: nonEmpty(report.summary),
   };
 }
 

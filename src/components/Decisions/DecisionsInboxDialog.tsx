@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+} from "react";
 import {
   AskingCircle,
   BrandMark,
@@ -10,75 +21,156 @@ import {
 } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { CountBadge } from "@/components/ui/badge";
-import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ArrowRight, ChevronRight } from "lucide-react";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FactRun } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
-import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { currentHostId, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useRovingRows } from "@/hooks/useRovingRows";
+import { listStepOf } from "@/lib/listStepChord";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { hasDraftText } from "@/lib/draftKey";
 import { pluralize } from "@/lib/pluralize";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { answerKey, useAnswerRecord } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import { isPtyPanel } from "@shared/types/panel";
 import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
+import {
+  ATTENTION_ACTIONS,
+  AttentionActionRow,
+  AttentionConfirmations,
+  ResumePending,
+  useWorktreeNames,
+} from "./AttentionActions";
+import { DecisionAskingPane } from "./DecisionAskingPane";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
+import { asksByDeadline, deadlineMs, expiryText } from "./decisionDeadline";
+import { useDecisionsClock } from "./useDecisionsClock";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
+  askerNotes,
+  answerFate,
+  askKey,
   askShownIn,
+  askedOnHost,
+  attentionNotice,
   attentionText,
+  CLEAR_GONE_HINT,
+  CLEARED_ELAPSED_NOTE,
+  CLEARED_NOTE,
+  clearAllText,
+  clearGoneText,
+  clearText,
   connectionNotice,
+  DECLINE_TEXT,
+  deliveryFacts,
+  dismissFate,
+  ELAPSED_NOTE,
   emptyText,
   expiresSoon,
+  findAsked,
+  folds,
+  GO_TO_TERMINAL_TEXT,
+  goneAsks,
+  hiddenIn,
+  HISTORY_PAGE,
   inboxGroupOf,
   inboxGroups,
+  closedTime,
+  headerFacts,
   inboxRowNote,
+  inWindowProject,
   isAttention,
   isClosed,
+  landedBy,
   markedText,
+  originFacts,
+  paneTitle,
+  questionOfKey,
+  movedText,
+  nextAfter,
+  nextWaiting,
+  recordedLabel,
   referenceKey,
+  replyLine,
+  replyLineKey,
+  replyToShow,
   resolveSelection,
+  RETRY_DECLINE_TEXT,
+  scopedQuestions,
+  scopeOffered,
+  shownItems,
+  shownGroups,
   standingText,
+  waitingText,
   whereFacts,
   worktreeName,
+  WITHDRAW_TEXT,
+  type DeliveryFacts,
+  type DeliveryPane,
+  type InboxAction,
+  type InboxActionFate,
   type InboxChoice,
   type InboxGroup,
+  type InboxGroupId,
+  type InboxReach,
+  type QuestionOrigin,
+  type InboxScope,
+  type WindowProject,
 } from "./decisionsInboxModel";
 import {
   useDecisionQuestionReader,
   useDecisionsReaderRetention,
   useQuestionCancel,
+  type TaggedRead,
 } from "./useDecisionQuestionReader";
+import { useAttentionActions } from "./useAttentionActions";
 import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
+import { replyRequest } from "./decisionFollowUpModel";
+import { useInboxAttentionItem } from "./useInboxAttentionItem";
+import {
+  HostAttentionActions,
+  HostAttentionStatus,
+  useHostAttention,
+} from "./HostAttentionActions";
+import { useThreadMessageScroll } from "./useThreadMessageScroll";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -89,12 +181,163 @@ const SUMMARY_BATCH = 64;
 /** While another project's question is shown, how often its terminal is looked for again. */
 const REACH_RECHECK_MS = 15_000;
 
+/**
+ * How long the arrow keys rest on a row before its question shows (#18038):
+ * long enough that arrowing past a row reads nothing and marks nothing seen.
+ */
+const SELECTION_DWELL_MS = 300;
+
+/** Where the keyboard goes in a question it's sent to: its words, or its answer. */
+type FocusDestination = "words" | "answer";
+
+/**
+ * The answer's first control, as Tab would reach it: the choice made, else the
+ * first that can be made, else its field. Null when it takes no answer here.
+ */
+function answerControl(scope: HTMLElement): HTMLElement | null {
+  const answer = scope.querySelector<HTMLElement>("[data-decision-answer]");
+  if (answer === null) return null;
+  return (
+    answer.querySelector<HTMLElement>('input[type="radio"]:checked:not(:disabled)') ??
+    answer.querySelector<HTMLElement>('input[type="radio"]:not(:disabled)') ??
+    answer.querySelector<HTMLElement>("textarea")
+  );
+}
+
+/** Puts the keyboard in the question shown: its answer when sent there and it takes one, else its words. */
+function landIn(detail: HTMLElement, wordsId: string, to: FocusDestination): void {
+  const control = to === "answer" ? answerControl(detail) : null;
+  // Scrolled to, since the answer can sit below the images.
+  if (control !== null) control.focus();
+  else (document.getElementById(wordsId) ?? detail).focus({ preventScroll: true });
+}
+
+/** Brings a question's row into the list's view once it has rendered as chosen. */
+function revealRow(key: string): void {
+  requestAnimationFrame(() => {
+    document
+      .querySelector(`[data-inbox-key="${encodeURIComponent(key)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+/** The inbox's two lists once it holds more than the window's project (#18051), named as prompt history names them. */
+const SCOPE_OPTIONS: SegmentedRadioOption<InboxScope>[] = [
+  { value: "all", label: "All projects" },
+  { value: "project", label: "This project" },
+];
+
+/**
+ * How long a question asked for while a layer over the inbox held the keyboard
+ * waits for that layer to hand it back (the palette closing as it runs the
+ * action), before the row it was going to keeps only its place in view.
+ */
+const LAYER_HANDBACK_MS = 1_000;
+
 type ListRead =
   { state: "loading" } | { state: "failed" } | { state: "listed"; list: DecisionQuestionList };
 
 const LOADING: ListRead = { state: "loading" };
+
+/**
+ * What the person did from this opening to the question shown while it was
+ * in Needs you (#18035), or declined or withdrew from Cleared (#18130), kept
+ * until it lands where that action takes it, or plainly won't.
+ */
+interface InboxActed {
+  seq: number;
+  /** Which press this was, so a late result of an earlier one changes nothing. */
+  id: number;
+  key: string;
+  /** The group it was acted on in: still listed there, it hasn't moved yet. */
+  from: "needs-you" | "cleared";
+  /** Those listed after it in that group then, so a move on from Cleared takes the one that followed it. */
+  following: string[];
+  /** What it asked as the person acted: a new ask while it waits is no longer theirs to move on from. */
+  ask: string;
+  /** Its answer record, where an answer or a dismissal from here stands. */
+  record: string;
+  label: string;
+  action: InboxAction;
+  /** For an answer, the submission its record held as Send was pressed: any other is this one's. */
+  prior: string | null;
+  /** For a clear, what its call said; a withdrawal is kept only once taken. */
+  fate: InboxActionFate;
+  /** While the confirmation it was taken in closes: the keyboard moves once that has handed it back. */
+  held: boolean;
+  /** The person went on to write or choose something in the question: it's said, not moved on from. */
+  stay: boolean;
+}
+
+/** Once the person's action has landed: what's said, and the question gone on to, if the inbox may. */
+interface InboxArrival {
+  id: number;
+  seq: number;
+  /** With the list and the ask (#18047) it was chosen in, so the choice holds in them. */
+  next: { key: string; index: number; scope: InboxScope; ask: number } | null;
+  /** Said when it goes on to `next`. */
+  text: string;
+  /** Said when it stays: no question after it, or the person busy elsewhere. */
+  stayText: string;
+}
+
+/** What a single clear says once it lands, when no move names it. */
+const CLEARED_ONE = markedText("clear", { result: "marked", marked: 1 });
+
+/** A text field: focus going into one means the person is writing, and stays where they are. */
+function isTextEntry(target: EventTarget): boolean {
+  return (
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLInputElement && target.type === "text") ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
+}
 const NO_LINES: ReadonlyMap<string, string | null> = new Map();
+const NO_QUESTIONS: readonly DecisionQuestionListItem[] = [];
+const NO_GROUPS: ReadonlySet<InboxGroupId> = new Set();
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
+
+/** A pane on this computer, by the project and terminal a question names it by. */
+function paneKey(projectId: string, terminalId: string): string {
+  return `${projectId}\u0000${terminalId}`;
+}
+
+const BAR_PREFIX = "group:";
+
+/** A folding group's bar among the rows the arrow keys walk; a question's key always has separators. */
+function barKey(id: InboxGroupId): string {
+  return `${BAR_PREFIX}${id}`;
+}
+
+function isBarKey(key: string): boolean {
+  return key.startsWith(BAR_PREFIX) && !key.includes("\u0000");
+}
+
+/** What the list's arrow keys walk, in order: a folding group's bar, then its rows while it's open. */
+function listStops(groups: readonly InboxGroup[], open: ReadonlySet<InboxGroupId>): string[] {
+  return groups.flatMap((group) => [
+    ...(folds(group.id) ? [barKey(group.id)] : []),
+    ...(folds(group.id) && !open.has(group.id)
+      ? []
+      : group.items.map((item) => referenceKey(item.reference))),
+  ]);
+}
+
+/**
+ * The drawn question a step from `fromKey` lands on, over the bars between: the
+ * first or last when it starts from nothing listed, itself at the list's ends,
+ * and null from a bar with no question past it.
+ */
+function stepFrom(stops: readonly string[], fromKey: string | null, step: -1 | 1): string | null {
+  const questions = stops.filter((key) => !isBarKey(key));
+  if (questions.length === 0) return null;
+  const from = fromKey === null ? -1 : stops.indexOf(fromKey);
+  if (from === -1) return step > 0 ? questions[0]! : questions[questions.length - 1]!;
+  for (let at = from + step; at >= 0 && at < stops.length; at += step) {
+    if (!isBarKey(stops[at]!)) return stops[at]!;
+  }
+  return isBarKey(stops[from]!) ? null : stops[from]!;
+}
 
 /**
  * This computer's questions while the inbox is open and Decisions is on, as
@@ -165,6 +408,13 @@ function useQuestionLines(
   }, []);
   useEffect(() => forget, [forget]);
 
+  // The rows drawn now, for a read that spans batches: one a fold hid since isn't read (#18023).
+  // Synced with the commit, so a batch resuming before passive effects run still sees it.
+  const drawn = useRef(items);
+  useLayoutEffect(() => {
+    drawn.current = items;
+  }, [items]);
+
   useEffect(() => {
     if (!active) {
       forget();
@@ -176,7 +426,14 @@ function useQuestionLines(
     const thisOpening = opening.current;
     void (async () => {
       for (let start = 0; start < missing.length; start += SUMMARY_BATCH) {
-        const batch = missing.slice(start, start + SUMMARY_BATCH);
+        const still = new Set(drawn.current.map((item) => referenceKey(item.reference)));
+        const batch = missing.slice(start, start + SUMMARY_BATCH).filter((item) => {
+          const key = referenceKey(item.reference);
+          // Asked again once its row is drawn.
+          if (!still.has(key)) asked.current.delete(key);
+          return still.has(key);
+        });
+        if (batch.length === 0) continue;
         const result = await decisionsClient
           .getQuestionSummariesByReference(batch.map((item) => item.reference))
           .catch(() => null);
@@ -205,6 +462,78 @@ function useQuestionLines(
   return { lines, release };
 }
 
+/**
+ * The opening line of each listed request for a reply (#18040), while its
+ * question waits on the person for one: read from that question's own thread
+ * by reference, once per request per opening (`replyLineKey`), and held only
+ * in memory. Only these rows, so everywhere else a question is named by its
+ * own words. A read that fails, or doesn't hold the request yet, is tried
+ * again with the next change to the list; a request it holds without words
+ * that can be read leaves the question's line.
+ */
+function useReplyLines(
+  items: readonly DecisionQuestionListItem[],
+  active: boolean
+): { lines: ReadonlyMap<string, string | null>; release: () => void } {
+  const [lines, setLines] = useState(NO_LINES);
+  const asked = useRef(new Set<string>());
+  const opening = useRef(0);
+  // Each new list, never a retry: a read that fails after a newer list came asks again at once,
+  // and only once for that list, so reads that keep failing never keep each other going.
+  const lists = useRef<{ items: readonly DecisionQuestionListItem[] | null; count: number }>({
+    items: null,
+    count: 0,
+  });
+  const [retries, setRetries] = useState(0);
+
+  const forget = useCallback(() => {
+    opening.current += 1;
+    asked.current = new Set();
+  }, []);
+  useEffect(() => forget, [forget]);
+
+  useEffect(() => {
+    if (!active) {
+      forget();
+      return;
+    }
+    if (lists.current.items !== items) lists.current = { items, count: lists.current.count + 1 };
+    const thisList = lists.current.count;
+    const missing = items.flatMap((item) => {
+      const key = replyLineKey(item);
+      const ask = replyToShow(item);
+      return key === null || ask === null || asked.current.has(key)
+        ? []
+        : [{ key, ask, reference: item.reference }];
+    });
+    const thisOpening = opening.current;
+    // Each on its own, so one slow Host holds up no other row.
+    for (const { key, ask, reference } of missing) {
+      asked.current.add(key);
+      void (async () => {
+        const read = await decisionsClient
+          .getQuestionContentByReference(reference)
+          .catch(() => null);
+        if (thisOpening !== opening.current) return;
+        // Not read, or read before it held the request: asked again with the list's next change.
+        const holds =
+          read?.result === "read" &&
+          read.question.thread.some((entry) => entry.type === "message" && entry.messageId === ask);
+        if (!holds) {
+          asked.current.delete(key);
+          if (lists.current.count !== thisList) setRetries((count) => count + 1);
+          return;
+        }
+        const line = replyLine(read.question, ask);
+        setLines((previous) => new Map(previous).set(key, line));
+      })();
+    }
+  }, [active, items, forget, retries]);
+
+  const release = useCallback(() => setLines(NO_LINES), []);
+  return { lines, release };
+}
+
 /** Where the terminal that asked can be gone to: in this view, or in another project's. */
 type TerminalReach = "here" | "elsewhere" | null;
 
@@ -221,20 +550,25 @@ async function runsTerminal(terminalId: string, projectId: string): Promise<bool
 }
 
 /**
- * Whether the terminal that asked the question is still open on this
- * computer. This view's own panels answer for this project, as they change;
- * for another, the terminals this computer runs, looked for again a while
- * after each look settles. A Remote Host window's terminals are another
- * computer's, so from one it offers nothing.
+ * Whether the terminal that asked the question is still open, on the machine
+ * this view works on (#18049): this view's own panels answer for its project,
+ * as they change, in a Remote Host's window too. For another project of this
+ * computer's, the terminals it runs, looked for again a while after each look
+ * settles; a Remote Host window's other projects aren't looked for. A
+ * question another machine asked offers nothing, whatever its ids.
  */
 function useTerminalReach(
   item: DecisionQuestionListItem | null,
   active: boolean
 ): { reach: TerminalReach; markGone: (key: string) => void } {
   const remote = isRemoteWindow();
-  const terminalId = item?.reference.terminalId ?? null;
-  const projectId = item?.reference.projectId ?? null;
-  const here = !remote && projectId !== null && projectId === getViewWorkspaceId();
+  const sameMachine = item !== null && askedOnHost(item, currentHostId());
+  // The terminal that asked was seen to close or run another session: a pane under its id isn't it.
+  const target = item?.asker?.target;
+  const gone = target === "closed" || target === "trashed" || target === "replaced";
+  const terminalId = gone ? null : (item?.reference.terminalId ?? null);
+  const projectId = gone ? null : (item?.reference.projectId ?? null);
+  const here = sameMachine && projectId !== null && projectId === getViewWorkspaceId();
   const openHere = usePanelStore((state) => {
     if (!here || terminalId === null) return false;
     const panel = state.panelsById[terminalId];
@@ -247,7 +581,15 @@ function useTerminalReach(
   const looks = useRef(0);
 
   useEffect(() => {
-    if (!active || remote || here || key === null || terminalId === null || projectId === null) {
+    if (
+      !active ||
+      remote ||
+      !sameMachine ||
+      here ||
+      key === null ||
+      terminalId === null ||
+      projectId === null
+    ) {
       return;
     }
     let live = true;
@@ -267,18 +609,152 @@ function useTerminalReach(
       live = false;
       clearTimeout(timer);
     };
-  }, [active, remote, here, key, terminalId, projectId, epoch]);
+  }, [active, remote, sameMachine, here, key, terminalId, projectId, epoch]);
 
   const markGone = useCallback((gone: string) => {
     looks.current += 1;
     setFound({ key: gone, open: false });
     setEpoch((n) => n + 1);
   }, []);
-  if (item === null || remote) return { reach: null, markGone };
+  if (item === null || !sameMachine || gone) return { reach: null, markGone };
   if (here) return { reach: openHere ? "here" : null, markGone };
+  if (remote) return { reach: null, markGone };
   return {
     reach: found !== null && found.key === key && found.open ? "elsewhere" : null,
     markGone,
+  };
+}
+
+/** A terminal as the inbox looks it up: by its project, then its id. */
+function terminalKey(projectId: string, terminalId: string): string {
+  return `${projectId}\u0000${terminalId}`;
+}
+
+type SeenAgent = Pick<DeliveryPane, "detectedAgentId" | "agentState" | "waitingReason">;
+
+/** What the terminals this computer runs report of each of `keys`, out of the trash and running. */
+async function agentsOf(keys: ReadonlySet<string>): Promise<ReadonlyMap<string, SeenAgent>> {
+  const seen = new Map<string, SeenAgent>();
+  for (const terminal of await terminalClient.getAll()) {
+    const key = terminalKey(terminal.projectId ?? "", terminal.id);
+    if (!keys.has(key) || terminal.isTrashed === true || terminal.hasPty === false) continue;
+    const { detectedAgentId, agentState, waitingReason } = terminal;
+    seen.set(key, { detectedAgentId, agentState, waitingReason });
+  }
+  return seen;
+}
+
+const NOTHING_SEEN: ReadonlyMap<string, SeenAgent> = new Map();
+
+/**
+ * What the inbox observes of each Being delivered question's terminal
+ * (#18032), from what the delivery gate reads: its agent as the terminals
+ * this computer runs report it, looked at again a while after each look
+ * settles and only for this opening, and whether this view's hybrid input
+ * holds a draft for it, joined so a keystroke re-renders the inbox only when
+ * a draft comes or goes. Null for one not running here, a Remote Host's, and
+ * any from a Remote Host window.
+ */
+function useDeliveryPanes(
+  items: readonly DecisionQuestionListItem[],
+  active: boolean,
+  opening: number
+): (item: DecisionQuestionListItem) => DeliveryPane | null {
+  const remote = isRemoteWindow();
+  const view = getViewWorkspaceId();
+  const delivering = remote
+    ? []
+    : items.filter(
+        (item) =>
+          item.standing.kind === "to-type" &&
+          item.standing.delivery !== undefined &&
+          item.remoteHost === undefined
+      );
+  const watched = [
+    ...new Set(
+      delivering.map((item) => terminalKey(item.reference.projectId, item.reference.terminalId))
+    ),
+  ]
+    .sort()
+    .join("\n");
+  const here = delivering
+    .filter((item) => item.reference.projectId === view)
+    .map((item) => item.reference.terminalId);
+  const draftsHere = useTerminalInputStore((state) =>
+    here.filter((id) => hasDraftText(state.draftInputs, id)).join("\u0000")
+  );
+  // This view's own reading of its panels' agents moves first: each change looks again at once,
+  // though only the terminals' record is taken at its word.
+  const agentsHere = usePanelStore((state) =>
+    here
+      .map((id) => {
+        const panel = state.panelsById[id];
+        return panel === undefined || !isPtyPanel(panel)
+          ? ""
+          : `${id}:${panel.agentState ?? ""}:${panel.waitingReason ?? ""}`;
+      })
+      .join("\u0000")
+  );
+  const [seen, setSeen] = useState<{
+    key: string;
+    agents: ReadonlyMap<string, SeenAgent>;
+  } | null>(null);
+  const seenKey = `${opening}\n${watched}`;
+
+  // Asks the running look for another as soon as it can: at once when none is out, else once it lands.
+  const lookAgain = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!active || watched === "") return;
+    const keys = new Set(watched.split("\n"));
+    const key = `${opening}\n${watched}`;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let out = false;
+    let again = false;
+    // One look at a time, so an older answer never lands after a newer one, and each one lands.
+    const look = () => {
+      clearTimeout(timer);
+      out = true;
+      again = false;
+      const settle = (agents: ReadonlyMap<string, SeenAgent>) => {
+        if (!live) return;
+        out = false;
+        setSeen({ key, agents });
+        if (again) look();
+        else timer = setTimeout(look, REACH_RECHECK_MS);
+      };
+      agentsOf(keys).then(settle, () => settle(NOTHING_SEEN));
+    };
+    lookAgain.current = () => {
+      if (out) again = true;
+      else look();
+    };
+    look();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      lookAgain.current = null;
+    };
+  }, [active, opening, watched]);
+
+  // A burst of changes asks for one look after the one out, never a look each.
+  const agentsLookedAt = useRef(agentsHere);
+  useEffect(() => {
+    if (agentsLookedAt.current === agentsHere) return;
+    agentsLookedAt.current = agentsHere;
+    lookAgain.current?.();
+  }, [agentsHere]);
+
+  const drafts = new Set(draftsHere === "" ? [] : draftsHere.split("\u0000"));
+  // Only what this opening looked at, for the terminals it still watches.
+  const agents = active && seen !== null && seen.key === seenKey ? seen.agents : NOTHING_SEEN;
+  return (item) => {
+    if (remote || item.remoteHost !== undefined) return null;
+    const { projectId, terminalId } = item.reference;
+    const agent = agents.get(terminalKey(projectId, terminalId));
+    if (agent === undefined) return null;
+    return { ...agent, draft: projectId === view && drafts.has(terminalId) };
   };
 }
 
@@ -320,13 +796,25 @@ const WarningGlyph = SEVERITY_GLYPH.warning;
  * Where the question stands, in the app's agent-state vocabulary: the waiting
  * ring with a question mark while it asks the person, the ring alone while an
  * answer waits to be typed in, the warning shape when delivery needs a person,
- * and the finished or ended ring once it is over.
+ * and the finished or ended ring once it is over. A question the person set
+ * aside is still an open ask, so it keeps its question mark, but not the
+ * amber that is kept for what waits on them.
  */
-function StandingGlyph({ standing }: { standing: DecisionQuestionStanding }) {
+function StandingGlyph({
+  standing,
+  cleared,
+}: {
+  standing: DecisionQuestionStanding;
+  cleared: boolean;
+}) {
   switch (standing.kind) {
     case "waiting":
     case "queued":
-      return <AskingCircle className={cn(STATE_GLYPH, "text-state-waiting")} />;
+      return (
+        <AskingCircle
+          className={cn(STATE_GLYPH, cleared ? "text-text-secondary" : "text-state-waiting")}
+        />
+      );
     case "to-type":
       return <HollowCircle className={cn(STATE_GLYPH, "text-text-secondary")} />;
     case "needs-attention":
@@ -342,39 +830,99 @@ function StandingGlyph({ standing }: { standing: DecisionQuestionStanding }) {
   }
 }
 
+/**
+ * One of the detail bar's actions, saying what it does before it's pressed
+ * (#18041): on hover and focus, and as its description to the ear.
+ */
+function DescribedAction({
+  description,
+  ref,
+  "aria-describedby": describedBy,
+  ...props
+}: ButtonProps & { description: string; ref?: Ref<HTMLButtonElement> }) {
+  const descriptionId = useId();
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={ref}
+            {...props}
+            // What it does, after anything the bar says it answers to (#18032).
+            aria-describedby={
+              describedBy === undefined ? descriptionId : `${describedBy} ${descriptionId}`
+            }
+          />
+        </TooltipTrigger>
+        <TooltipContent>{description}</TooltipContent>
+      </Tooltip>
+      <span id={descriptionId} className="sr-only">
+        {description}
+      </span>
+    </>
+  );
+}
+
 function InboxRow({
   item,
   rowKey,
   line,
-  agent,
-  where,
+  origin,
   selected,
+  describedBy,
   tabStop,
   rowRef,
   onFocus,
   onSelect,
+  onAnswer,
   nowMs,
+  delivery,
 }: {
   item: DecisionQuestionListItem;
   rowKey: string;
   line: string | null;
-  agent: string;
-  where: readonly string[];
+  origin: QuestionOrigin;
   selected: boolean;
+  /** The list's keys, said with the row Tab lands on: the region's own description isn't read there. */
+  describedBy: string | undefined;
   tabStop: boolean;
   rowRef: (element: HTMLElement | null) => void;
   onFocus: (element: HTMLElement) => void;
   onSelect: () => void;
+  onAnswer: () => void;
   nowMs: number | null;
+  /** What waits to be typed in, and on what, while it's being delivered (#18032). */
+  delivery: DeliveryFacts | null;
 }) {
-  const note = inboxRowNote(item);
-  const cleared = inboxGroupOf(item) === "cleared";
+  const note = delivery?.text ?? inboxRowNote(item, nowMs);
+  // Being delivered shows when what waits was recorded, as History shows when it closed.
+  const shownTime: { at: string; kind: "closed" | "asked" | DeliveryFacts["first"] } =
+    inboxGroupOf(item, nowMs) === "history"
+      ? closedTime(item)
+      : delivery !== null
+        ? { at: delivery.recordedAt, kind: delivery.first }
+        : { at: item.askedAt, kind: "asked" };
+  const cleared = inboxGroupOf(item, nowMs) === "cleared";
+  const deadline = deadlineMs(item.expiresAt);
+  // Within a day: when, in this computer's time, and how long is left (#17943).
   const expiry =
-    item.expiresAt !== null && nowMs !== null && expiresSoon(item, nowMs)
-      ? `Due ${formatRelativeTime(Date.parse(item.expiresAt), nowMs)}`
+    deadline !== null && nowMs !== null && expiresSoon(item, nowMs)
+      ? expiryText(deadline, nowMs, item.replyMode)
       : null;
+  const asker = askerNotes(item);
   const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
+  // Set aside, not over: the title steps down like History's, the question stays open.
+  const quiet = closed || cleared;
+  // Past its deadline it no longer waits on the person, and the ear hears that, not an invitation to answer.
+  const spoken =
+    delivery !== null
+      ? delivery.text
+      : inboxGroupOf(item, nowMs) === "awaiting"
+        ? note
+        : note === CLEARED_ELAPSED_NOTE
+          ? ELAPSED_NOTE
+          : standingText(item.standing, item);
   return (
     <li>
       <button
@@ -383,18 +931,26 @@ function InboxRow({
         // One tab stop for the whole list; the arrow keys move it.
         tabIndex={tabStop ? 0 : -1}
         aria-current={selected || undefined}
+        aria-describedby={describedBy}
         data-roving-row=""
         data-inbox-key={encodeURIComponent(rowKey)}
         data-selected={selected ? "true" : undefined}
         onFocus={(event) => onFocus(event.currentTarget)}
         onClick={onSelect}
+        // Across to the question beside the list, into its answer. Enter and Space stay the button's.
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowRight") return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          event.preventDefault();
+          onAnswer();
+        }}
         className="decisions-inbox-row flex w-full cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
         data-testid="decisions-inbox-row"
       >
         {/* The leading column: where it stands, and whose agent asked. */}
         <span aria-hidden="true" className="flex h-5 w-10 shrink-0 items-center gap-2">
           <span className="flex size-4 items-center justify-center">
-            <StandingGlyph standing={item.standing} />
+            <StandingGlyph standing={item.standing} cleared={cleared} />
           </span>
           <span className="flex size-4 items-center justify-center">
             <AgentMark agentKind={item.agentKind} />
@@ -405,50 +961,79 @@ function InboxRow({
             <span
               className={cn(
                 "min-w-0 flex-1 text-sm leading-5 [text-wrap:pretty]",
-                // History is recognised, not triaged: one line of scent is enough.
-                closed ? "line-clamp-1 text-text-secondary" : "line-clamp-2 text-text-primary"
+                // History and Cleared are recognised, not triaged: one line of scent is enough.
+                quiet ? "line-clamp-1 text-text-secondary" : "line-clamp-2 text-text-primary"
               )}
               data-testid="decisions-inbox-row-line"
             >
               {line ?? aliasLabel(item.alias)}
             </span>
-            <TimeAgo
-              timestamp={item.askedAt}
-              className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums"
-            />
+            {/* History sorts by when a question closed, so it shows that time (#18025). */}
+            <span className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums">
+              <span className="sr-only">
+                {shownTime.kind === "closed"
+                  ? "Closed, "
+                  : shownTime.kind === "asked"
+                    ? "Asked, "
+                    : `${recordedLabel(shownTime.kind)}, `}
+              </span>
+              <TimeAgo timestamp={shownTime.at} />
+            </span>
           </span>
           {/* Only what sets this row apart from its group; the full sentence is for the ear.
-              A closed row's outcome leads its where-line instead, so history stays two lines. */}
-          {((note !== null && !closed) || expiry !== null) && (
+              A closed row's outcome follows who asked on its where-line instead, so history stays two lines. */}
+          {((note !== null && !closed) || expiry !== null || asker !== null) && (
             <span
               aria-hidden="true"
               className={cn(
-                "flex min-w-0 items-center gap-1.5 text-xs leading-4",
+                // Wraps rather than squeeze what was seen of the asker out past a deadline chip.
+                "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-4",
                 attention || expiry !== null ? "text-text-primary" : "text-text-secondary"
               )}
             >
               {expiry !== null && (
                 // A deadline inside a day: the one chip a waiting row wears, as on the phone.
                 <span className="flex min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-overlay-soft px-1.5 py-0.5 font-medium">
-                  <Clock className="size-3 shrink-0 text-status-warning" />
+                  <Clock
+                    className={cn(
+                      "size-3 shrink-0",
+                      cleared ? "text-text-secondary" : "text-status-warning"
+                    )}
+                  />
                   <span className="truncate">{expiry}</span>
                 </span>
               )}
-              {note !== null && !closed && <span className="min-w-0 truncate">{note}</span>}
+              {note !== null && !closed && (
+                // What holds a delivery is the row's news: it wraps rather than lose its reason.
+                <span
+                  className={cn(
+                    "min-w-0",
+                    delivery !== null ? "line-clamp-2 [text-wrap:pretty]" : "truncate"
+                  )}
+                >
+                  {note}
+                </span>
+              )}
+              {asker !== null && (
+                <span className="min-w-0 truncate" data-testid="decisions-inbox-row-asker">
+                  {asker.row}
+                </span>
+              )}
             </span>
           )}
           {/* A closed row's outcome is already read out with its where-line. */}
           {!(closed && note !== null) && (
             <span className="sr-only">
-              {standingText(item.standing)}
-              {cleared && ", cleared on this computer"}
+              {spoken}
+              {cleared && `, ${CLEARED_NOTE.toLowerCase()}`}
               {expiry !== null && `, ${expiry.toLowerCase()}`}
+              {asker !== null && `, ${asker.row.toLowerCase()}`}
             </span>
           )}
           <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
-            <span className="min-w-0 flex-1 truncate">
-              <span className="sr-only">{agent}, </span>
-              <FactRun facts={closed && note !== null ? [note, ...where] : where} />
+            {/* Who asked leads; the place, ending with the project, gives way first. */}
+            <span className="min-w-0 flex-1 truncate" data-testid="decisions-inbox-row-origin">
+              <FactRun facts={originFacts(origin, closed ? note : null)} />
             </span>
             {/* Not twice: a row whose line couldn't be read is already named by it. */}
             {line !== null && (
@@ -471,33 +1056,132 @@ function InboxRow({
  * while the dialog is: what it holds of the rows goes with the close.
  */
 function InboxList({
+  listRef,
+  lead,
   groups,
+  open,
+  onFold,
+  historyHidden,
+  nextOlderKey,
+  onShowOlder,
   lines,
+  replyLines,
   partsOf,
   selectedKey,
   onSelect,
+  onAnswer,
   nowMs,
+  deliveryOf,
 }: {
+  listRef: RefObject<HTMLDivElement | null>;
+  /** Above the groups: what the list says when it has nothing, or that nothing waits (#18022). */
+  lead: ReactNode;
   groups: readonly InboxGroup[];
+  /** The folding groups this opening has open; the rest of History and Cleared are shut. */
+  open: ReadonlySet<InboxGroupId>;
+  onFold: (id: InboxGroupId, open: boolean) => void;
+  /** History's rows left out of `groups`, older than every one shown. */
+  historyHidden: number;
+  /** The newest of them, the first row showing older ones brings in. */
+  nextOlderKey: string | null;
+  /** Shows the next page of older History rows. */
+  onShowOlder: () => void;
   lines: ReadonlyMap<string, string | null>;
-  partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
+  /** A request for a reply's line, by `replyLineKey`, in place of its question's. */
+  replyLines: ReadonlyMap<string, string | null>;
+  partsOf: (item: DecisionQuestionListItem) => QuestionOrigin;
   selectedKey: string | null;
-  onSelect: (key: string, index: number) => void;
+  onSelect: (key: string) => void;
+  /** Show this row's question now and take the keyboard into its answer. */
+  onAnswer: (key: string) => void;
   nowMs: number | null;
+  deliveryOf: (item: DecisionQuestionListItem) => DeliveryFacts | null;
 }) {
-  const listRef = useRef<HTMLDivElement>(null);
   const labelId = useId();
-  const ordered = groups.flatMap((group) => group.items);
-  const keys = ordered.map((item) => referenceKey(item.reference));
-  const roving = useRovingRows({ keys, preferredKey: selectedKey, containerRef: listRef });
+  const hintId = useId();
+  const barHintId = useId();
+  const shut = (id: InboxGroupId) => folds(id) && !open.has(id);
+  const keys = listStops(groups, open);
+  // The question shown, under a shut group, is reached through that group's bar.
+  const selectedShut = selectedKey === null ? null : hiddenIn(groups, selectedKey, open);
+  const roving = useRovingRows({
+    keys,
+    preferredKey: selectedShut !== null ? barKey(selectedShut) : selectedKey,
+    containerRef: listRef,
+  });
+  // The list's keys, said with the stop Tab lands on: the region's own description isn't read there.
+  // The stop itself while the question shown has no row drawn or a bar holds the stop, so Tab back
+  // from a group shut and opened again still hears it.
+  const barStop = roving.tabStopKey !== null && isBarKey(roving.tabStopKey);
+  const hintKey =
+    selectedKey === null || selectedShut !== null || barStop ? roving.tabStopKey : selectedKey;
   // The row the keyboard was on, until focus goes somewhere else on purpose.
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
+  // The first History row showing older ones brings in: the keyboard goes on to it.
+  const showingOlder = useRef<string | null>(null);
+  // The button showing older rows has the keyboard, so a list update that takes it away hands it back.
+  const olderFocused = useRef(false);
   const shape = groups
     .flatMap((group) => group.items.map((item) => `${group.id}:${referenceKey(item.reference)}`))
     .join("\n");
+  // The arrows' rest before the row they reached shows. Armed only by the list's own keys:
+  // a click shows at once, and focus put back on a row (a regroup, a dialog closing) shows nothing new.
+  const dwell = useRef<{ timer?: ReturnType<typeof setTimeout> }>({});
+  useEffect(() => {
+    const held = dwell.current;
+    return () => clearTimeout(held.timer);
+  }, []);
+
+  // Started by each press that moves the keyboard to a row, for the row it moved to. A bar shows
+  // no question, so resting on one shows nothing.
+  const armDwell = () => {
+    clearTimeout(dwell.current.timer);
+    const landed = lastFocused.current;
+    if (landed === null || landed.key === selectedKey || isBarKey(landed.key)) return;
+    dwell.current.timer = setTimeout(() => {
+      const now = lastFocused.current;
+      // Only while the keyboard is still on it: another press, a blur, or its row going ends it.
+      if (now === null || now.key !== landed.key || document.activeElement !== now.element) return;
+      onSelect(now.key);
+    }, SELECTION_DWELL_MS);
+  };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    roving.onKeyDown(event);
+    if (event.isDefaultPrevented()) armDwell();
+  };
+  const renderRow = (item: DecisionQuestionListItem) => {
+    const key = referenceKey(item.reference);
+    const replyKey = replyLineKey(item);
+    return (
+      <InboxRow
+        key={key}
+        item={item}
+        rowKey={key}
+        // The question's line until its request's is read, and where that can't be.
+        line={(replyKey === null ? null : replyLines.get(replyKey)) ?? lines.get(key) ?? null}
+        origin={partsOf(item)}
+        selected={key === selectedKey}
+        describedBy={key === hintKey ? hintId : undefined}
+        tabStop={key === roving.tabStopKey}
+        rowRef={roving.rowRef(key)}
+        onFocus={(element) => {
+          lastFocused.current = { key, element };
+          roving.onRowFocus(key);
+        }}
+        onSelect={() => onSelect(key)}
+        onAnswer={() => {
+          clearTimeout(dwell.current.timer);
+          onAnswer(key);
+        }}
+        nowMs={nowMs}
+        delivery={deliveryOf(item)}
+      />
+    );
+  };
 
   // A row that moves to another group is a new element, and the old one took
-  // focus with it; the keyboard goes back to the row, or to the list's stop.
+  // focus with it; the keyboard goes back to the row, to the bar of the shut
+  // group it went into, or to the list's stop.
   useLayoutEffect(() => {
     const last = lastFocused.current;
     const list = listRef.current;
@@ -506,22 +1190,83 @@ function InboxList({
     lastFocused.current = null;
     const focused = document.activeElement;
     if (focused !== null && focused !== document.body) return;
-    const row =
-      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(last.key)}"]`) ??
-      list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
+    const at = (key: string) =>
+      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`);
+    const into = hiddenIn(groups, last.key, open);
+    const shutBar = into === null ? null : at(barKey(into));
+    // The bar can sit far from where the row was, so it comes into view with the keyboard.
+    if (at(last.key) === null && shutBar !== null) {
+      shutBar.focus();
+      return;
+    }
+    const row = at(last.key) ?? list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
     row?.focus({ preventScroll: true });
-  }, [shape]);
+  }, [groups, open, listRef]);
+
+  // The older rows asked for are shown: the keyboard goes on to the first of them, so the
+  // button it pressed can go without dropping focus. One a list update moved or took away
+  // leaves it on the list's own stop.
+  useLayoutEffect(() => {
+    const key = showingOlder.current;
+    const list = listRef.current;
+    if (key === null || list === null) return;
+    showingOlder.current = null;
+    olderFocused.current = false;
+    const row =
+      list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`) ??
+      list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ??
+      list;
+    row.focus();
+    // Also when the rows asked for went in the same update: the hidden count moved, if not the rows.
+  }, [shape, historyHidden, listRef]);
+
+  // A list update that leaves nothing older to show takes the button away under the keyboard.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (historyHidden > 0 || !olderFocused.current || list === null) return;
+    olderFocused.current = false;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body) return;
+    (list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ?? list).focus({
+      preventScroll: true,
+    });
+  }, [historyHidden, listRef]);
 
   return (
     <div
       ref={listRef}
-      onKeyDown={roving.onKeyDown}
-      tabIndex={roving.containerProps.tabIndex}
-      onFocus={roving.containerProps.onFocus}
+      onKeyDown={(event) => {
+        // On the list itself (it had no rows, or a click on its blank space), the first arrow
+        // goes to the row Tab would reach, rather than one past it.
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          const stop = event.currentTarget.querySelector<HTMLElement>(
+            '[data-roving-row][tabindex="0"]'
+          );
+          if (stop !== null) {
+            event.preventDefault();
+            stop.focus();
+            armDwell();
+            return;
+          }
+        }
+        onKeyDown(event);
+      }}
+      // The dialog's first stop while it has no rows, so the keyboard still starts on the list; with
+      // rows, the rows are, and the list only holds focus a row it lost (or a control under it) hands back.
+      tabIndex={keys.length === 0 ? 0 : -1}
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (next instanceof Node && !event.currentTarget.contains(next)) {
           lastFocused.current = null;
+          // Gone somewhere else on purpose: coming back is not resting on it.
+          clearTimeout(dwell.current.timer);
         } else if (next === null) {
           // Focus left for nowhere: a row a regroup replaced is gone by the
           // next task, and one still in place was blurred some other way.
@@ -536,15 +1281,102 @@ function InboxList({
       }}
       role="region"
       aria-labelledby={labelId}
-      className="flex flex-col"
+      className="flex flex-1 flex-col outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       data-testid="decisions-inbox-groups"
     >
       <span id={labelId} className="sr-only">
         Questions
       </span>
+      <span id={hintId} className="sr-only">
+        Up and down arrows show each question. Right arrow moves into it.
+      </span>
+      {/* A bar opens no question to move into. */}
+      <span id={barHintId} className="sr-only">
+        Up and down arrows show each question.
+      </span>
+      {lead}
       {groups.map((group) => {
         const headingId = `${labelId}-${group.id}`;
+        const rowsId = `${headingId}-rows`;
         const stopped = groups.find((other) => other.id === "attention")?.items.length ?? 0;
+        const older = group.id === "history" ? historyHidden : 0;
+        const total = group.items.length + older;
+        const label = (
+          <>
+            {group.title}
+            <CountBadge label={pluralize(total, "question")}>{total.toLocaleString()}</CountBadge>
+          </>
+        );
+        if (folds(group.id)) {
+          const key = barKey(group.id);
+          const expanded = !shut(group.id);
+          return (
+            <section
+              key={group.id}
+              aria-labelledby={headingId}
+              className="flex flex-col"
+              data-testid={`decisions-inbox-group-${group.id}`}
+            >
+              {/* Canopy's folding bar: its count stays in view while the group is shut. */}
+              <h3 id={headingId} className="decisions-inbox-heading flex h-9 w-full shrink-0">
+                <button
+                  type="button"
+                  ref={roving.rowRef(key)}
+                  tabIndex={key === roving.tabStopKey ? 0 : -1}
+                  aria-expanded={expanded}
+                  aria-controls={rowsId}
+                  aria-describedby={key === hintKey ? barHintId : undefined}
+                  data-roving-row=""
+                  data-inbox-key={encodeURIComponent(key)}
+                  onFocus={(event) => {
+                    lastFocused.current = { key, element: event.currentTarget };
+                    roving.onRowFocus(key);
+                  }}
+                  // The keyboard on a row it shuts goes to the bar with the layout effect above.
+                  onClick={() => onFold(group.id, !expanded)}
+                  className="decisions-inbox-fold flex w-full cursor-pointer items-center justify-between gap-1.5 px-3 text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+                  data-testid={`decisions-inbox-fold-${group.id}`}
+                >
+                  <span className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
+                    {label}
+                  </span>
+                  <ChevronRight
+                    aria-hidden="true"
+                    className={cn(
+                      "size-3.5 shrink-0 text-text-secondary transition-transform duration-150 motion-reduce:transition-none",
+                      expanded && "rotate-90"
+                    )}
+                  />
+                </button>
+              </h3>
+              <ul id={rowsId} hidden={!expanded} className="flex flex-col">
+                {expanded && group.items.map((item) => renderRow(item))}
+              </ul>
+              {expanded && older > 0 && (
+                <div className="flex px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onFocus={() => {
+                      olderFocused.current = true;
+                    }}
+                    onBlur={(event) => {
+                      // Taken out from under the keyboard, it has nowhere it went.
+                      if (event.relatedTarget !== null) olderFocused.current = false;
+                    }}
+                    onClick={() => {
+                      showingOlder.current = nextOlderKey;
+                      onShowOlder();
+                    }}
+                    data-testid="decisions-inbox-show-older"
+                  >
+                    Show {pluralize(Math.min(older, HISTORY_PAGE), "older question")}
+                  </Button>
+                </div>
+              )}
+            </section>
+          );
+        }
         return (
           <section
             key={group.id}
@@ -558,10 +1390,7 @@ function InboxList({
                 id={headingId}
                 className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}
               >
-                {group.title}
-                <CountBadge label={pluralize(group.items.length, "question")}>
-                  {group.items.length.toLocaleString()}
-                </CountBadge>
+                {label}
               </h3>
               {/* Stopped deliveries can sit below a long queue: one click takes the list to them.
                   A pointer shortcut only; the keyboard reaches them with the list's own keys. */}
@@ -584,31 +1413,7 @@ function InboxList({
                 </button>
               )}
             </div>
-            <ul className="flex flex-col">
-              {group.items.map((item) => {
-                const key = referenceKey(item.reference);
-                const parts = partsOf(item);
-                return (
-                  <InboxRow
-                    key={key}
-                    item={item}
-                    rowKey={key}
-                    line={lines.get(key) ?? null}
-                    agent={parts.agent}
-                    where={parts.where}
-                    selected={key === selectedKey}
-                    tabStop={key === roving.tabStopKey}
-                    rowRef={roving.rowRef(key)}
-                    onFocus={(element) => {
-                      lastFocused.current = { key, element };
-                      roving.onRowFocus(key);
-                    }}
-                    onSelect={() => onSelect(key, keys.indexOf(key))}
-                    nowMs={nowMs}
-                  />
-                );
-              })}
-            </ul>
+            <ul className="flex flex-col">{group.items.map((item) => renderRow(item))}</ul>
           </section>
         );
       })}
@@ -616,15 +1421,31 @@ function InboxList({
   );
 }
 
+/** Where Go to terminal goes: one of this computer's terminals, by its project. */
+export interface InboxTerminal {
+  terminalId: string;
+  projectId: string;
+}
+
+export interface DecisionsInboxDialogProps {
+  /**
+   * Takes the person to the terminal once the inbox has closed, in a window
+   * with no project of its own (the Canopy window, #18048), where the
+   * project's actions aren't registered. Absent, the view's own actions do.
+   */
+  navigateToTerminal?: (terminal: InboxTerminal) => void;
+}
+
 /**
  * Every question this computer's Decisions holds (#17231), across its
- * projects and terminals, grouped by what it needs: the person, delivery, or
- * a decision about a stopped delivery, then history. Selecting one reads it
+ * projects and terminals, or only the window's project's once narrowed to it
+ * (#18051), grouped by what it needs: the person, delivery, or a decision
+ * about a stopped delivery, then history. Selecting one reads it
  * in full beside the list, with the question view's answer and dismissal, and
  * a way to the terminal that asked while it is still open. The words are
  * read on demand by reference and held in memory only while it is open.
  */
-export function DecisionsInboxDialog() {
+export function DecisionsInboxDialog({ navigateToTerminal }: DecisionsInboxDialogProps = {}) {
   const isOpen = useDecisionsInboxStore((state) => state.isOpen);
   const request = useDecisionsInboxStore((state) => state.request);
   const close = useDecisionsInboxStore((state) => state.close);
@@ -635,53 +1456,223 @@ export function DecisionsInboxDialog() {
   const { read: listRead, retry, release: releaseList } = useQuestionList(active, request.seq);
   const { status, known: statusKnown } = useInboxStatus(active, request.seq);
   const notice = connectionNotice(status);
-  // Read against when this opening began: a deadline a day out doesn't need to tick while it's open.
-  const nowMs = request.openedAt ?? null;
   const questions = listRead.state === "listed" ? listRead.list.questions : null;
-  const groups = questions === null ? [] : inboxGroups(questions, nowMs);
+  // Moved on only when a deadline's row would read differently, or the clock jumped (#17943).
+  const nowMs = useDecisionsClock(
+    (questions ?? []).flatMap((item) => (asksByDeadline(item.standing) ? [item.expiresAt] : [])),
+    active
+  );
+  const viewWorkspace = getViewWorkspaceId();
+  // The project this window shows, on its own Host; a scratch workspace is no project to narrow to.
+  const windowProject: WindowProject | null =
+    viewWorkspace === null || isScratchWorkspaceId(viewWorkspace)
+      ? null
+      : { hostId: currentHostId(), projectId: viewWorkspace };
+  // A question asked for (#18047): on opening, or in this opening while it stays open.
+  const asked = request.question ?? null;
+  const ask = request.ask ?? 0;
+  const viewHostId = currentHostId();
+  // The question shown sticks to the one chosen, by reference, as the list moves around it. A
+  // question asked for while open starts the choice afresh.
+  const [choice, setChoice] = useState<
+    (InboxChoice & { seq: number; scope: InboxScope; ask: number }) | null
+  >(null);
+  const chosen =
+    choice !== null && choice.seq === request.seq && choice.ask === ask ? choice : null;
+  // Each opening starts on every project, as the toolbar's count does. Once the list holds this
+  // project and another, the switch stays for the opening, so a push that empties one side never
+  // takes the switch from under the keyboard or quietly widens what Clear reaches.
+  const offered = questions !== null && scopeOffered(questions, windowProject);
+  const [scopeChoice, setScopeChoice] = useState<{
+    seq: number;
+    scope: InboxScope;
+    /** The ask it was chosen at: only a later one can widen it. */
+    ask: number;
+    /** Widened for that ask's question (#18119). */
+    widened: boolean;
+  } | null>(null);
+  const opening = scopeChoice !== null && scopeChoice.seq === request.seq ? scopeChoice : null;
+  let scope: InboxScope = opening?.scope ?? "all";
+  if (opening === null) {
+    if (offered) setScopeChoice({ seq: request.seq, scope, ask, widened: false });
+  } else if (active && opening.scope === "project" && opening.ask !== ask && asked !== null) {
+    // Asked for another project's question while narrowed (#18119), the list goes back to every
+    // project, once per ask, so the question is shown and Clear says how far it reaches. Not while
+    // a row the person picked since the ask is still in the list it was picked in, nor before the
+    // question is listed, nor as the inbox closes. A pick that goes before the question is listed
+    // leaves the list as the person had it; one gone by the time it's listed gives way (#18048).
+    if (questions !== null) {
+      const match = findAsked(questions, asked, viewHostId);
+      const picked = chosen?.picked === true;
+      const pickStays =
+        picked &&
+        scopedQuestions(questions, "project", windowProject).some(
+          (item) => referenceKey(item.reference) === chosen.key
+        );
+      if (match !== undefined || (picked && !pickStays)) {
+        const widened = !pickStays && match !== undefined && !inWindowProject(match, windowProject);
+        if (widened) scope = "all";
+        setScopeChoice({ seq: request.seq, scope, ask, widened });
+      }
+    }
+  }
+  const showScope = questions !== null && (offered || opening !== null);
+  const shown = questions === null ? null : scopedQuestions(questions, scope, windowProject);
+  const groups = shown === null ? [] : inboxGroups(shown, nowMs);
   const ordered = groups.flatMap((group) => group.items);
-  const { lines, release: releaseLines } = useQuestionLines(ordered, active);
+  // Which of History and Cleared this opening has open (#18023), and which the person opened or
+  // shut themselves. Every opening starts with both shut, so one look back doesn't leave History's
+  // rows across every later visit.
+  const [unfolded, setUnfolded] = useState<{
+    seq: number;
+    groups: ReadonlySet<InboxGroupId>;
+    byPerson: ReadonlySet<InboxGroupId>;
+  } | null>(null);
+  const folding = unfolded !== null && unfolded.seq === request.seq ? unfolded : null;
+  const openGroups = folding?.groups ?? NO_GROUPS;
+  const foldedByPerson = folding?.byPerson ?? NO_GROUPS;
+  const fold = (id: InboxGroupId, open: boolean, byPerson: boolean) => {
+    const next = new Set(openGroups);
+    if (open) next.add(id);
+    else next.delete(id);
+    setUnfolded({
+      seq: request.seq,
+      groups: next,
+      byPerson: byPerson ? new Set([...foldedByPerson, id]) : foldedByPerson,
+    });
+  };
+  // The list as it came, so its next change, not every render, is what asks again; a shut
+  // group's rows wait until it opens.
+  const replyItems = useMemo(
+    () =>
+      questions === null
+        ? NO_QUESTIONS
+        : questions.filter((item) => {
+            const id = inboxGroupOf(item, nowMs);
+            return !folds(id) || openGroups.has(id);
+          }),
+    [questions, nowMs, openGroups]
+  );
+  const { lines: replyLines, release: releaseReplyLines } = useReplyLines(replyItems, active);
+  // Whether Clear Needs you says how far it goes: always beside the switch, which names the list
+  // shown, and otherwise once the list holds a question from outside the window's project.
+  const clearNamesReach =
+    showScope || (shown ?? []).some((item) => !inWindowProject(item, windowProject));
+  const paneOf = useDeliveryPanes(ordered, active, request.seq);
+  const deliveryOf = (item: DecisionQuestionListItem) => deliveryFacts(item, paneOf(item));
 
   const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
-  const viewWorkspace = getViewWorkspaceId();
-  // A Remote Host window's projects are another computer's, whatever their
-  // ids: a question there keeps the names it was asked under.
-  const partsOf = (item: DecisionQuestionListItem): { agent: string; where: string[] } => {
-    const local = !remote && item.reference.projectId === viewWorkspace;
+  // Every run on this computer, across its projects: what names the pane that asked (#18039).
+  // Read only while open here: the fleet moves with every retitle, and a closed inbox shows none of it.
+  const runs = useFleetSnapshotStore((state) =>
+    active && !remote ? (state.snapshot?.runs ?? null) : null
+  );
+  const runsByPane = new Map((runs ?? []).map((run) => [paneKey(run.workspaceId, run.runId), run]));
+  // A Remote Host window's projects and runs are another computer's, whatever
+  // their ids, as are a Host's own questions anywhere: those keep the names
+  // they were asked under.
+  const partsOf = (item: DecisionQuestionListItem): QuestionOrigin => {
+    const own = !remote && item.remoteHost === undefined;
+    const local = own && item.reference.projectId === viewWorkspace;
     const project =
-      (remote
-        ? undefined
-        : projects.find((candidate) => candidate.id === item.reference.projectId)?.name) ??
-      item.projectLabel;
+      (own
+        ? projects.find((candidate) => candidate.id === item.reference.projectId)?.name
+        : undefined) ?? item.projectLabel;
     const known = local ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null) : null;
+    const agent = agentName(item.agentKind);
+    const run = own
+      ? runsByPane.get(paneKey(item.reference.projectId, item.reference.terminalId))
+      : undefined;
     return {
-      agent: agentName(item.agentKind),
+      agent,
+      pane: run === undefined ? null : paneTitle(run, item.agentKind, agent),
+      host: item.remoteHost?.name ?? null,
+      away: item.remoteHost?.connected === false,
       where: whereFacts(project, worktreeName(item, known)),
     };
   };
 
-  // The question shown sticks to the one chosen, by reference, as the list moves around it.
-  const [choice, setChoice] = useState<(InboxChoice & { seq: number }) | null>(null);
-  const chosen = choice !== null && choice.seq === request.seq ? choice : null;
-  const selected = resolveSelection(ordered, chosen, request.terminalId);
+  // A choice made in the other list keeps its question while this one shows it, but its place
+  // was in the other list: nothing here takes that place by index.
+  const sameScope = chosen !== null && chosen.scope === scope;
+  const selected = resolveSelection(
+    groups,
+    chosen === null || sameScope ? chosen : { ...chosen, picked: false },
+    request.terminalId,
+    viewHostId,
+    windowProject,
+    openGroups,
+    asked,
+    request.prefer ?? null
+  );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
-  const selectedIndex = selected === null ? -1 : ordered.indexOf(selected);
+  // A page of History at a time (#18033), from the newest, for this opening; the question shown
+  // stays in view however far down it is.
+  const [historyPage, setHistoryPage] = useState<{ seq: number; shown: number } | null>(null);
+  const historyShown = historyPage?.seq === request.seq ? historyPage.shown : HISTORY_PAGE;
+  const visible = shownGroups(groups, historyShown, selected);
+  // Only the rows drawn: a shut group's lines are read once it opens, and History's a page at a time.
+  const drawn = shownItems(visible.groups, openGroups);
+  const drawnIndexOf = (key: string) =>
+    drawn.findIndex((item) => referenceKey(item.reference) === key);
+  const { lines, release: releaseLines } = useQuestionLines(drawn, active);
+  const drawnAt = selectedKey === null ? -1 : drawnIndexOf(selectedKey);
+  // Under a shut group, it keeps the place it was last drawn at.
+  const selectedIndex = drawnAt >= 0 ? drawnAt : (chosen?.index ?? 0);
   if (
     selectedKey !== null &&
-    (chosen === null || chosen.key !== selectedKey || chosen.index !== selectedIndex)
+    (chosen === null || !sameScope || chosen.key !== selectedKey || chosen.index !== selectedIndex)
   ) {
-    setChoice({ seq: request.seq, key: selectedKey, index: selectedIndex });
+    // One that took a picked row's place stays picked; one the inbox opened on stays its own choice,
+    // as does the pane's own a vanished pick falls back to with no drawn row to take its place.
+    // Across a switch, only the same question stays picked, and only once it's drawn in this list:
+    // under a shut group it has no place here yet for another to take.
+    setChoice({
+      seq: request.seq,
+      scope,
+      ask,
+      key: selectedKey,
+      index: selectedIndex,
+      picked:
+        chosen?.picked === true &&
+        (chosen.key === selectedKey ? sameScope || drawnAt >= 0 : sameScope && drawn.length > 0),
+    });
+    // Newly shown under a shut group can only be the opening pane's own question or one asked for
+    // (#18047) (rows and Next question pick drawn ones): it is never hidden, so its group opens for
+    // this opening, unless the person opened or shut that group themselves; one asked for opens it
+    // even then, since its row takes the keyboard. One that moves into a shut group while shown,
+    // cleared, closed or listed under the pane its answer was sent to, leaves the group shut.
+    const stayed = chosen !== null && questionOfKey(chosen.key) === questionOfKey(selectedKey);
+    const into = stayed ? null : hiddenIn(groups, selectedKey, openGroups);
+    const askedFor =
+      asked !== null && selected !== null && findAsked([selected], asked, viewHostId) !== undefined;
+    if (into !== null && (askedFor || !foldedByPerson.has(into))) fold(into, true, false);
+  } else if (selectedKey === null && chosen !== null) {
+    // Gone with nothing in its place: a later list starts afresh, rather than reviving it in History.
+    setChoice(null);
   }
 
-  // One target per question, so a push that only renews the list's objects
-  // doesn't start the reader's reads over.
-  const [target, setTarget] = useState<{ key: string; target: DecisionQuestionTarget } | null>(
-    null
-  );
-  if (selected !== null && selectedKey !== null && target?.key !== selectedKey) {
-    setTarget({ key: selectedKey, target: referencedQuestion(selected.reference) });
+  const askedShown =
+    asked !== null && selected !== null && findAsked([selected], asked, viewHostId) !== undefined;
+  // The question the list went back to every project for (#18119), whose announcement says so.
+  const widenedFor = opening?.widened === true && opening.ask === ask && askedShown ? ask : null;
+  // One target per question, so a push that only renews the list's objects doesn't start the
+  // reader's reads over. A reply's question asked for while shown does start them over, so a read
+  // begun before the ask, which can predate the follow-up it opens at, never paints.
+  const [target, setTarget] = useState<{
+    key: string;
+    ask: number;
+    target: DecisionQuestionTarget;
+  } | null>(null);
+  const renewsReads = asked?.threadMessageId !== undefined && askedShown;
+  if (
+    selected !== null &&
+    selectedKey !== null &&
+    (target?.key !== selectedKey || (renewsReads && target.ask !== ask))
+  ) {
+    setTarget({ key: selectedKey, ask, target: referencedQuestion(selected.reference) });
   }
   const shownTarget = selectedKey !== null && target?.key === selectedKey ? target.target : null;
   const reader = useDecisionQuestionReader(shownTarget, active);
@@ -697,25 +1688,153 @@ export function DecisionsInboxDialog() {
           ? { text: dismissal.outcome, live: true }
           : null;
   const { reach, markGone } = useTerminalReach(selected, active);
+  const selectedAsker = selected === null ? null : askerNotes(selected);
+  // A stopped delivery on this computer is resolved here, in the detail, rather than in a
+  // second list over it (#18027). A Remote Host's stall is read and resolved through its Host.
+  const attention = useInboxAttentionItem(selected, active, request.seq);
+  const attentionItem = attention.read.state === "found" ? attention.read.item : null;
+  const attentionWorktreeName = useWorktreeNames();
+  const attentionActions = useAttentionActions({
+    scope: isOpen ? `${request.seq}:${selected?.reference.questionId ?? ""}` : null,
+    // A confirmation asked about a reading the stall has since moved past goes with it.
+    shown: attention.stale
+      ? []
+      : attention.read.state === "found"
+        ? [attention.read.item]
+        : attention.read.state === "loading" || attention.read.state === "failed"
+          ? null
+          : [],
+    refresh: attention.refresh,
+  });
+  const attentionBusy =
+    selected === null ? null : (attentionActions.busy.get(selected.reference.questionId) ?? null);
+  const attentionActionsRef = useRef<HTMLDivElement>(null);
+  /** The control of the stall the keyboard was on, until it goes with the stall it resolved. */
+  const attentionFocus = useRef<HTMLElement | null>(null);
+  // What an action did stays with its question until the question stalls anew: a success it
+  // reported (typed in, sent on) is no longer so once a read finds a stall it wasn't taken on.
+  const attentionScope = isOpen ? `${request.seq}:${selected?.reference.questionId ?? ""}` : null;
+  const attentionOutcome = attentionActions.outcome;
+  const outcomeSuperseded =
+    attentionOutcome !== null &&
+    attentionOutcome.severity === "success" &&
+    attention.read.state === "found" &&
+    !attention.stale &&
+    attention.read.item.token !== attentionOutcome.token;
+  const { clearOutcome } = attentionActions;
+  const supersededToken = outcomeSuperseded ? attentionOutcome.token : null;
+  useEffect(() => {
+    if (supersededToken !== null && attentionScope !== null) {
+      clearOutcome(attentionScope, supersededToken);
+    }
+  }, [supersededToken, attentionScope, clearOutcome]);
+  const hostAttention = useHostAttention(selected, active);
+  const selectedDelivery = selected === null ? null : deliveryOf(selected);
+  // A question waiting to be typed in whose machine didn't say what waits still says that much.
+  const deliveryLine =
+    selectedDelivery?.text ??
+    (selected?.standing.kind === "to-type" ? standingText(selected.standing) : null);
+  const deliveryLineId = useId();
   const questionHeadingId = useId();
-  const pendingFocus = useRef<{ seq: number; key: string } | null>(null);
+  // `reached` once its question has been the one shown, so a later choice of another abandons it.
+  const pendingFocus = useRef<{
+    seq: number;
+    key: string;
+    to: FocusDestination;
+    reached?: true;
+  } | null>(null);
   const detailRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const detailHeadingId = useId();
-  // Where the needs-attention list hands the keyboard back once it closes over the inbox.
-  const detailDomId = useId();
   // Once the one shown no longer needs the person, the next that does is one press away:
   // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
-  const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
+  const gone = goneAsks(waiting, nowMs);
+  const selectedGroup = selected === null ? null : inboxGroupOf(selected, nowMs);
   const nextUp =
-    selected !== null && inboxGroupOf(selected) !== "needs-you"
-      ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
-      : null;
+    selected !== null && selectedGroup !== "needs-you" ? nextWaiting(groups, selectedKey) : null;
   const announce = useAnnouncerStore((state) => state.announce);
+
+  // What the person last did here to the question shown in Needs you (#18035), until the list
+  // shows where it went.
+  const [acted, setActed] = useState<InboxActed | null>(null);
+  const actedCount = useRef(0);
+  const liveActed = useRef<number | null>(null);
+  const liveShown = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    liveActed.current = acted?.id ?? null;
+    liveShown.current = selectedKey;
+  });
+  // Only from Needs you: what moves a question out of it moves the inbox on.
+  const actOn = selected !== null && selectedGroup === "needs-you" ? selected : null;
+  // A decline or withdrawal moves it on from Cleared too (#18130); a restore stays put.
+  const declineOn =
+    selected !== null && (selectedGroup === "needs-you" || selectedGroup === "cleared")
+      ? selected
+      : null;
+  const act = (
+    item: DecisionQuestionListItem,
+    action: InboxAction,
+    over: Partial<Pick<InboxActed, "prior" | "fate" | "held">> = {}
+  ): number => {
+    // A clear that was taken and still waits for the list says so before this takes its place.
+    if (acted?.action === "clear" && acted.fate === "taken" && CLEARED_ONE !== null) {
+      announce(CLEARED_ONE);
+    }
+    actedCount.current += 1;
+    const id = actedCount.current;
+    const key = referenceKey(item.reference);
+    const from = inboxGroupOf(item, nowMs) === "cleared" ? "cleared" : "needs-you";
+    const peers = (groups.find((group) => group.id === from)?.items ?? []).map((candidate) =>
+      referenceKey(candidate.reference)
+    );
+    const following = peers.slice(peers.indexOf(key) + 1);
+    setActed({
+      seq: request.seq,
+      id,
+      key,
+      from,
+      following,
+      ask: askKey(item),
+      record: answerKey(item.reference),
+      label: aliasLabel(item.alias),
+      action,
+      prior: null,
+      fate: "open",
+      held: false,
+      stay: false,
+      ...over,
+    });
+    return id;
+  };
+  // A confirmation's reply can come back once another question is shown: not one to move on from.
+  const actOnDecline = (
+    action: "dismiss" | "withdraw",
+    over: Partial<Pick<InboxActed, "fate" | "held">>
+  ) => {
+    if (declineOn === null || liveShown.current !== referenceKey(declineOn.reference)) return;
+    act(declineOn, action, over);
+  };
+  const stay = () =>
+    setActed((current) =>
+      current === null || current.stay ? current : { ...current, stay: true }
+    );
+  // A clear's call settles it; true when the move it makes will say so instead.
+  const settleClear = (id: number, taken: boolean): boolean => {
+    setActed((current) =>
+      current !== null && current.id === id
+        ? { ...current, fate: taken ? "taken" : "failed" }
+        : current
+    );
+    return taken && liveActed.current === id;
+  };
   // Clearing and restoring stay on this computer: nothing is answered, declined or typed in,
   // and each question goes with the ask it was shown with, so one asking something new stays.
-  const markShown = (action: "clear" | "restore", items: readonly DecisionQuestionListItem[]) => {
+  const markShown = (
+    action: "clear" | "restore",
+    items: readonly DecisionQuestionListItem[],
+    actedId: number | null = null
+  ) => {
     const questions = items.flatMap((item) =>
       item.inbox === undefined ? [] : [{ reference: item.reference, ask: item.inbox.ask }]
     );
@@ -724,38 +1843,94 @@ export function DecisionsInboxDialog() {
       if (text !== null) announce(text);
     };
     decisionsClient.markQuestions(action, questions).then(
-      (result) => say(markedText(action, result)),
-      () => say(markedText(action, { result: "failed" }))
+      (result) => {
+        const taken = result.result === "marked" && result.marked > 0;
+        if (actedId !== null && settleClear(actedId, taken)) return;
+        say(markedText(action, result));
+      },
+      () => {
+        if (actedId !== null) settleClear(actedId, false);
+        say(markedText(action, { result: "failed" }));
+      }
     );
   };
-  const selectedGroup = selected === null ? null : inboxGroupOf(selected);
+  // The question list, where the keyboard goes when a control beside it goes away under it.
+  const listRef = useRef<HTMLDivElement>(null);
+  // Clear Needs you goes once the group empties, by its own press or a deadline passing (#18022):
+  // the keyboard on it moves to the list's stop, or the list, rather than falling to the document.
+  const handBackToList = useCallback((button: HTMLElement | null) => {
+    if (button === null) return;
+    return () => {
+      if (document.activeElement !== button) return;
+      // After the commit, once the rows that replaced the group are in, and only while the inbox
+      // is still open: one closing in the same commit hands focus back to where it was opened.
+      queueMicrotask(() => {
+        const list = listRef.current;
+        if (button.isConnected || list === null || !list.isConnected) return;
+        if (!useDecisionsInboxStore.getState().isOpen) return;
+        const focused = document.activeElement;
+        if (focused !== null && focused !== document.body) return;
+        (list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ?? list).focus();
+      });
+    };
+  }, []);
+  const clearHintId = useId();
+  const clearGoneHintId = useId();
+  const clearHint = clearText(selectedGroup === "cleared");
+  const choose = (key: string) => {
+    setChoice({ seq: request.seq, scope, ask, key, index: drawnIndexOf(key), picked: true });
+  };
+  // Sends the keyboard into a question. The one already read takes it at once; another is
+  // shown, and the keyboard waits in the pane until it's read (the effect below), since
+  // what it was on goes with the question it followed.
+  const handOff = (key: string, to: FocusDestination) => {
+    const detail = detailRef.current;
+    if (detail === null) return;
+    choose(key);
+    if (key === selectedKey && readResult !== null) {
+      pendingFocus.current = null;
+      // One that can't be read: the pane, on why.
+      if (shownRead !== null) landIn(detail, questionHeadingId, to);
+      else detail.focus({ preventScroll: true });
+      return;
+    }
+    // Already the question shown, still being read: it has reached it.
+    pendingFocus.current =
+      key === selectedKey
+        ? { seq: request.seq, key, to, reached: true }
+        : { seq: request.seq, key, to };
+    detail.focus({ preventScroll: true });
+  };
   const showNext = () => {
     if (nextUp === null) return;
     const key = referenceKey(nextUp.reference);
-    setChoice({ seq: request.seq, key, index: ordered.indexOf(nextUp) });
-    // The button goes with the question it followed: the keyboard waits in the pane, and
-    // moves to the next question's words once they're read (the effect below), so the
-    // next Tab leads into its answer. The list shows where that question sits.
-    pendingFocus.current = { seq: request.seq, key };
-    detailRef.current?.focus({ preventScroll: true });
-    requestAnimationFrame(() => {
-      document
-        .querySelector(`[data-inbox-key="${encodeURIComponent(key)}"]`)
-        ?.scrollIntoView({ block: "nearest" });
-    });
+    // To its words, so the next Tab leads into its answer. The list shows where it sits.
+    handOff(key, "words");
+    revealRow(key);
   };
 
   // Each look before going elsewhere belongs to the question shown when it
-  // started, in this opening: closing, reopening or choosing another drops it.
+  // started, in this opening: closing, reopening, choosing another or a question
+  // asked for (#18047), even the one shown, drops it.
   const navigation = useRef(0);
+  // Losing the way to it drops a look too: a terminal seen to end or restart meanwhile isn't it.
   useEffect(() => {
     navigation.current += 1;
-  }, [isOpen, request.seq, selectedKey]);
+  }, [isOpen, request.seq, selectedKey, reach, ask]);
 
-  // Next question's hand-off: once the question it asked for is read, its words take the keyboard,
-  // unless the keyboard went somewhere else meanwhile or another question was chosen.
+  // A hand-off's landing: once the question it asked for is read, its words or answer take the
+  // keyboard, unless the keyboard went somewhere else meanwhile or another question was chosen.
+  const readResult = reader.current?.result ?? null;
   const shownRead = reader.current?.result === "read" ? reader.current.question : null;
   useDecisionQuestionSeen(selected, shownRead, active, detailRef);
+  // A reply's notification opens at the follow-up asking for it (#17235), once per question asked
+  // for, while that question is shown and the person hasn't picked another.
+  useThreadMessageScroll(
+    active && askedShown && chosen?.picked !== true ? `${request.seq}:${ask}` : null,
+    asked?.threadMessageId,
+    reader.shownRead,
+    detailRef
+  );
   // Clearing waits while the read on screen predates what the list says it asks now; with
   // no read on screen (one that can't be read, its Host away) it goes by the list alone.
   const clearWaits =
@@ -765,20 +1940,269 @@ export function DecisionsInboxDialog() {
     !askShownIn(selected, shownRead);
   useEffect(() => {
     const pending = pendingFocus.current;
-    if (pending === null || shownRead === null) return;
+    if (pending === null) return;
     if (pending.seq !== request.seq || pending.key !== selectedKey) {
-      pendingFocus.current = null;
+      // Left alone until its question has shown: it may be for one chosen after this commit,
+      // whose effect comes next. Once it has, another chosen since abandons it.
+      if (pending.reached) pendingFocus.current = null;
+      return;
+    }
+    if (readResult === null) {
+      if (!pending.reached) pendingFocus.current = { ...pending, reached: true };
       return;
     }
     pendingFocus.current = null;
-    if (document.activeElement !== detailRef.current) return;
-    document.getElementById(questionHeadingId)?.focus({ preventScroll: true });
-  }, [shownRead, selectedKey, request.seq, questionHeadingId]);
+    // One that can't be read leaves the keyboard in the pane, on why.
+    const detail = detailRef.current;
+    if (detail === null || document.activeElement !== detail || shownRead === null) return;
+    landIn(detail, questionHeadingId, pending.to);
+  }, [readResult, shownRead, selectedKey, request.seq, questionHeadingId]);
+
+  // ⌘↑/⌘↓ (Alt+↑/↓ off the Mac) from anywhere in the inbox, as Canopy steps between agents:
+  // the question above or below, stopping at the ends, with the keyboard where it was in the
+  // last one: on its row, in its answer, or in the pane. Anywhere else it stays put.
+  const onStepKeyDownCapture = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = listStepOf(event);
+    if (step === null || !active || drawn.length === 0) return;
+    const target = event.target;
+    // A dialog opened over this one (an image at full size) keeps its own keys.
+    if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const row = target.closest<HTMLElement>("[data-roving-row]");
+    const rowKey = row?.dataset.inboxKey;
+    // From the row or bar the arrows rest on, before it has shown; else from the question shown,
+    // or the bar of the shut group holding it. Only drawn questions are stepped to (#18023).
+    const shutGroup = selectedKey === null ? null : hiddenIn(groups, selectedKey, openGroups);
+    const fromKey =
+      rowKey !== undefined
+        ? decodeURIComponent(rowKey)
+        : shutGroup !== null
+          ? barKey(shutGroup)
+          : selectedKey;
+    // Through the rows shown, as the arrows go: a History row not shown yet has no row to land on.
+    const key = stepFrom(listStops(visible.groups, openGroups), fromKey, step);
+    if (key === null) return;
+    if (row !== null) {
+      choose(key);
+      // Its focus moves the list's tab stop with it, and scrolls it into view.
+      document.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(key)}"]`)?.focus();
+      return;
+    }
+    const detail = detailRef.current;
+    if (detail !== null && detail.contains(target)) {
+      if (key === selectedKey) return;
+      // Still waiting in the pane from the last step: where that one was going.
+      const pending = pendingFocus.current;
+      const into: FocusDestination =
+        target === detail &&
+        pending !== null &&
+        pending.seq === request.seq &&
+        pending.key === selectedKey
+          ? pending.to
+          : target.closest("[data-decision-answer]") !== null
+            ? "answer"
+            : "words";
+      handOff(key, into);
+      revealRow(key);
+      return;
+    }
+    if (key !== selectedKey) choose(key);
+    revealRow(key);
+  };
+
+  // The question shown, said as it changes: by its id while the keyboard is on its row, whose
+  // name has just been read, and with its line from anywhere else, once that line or the question
+  // itself is read. Not what an opening's list first shows, which the focus on its row says, nor
+  // a regroup or a late line, which change nothing shown.
+  const announced = useRef<{ seq: number; key: string | null } | null>(null);
+  /** The question the person's own action moved the inbox on to (#18035), whose move said it. */
+  const movedTo = useRef<{ seq: number; key: string } | null>(null);
+  /** The ask whose widening was said: once, not again as the person comes back to its question. */
+  const widenSaid = useRef<{ seq: number; ask: number } | null>(null);
+  useEffect(() => {
+    if (!active || listRead.state !== "listed") return;
+    const last = announced.current;
+    if (last === null || last.seq !== request.seq) {
+      announced.current = { seq: request.seq, key: selectedKey };
+      return;
+    }
+    // The list going back to every project for a question asked for (#18119) is said as that
+    // question is shown, once, without waiting on its reads or on it being a new question.
+    const said = widenSaid.current;
+    if (
+      widenedFor !== null &&
+      selected !== null &&
+      selectedKey !== null &&
+      (said === null || said.seq !== request.seq || said.ask !== widenedFor)
+    ) {
+      widenSaid.current = { seq: request.seq, ask: widenedFor };
+      announced.current = { seq: request.seq, key: selectedKey };
+      announce(`Showing all projects for ${aliasLabel(selected.alias)}`);
+      return;
+    }
+    if (last.key === selectedKey) return;
+    // Nothing shown: forgotten, so a question that comes back is said again.
+    if (selected === null || selectedKey === null) {
+      announced.current = { seq: request.seq, key: null };
+      return;
+    }
+    const moved = movedTo.current;
+    movedTo.current = null;
+    if (moved !== null && moved.seq === request.seq && moved.key === selectedKey) {
+      announced.current = { seq: request.seq, key: selectedKey };
+      return;
+    }
+    const focusedRow = document.activeElement?.closest("[data-roving-row]");
+    const onRow = focusedRow?.getAttribute("data-inbox-key") === encodeURIComponent(selectedKey);
+    const line = lines.get(selectedKey);
+    if (!onRow && line === undefined && readResult === null) return;
+    announced.current = { seq: request.seq, key: selectedKey };
+    const alias = aliasLabel(selected.alias);
+    announce(!onRow && line != null ? `Showing ${alias}: ${line}` : `Showing ${alias}`);
+  }, [
+    active,
+    listRead.state,
+    selected,
+    selectedKey,
+    request.seq,
+    lines,
+    readResult,
+    announce,
+    widenedFor,
+  ]);
+
+  // An action that resolved the stall went with it, taking the keyboard along: it
+  // waits in the detail, on the question that moved, rather than on nothing.
+  useEffect(() => {
+    const last = attentionFocus.current;
+    if (last === null || last.isConnected) return;
+    attentionFocus.current = null;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body && focused.isConnected) return;
+    if (!useDecisionsInboxStore.getState().isOpen) return;
+    detailRef.current?.focus({ preventScroll: true });
+  });
+
+  // A question asked for while open takes the keyboard to its row, as an opening does, and so
+  // brings it into view: the row the keyboard was on would keep the list's tab stop otherwise. Only
+  // as it's asked for: one listed later is shown without taking the keyboard from where it is. A
+  // layer over the inbox (a confirmation, the palette closing) keeps the keyboard it holds; the row
+  // is brought into view, and takes the keyboard once the layer hands it back into the inbox soon
+  // after (the palette returning it to where it was opened from). Choosing another question, a
+  // close or another ask meanwhile drops that.
+  const focusedAsk = useRef(ask);
+  useEffect(() => {
+    if (focusedAsk.current === ask) return;
+    focusedAsk.current = ask;
+    const list = listRef.current;
+    if (!isOpen || !askedShown || selectedKey === null || list === null) return;
+    const rowSelector = `[data-inbox-key="${encodeURIComponent(selectedKey)}"]`;
+    const row = list.querySelector<HTMLElement>(rowSelector);
+    if (row === null) return;
+    const active = document.activeElement;
+    const surface = list.closest('[role="dialog"]');
+    if (
+      surface === null ||
+      active === null ||
+      active === document.body ||
+      surface.contains(active)
+    ) {
+      row.focus();
+      return;
+    }
+    row.scrollIntoView({ block: "nearest" });
+    let handOn: ReturnType<typeof setTimeout> | undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      const landed = event.target;
+      if (!(landed instanceof Node) || !surface.contains(landed)) return;
+      stop();
+      // After the focus that landed has run its own handlers, so the list records the move, and
+      // only while it's still there.
+      handOn = setTimeout(() => {
+        if (document.activeElement === landed)
+          list.querySelector<HTMLElement>(rowSelector)?.focus();
+      }, 0);
+    };
+    const expiry = setTimeout(() => stop(), LAYER_HANDBACK_MS);
+    function stop() {
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("pointerdown", stop, true);
+      clearTimeout(expiry);
+    }
+    document.addEventListener("focusin", onFocusIn, true);
+    // A press anywhere is the person taking over: the keyboard stays where it lands.
+    document.addEventListener("pointerdown", stop, true);
+    return () => {
+      stop();
+      clearTimeout(handOn);
+    };
+  }, [ask, isOpen, askedShown, selectedKey]);
 
   // Each question is read from its top, wherever the last one was scrolled to.
   useLayoutEffect(() => {
     if (detailRef.current !== null) detailRef.current.scrollTop = 0;
   }, [selectedKey]);
+
+  // Except one waiting on a reply, which opens at the agent's request for it (#18040): once per
+  // choice, so a read again or a request that comes while it's being read leaves it where it is.
+  // A read already on screen can predate the request: without it there, a read made for this
+  // choice opens, once, at the request it holds itself, else at the thread, until one holds it.
+  const replyScroll = useRef<{
+    seq: number;
+    key: string;
+    messageId: string | null;
+    stale: TaggedRead | null;
+    interim: boolean;
+  } | null>(null);
+  const replyId = selected === null ? null : replyToShow(selected);
+  const { shownRead: taggedRead } = reader;
+  useEffect(() => {
+    if (!isOpen || selectedKey === null) {
+      replyScroll.current = null;
+      return;
+    }
+    let pending = replyScroll.current;
+    if (pending === null || pending.seq !== request.seq || pending.key !== selectedKey) {
+      pending = {
+        seq: request.seq,
+        key: selectedKey,
+        messageId: replyId,
+        stale: taggedRead,
+        interim: false,
+      };
+      replyScroll.current = pending;
+    } else if (pending.messageId !== null && pending.messageId !== replyId) {
+      // Superseded, or answered, before it was scrolled to: the newest request, or none.
+      pending = { ...pending, messageId: replyId };
+      replyScroll.current = pending;
+    }
+    const { messageId } = pending;
+    const read = taggedRead?.read;
+    if (messageId === null || read?.result !== "read") return;
+    const detail = detailRef.current;
+    const entryOf = (id: string) =>
+      detail?.querySelector(`[data-message-id="${CSS.escape(id)}"]`) ?? null;
+    // What the read itself shows still waiting: the list can lag it either way.
+    const own = replyRequest(read.question)?.messageId ?? null;
+    const entry = entryOf(messageId);
+    if (entry !== null) {
+      replyScroll.current = { ...pending, messageId: null, stale: null };
+      // Replied to in the read already, it no longer waits, so it stays at its top.
+      (own === messageId ? entry : own === null ? null : entryOf(own))?.scrollIntoView({
+        block: "nearest",
+      });
+      return;
+    }
+    if (taggedRead === pending.stale || pending.interim) return;
+    replyScroll.current = { ...pending, interim: true };
+    (
+      (own === null ? null : entryOf(own)) ??
+      detail?.querySelector('[data-testid="decision-question-thread"]')
+    )?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [isOpen, request.seq, selectedKey, replyId, taggedRead]);
 
   // Where the person went from this opening: the close hands focus to the
   // terminal, and nothing of it outlives the opening it was asked in.
@@ -790,7 +2214,9 @@ export function DecisionsInboxDialog() {
   } | null>(null);
   const going = handoff !== null && handoff.seq === request.seq ? handoff : null;
 
+  // An opener that named its own successor (a Canopy card, #18048) gets that instead.
   const restoreFocusTo = useCallback((): HTMLElement | null => {
+    if (request.returnFocusTo != null) return document.getElementById(request.returnFocusTo);
     const terminalId = request.terminalId;
     if (terminalId === null) return null;
     const escaped = CSS.escape(terminalId);
@@ -799,7 +2225,7 @@ export function DecisionsInboxDialog() {
         `[data-panel-id="${escaped}"][data-panel-location="grid"]`
       ) ?? document.querySelector<HTMLElement>(`[data-panel-id="${escaped}"]`);
     return pane?.querySelector<HTMLElement>(PANE_CHIP) ?? pane;
-  }, [request.terminalId]);
+  }, [request.terminalId, request.returnFocusTo]);
 
   // Only while this opening is the one on screen: its button stays focusable through the exit.
   const stillShowing = (seq: number): boolean => {
@@ -835,10 +2261,16 @@ export function DecisionsInboxDialog() {
   const onCloseComplete = (restoreSkipped?: () => void) => {
     // Content is never kept past the close.
     reader.release();
+    attention.release();
     releaseLines();
+    releaseReplyLines();
     releaseList();
     setHandoff(null);
     if (going === null) return;
+    if (navigateToTerminal !== undefined) {
+      navigateToTerminal({ terminalId: going.terminalId, projectId: going.projectId });
+      return;
+    }
     const landed =
       going.reach === "here"
         ? actionService.dispatch("panel.focus", { panelId: going.terminalId })
@@ -856,9 +2288,133 @@ export function DecisionsInboxDialog() {
   };
 
   const showListSkeleton = useSkeletonGate(active && listRead.state === "loading");
-  // Only once the relay is known to be reachable does an empty list say nothing was asked.
+  const listReach: InboxReach = !statusKnown
+    ? "pending"
+    : status === null
+      ? "unknown"
+      : status.problem === "storage"
+        ? "unreadable"
+        : notice !== null
+          ? "unavailable"
+          : "connected";
+  const listed = listRead.state === "listed";
+  const hostsAway = listRead.state === "listed" ? (listRead.list.hostsAway ?? []) : [];
+  // Only once the relay, and every Remote Host, is known to be reachable does an empty list say
+  // nothing was asked; narrowed to this project, the line above the list says it has none.
   const empty =
-    listRead.state === "listed" && statusKnown && notice === null ? emptyText(groups) : null;
+    listed && scope === "all" && listReach === "connected" && hostsAway.length === 0
+      ? emptyText(groups)
+      : null;
+  const waitingLine =
+    listed && empty === null ? waitingText(groups, listReach, hostsAway, scope) : null;
+
+  // Once what the person did lands where it takes the question (#18035), the inbox goes on to the
+  // next question waiting and its row takes the keyboard. Anything else that moves it, a phone's
+  // answer, a relay's update or the clock, leaves them where they are.
+  const actedRecord = useAnswerRecord(acted?.record ?? "");
+  const [arrival, setArrival] = useState<InboxArrival | null>(null);
+  if (acted !== null) {
+    const live = acted.seq === request.seq && active && acted.key === selectedKey;
+    const at = groups.find((group) =>
+      group.items.some((item) => referenceKey(item.reference) === acted.key)
+    );
+    const item = at?.items.find((candidate) => referenceKey(candidate.reference) === acted.key);
+    const fate =
+      acted.action === "answer"
+        ? answerFate(actedRecord, acted.prior)
+        : acted.action === "dismiss"
+          ? dismissFate(actedRecord.decline)
+          : acted.fate;
+    if (
+      !live ||
+      at === undefined ||
+      item === undefined ||
+      fate === "failed" ||
+      (at.id === acted.from ? askKey(item) !== acted.ask : !landedBy(acted.action, item, at.id))
+    ) {
+      setActed(null);
+      // A clear that was taken, whose move would have said so: said on its own.
+      if (acted.action === "clear" && acted.fate === "taken" && CLEARED_ONE !== null) {
+        setArrival({
+          id: acted.id,
+          seq: acted.seq,
+          next: null,
+          text: CLEARED_ONE,
+          stayText: CLEARED_ONE,
+        });
+      }
+    } else if (at.id !== acted.from && fate === "taken" && !acted.held) {
+      // Taken once: with nothing else to go on to it stays shown, and a question asked later is no
+      // reason to move.
+      setActed(null);
+      // From Cleared, staying in it only while it's open: one the person shut they've left.
+      const next = nextAfter(
+        groups,
+        acted.key,
+        acted.from === "cleared" && openGroups.has("cleared") ? "cleared" : "needs-you",
+        acted.following
+      );
+      const after = next === null ? waitingLine : null;
+      setArrival({
+        id: acted.id,
+        seq: acted.seq,
+        next:
+          next === null || acted.stay
+            ? null
+            : {
+                key: referenceKey(next.reference),
+                index: drawnIndexOf(referenceKey(next.reference)),
+                scope,
+                ask,
+              },
+        text: movedText(
+          acted.action,
+          acted.label,
+          at.title,
+          next === null ? null : aliasLabel(next.alias),
+          after
+        ),
+        stayText: movedText(acted.action, acted.label, at.title, null, after),
+      });
+    }
+  }
+  const arrived = useRef(0);
+  useLayoutEffect(() => {
+    if (arrival === null || arrival.id === arrived.current) return;
+    arrived.current = arrival.id;
+    const list = listRef.current;
+    const next = arrival.next;
+    const row =
+      next === null || list === null
+        ? null
+        : list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(next.key)}"]`);
+    // Never from under another dialog over the inbox, such as one of the question's images, nor
+    // from wherever else the person went: there it only says what happened.
+    const focused = document.activeElement;
+    const inside =
+      focused === null ||
+      focused === document.body ||
+      (list?.closest('[role="dialog"]')?.contains(focused) ?? false);
+    const shown = useDecisionsInboxStore.getState();
+    const showing = shown.isOpen && shown.request.seq === arrival.seq;
+    if (next === null || row === null || !inside || !showing) {
+      announce(arrival.stayText);
+      return;
+    }
+    row.focus({ preventScroll: true });
+    row.scrollIntoView({ block: "nearest" });
+    setChoice({
+      seq: arrival.seq,
+      scope: next.scope,
+      ask: next.ask,
+      key: next.key,
+      index: next.index,
+      picked: true,
+    });
+    // Said here, with what moved it: not again once it's the question shown.
+    movedTo.current = { seq: arrival.seq, key: next.key };
+    announce(arrival.text);
+  }, [arrival, announce]);
 
   return (
     <>
@@ -876,6 +2432,7 @@ export function DecisionsInboxDialog() {
         // Going to a panel of this view, the close leaves focus for the panel to take.
         restoreFocusOnClose={going?.reach !== "here"}
         onCloseComplete={onCloseComplete}
+        onKeyDownCapture={onStepKeyDownCapture}
         data-testid="decisions-inbox-dialog"
       >
         <AppDialog.Header>
@@ -894,84 +2451,197 @@ export function DecisionsInboxDialog() {
             </Callout>
           </div>
         )}
-        {empty !== null ? (
+        {/* Two columns that scroll on their own, so a plain element rather than the dialog's body
+            column. With no question ever asked, the list spans both and says so; it stays the same
+            element throughout, so the keyboard on it stays as the canvas comes and goes. */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <div
-            className="flex min-h-0 flex-1 items-center justify-center p-8"
-            data-testid="decisions-inbox-empty"
+            className={cn(
+              "flex flex-col",
+              empty !== null
+                ? "min-w-0 flex-1"
+                : "w-80 shrink-0 border-r border-divider lg:w-[26rem]"
+            )}
           >
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<DecisionsIcon />}
-              title="No questions yet"
-              description={empty}
-            />
-          </div>
-        ) : (
-          // Two columns that scroll on their own, so a plain element rather than the dialog's body column.
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="flex w-80 shrink-0 flex-col border-r border-divider lg:w-[26rem]">
-              <div
-                className="decisions-inbox-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
-                data-testid="decisions-inbox-list"
-              >
-                {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
-                {listRead.state === "failed" && (
-                  <div className="p-3">
-                    <Callout
-                      severity="warning"
-                      size="compact"
-                      action={
-                        <Button variant="outline" size="xs" onClick={retry}>
-                          Retry
-                        </Button>
-                      }
-                      data-testid="decisions-inbox-failed"
-                    >
-                      The questions couldn&apos;t be read.
-                    </Callout>
-                  </div>
-                )}
-                {groups.length > 0 && (
-                  <InboxList
-                    groups={groups}
-                    lines={lines}
-                    partsOf={partsOf}
-                    nowMs={nowMs}
-                    selectedKey={selectedKey}
-                    onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
-                  />
-                )}
-              </div>
-              {/* Below the list rather than on its heading, so the dialog's first focus stays on the
-                question list. Kept while anything is cleared, so a press that empties Needs you
-                leaves the keyboard here rather than nowhere. */}
-              {(waiting.length > 0 || cleared.length > 0) && (
-                <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    aria-disabled={waiting.length === 0 || undefined}
-                    onClick={() => {
-                      if (waiting.length > 0) markShown("clear", waiting);
-                    }}
-                    className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                    data-testid="decisions-inbox-clear-all"
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain",
+                // The sidebar colour belongs to the list beside a question, not the canvas.
+                empty === null && "decisions-inbox-list"
+              )}
+              data-testid="decisions-inbox-list"
+            >
+              {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
+              {listRead.state === "failed" && (
+                <div className="p-3">
+                  <Callout
+                    severity="warning"
+                    size="compact"
+                    action={
+                      <Button variant="outline" size="xs" onClick={retry}>
+                        Retry
+                      </Button>
+                    }
+                    data-testid="decisions-inbox-failed"
                   >
-                    Clear Needs you
-                  </Button>
+                    The questions couldn&apos;t be read.
+                  </Callout>
                 </div>
               )}
+              {listed && (
+                <InboxList
+                  listRef={listRef}
+                  lead={
+                    empty !== null ? (
+                      <div
+                        className="flex min-h-0 flex-1 items-center justify-center p-8"
+                        data-testid="decisions-inbox-empty"
+                      >
+                        <EmptyState
+                          variant="zero-data"
+                          scale="canvas"
+                          icon={<DecisionsIcon />}
+                          title="No questions yet"
+                          description={empty}
+                        />
+                      </div>
+                    ) : waitingLine !== null ? (
+                      <p
+                        className="px-3 py-2.5 text-xs leading-4 text-text-secondary [text-wrap:pretty]"
+                        data-testid="decisions-inbox-waiting"
+                      >
+                        {waitingLine}
+                      </p>
+                    ) : null
+                  }
+                  groups={visible.groups}
+                  open={openGroups}
+                  onFold={(id, open) => fold(id, open, true)}
+                  historyHidden={visible.hidden}
+                  nextOlderKey={visible.next === null ? null : referenceKey(visible.next.reference)}
+                  onShowOlder={() =>
+                    setHistoryPage({ seq: request.seq, shown: historyShown + HISTORY_PAGE })
+                  }
+                  lines={lines}
+                  replyLines={replyLines}
+                  partsOf={partsOf}
+                  nowMs={nowMs}
+                  selectedKey={selectedKey}
+                  onSelect={(key) => {
+                    // A dwell that ends as the inbox closes changes nothing shown.
+                    if (stillShowing(request.seq)) {
+                      setChoice({
+                        seq: request.seq,
+                        scope,
+                        ask,
+                        key,
+                        index: drawnIndexOf(key),
+                        picked: true,
+                      });
+                    }
+                  }}
+                  onAnswer={(key) => handOff(key, "answer")}
+                  deliveryOf={deliveryOf}
+                />
+              )}
             </div>
+            {/* Below the list rather than on its heading, so the dialog's first focus stays on the
+                question list. Clear only while Needs you has questions: the press that empties it
+                hands the keyboard to the list. It clears what the list shows, and says how far. */}
+            {(showScope || waiting.length > 0) && (
+              <div className="decisions-inbox-list-footer flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider px-3 py-2">
+                {showScope && (
+                  <SegmentedRadioGroup<InboxScope>
+                    density="compact"
+                    aria-label="Questions shown"
+                    testId="decisions-inbox-scope"
+                    value={scope}
+                    onChange={(next) =>
+                      setScopeChoice({ seq: request.seq, scope: next, ask, widened: false })
+                    }
+                    options={SCOPE_OPTIONS}
+                  />
+                )}
+                {/* Only while Needs you holds an ask with no agent: the press that clears them hands
+                    the keyboard to the list, as clearing Needs you does. */}
+                {gone.length > 0 && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={handBackToList}
+                          variant="ghost"
+                          size="xs"
+                          aria-describedby={clearGoneHintId}
+                          onClick={() => markShown("clear", gone)}
+                          className="ml-auto"
+                          data-testid="decisions-inbox-clear-gone"
+                        >
+                          {clearGoneText(gone.length)}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{CLEAR_GONE_HINT}</TooltipContent>
+                    </Tooltip>
+                    <span id={clearGoneHintId} className="sr-only">
+                      {CLEAR_GONE_HINT}
+                    </span>
+                  </>
+                )}
+                {waiting.length > 0 && (
+                  <Button
+                    ref={handBackToList}
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => markShown("clear", waiting)}
+                    className={gone.length > 0 ? undefined : "ml-auto"}
+                    data-testid="decisions-inbox-clear-all"
+                  >
+                    {clearAllText(scope, clearNamesReach)}
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+          {empty === null && (
             <section
               ref={detailRef}
-              id={detailDomId}
               // A stop of its own, so a question with nothing to press still scrolls from the keyboard.
               tabIndex={selected !== null ? 0 : -1}
+              // A hand-off waits only while the keyboard waits here with it.
+              onBlur={(event) => {
+                if (event.target === event.currentTarget) pendingFocus.current = null;
+              }}
               aria-labelledby={selected !== null ? detailHeadingId : undefined}
-              className="flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              aria-label={selected === null ? "Question details" : undefined}
+              // Writing or choosing something more in it, such as a follow-up, keeps the person on it
+              // (#18035).
+              onFocus={(event) => {
+                if (acted !== null && isTextEntry(event.target)) stay();
+              }}
+              onChange={() => {
+                if (acted !== null) stay();
+              }}
+              // Room for the sticky bar, so whatever is scrolled to opens below it rather than under it.
+              className="flex min-w-0 flex-1 scroll-pt-16 flex-col overflow-y-auto overscroll-contain outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
               data-testid="decisions-inbox-detail"
             >
+              {/* Nothing opened by itself (#18022): a quiet word in the pane, never a blank one. */}
+              {selected === null && listRead.state !== "loading" && (
+                <div
+                  className="flex flex-1 items-center justify-center p-8"
+                  data-testid="decisions-inbox-detail-empty"
+                >
+                  <EmptyState
+                    variant="zero-data"
+                    scale="sidebar"
+                    title={
+                      ordered.length > 0
+                        ? "Choose a question to read it"
+                        : "Question details appear here"
+                    }
+                  />
+                </div>
+              )}
               {selected !== null && (
                 <>
                   {/* The pane's bar, as Canopy's: who asked and where, and what can be done to it. */}
@@ -985,84 +2655,155 @@ export function DecisionsInboxDialog() {
                       >
                         Question {aliasLabel(selected.alias)}
                       </h3>
-                      {/* Where it was asked, as the Decisions app's bar names it; who asked heads the question. */}
-                      <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-                        <span className="min-w-0 truncate">
-                          <FactRun facts={partsOf(selected).where} />
-                        </span>
-                        <span className="shrink-0 font-mono text-2xs tabular-nums">
-                          {aliasLabel(selected.alias)}
-                        </span>
-                      </p>
+                      {/* A basis, so the buttons wrap below a long delivery line before they squeeze it. */}
+                      <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1">
+                        {/* The pane that asked and where, as the Decisions app's bar names it; who asked heads the question. */}
+                        <p className="flex min-w-0 items-center gap-2 text-xs text-text-secondary">
+                          <span
+                            className="min-w-0 truncate"
+                            data-testid="decisions-inbox-detail-origin"
+                          >
+                            <FactRun facts={headerFacts(partsOf(selected))} />
+                          </span>
+                          <span className="shrink-0 font-mono text-2xs tabular-nums">
+                            {aliasLabel(selected.alias)}
+                          </span>
+                        </p>
+                        {/* What holds its delivery (#18032), beside the way to the terminal that can clear it. */}
+                        {deliveryLine !== null && (
+                          <p
+                            id={deliveryLineId}
+                            className="text-xs text-text-primary [text-wrap:pretty]"
+                            data-testid="decisions-inbox-delivery"
+                          >
+                            <FactRun
+                              facts={[
+                                deliveryLine,
+                                ...(selectedDelivery !== null
+                                  ? [
+                                      <span key="recorded" className="text-text-secondary">
+                                        <TimeAgo
+                                          timestamp={selectedDelivery.recordedAt}
+                                          prefix={`${recordedLabel(selectedDelivery.first)} `}
+                                        />
+                                      </span>,
+                                    ]
+                                  : []),
+                              ]}
+                            />
+                          </p>
+                        )}
+                      </div>
                       {/* Ghost buttons pad their ink; pulled out by that pad so the text ends where the body does. */}
                       <div className="-mr-2 flex shrink-0 items-center gap-1">
                         {reach !== null && (
-                          <Button
-                            variant="ghost"
+                          <DescribedAction
+                            description={GO_TO_TERMINAL_TEXT}
+                            // Steps up while going there is what lets delivery go on.
+                            variant={selectedDelivery?.clearable === true ? "outline" : "ghost"}
                             size="xs"
                             onClick={goToTerminal}
+                            aria-describedby={
+                              selectedDelivery?.clearable === true ? deliveryLineId : undefined
+                            }
                             data-testid="decisions-inbox-go-to-terminal"
                           >
                             Go to terminal
-                          </Button>
+                          </DescribedAction>
                         )}
                         {/* One button that turns into its inverse, so the keyboard stays on it as the
                             question moves between groups. Needs only the list: it works whether or
                             not the question can be read or its terminal reached. */}
-                        {(selectedGroup === "needs-you" || selectedGroup === "cleared") && (
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-disabled={clearWaits || undefined}
-                            onClick={() => {
-                              if (clearWaits) return;
-                              markShown(selectedGroup === "cleared" ? "restore" : "clear", [
-                                selected,
-                              ]);
-                            }}
-                            className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                            data-testid="decisions-inbox-clear"
-                          >
-                            {selectedGroup === "cleared"
-                              ? "Restore to Needs you"
-                              : "Clear from Needs you"}
-                          </Button>
+                        {/* Kept, unavailable, once its deadline passes under it, so focus on it stays. */}
+                        {(selectedGroup === "needs-you" ||
+                          selectedGroup === "cleared" ||
+                          selectedGroup === "awaiting") && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-disabled={
+                                  clearWaits || selectedGroup === "awaiting" || undefined
+                                }
+                                aria-describedby={clearHintId}
+                                onClick={() => {
+                                  if (clearWaits || selectedGroup === "awaiting") return;
+                                  if (actOn === null) {
+                                    markShown("restore", [selected]);
+                                    return;
+                                  }
+                                  // A second press while the first goes changes nothing, and mustn't
+                                  // take its place.
+                                  if (acted?.action === "clear" && acted.key === selectedKey)
+                                    return;
+                                  markShown("clear", [actOn], act(actOn, "clear"));
+                                }}
+                                className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                                data-testid="decisions-inbox-clear"
+                              >
+                                {selectedGroup === "cleared"
+                                  ? "Restore to Needs you"
+                                  : "Clear from Needs you"}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{clearHint}</TooltipContent>
+                          </Tooltip>
                         )}
+                        {/* What Clear does, before it's pressed (#17943): it stays local and declines nothing. */}
+                        <span id={clearHintId} className="sr-only">
+                          {clearHint}
+                        </span>
                         {reader.cancellable &&
                           (dismissal.progress !== null ? (
                             dismissal.phase?.kind === "lost" && (
-                              <Button
+                              <DescribedAction
                                 ref={cancelRef}
+                                description={RETRY_DECLINE_TEXT}
                                 variant="outline"
                                 size="xs"
                                 onClick={dismissal.retry}
                                 data-testid="decisions-inbox-dismiss-retry"
                               >
                                 Retry
-                              </Button>
+                              </DescribedAction>
                             )
                           ) : dismissal.fallback !== null ? (
-                            <Button
+                            <DescribedAction
                               ref={cancelRef}
-                              variant="ghost"
+                              description={WITHDRAW_TEXT}
+                              variant="ghost-danger"
                               size="xs"
                               onClick={cancel.askToWithdraw}
                               data-testid="decisions-inbox-withdraw"
                             >
                               Withdraw question
-                            </Button>
+                            </DescribedAction>
                           ) : (
-                            // Neutral here: the confirmation carries the danger, not the bar.
-                            <Button
+                            // Danger, as in the question view: unlike Clear, it's sent and can't be undone.
+                            <DescribedAction
                               ref={cancelRef}
-                              variant="ghost"
+                              description={DECLINE_TEXT}
+                              variant="ghost-danger"
                               size="xs"
                               onClick={cancel.ask}
                               data-testid="decisions-inbox-dismiss"
                             >
-                              Dismiss question
-                            </Button>
+                              Decline question
+                            </DescribedAction>
                           ))}
+                        {/* Once this one no longer needs the person, the way on stays in view. */}
+                        {nextUp !== null && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={showNext}
+                            data-testid="decisions-inbox-next"
+                          >
+                            Next question
+                            <ArrowRight className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1076,39 +2817,110 @@ export function DecisionsInboxDialog() {
                         {dismissNote.text}
                       </p>
                     )}
-                    {selected.standing.kind === "needs-attention" && (
+                    {selectedAsker !== null && (
                       <Callout
-                        severity="warning"
+                        severity="neutral"
                         size="compact"
-                        title={
-                          selected.standing.deliveryStatus === "delivery-uncertain"
-                            ? "Delivery uncertain"
-                            : "Delivery stopped"
-                        }
-                        action={
-                          // This computer's list of stopped answers; a Remote Host keeps its own.
-                          selected.remoteHost === undefined ? (
-                            <Button
-                              variant="outline"
-                              size="xs"
-                              onClick={() =>
-                                useDecisionsAttentionStore
-                                  .getState()
-                                  .open(selected.reference.terminalId, {
-                                    returnFocusTo: detailDomId,
-                                  })
-                              }
-                              data-testid="decisions-inbox-review-attention"
-                            >
-                              Resolve delivery
-                            </Button>
-                          ) : undefined
-                        }
-                        data-testid="decisions-inbox-attention"
+                        data-testid="decisions-inbox-asker"
                       >
-                        {attentionText(selected.standing)}
+                        {selectedAsker.detail}
                       </Callout>
                     )}
+                    {selected.standing.kind === "needs-attention" && (
+                      <div
+                        className="flex flex-col gap-2"
+                        // Its actions and its Retry alike, so whichever goes leaves the keyboard here.
+                        onFocus={(event) => {
+                          attentionFocus.current = event.target;
+                        }}
+                      >
+                        <Callout
+                          severity="warning"
+                          size="compact"
+                          title={
+                            selected.standing.deliveryStatus === "delivery-uncertain"
+                              ? "Delivery uncertain"
+                              : "Delivery stopped"
+                          }
+                          action={
+                            // This computer's stall is resolved below; a Remote Host's, as it offers it.
+                            selected.remoteHost === undefined ? undefined : (
+                              <HostAttentionActions
+                                attention={hostAttention}
+                                fallbackFocus={detailRef}
+                              />
+                            )
+                          }
+                          data-testid="decisions-inbox-attention"
+                        >
+                          {attentionText(selected)}
+                        </Callout>
+                        {attentionItem !== null && (
+                          <div
+                            ref={attentionActionsRef}
+                            data-testid="decisions-inbox-attention-actions"
+                          >
+                            <AttentionActionRow
+                              item={attentionItem}
+                              worktreeName={attentionWorktreeName}
+                              busy={attentionBusy}
+                              onResume={() => attentionActions.resume(attentionItem)}
+                              onChoose={(destination) =>
+                                attentionActions.choose(attentionItem, destination)
+                              }
+                              onHandled={() => attentionActions.handle(attentionItem)}
+                              held={attention.stale}
+                            />
+                          </div>
+                        )}
+                        {attention.read.state === "not-running" && (
+                          <p className="text-xs text-text-secondary [text-wrap:pretty]">
+                            Decisions isn&apos;t delivering answers on this computer right now, so
+                            this one can&apos;t be resolved here.
+                          </p>
+                        )}
+                        {attention.read.state === "failed" && (
+                          <Callout
+                            severity="warning"
+                            size="compact"
+                            action={
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => void attention.refresh()}
+                              >
+                                Retry
+                              </Button>
+                            }
+                            data-testid="decisions-inbox-attention-failed"
+                          >
+                            {attention.read.message}
+                          </Callout>
+                        )}
+                      </div>
+                    )}
+                    {/* Kept apart from the stall, so a resume that moves the question while it
+                        runs, and what came of it, stay in view as it changes group. */}
+                    <ResumePending
+                      key={selected.reference.questionId}
+                      alias={selected.alias}
+                      active={attentionBusy === "resume"}
+                    />
+                    {attentionOutcome !== null && !outcomeSuperseded && (
+                      <Callout
+                        severity={attentionOutcome.severity}
+                        size="compact"
+                        data-testid="decisions-inbox-attention-outcome"
+                      >
+                        {attentionOutcome.message}
+                      </Callout>
+                    )}
+                    <HostAttentionStatus attention={hostAttention} fallbackFocus={detailRef} />
+                    {/* Collapsed and unread until asked for (#18037); each question and opening starts afresh. */}
+                    <DecisionAskingPane
+                      key={`${request.seq}:${selectedKey}`}
+                      reference={selected.reference}
+                    />
                     <DecisionQuestionReadView
                       reader={reader}
                       target={shownTarget}
@@ -1116,6 +2928,10 @@ export function DecisionsInboxDialog() {
                       headingId={questionHeadingId}
                       // As the question view does, so a reply in progress never unmounts as it moves on.
                       followUps
+                      // So the follow-up waits on the same stall the warning above names.
+                      listed={selected}
+                      // The warning says how far the closing notice got; the facts needn't again.
+                      noticeShown={attentionNotice(selected)}
                       eyebrow={
                         <p className="flex items-center gap-1.5 text-xs">
                           <span
@@ -1129,6 +2945,10 @@ export function DecisionsInboxDialog() {
                           </span>
                         </p>
                       }
+                      deliveryNotice={selectedAsker?.composer ?? null}
+                      onSend={
+                        actOn === null ? undefined : (prior) => act(actOn, "answer", { prior })
+                      }
                       sendNote={
                         // Only while a connection is being retried, never past a problem that needs the person.
                         status !== null &&
@@ -1140,26 +2960,12 @@ export function DecisionsInboxDialog() {
                           : null
                       }
                     />
-                    {/* Once this one is settled, the way on sits where the reading ends. */}
-                    {nextUp !== null && (
-                      <div className="-mr-2 flex justify-end">
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={showNext}
-                          data-testid="decisions-inbox-next"
-                        >
-                          Next question
-                          <ArrowRight className="size-3.5" aria-hidden="true" />
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 </>
               )}
             </section>
-          </div>
-        )}
+          )}
+        </div>
         {/* After the columns, so the dialog's first focus still lands on the question list. Each
             opening has its own, so nothing a save in an earlier one settles reaches this one. */}
         <DecisionsInvolvementSection
@@ -1171,9 +2977,36 @@ export function DecisionsInboxDialog() {
       </AppDialog>
       <DecisionCancelDialog
         {...cancel.dialog}
+        onDismissing={() => {
+          cancel.dialog.onDismissing();
+          actOnDecline("dismiss", { held: true });
+        }}
+        onWithdrawn={() => {
+          actOnDecline("withdraw", { fate: "taken", held: true });
+        }}
         // The button goes once the question stops waiting; the detail then takes focus.
         restoreFocusTo={() =>
           cancelRef.current?.isConnected ? cancelRef.current : detailRef.current
+        }
+        // Only once focus is back from the confirmation does the inbox move on from what it took.
+        onCloseComplete={() =>
+          setActed((current) =>
+            current !== null && current.held ? { ...current, held: false } : current
+          )
+        }
+      />
+      <AttentionConfirmations
+        actions={attentionActions}
+        worktreeName={attentionWorktreeName}
+        restoreFocusOnClose={isOpen}
+        // The detail's question is a read of its own: the confirmation names what this item holds.
+        showSubject
+        // Back to an action of the stall's that can take it; once a fast action has
+        // resolved the stall and its actions went with it, to the detail.
+        restoreFocusTo={() =>
+          attentionActionsRef.current?.querySelector<HTMLElement>(
+            `${ATTENTION_ACTIONS}:not(:disabled)`
+          ) ?? detailRef.current
         }
       />
     </>

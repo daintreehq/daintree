@@ -17,6 +17,7 @@ export {
 } from "@shared/utils/dispatchAgentLaunch";
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
 export {
+  ASSISTANT_HANDOFF_ACTION_IDS,
   CLOSE_ALL_ACTION_ID,
   resolveEffectiveActionDanger,
 } from "@shared/utils/effectiveActionDanger";

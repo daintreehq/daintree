@@ -77,7 +77,11 @@ const subject = {
 };
 
 const running = (inputOwner: string, inputEpoch: number): GlobalAssistantView => ({
+  slot: 0,
   phase: "running",
+  pinnedAgentId: null,
+  coordinating: false,
+  occupied: true,
   generation: 1,
   agentId: "claude",
   terminalId: "g1",

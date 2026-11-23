@@ -50,16 +50,6 @@ describe("createEventBus", () => {
     expect(received).toEqual([{ reference: reference("q-2") }]);
   });
 
-  it("opens the answers needing attention clicked before the view's host subscribed (#17235)", () => {
-    push(ipc, "decisions:open-attention", { terminalId: "term-1" });
-    push(ipc, "decisions:open-attention", { terminalId: "term-2" });
-
-    const received: unknown[] = [];
-    bus.on("decisions:open-attention", (payload) => received.push(payload));
-
-    expect(received).toEqual([{ terminalId: "term-2" }]);
-  });
-
   it("replays every FIFO event in arrival order", () => {
     push(ipc, "plugin:archive-install-intent", { path: "a.dntr" });
     push(ipc, "plugin:archive-install-intent", { path: "b.dntr" });

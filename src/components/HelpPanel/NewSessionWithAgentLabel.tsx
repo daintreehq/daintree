@@ -3,11 +3,15 @@ import { SquareTerminal } from "lucide-react";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { GLOBAL_ASSISTANT_SESSION_LIMIT } from "@shared/config/globalAssistantSessions";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 const CEILING_SENTENCE = `${pluralize(MAX_ASSISTANT_SLOTS, "session")} is the maximum for one project`;
+
+/** The machine's limit on global assistant sessions (#18142), in words. */
+export const GLOBAL_CEILING_SENTENCE = `${pluralize(GLOBAL_ASSISTANT_SESSION_LIMIT, "session")} is the maximum for one machine`;
 
 /**
  * One row of the menus that start a session on a chosen agent (#13442): the
@@ -51,14 +55,18 @@ export function NewSessionWithAgentLabel({
 export function SessionCeilingReason({
   open,
   meta: Meta,
+  limit = MAX_ASSISTANT_SLOTS,
+  sentence = CEILING_SENTENCE,
 }: {
   open: number;
   meta?: ComponentType<{ children?: ReactNode }>;
+  limit?: number;
+  sentence?: string;
 }) {
   return (
     <>
-      {Meta && <Meta>{`${open} of ${MAX_ASSISTANT_SLOTS} open`}</Meta>}
-      <span className="sr-only">, {CEILING_SENTENCE}</span>
+      {Meta && <Meta>{`${open} of ${limit} open`}</Meta>}
+      <span className="sr-only">, {sentence}</span>
     </>
   );
 }
@@ -68,6 +76,6 @@ export function SessionCeilingReason({
  * skip a disabled row, so a reason carried only in its name never reaches someone
  * moving through the menu with a screen reader.
  */
-export function announceSessionCeiling(): void {
-  useAnnouncerStore.getState().announce(`New session unavailable, ${CEILING_SENTENCE}`, "polite");
+export function announceSessionCeiling(sentence: string = CEILING_SENTENCE): void {
+  useAnnouncerStore.getState().announce(`New session unavailable, ${sentence}`, "polite");
 }

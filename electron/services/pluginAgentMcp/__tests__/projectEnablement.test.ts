@@ -21,6 +21,7 @@ import {
   makeProjectPluginInstanceKey,
 } from "../../../../shared/types/plugin.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
+import { assistantGrantEpoch, assistantGrantOffEpoch } from "../assistantGrantEpoch.js";
 import {
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
@@ -41,6 +42,7 @@ import {
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
   setProjectAssistantAgentMcpAccess,
+  onAssistantAgentMcpAccessOff,
 } from "../projectEnablement.js";
 import { _resetProjectMcpDefaultsForTests, refreshProjectMcpDefaults } from "../projectDefaults.js";
 import {
@@ -834,6 +836,23 @@ describe("projectEnablement", () => {
 
   describe("the Daintree Assistant's answer", () => {
     const WRITES = declared({ hasDatabaseWrites: true });
+
+    it("tells who listens, and remembers when, each time the user turns it off (#18154)", () => {
+      const heard = vi.fn();
+      const off = onAssistantAgentMcpAccessOff(heard);
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      expect(heard).not.toHaveBeenCalled();
+      const raised = assistantGrantEpoch();
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(heard).toHaveBeenCalledWith(PROJECT_A, LEDGER);
+      // Gone off after a notification raised at `raised`, and only for that pair.
+      expect(assistantGrantOffEpoch(PROJECT_A, LEDGER)).toBeGreaterThan(raised);
+      expect(assistantGrantOffEpoch(PROJECT_A, "acme.crm")).toBeLessThanOrEqual(raised);
+      expect(assistantGrantOffEpoch(PROJECT_B, LEDGER)).toBeLessThanOrEqual(raised);
+      off();
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
 
     it("is off until the user answers, and caps nothing in by itself", () => {
       setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");

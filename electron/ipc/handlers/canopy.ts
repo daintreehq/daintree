@@ -28,6 +28,7 @@ import type {
   CanopyTrashOutcome,
   CanopyTrashTarget,
   CanopyUntrashOutcome,
+  CanopyWorktreeReading,
 } from "../../../shared/types/ipc/canopy.js";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
@@ -63,6 +64,7 @@ import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { readInputLines } from "../../services/canopy/canopyInputLines.js";
+import { readRunWorktrees } from "../../services/canopy/canopyWorktrees.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
@@ -129,6 +131,7 @@ import {
 } from "../../services/assistants/liveAssistantSubject.js";
 import type { GlobalAssistantInputStamp } from "../../../shared/types/ipc/help.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { GLOBAL_ASSISTANT_SLOT } from "../../../shared/config/globalAssistant.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
@@ -1636,11 +1639,10 @@ function assertViewsThisMachine(ctx: IpcContext): void {
 
 /** Where main holds the assistants a person can view; read at the moment of use. */
 async function liveAssistantSources() {
-  const [{ helpSessionService }, { peekGlobalAssistantService }] = await Promise.all([
+  const [{ helpSessionService }, { peekGlobalAssistantServices }] = await Promise.all([
     import("../../services/HelpSessionService.js"),
     import("../../services/globalAssistant.js"),
   ]);
-  const global = peekGlobalAssistantService();
   return {
     hostId: LOCAL_HOST_ID,
     ptyClient: requirePtyClient(),
@@ -1649,14 +1651,12 @@ async function liveAssistantSources() {
     onSessionEnded: (
       listener: (event: { projectId: string; slot: number; sessionId: string }) => void
     ) => helpSessionService.addSessionEndedListener(listener),
-    global: global
-      ? {
-          getState: () => global.getState(),
-          onChange: (listener: () => void) => global.onChange(() => listener()),
-          inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
-          canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
-        }
-      : null,
+    globals: peekGlobalAssistantServices().map((global) => ({
+      getState: () => global.getState(),
+      onChange: (listener: () => void) => global.onChange(() => listener()),
+      inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
+      canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
+    })),
   };
 }
 
@@ -1683,9 +1683,13 @@ export async function resolveAssistantDestination(
   );
   if (!binding) return null;
   const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
-  return scope.kind === "project" && lane !== undefined
-    ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
-    : { scope: "global", hostId, terminalId, incarnation };
+  if (scope.kind === "project" && lane !== undefined) {
+    return { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation };
+  }
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  const slot = peekGlobalAssistantServiceForTerminal(terminalId)?.slot ?? GLOBAL_ASSISTANT_SLOT;
+  return { scope: "global", hostId, terminalId, incarnation, slot };
 }
 
 /**
@@ -1708,20 +1712,21 @@ export async function assistantLaneHolder(projectId: string, lane: number): Prom
   );
 }
 
-/** The view on this machine that has the global assistant's input, if any. */
-export async function globalAssistantInputOwner(): Promise<number | null> {
-  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
-  return peekGlobalAssistantService()?.inputOwnerWebContentsId() ?? null;
+/** The view on this machine that has the input of the global session on this terminal, if any. */
+export async function globalAssistantInputOwner(terminalId: string): Promise<number | null> {
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  return peekGlobalAssistantServiceForTerminal(terminalId)?.inputOwnerWebContentsId() ?? null;
 }
 
 /**
  * A card answer presses keys with no input ownership behind it, so it never
- * reaches the global assistant, whose input one window holds at a time (#14454).
+ * reaches a global assistant session, whose input one window holds at a time (#14454).
  */
 async function assertNotGlobalAssistant(runId: string): Promise<void> {
-  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
-  const state = peekGlobalAssistantService()?.getState();
-  if (state?.terminalId === runId) {
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  if (peekGlobalAssistantServiceForTerminal(runId) !== null) {
     throw new AppError({
       code: "PERMISSION",
       message: "card answers don't reach the global assistant",
@@ -2376,6 +2381,26 @@ export const canopyNamespace = defineIpcNamespace({
           live.has(`${target.runId}\u0000${target.spawnedAt}`)
         );
         return readInputLines(requirePtyClient(), known);
+      }
+    ),
+
+    /**
+     * What each run's worktree holds that exists only on this machine
+     * (#18151), so the panel's bulk trash can leave unpushed or uncommitted
+     * work unticked. Read here, where the worktree is: only the counts go
+     * back. Only runs the fleet holds in the same incarnation are read.
+     */
+    readWorktrees: op(
+      CANOPY_METHOD_CHANNELS.readWorktrees,
+      async (targets: CanopyRunTarget[]): Promise<CanopyWorktreeReading[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readWorktrees, 10, 10_000);
+        assertRunTargets(targets);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        return readRunWorktrees(
+          runs,
+          targets,
+          (workspaceId) => projectStore.getProjectById(workspaceId)?.path ?? null
+        );
       }
     ),
 

@@ -2,8 +2,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GlobalAssistantService } from "../../../services/GlobalAssistantService.js";
 
 let service: GlobalAssistantService;
+let secondService: GlobalAssistantService;
+const registry = vi.hoisted(() => ({
+  startNew: vi.fn(),
+  join: vi.fn(),
+  hand: vi.fn(async (_slot: number) => {}),
+  coordinator: 0 as 0 | 1,
+}));
 vi.mock("../../../services/globalAssistant.js", () => ({
-  getGlobalAssistantService: () => service,
+  getGlobalAssistantService: (slot = 0) => (slot === 1 ? secondService : service),
+  whenGlobalAssistantSessionsReadable: async () => {},
+  startNewGlobalAssistantSession: registry.startNew,
+  joinNewGlobalAssistantLaunch: registry.join,
+  globalAssistantCoordinatorSlot: () => registry.coordinator,
+  handGlobalAssistantCoordination: registry.hand,
+  stopGlobalAssistantSession: async (
+    slot: number,
+    check: (instance: GlobalAssistantService) => void
+  ) => {
+    const instance = slot === 1 ? secondService : service;
+    check(instance);
+    await instance.discard();
+  },
 }));
 
 const pty = vi.hoisted(() => ({
@@ -55,18 +75,22 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const handlers = await import("../helpGlobalAssistant.js");
 
-function makeService() {
-  return new GlobalAssistantService({
-    agentId: async () => "claude",
-    provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
-    takeResume: async () => null,
-    releaseResume: async () => {},
-    discardResume: async () => {},
-    spawn: async () => true,
-    revoke: async () => {},
-    kill: () => {},
-    focusedWindows: () => [],
-  });
+function makeService(slot: 0 | 1 = 0, pinnedAgentId: string | null = null) {
+  return new GlobalAssistantService(
+    {
+      agentId: async () => (slot === 0 ? "claude" : null),
+      canRun: async () => true,
+      provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
+      takeResume: async () => null,
+      releaseResume: async () => {},
+      discardResume: async () => {},
+      spawn: async () => true,
+      revoke: async () => {},
+      kill: () => {},
+      focusedWindows: () => [],
+    },
+    { slot, pinnedAgentId }
+  );
 }
 
 const ctx = (webContentsId: number, windowId: number | null) =>
@@ -78,6 +102,11 @@ const ctx = (webContentsId: number, windowId: number | null) =>
 describe("global assistant IPC handlers", () => {
   beforeEach(() => {
     service = makeService();
+    secondService = makeService(1);
+    registry.startNew.mockReset();
+    registry.join.mockReset();
+    registry.hand.mockClear();
+    registry.coordinator = 0;
     pty.generation = 3;
     pty.spawnResult.clear();
     pty.read.mockReset();
@@ -178,11 +207,188 @@ describe("global assistant IPC handlers", () => {
     expect(discarded.phase).toBe("absent");
   });
 
+  describe("which session coordinates (#18143)", () => {
+    it("hands coordination over from a window, answering with both sessions", async () => {
+      const views = await handlers.handleSetGlobalAssistantCoordinator(ctx(10, 1), 1);
+
+      expect(registry.hand).toHaveBeenCalledWith(1);
+      expect(views.map((view) => view.slot)).toEqual([0, 1]);
+    });
+
+    it("stops nothing once the session it was told takes over no longer would", async () => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+
+      // Told session 2 takes over, but it isn't open (another window stopped it).
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      secondService = makeService(1, "codex");
+      // Open, but coordination already moved to it.
+      registry.coordinator = 1;
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), first.generation, 0, true, 1)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(service.getState().phase).toBe("running");
+
+      registry.coordinator = 0;
+      const stopped = await handlers.handleDiscardGlobalAssistant(
+        ctx(10, 1),
+        first.generation,
+        0,
+        true,
+        1
+      );
+      expect(stopped.phase).toBe("absent");
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), undefined, 0, undefined, 0)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    });
+
+    it("refuses a call from no window, or naming no session", async () => {
+      await expect(
+        handlers.handleSetGlobalAssistantCoordinator(ctx(10, null), 1)
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      await expect(
+        handlers.handleSetGlobalAssistantCoordinator(ctx(10, 1), 2)
+      ).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(registry.hand).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("replacing the run from a hand-off (#18140)", () => {
+    const replacement = (generation: number, phase: "absent" | "launching" | "running") => ({
+      agentId: "codex",
+      prompt: "Continue from the hand-off",
+      expected: { generation, phase },
+    });
+
+    it("replaces the run the person approved with one on the chosen agent, from its hand-off", async () => {
+      const spawn = vi.fn(async () => true);
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      const replaced = await handlers.handleReplaceGlobalAssistant(
+        ctx(10, 1),
+        replacement(first.generation, "running")
+      );
+      expect(replaced).toMatchObject({ phase: "running", agentId: "codex" });
+      expect(replaced.terminalId).not.toBe(first.terminalId);
+      expect(spawn).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agentId: "codex", prompt: "Continue from the hand-off" })
+      );
+    });
+
+    it("replaces the session that coordinated when asked, and nothing once it handed over (#18143)", async () => {
+      registry.coordinator = 1;
+      secondService = makeService(1, "codex");
+      const second = await handlers.handleEnsureGlobalAssistant(ctx(10, 1), 1);
+      const replaced = await handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+        ...replacement(second.generation, "running"),
+        slot: 1,
+      });
+      expect(replaced).toMatchObject({ slot: 1, phase: "running" });
+      expect(service.getState().phase).toBe("absent");
+
+      registry.coordinator = 0;
+      const shown = secondService.getState();
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+          ...replacement(shown.generation, "running"),
+          slot: 1,
+        })
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(secondService.getState().generation).toBe(shown.generation);
+    });
+
+    it("tells the person how to recover when the new agent doesn't start", async () => {
+      service = new GlobalAssistantService({
+        agentId: async () => "claude",
+        canRun: async () => true,
+        provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+        takeResume: async () => null,
+        releaseResume: async () => {},
+        discardResume: async () => {},
+        spawn: async () => false,
+        revoke: async () => {},
+        kill: () => {},
+        focusedWindows: () => [],
+      });
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), replacement(0, "absent"))
+      ).rejects.toMatchObject({
+        code: "INTERNAL",
+        userMessage:
+          "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    });
+
+    it("answers whether an agent could replace the run, for a window only", async () => {
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "codex")).toBe(true);
+      expect(await handlers.handleCanRunGlobalAssistant(ctx(10, 1), "")).toBe(false);
+      await expect(
+        handlers.handleCanRunGlobalAssistant(ctx(10, null), "codex")
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    });
+
+    it("says nothing was replaced when the run changed since the person was asked", async () => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      await handlers.handleRestartGlobalAssistant(ctx(10, 1), first.generation);
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(20, 2), replacement(first.generation, "running"))
+      ).rejects.toMatchObject({
+        code: "STALE_GENERATION",
+        userMessage: "The global assistant changed since you were asked. Nothing was replaced.",
+      });
+      expect((await handlers.handleGetGlobalAssistantState()).agentId).toBe("claude");
+    });
+
+    it.each([
+      ["a blank hand-off", { prompt: "   " }],
+      ["a hand-off of tabs and line breaks", { prompt: "\t\n" }],
+      ["a hand-off the CLI would read as an option", { prompt: " --dangerously-skip-permissions" }],
+      ["a hand-off that reads as a short option", { prompt: "-p go" }],
+      ["a hand-off with a control character", { prompt: "go\u001b[2J" }],
+      ["a missing run to compare", { expected: undefined }],
+      ["an unknown phase", { expected: { generation: 0, phase: "stopped" } }],
+    ])("refuses %s before anything stops", async (_name, override) => {
+      const first = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, 1), {
+          ...replacement(first.generation, "running"),
+          ...override,
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect((await handlers.handleGetGlobalAssistantState()).terminalId).toBe(first.terminalId);
+    });
+
+    it("refuses a caller with no window", async () => {
+      await expect(
+        handlers.handleReplaceGlobalAssistant(ctx(10, null), replacement(0, "absent"))
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("absent");
+    });
+  });
+
   it("stops a launch from any window, only the launch it was asked about, and never a run (#16603)", async () => {
     let spawned: ((started: boolean) => void) | null = null;
     const discardResume = vi.fn(async () => {});
     service = new GlobalAssistantService({
       agentId: async () => "claude",
+      canRun: async () => true,
       provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
       takeResume: async () => null,
       releaseResume: async () => {},
@@ -223,6 +429,7 @@ describe("global assistant IPC handlers", () => {
     let spawned: ((started: boolean) => void) | null = null;
     service = new GlobalAssistantService({
       agentId: async () => "claude",
+      canRun: async () => true,
       provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "secret", mcpUrl: null }),
       takeResume: async () => null,
       releaseResume: async () => {},
@@ -344,6 +551,155 @@ describe("global assistant IPC handlers", () => {
     const discarded = await handlers.handleDiscardGlobalAssistant(ctx(10, 1));
     expect(discarded.phase).toBe("absent");
   });
+  describe("two sessions (#18142)", () => {
+    it("routes every call to the session it names, and to the first when it names none", async () => {
+      await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      await secondService.startOn("codex");
+      const { attachmentId } = await handlers.handleAttachGlobalAssistant(ctx(10, 1), true, 1);
+      expect(secondService.getState().inputOwner).toBe(attachmentId);
+      expect(service.getState().attachments).toEqual([]);
+      // Its attachment is the second session's alone.
+      await expect(
+        handlers.handleClaimGlobalAssistantInput(ctx(10, 1), attachmentId)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      const firstRun = service.getState().terminalId;
+      const secondRun = secondService.getState().terminalId;
+      const before = secondService.getState().generation;
+      await handlers.handleRestartGlobalAssistant(ctx(10, 1), before, 1);
+      expect(service.getState().terminalId).toBe(firstRun);
+      expect(secondService.getState()).toMatchObject({ phase: "running", agentId: "codex" });
+      expect(secondService.getState().terminalId).not.toBe(secondRun);
+
+      // A stop for the second session leaves the first running.
+      await handlers.handleDiscardGlobalAssistant(
+        ctx(10, 1),
+        secondService.getState().generation,
+        1,
+        true
+      );
+      expect(secondService.getState().phase).toBe("absent");
+      expect(service.getState()).toMatchObject({ phase: "running", terminalId: firstRun });
+
+      await handlers.handleDetachGlobalAssistant(ctx(10, 1), attachmentId, 1);
+      expect(secondService.getState().attachments).toEqual([]);
+    });
+
+    it("stops nothing for a confirm asked of an idle session that has started since", async () => {
+      secondService = makeService(1, "codex");
+      // Idle but kept when the person was asked to stop it.
+      const asked = secondService.getState().generation;
+      expect(secondService.getState()).toMatchObject({ phase: "absent", occupied: true });
+      // Another window starts it meanwhile, at the same generation.
+      await secondService.ensureSession();
+      expect(secondService.getState().generation).toBe(asked);
+
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), asked, 1, false)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      expect(secondService.getState().phase).toBe("running");
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), asked, 1, "yes" as never)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    });
+
+    it("stops nothing for a confirm asked of an idle session that is starting now", async () => {
+      let spawned!: (ok: boolean) => void;
+      secondService = new GlobalAssistantService(
+        {
+          agentId: async () => null,
+          canRun: async () => true,
+          provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
+          takeResume: async () => null,
+          releaseResume: async () => {},
+          discardResume: async () => {},
+          spawn: () =>
+            new Promise<boolean>((resolve) => {
+              spawned = resolve;
+            }),
+          revoke: async () => {},
+          kill: () => {},
+          focusedWindows: () => [],
+        },
+        { slot: 1, pinnedAgentId: "codex" }
+      );
+      const asked = secondService.getState().generation;
+      const starting = secondService.ensureSession();
+      expect(secondService.getState().phase).toBe("launching");
+      await expect(
+        handlers.handleDiscardGlobalAssistant(ctx(10, 1), asked, 1, false)
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      await vi.waitFor(() => expect(spawned).toBeTypeOf("function"));
+      spawned(true);
+      await expect(starting).resolves.toMatchObject({ phase: "running" });
+    });
+
+    it("refuses a session that doesn't exist", async () => {
+      await expect(handlers.handleGetGlobalAssistantState(2)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      await expect(
+        handlers.handleAttachGlobalAssistant(ctx(10, 1), true, -1)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    });
+
+    it("lists both sessions, running or not, and tags each change with its session", async () => {
+      await secondService.startOn("codex");
+      const listed = await handlers.handleListGlobalAssistantSessions();
+      expect(listed.map((view) => [view.slot, view.phase, view.occupied])).toEqual([
+        [0, "absent", false],
+        [1, "running", true],
+      ]);
+      broadcast.mockClear();
+      await secondService.discard();
+      expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({ slot: 1, occupied: false });
+    });
+
+    it("answers a new session as soon as it is claimed, and joins only its launch", async () => {
+      registry.startNew.mockImplementation(async (agentId: string) => {
+        secondService.startOn(agentId).catch(() => {});
+        return secondService;
+      });
+      const claimed = await handlers.handleStartNewGlobalAssistant(ctx(10, 1), "codex");
+      expect(claimed).toMatchObject({ slot: 1, phase: "launching", pinnedAgentId: "codex" });
+      expect(registry.startNew).toHaveBeenCalledWith("codex");
+
+      registry.join.mockResolvedValue(undefined);
+      await handlers.handleEnsureGlobalAssistant(ctx(10, 1), 1, claimed.generation);
+      expect(registry.join).toHaveBeenCalledWith(1, claimed.generation);
+      // Joined after a clear moved the session on: not the run that was asked about.
+      await secondService.restart();
+      await expect(
+        handlers.handleEnsureGlobalAssistant(ctx(10, 1), 1, claimed.generation)
+      ).rejects.toMatchObject({ code: "CANCELLED" });
+      await expect(handlers.handleEnsureGlobalAssistant(ctx(10, 1), 1, 1.5)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      await expect(
+        handlers.handleStartNewGlobalAssistant(ctx(10, null), "codex")
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    });
+
+    it("hands a project switch the session the window showed", async () => {
+      const record = vi.fn();
+      windows.managers.set(1, { ownsView: () => true, recordGlobalAssistantPanel: record });
+      await handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), {
+        showing: true,
+        target: null,
+        slot: 1,
+      });
+      expect(record).toHaveBeenCalledWith(10, { showing: true, target: null, slot: 1 });
+      await expect(
+        handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), {
+          showing: true,
+          target: null,
+          slot: 2 as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      windows.managers.delete(1);
+    });
+  });
+
   describe("what the run's terminal is seen doing (#14986)", () => {
     it("tells every window each transition of the run's terminal, and only of that one", async () => {
       const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));

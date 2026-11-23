@@ -1,8 +1,9 @@
 import {
-  DecisionsBridge,
+  type DecisionsBridge,
   RelayClient,
   RelayError,
   loadIdentity,
+  type AgentStoppedPushResult,
   type DecisionLearner,
   type DesktopRole,
   type Identity,
@@ -28,11 +29,14 @@ import {
 } from "./paneSnapshots.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { DaintreeRelayClient } from "./relayFeatures.js";
-import { relayRequests } from "./relayIdentity.js";
+import { relayRequests, type RelayRequests } from "./relayIdentity.js";
 import {
+  AttemptBridge,
   ObservedSocket,
   RetiredAttemptError,
   chromiumWebSocket,
+  inertAttemptDelivery,
+  drainWithoutAnnouncing,
   holdingTerminalSink,
   isRelaySocketUrl,
   newBridgeLock,
@@ -43,6 +47,7 @@ import {
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
 import { DesktopPresence, type DesktopPresenceOptions } from "./desktopPresence.js";
+import { AgentStoppedPushes, type AgentStoppedPushesOptions } from "./agentStoppedPushes.js";
 import { watchNetwork } from "../../utils/networkWatch.js";
 import { logWarn } from "../../utils/logger.js";
 
@@ -68,8 +73,6 @@ export type RelayConnectionStatus =
 export type RelayConnectionStore = LocalStore & {
   isFaulted?(): boolean;
   hasPendingDelivery?(): Promise<boolean>;
-  /** Marks a question's pending create as possibly published, atomically, if it has one (#16014). */
-  markCreateMaybePublished?(questionId: string): Promise<boolean>;
 };
 
 /**
@@ -93,6 +96,18 @@ export interface QuestionSource {
   readonly lock?: BridgeLock;
   /** The lifetime's attachments, the ones every attempt's bridge asks with; none refuses them. */
   readonly attachments?: QuestionAttachments;
+  /**
+   * Whether the lifetime delivers advisory outcomes, which every bridge over
+   * its store is given as `advisoryDeadlines` (`RelayConnectionOptions`); off
+   * unless said.
+   */
+  readonly advisoryDeadlines?: boolean;
+  /**
+   * Whether an advisory notice would wait for the ledger, as the lifetime's
+   * delivery holds it (#17941): what `get_decision` reads between attempts,
+   * so it never disagrees with what is typed. Null while no delivery runs.
+   */
+  ledgerHolds?(questionId: string, opts?: { start?: boolean }): Promise<boolean> | null;
 }
 
 /** What a lifetime's attempts take from its decision model. */
@@ -159,6 +174,16 @@ export interface RelayConnectionOptions {
    */
   delivery?: AnswerDeliveryDeps;
   /**
+   * The lifetime's delivery types an advisory question's outcome into the pane
+   * that asked (protocol section 21), so every bridge over its store, each
+   * attempt's, the one between attempts and delivery's own, is given
+   * `advisoryDeadlines`: it then signs advice the trusted policy allows, and
+   * reads and types its outcome alike. Only with `delivery`: without it, or
+   * when delivery couldn't start, no outcome is typed, so no bridge is given
+   * it. Off unless said.
+   */
+  advisoryDeadlines?: boolean;
+  /**
    * Terminal snapshots of the panes that asked (#16230), through every
    * attempt's bridge for as long as the connection lasts. With them each
    * bridge declares `pane-snapshots-v1`, whether or not they are on;
@@ -172,6 +197,14 @@ export interface RelayConnectionOptions {
    * the connection through `presenceChanged`.
    */
   presence?: Omit<DesktopPresenceOptions, "report">;
+  /**
+   * Telling the person's phone that one of this computer's agents stopped
+   * while they were away (#17319), through whichever attempt's bridge is live
+   * when a batch goes out, for the owner's connection only: a Remote Host's
+   * bridge is refused it. A change to what `allowed` reads reaches the
+   * connection through `agentStoppedPushesChanged`.
+   */
+  agentStopped?: Omit<AgentStoppedPushesOptions, "send">;
   watchResume?: (onResume: () => void) => () => void;
   watchNetwork?: (onChange: (online: boolean) => void) => () => void;
   now?: () => number;
@@ -292,10 +325,16 @@ export class RelayConnection {
   private readonly lock = newBridgeLock();
   private readonly snapshots: PaneSnapshots | null;
   private readonly presence: DesktopPresence | null;
+  private readonly agentStopped: AgentStoppedPushes | null;
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
   private readonly rotations: KeyRotations;
+  /**
+   * `advisoryDeadlines` for every bridge the connection makes
+   * (`RelayConnectionOptions`), settled before questions can be asked.
+   */
+  private advisoryDeadlines = false;
 
   constructor(options: RelayConnectionOptions) {
     this.o = options;
@@ -315,6 +354,15 @@ export class RelayConnection {
             // A store that stopped writing can't record a question's notification, so none shows.
             allowed: () => !this.o.store.isFaulted?.() && presence.allowed(),
             report: (present) => this.reportPresence(present),
+          })
+        : null;
+    const agentStopped = options.agentStopped;
+    this.agentStopped =
+      agentStopped && (options.role ?? "owner-desktop") === "owner-desktop"
+        ? new AgentStoppedPushes({
+            ...agentStopped,
+            allowed: () => !this.o.store.isFaulted?.() && agentStopped.allowed(),
+            send: (stillDue) => this.requestAgentStoppedPush(stillDue),
           })
         : null;
   }
@@ -345,6 +393,15 @@ export class RelayConnection {
    */
   presenceChanged(): void {
     if (!this.ended && this.identity !== null) this.presence?.update();
+  }
+
+  /**
+   * Whether agent-stopped pushes may be asked for may have changed (#17319):
+   * the switch, or Decisions being turned off. Out of turn is fine: it starts
+   * nothing else.
+   */
+  agentStoppedPushesChanged(): void {
+    if (!this.ended && this.identity !== null) this.agentStopped?.update();
   }
 
   /**
@@ -444,6 +501,12 @@ export class RelayConnection {
       this.halt({ state: "not-connected", problem: "other-relay" });
       return;
     }
+    // Made before the identity is: no attempt starts, and no question is
+    // asked, before it's settled whether a lifetime whose delivery couldn't
+    // start, and so types no advisory outcome, gives its bridges one.
+    const deliveryRequests = await this.deliveryRequests();
+    if (this.ended) return;
+    this.advisoryDeadlines = this.o.advisoryDeadlines === true && deliveryRequests !== null;
     this.identity = identity;
     this.o.onQuestionsReady?.({
       identity: () => (this.ended ? null : this.identity),
@@ -455,9 +518,11 @@ export class RelayConnection {
       policy: this.o.policy,
       lock: this.lock,
       ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
+      advisoryDeadlines: this.advisoryDeadlines,
+      ledgerHolds: (questionId, opts) => this.delivery?.ledgerHolds(questionId, opts) ?? null,
     });
     if (this.ended) return;
-    await this.startDelivery(identity);
+    this.startDelivery(identity, deliveryRequests);
     if (this.ended) return;
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
@@ -466,6 +531,7 @@ export class RelayConnection {
       })
     );
     this.presence?.update();
+    this.agentStopped?.update();
     this.begin();
   }
 
@@ -495,24 +561,27 @@ export class RelayConnection {
     return true;
   }
 
-  /**
-   * Delivery runs for the connection's lifetime, not an attempt's, so an
-   * answer already stored is typed while the relay is out of reach.
-   */
-  private async startDelivery(identity: Identity): Promise<void> {
-    const deps = this.o.delivery;
-    if (!deps) return;
-    let requests: Awaited<ReturnType<typeof relayRequests>>;
+  /** Delivery's way to the relay; null without delivery, or when none could be made. */
+  private async deliveryRequests(): Promise<RelayRequests | null> {
+    if (!this.o.delivery) return null;
     try {
-      requests = await relayRequests(this.o.relay.relayOrigin, {
+      return await relayRequests(this.o.relay.relayOrigin, {
         fetchImpl: this.o.fetchImpl,
         signal: this.lifetime.signal,
       });
     } catch {
       console.warn("[Decisions] Answers can't be delivered: no way to reach the relay was made");
-      return;
+      return null;
     }
-    if (this.ended) return;
+  }
+
+  /**
+   * Delivery runs for the connection's lifetime, not an attempt's, so an
+   * answer already stored is typed while the relay is out of reach.
+   */
+  private startDelivery(identity: Identity, requests: RelayRequests | null): void {
+    const deps = this.o.delivery;
+    if (!deps || requests === null) return;
     const delivery = new AnswerDelivery({
       deps,
       identity,
@@ -520,6 +589,12 @@ export class RelayConnection {
       keys: this.o.keys,
       ...(this.o.phoneImages ? { phoneImages: this.o.phoneImages } : {}),
       lock: this.lock,
+      policy: this.o.policy,
+      advisoryDeadlines: this.advisoryDeadlines,
+      ledger: () => {
+        const current = this.current;
+        return current !== null && !current.retired ? current.bridge : null;
+      },
       // Reports are retried on every pass while they fail, so each is tried once.
       client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
@@ -571,7 +646,7 @@ export class RelayConnection {
       const settled = await this.settleKeys(attempt, client);
       if (attempt.retired) return;
       const snapshots = this.snapshots;
-      bridge = new DecisionsBridge({
+      bridge = new AttemptBridge({
         identity: settled,
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
         store: this.watchedStore(
@@ -582,6 +657,7 @@ export class RelayConnection {
         // Its inbox stores the person's follow-ups; the lifetime's delivery types them.
         followUps: true,
         policy: this.o.policy,
+        advisoryDeadlines: this.advisoryDeadlines,
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
           : {}),
@@ -604,7 +680,12 @@ export class RelayConnection {
       // Answers are typed by the lifetime's delivery. An attempt's own engine
       // would stop with its socket, and reconcile the lifetime's injections as
       // crashed ones each time an attempt starts.
-      bridge.delivery.stopped = true;
+      inertAttemptDelivery(
+        bridge.delivery,
+        (questionId) => this.delivery?.closureWrite(questionId) ?? null,
+        () => (attempt.retired ? null : this.delivery)
+      );
+      drainWithoutAnnouncing(bridge);
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;
@@ -843,6 +924,28 @@ export class RelayConnection {
     bridge.reportPresence(present);
   }
 
+  /**
+   * Asks the bridge live now for an agent-stopped push; null when none is
+   * (between attempts, or one still starting), so a batch is dropped rather
+   * than held for a later one. The library's own pusher is asked rather than
+   * `requestAgentStoppedPush`, which checks only that the bridge still runs
+   * once the relay's features are read: `stillDue` is checked there too, so a
+   * switch turned off, or a person back at the desk, while `/info` answers
+   * sends nothing. A request already being sent can't be recalled.
+   */
+  private requestAgentStoppedPush(stillDue: () => boolean): Promise<AgentStoppedPushResult> | null {
+    const current = this.current;
+    if (this.ended || !current?.started || current.retired) return null;
+    const bridge = current.bridge;
+    // The guards `requestAgentStoppedPush` keeps: an owner's bridge, started and not revoked.
+    if (!bridge || bridge.state !== "running" || bridge.ctx.identity.role !== "owner-desktop") {
+      return null;
+    }
+    return bridge.agentStopped.request(
+      () => !this.ended && !current.retired && bridge.state === "running" && stillDue()
+    );
+  }
+
   private retire(attempt: Attempt): void {
     if (attempt.retired) return;
     attempt.retired = true;
@@ -878,6 +981,7 @@ export class RelayConnection {
     this.clearRetry();
     this.snapshots?.stop();
     this.presence?.stop();
+    this.agentStopped?.stop();
     for (const off of this.watchers.splice(0)) off();
     // Reports to the relay stop now: a stalled one must not hold up the local
     // record of an answer being typed. A delivery's report is sent again next

@@ -12,6 +12,8 @@ import type { PtyClient } from "../../services/PtyClient.js";
 import { getSharedTerminalSnapshot } from "../../services/sharedTerminalSnapshot.js";
 import { classifyRun, computeProjectAgentCounts } from "../../services/projectAgentCounts.js";
 import { canopyRefinementFor } from "../../services/canopy/canopyRefinementSource.js";
+import { decisionAttentionFor } from "../../services/runAnswerAttentionSource.js";
+import { isDecisionsNeed } from "../../../shared/utils/fleetBands.js";
 import {
   getAgentVersionService,
   getCliAvailabilityServiceRef,
@@ -109,33 +111,52 @@ export async function observeAgents(
 
   const availability = getAgentAvailabilityStore();
   const known = new Set(projectIds);
-  let working = 0;
-  let waiting = 0;
-  let idle = 0;
-  for (const terminal of terminals) {
-    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
-    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
-    if (terminal.agentState === "working") working += 1;
-    else if (terminal.agentState === "waiting") waiting += 1;
-    else if (terminal.agentState === "idle" || terminal.agentState === "completed") idle += 1;
-  }
-
   // The same sources the switcher's counts read, so a host's summary and its
   // own panes agree about who needs the user (#16058).
   const handBacks = getRunHandBackServiceRef();
   const shelves = getRunAttentionServiceRef();
+  const parked = shelves?.getAll();
+  const snoozed = shelves?.getActiveSnoozes();
+  let working = 0;
+  let waiting = 0;
+  let idle = 0;
+  // Agents at work that Decisions puts in Needs you: counted as asking below,
+  // but in none of the settled states that count is taken from.
+  let askingAtWork = 0;
+  for (const terminal of terminals) {
+    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
+    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
+    const state = terminal.agentState;
+    if (state === "working") working += 1;
+    else if (state === "waiting") waiting += 1;
+    else if (state === "idle" || state === "completed") idle += 1;
+    if (
+      (state === "working" || state === "directing") &&
+      terminal.id !== undefined &&
+      parked?.has(terminal.id) !== true &&
+      snoozed?.has(terminal.id) !== true &&
+      isDecisionsNeed({
+        agentState: state,
+        waitingReason: terminal.waitingReason,
+        ...decisionAttentionFor(terminal.id),
+      })
+    ) {
+      askingAtWork += 1;
+    }
+  }
   const counts = computeProjectAgentCounts(
     projectIds,
     terminals,
     undefined,
-    shelves?.getActiveSnoozes(),
+    snoozed,
     // As the switcher reads them: an unloaded session service has no panel or lane.
     (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
     (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
     handBacks ? (id, spawnedAt) => handBacks.getRecord(id, spawnedAt) : undefined,
-    shelves?.getAll(),
+    parked,
     canopyRefinementFor,
-    handBacks ? (id, spawnedAt) => handBacks.getWait(id, spawnedAt) : undefined
+    handBacks ? (id, spawnedAt) => handBacks.getWait(id, spawnedAt) : undefined,
+    decisionAttentionFor
   );
   let asking = 0;
   let blocked = 0;
@@ -144,9 +165,10 @@ export async function observeAgents(
     blocked += entry.blocked;
   }
   // Every run counted as asking or blocked is an idle, finished or waiting one,
-  // so the rest of those are the host's settled runs: a prompt nothing puts in
-  // Needs you among them.
-  const settled = Math.max(0, idle + waiting - asking - blocked);
+  // or an agent at work with a Decisions question, so the rest of the idle,
+  // finished and waiting ones are the host's settled runs: a prompt nothing
+  // puts in Needs you among them.
+  const settled = Math.max(0, idle + waiting - (asking - askingAtWork) - blocked);
   return { working, waiting, idle, attention: { waiting: asking, blocked, idle: settled } };
 }
 

@@ -737,6 +737,88 @@ describe("host.watch audit (#14463)", () => {
   });
 });
 
+describe("host.watch audit on plugins' notifications (#18154)", () => {
+  const id = "0b7a1c2e-0000-4000-8000-000000000003";
+  const summary = {
+    notificationId: id,
+    pluginId: "PLUGIN-SENTINEL",
+    pluginName: "NAME-SENTINEL",
+    projectId: "p1",
+    dedupeKey: "KEY-SENTINEL",
+    severity: "warning",
+    createdAt: 1,
+  };
+
+  it("records which notifications were handed over or read, never their words, key or plugin", () => {
+    const armed = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      armed: true,
+      watches: [
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000002",
+          hostId: "local",
+          hostName: "HOST-SENTINEL",
+          condition: {
+            connection: null,
+            memoryAvailableBytesAtLeast: null,
+            cpuIdleCoresAtLeast: null,
+            memoryPressureAtMost: null,
+            agentsWaiting: null,
+            pluginNotifications: { projectId: "p1", pluginId: "PLUGIN-SENTINEL" },
+          },
+          note: "NOTE-SENTINEL",
+          status: "armed",
+          lostReason: null,
+          delivery: "none",
+        },
+      ],
+      observed: null,
+      notifications: { matches: [summary, { notificationId: "ID-SENTINEL" }], omitted: 2 },
+    });
+    const read = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      armed: false,
+      watches: [],
+      observed: null,
+      notification: { ...summary, title: "TITLE-SENTINEL", body: "BODY-SENTINEL" },
+    });
+    const args = projectAuditArgs("host.watch", {
+      operation: "arm",
+      pluginNotifications: true,
+      pluginId: "PLUGIN-SENTINEL",
+      projectId: "p1",
+      note: "NOTE-SENTINEL",
+    });
+    const readArgs = projectAuditArgs("host.watch", { operation: "read", notificationId: id });
+    const badRead = projectAuditArgs("host.watch", {
+      operation: "read",
+      notificationId: "ID-SENTINEL",
+    });
+
+    expect(armed).toMatchObject({
+      watches: [{ hostId: "local", on: "plugins", status: "armed" }],
+      notificationIds: [id, null],
+      omittedNotifications: 2,
+      read: null,
+    });
+    expect(read).toMatchObject({ read: id, notificationIds: null });
+    expect(args).toMatchObject({ operation: "arm", pluginNotifications: true, pluginNamed: true });
+    expect(readArgs).toMatchObject({ operation: "read", notificationId: id });
+    expect(badRead).toMatchObject({ notificationId: null });
+    const audited = JSON.stringify(
+      [armed, read, args, readArgs, badRead].map((value) => [
+        summarizeMcpResult(value),
+        summarizeMcpArgs(value),
+      ])
+    );
+    expect(audited).not.toContain("SENTINEL");
+  });
+});
+
 describe("host.bringBack audit (#16170)", () => {
   it("records how the attempt ended and what it did, never ssh's words or the host's network", () => {
     const result = projectAuditResult("host.bringBack", {
@@ -835,5 +917,46 @@ describe("host.status audit (#16191)", () => {
     const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
     expect(audited).not.toContain("SENTINEL");
     expect(projectAuditResult("host.status", "nope")).toEqual({ status: "unrecognized" });
+  });
+});
+
+describe("projectAuditResult — terminal.applyClaudeUpdateOwned (#17908)", () => {
+  const REFUSAL =
+    "Can't restart this session here. Its folder, /Users/FOLDER-SENTINEL, can't be found.";
+
+  it("keeps whether a refusal was seen, never its words", () => {
+    const projected = projectAuditResult("terminal.applyClaudeUpdateOwned", {
+      terminalId: "3f0c2a4e-1111-4222-8333-444455556666",
+      status: "sent",
+      refusal: REFUSAL,
+      output: "read",
+      message: "typed",
+    });
+
+    expect(projected).toEqual({
+      terminalId: "3f0c2a4e-1111-4222-8333-444455556666",
+      status: "sent",
+      reason: null,
+      refusalSeen: true,
+      output: "read",
+    });
+    expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("FOLDER-SENTINEL");
+  });
+
+  it("keeps why an unsent request stopped", () => {
+    expect(
+      projectAuditResult("terminal.applyClaudeUpdateOwned", {
+        terminalId: "t",
+        status: "not-sent",
+        reason: "typed",
+        message: "Someone typed.",
+      })
+    ).toEqual({
+      terminalId: null,
+      status: "not-sent",
+      reason: "typed",
+      refusalSeen: false,
+      output: null,
+    });
   });
 });

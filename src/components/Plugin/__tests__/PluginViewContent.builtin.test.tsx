@@ -188,6 +188,197 @@ describe("built-in panel views", () => {
     expect(documentViews.calls).toEqual([]);
   });
 
+  // A built-in's file editor view (#17336) is a hosted view, keyed by its
+  // hosted-view kind id rather than a panel kind, and has no bundle either.
+  it("renders a built-in file editor view by its hosted-view id, handing it the document", async () => {
+    const seen: PanelViewProps[] = [];
+    function Table(props: PanelViewProps) {
+      seen.push(props);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/table`;
+    registerBuiltinView(kindId, Table, { pluginId: BUILTIN_ID, label: "Table" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Table fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const fileDocument = {
+      fileName: "users.csv",
+      getDraft: () => "a,b",
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
+    const { rerender } = render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+
+    await screen.findByTestId("builtin-view");
+    const renders = seen.length;
+    rerender(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+        worktreeId="wt-2"
+      />
+    );
+    expect(seen.at(-1)?.worktreeId).toBe("wt-2");
+    expect(seen.length).toBeGreaterThan(renders);
+    // The view's own hold on it (#17903): one object for the mount, reading
+    // through to the host's document.
+    expect(seen.at(-1)?.fileDocument).not.toBe(fileDocument);
+    expect(new Set(seen.map((props) => props.fileDocument)).size).toBe(1);
+    expect(seen.at(-1)?.fileDocument?.fileName).toBe("users.csv");
+    expect(seen.at(-1)?.fileDocument?.getDraft()).toBe("a,b");
+    expect(seen.at(-1)?.hostContext).toEqual({ kind: "fileEditor" });
+    expect(activateForView).toHaveBeenCalledWith(kindId);
+    expect(stylePrep.calls).toEqual([]);
+    expect(documentViews.calls).toEqual([]);
+  });
+
+  // A view replaced inside the same host (a crash and Try again, a reload, a
+  // rebind) may still have a formatter or a debounced report in flight. Landing
+  // on the draft its successor started, under the successor's base, it would
+  // have the close prompt's Save write text that base never described (#17903).
+  it("keeps a crashed file editor view's late writes off the document its retry edits", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Recorded on commit: React's dev stack capture calls a throwing view
+    // without props.
+    const mounted: NonNullable<PanelViewProps["fileDocument"]>[] = [];
+    let shouldThrow = true;
+    function Editor({ fileDocument }: PanelViewProps) {
+      useEffect(() => {
+        if (fileDocument) mounted.push(fileDocument);
+        return () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-a" });
+      }, [fileDocument]);
+      // Thrown post-commit, as in the retry test below.
+      useEffect(() => {
+        if (shouldThrow) throw new Error("editor exploded");
+      }, []);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/editor`;
+    registerBuiltinView(kindId, Editor, { pluginId: BUILTIN_ID, label: "Editor" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Editor fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const setDraft = vi.fn();
+    const setConflict = vi.fn();
+    const save = vi.fn(() => Promise.resolve({ status: "saved", revision: "rev-c" }));
+    const fileDocument = {
+      fileName: "a.json",
+      readOnly: false,
+      setDraft,
+      setConflict,
+      save,
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
+    render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+    await screen.findByTestId("plugin-view-diagnostics");
+    expect(mounted).toHaveLength(1);
+    const crashed = mounted[0]!;
+    // Its unmount cleanup's flush still reaches the document.
+    expect(setDraft).toHaveBeenCalledWith("flushed on unmount", { baseRevision: "rev-a" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    setDraft.mockClear();
+    crashed.setDraft("formatted late", { baseRevision: "rev-a" });
+    crashed.setConflict(true);
+    await expect(crashed.save("formatted late", { expectedRevision: "rev-a" })).resolves.toEqual({
+      status: "refused",
+      reason: "unavailable",
+    });
+    expect(setDraft).not.toHaveBeenCalled();
+    expect(setConflict).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-retry"));
+    await screen.findByTestId("builtin-view");
+    expect(mounted).toHaveLength(2);
+    const retried = mounted[1]!;
+    expect(retried).not.toBe(crashed);
+    expect(retried).not.toBe(fileDocument);
+    expect(retried.fileName).toBe("a.json");
+    retried.setDraft("edited", { baseRevision: "rev-b" });
+    retried.setConflict(true);
+    await expect(retried.save("edited", { expectedRevision: "rev-b" })).resolves.toEqual({
+      status: "saved",
+      revision: "rev-c",
+    });
+    expect(setDraft).toHaveBeenCalledWith("edited", { baseRevision: "rev-b" });
+    expect(setConflict).toHaveBeenCalledWith(true);
+    expect(save).toHaveBeenCalledWith("edited", { expectedRevision: "rev-b" });
+
+    // The retry's mount never brings the crashed one back.
+    crashed.setDraft("formatted late", { baseRevision: "rev-a" });
+    expect(setDraft).toHaveBeenCalledTimes(1);
+  });
+
+  // Torn down whole (a plugin reload, its host closing), the content aborts the
+  // view's dispose signal from a microtask queued during that teardown. Work
+  // the view tied to it runs after the view has unmounted and must change
+  // nothing.
+  it("drops writes a torn-down file editor view tied to its dispose signal", async () => {
+    function Editor({ fileDocument, disposeSignal }: PanelViewProps) {
+      useEffect(() => {
+        disposeSignal.addEventListener("abort", () =>
+          fileDocument?.setDraft("from a stale snapshot", { baseRevision: "rev-a" })
+        );
+        return () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-b" });
+      }, [fileDocument, disposeSignal]);
+      return <div data-testid="builtin-view" />;
+    }
+    const kindId = `plugin-view:${BUILTIN_ID}/editor`;
+    registerBuiltinView(kindId, Editor, { pluginId: BUILTIN_ID, label: "Editor" });
+
+    const Content = makePluginViewContent({
+      id: kindId,
+      name: "Editor fileEditor",
+      componentPath: `plugin://${BUILTIN_ID}/__dtv-1/renderer/index.js`,
+      extensionId: BUILTIN_ID,
+      standalone: true,
+    });
+    const setDraft = vi.fn();
+    const fileDocument = {
+      fileName: "a.json",
+      readOnly: false,
+      setDraft,
+    } as unknown as NonNullable<PanelViewProps["fileDocument"]>;
+    const { unmount } = render(
+      <Content
+        panelId="file-editor:panel-1"
+        fileDocument={fileDocument}
+        hostContext={pluginViewHostContext("fileEditor")}
+      />
+    );
+    await screen.findByTestId("builtin-view");
+
+    unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setDraft.mock.calls).toEqual([["flushed on unmount", { baseRevision: "rev-b" }]]);
+  });
+
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {
     const seen: PanelViewProps[] = [];
     function Inspector(props: PanelViewProps) {

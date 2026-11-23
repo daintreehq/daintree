@@ -1477,6 +1477,7 @@ export const SETTINGS_REGISTRY = [
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
       "Prompt templates": SECTION_SETTINGS.promptTemplates,
+      Usage: SECTION_SETTINGS.agentUsage,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
@@ -1527,6 +1528,26 @@ export const SETTINGS_REGISTRY = [
           "launch",
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
+        ],
+      },
+      {
+        id: "agents-usage-tracking",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Usage",
+        title: "Track agent usage",
+        description:
+          "Show each agent's usage in the sidebar, read in the background here and on linked hosts",
+        keywords: [
+          "usage",
+          "quota",
+          "limit",
+          "rate limit",
+          "sidebar",
+          "background",
+          "tracking",
+          "codex",
+          "claude",
         ],
       },
       {
@@ -2212,6 +2233,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyDecisionsSettingsTab.preload,
     LazyComponent: LazyDecisionsSettingsTab,
     needsOnClose: true,
+    needsIsActive: true,
     searchNavDescription:
       "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
     searchNavKeywords: [
@@ -2305,11 +2327,70 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-rotate-keys",
+        section: "Encryption",
+        title: "Rotate keys",
+        description: "Replaces the shared encryption key without revoking any phone or Host",
+        keywords: ["encryption", "keys", "rotate", "rotation", "key", "e2ee", "secret", "security"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-agents",
+        section: "Agents",
+        // Not "Agents …": a title holding "agent" outranks Agents → Default agent for "agent".
+        title: "Who can ask you",
+        description:
+          "Which installed agents get ask_human when they launch, each switched on one at a time. Every agent is off until you switch it on",
+        keywords: [
+          "agents",
+          "ask_human",
+          "ask human",
+          "mcp",
+          "launch",
+          "switch",
+          "opt in",
+          "supported",
+          "claude",
+          "codex",
+          "gemini",
+          "qwen",
+          "opencode",
+          "copilot",
+          "amp",
+          "mistral",
+          "vibe",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-involvement",
+        section: "Involvement",
+        title: "How involved you want to be",
+        description:
+          "Whether agents ask you while they explore the options or consult other agents first and bring a recommendation, for good or for a while",
+        keywords: [
+          "involvement",
+          "involved",
+          "involve",
+          "recommend",
+          "recommendation",
+          "consult",
+          "explore",
+          "exploring",
+          "temporary",
+          "for a while",
+          "until",
+          "agents",
+          "preference",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-questions",
         section: "Questions",
         title: "Default question expiry",
         description:
-          "How long a question waits for your answer when its agent sets no expiry, never included, and what an expired one authorises",
+          "How long a question on this computer waits when its agent sets no time, never included, and what an expired one authorises",
         keywords: [
           "expiry",
           "expire",
@@ -2366,7 +2447,7 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "decisions-hold-phone-pushes",
-        section: "Questions",
+        section: "Notifications",
         title: "Hold phone notifications while I'm at this computer",
         description:
           "While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question",
@@ -2385,6 +2466,25 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-agent-stopped-pushes",
+        section: "Notifications",
+        title: "Notify my phone when an agent stops",
+        description:
+          "While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on.",
+        keywords: [
+          "phone",
+          "push",
+          "notification",
+          "finished",
+          "completed",
+          "stopped",
+          "done",
+          "away",
+          "mobile",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-policy",
         section: "Policy",
         title: "Workflow gates",
@@ -2394,12 +2494,21 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
-        id: "decisions-proxy-allowlist",
-        section: "Policy",
-        title: "Allow proxy answers",
+        id: "decisions-model",
+        section: "Decision model",
+        title: "Answer automatically",
         description:
-          "Whether a question without a registered workflow gate may accept a decision model's answer",
-        keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
+          "Lets the decision model answer in your place once it's evaluated, labelled as a proxy's answer and never for a question only you can answer",
+        keywords: [
+          "proxy",
+          "allowlist",
+          "decision model",
+          "automatic",
+          "auto-answer",
+          "answer",
+          "threshold",
+          "confidence",
+        ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
@@ -2442,10 +2551,38 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "decisions-voice",
-        section: "Voice",
+        section: "Data",
         title: "Dictating answers",
         description: "Dictation in the phone app isn't end-to-end encrypted",
         keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-recovery-kit-save",
+        section: "Data",
+        title: "Recovery kit",
+        description:
+          "Save a file holding this computer's Decisions keys, locked with a passphrase, and verify it",
+        keywords: [
+          "recovery",
+          "recovery kit",
+          "kit",
+          "backup",
+          "restore",
+          "keys",
+          "passphrase",
+          "verify",
+          "lost",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-data-export",
+        section: "Data",
+        title: "Export decision history",
+        description:
+          "Saves every question and answer stored on this computer, with the audit log, to an encrypted file",
+        keywords: ["export", "history", "download", "audit", "log", "backup", "passphrase", "save"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {

@@ -25,7 +25,7 @@ export interface UnavailableCopy {
   title: string;
   description: string;
   /** The way out the body offers, beyond the toolbar's own actions. */
-  action: "open" | "reveal" | "retry" | "save" | "take-control" | null;
+  action: "open" | "reveal" | "retry" | "save" | "take-control" | "rendered" | null;
 }
 
 /**
@@ -58,13 +58,23 @@ export function refusalReason(error: MediaPreviewError | undefined): Unavailable
  * action follows the toolbar's own target for the file's type, so "open" means
  * the editor for text and the OS default app for media — never the OS default
  * for a binary, which may execute it; a binary gets Reveal. In a remote window
- * the file is on the host: see {@link remoteUnavailableCopy}.
+ * the file is on the host: see {@link remoteUnavailableCopy}. A file too large
+ * for Source that a plugin viewer still shows, `renderedBy` naming it, points
+ * at Rendered first, from here or from a host alike.
  */
 export function unavailableCopy(
   reason: UnavailableReason,
   message: string,
-  remote: RemoteFileContext | null = null
+  remote: RemoteFileContext | null = null,
+  renderedBy: string | null = null
 ): UnavailableCopy {
+  if (reason === "FILE_TOO_LARGE" && renderedBy !== null) {
+    return {
+      title: "Too large for Source",
+      description: `It's over the size Source opens. ${renderedBy} still shows it in Rendered.`,
+      action: "rendered",
+    };
+  }
   const remoteCopy = remote === null ? null : remoteUnavailableCopy(reason, message, remote);
   if (remoteCopy !== null) return remoteCopy;
   switch (reason) {

@@ -281,7 +281,13 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
   // holds nothing for that token. Reported as `unknown` rather than omitted,
   // which a caller could not tell from "the field was never asked for".
   if (submissionToken !== undefined) {
-    entry.submission = record.submission ?? { token: submissionToken, phase: "unknown" };
+    if (record.submission === undefined) {
+      entry.submission = { token: submissionToken, phase: "unknown" };
+    } else {
+      // Main's own reading of a guarded line (#18157), not part of this surface.
+      const { cancelledAt: _cancelledAt, ...submission } = record.submission;
+      entry.submission = submission;
+    }
   }
 
   return entry;
@@ -317,13 +323,14 @@ export async function buildViewlessTerminalStatus(
   workspaceId: string,
   rawArgs: unknown,
   admittedAssistants?: ReadonlySet<string>,
-  admittedGlobal?: string
+  admittedGlobals?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const { terminalIds, lines, stripAnsi, includeOutput, submissionToken } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
-  // The global Assistant a project's assistant named (#16410) is the one id
-  // read outside the workspace, and only where the global's own run is.
-  const workspaceOf = (id: string) => (id === admittedGlobal ? GLOBAL_ASSISTANT_ID : workspaceId);
+  // The global Assistant sessions a project's assistant named (#16410, #18142)
+  // are the only ids read outside the workspace, and only where their own runs are.
+  const isGlobal = (id: string) => admittedGlobals?.has(id) === true;
+  const workspaceOf = (id: string) => (isGlobal(id) ? GLOBAL_ASSISTANT_ID : workspaceId);
 
   const placed = new Set<string>();
   const unplaced: string[] = [];
@@ -361,7 +368,7 @@ export async function buildViewlessTerminalStatus(
   const outputs = new Map<string, (CapturedTail & { inputLine: TerminalInputLine }) | null>();
   if (includeOutput) {
     // The global's screen is the person's own conversation: never read for a project.
-    const readable = lookupIds.filter((id) => records.has(id) && id !== admittedGlobal);
+    const readable = lookupIds.filter((id) => records.has(id) && !isGlobal(id));
     const snapshots = await Promise.all(
       // Raw output keeps the whole-buffer read: the serializer's erase escapes
       // depend on the range it starts from, so a capped read is not byte-identical.
@@ -411,7 +418,7 @@ export async function buildViewlessTerminalStatus(
       };
     }
     const entry = buildEntry(record, submissionToken);
-    if (id === admittedGlobal) {
+    if (isGlobal(id)) {
       // Its handback is shown only to the send that asked for it, by that
       // send's token, and never the screen a submission's capture kept.
       if (
@@ -457,7 +464,7 @@ export async function handleTerminalGetStatusViewless(
   rawArgs: unknown,
   workspaceId: string,
   admittedAssistants?: ReadonlySet<string>,
-  admittedGlobal?: string
+  admittedGlobals?: ReadonlySet<string>
 ): Promise<TerminalStatusResult> {
   const ptyClient = getPtyClient();
   if (!ptyClient) {
@@ -471,6 +478,6 @@ export async function handleTerminalGetStatusViewless(
     workspaceId,
     rawArgs,
     admittedAssistants,
-    admittedGlobal
+    admittedGlobals
   );
 }

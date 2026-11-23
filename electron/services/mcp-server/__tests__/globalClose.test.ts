@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GlobalCloseTarget } from "../../assistants/GlobalWorkerSteer.js";
 import {
   globalCloseBatchQuestion,
   globalCloseQuestion,
+  readGlobalCloseWorktrees,
   sameGlobalCloseTarget,
   settleGlobalCloseAnswer,
 } from "../globalClose.js";
@@ -20,6 +21,60 @@ const TARGET: GlobalCloseTarget = {
   lastTypedInputAt: 900,
   title: "Fix the flaky test",
 };
+
+describe("the global close's worktree read (#18151)", () => {
+  const signal = new AbortController().signal;
+  const clean = {
+    kind: "observed",
+    unpushedCommits: 0,
+    changedEntries: 0,
+    hiddenFromStatus: 0,
+  } as const;
+
+  it("reads nothing when no panel sits in a worktree", async () => {
+    const read = vi.fn(async () => [clean]);
+    expect(await readGlobalCloseWorktrees(read, "p", [{}], signal)).toEqual([
+      { kind: "not-applicable" },
+    ]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("leaves each panel in a worktree unreadable when the read fails, is missing, or comes back short", async () => {
+    const targets = [{ worktreeId: "/wt/a" }, {}, { worktreeId: "/wt/b" }];
+    const unreadable = [{ kind: "unreadable" }, { kind: "not-applicable" }, { kind: "unreadable" }];
+    expect(await readGlobalCloseWorktrees(undefined, "p", targets, signal)).toEqual(unreadable);
+    expect(
+      await readGlobalCloseWorktrees(
+        async () => {
+          throw new Error("no git");
+        },
+        "p",
+        targets,
+        signal
+      )
+    ).toEqual(unreadable);
+    const read = vi.fn(async () => [clean]);
+    expect(await readGlobalCloseWorktrees(read, "p", targets, signal)).toEqual([
+      clean,
+      { kind: "not-applicable" },
+      { kind: "unreadable" },
+    ]);
+    expect(read).toHaveBeenCalledWith("p", ["/wt/a", undefined, "/wt/b"], signal);
+  });
+
+  it("puts what only this machine holds on the panel's line, and nothing for a clean one", () => {
+    const line = (worktree: Parameters<typeof globalCloseQuestion>[2]) =>
+      globalCloseQuestion("t-1", TARGET, worktree).lines[1];
+    expect(line(clean)).not.toContain("—");
+    expect(line({ ...clean, unpushedCommits: 72, changedEntries: 1 })).toMatch(
+      / — 72 commits on no remote, 1 changed or untracked path$/
+    );
+    expect(line({ kind: "unreadable" })).toMatch(/ — Worktree state unreadable$/);
+    expect(line({ ...clean, unpushedCommits: null, hiddenFromStatus: 2 })).toMatch(
+      / — Branch has no commits yet, 2 tracked files git doesn't check$/
+    );
+  });
+});
 
 describe("the global close's question (#16750)", () => {
   it("keeps every line inside what the relay carries, whatever the id or title", () => {

@@ -62,6 +62,7 @@ function cleanReads(getPR: () => Promise<PR | null> = async () => mergedPR()) {
       unstaged: 0,
       untracked: 0,
       conflicted: 0,
+      changedEntries: 0,
       hiddenFromStatus: 0,
     }),
     countTerminals: async () => ({ count: 0, complete: true }),

@@ -1,9 +1,15 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
-import { isTerminalReportOnly } from "../terminalInput.js";
-import type { ExactPromptGuard } from "../../../../shared/types/pty-host.js";
+import { getSubmitEnterDelay, isTerminalReportOnly } from "../terminalInput.js";
+import type { AnalysisBackend } from "../analysis/AnalysisBackend.js";
+import { AgentStateService } from "../AgentStateService.js";
+import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
+import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import {
   batchNotices,
   formatAnswerNotice,
@@ -17,16 +23,18 @@ import {
 } from "../../decisions/answerNotice.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
+/** The last mock pty's output listener: output handed to it reaches the terminal as the pty's own. */
+let ptyOutput: ((data: string) => void) | null = null;
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
 });
 
-function createMockPty(): IPty {
+function createMockPty(cols = 80, rows = 24): IPty {
   const pty: Partial<IPty> = {
     pid: 123,
-    cols: 80,
-    rows: 24,
+    cols,
+    rows,
     write: (data: string) => {
       ptyWriteMock(data);
     },
@@ -34,7 +42,10 @@ function createMockPty(): IPty {
     kill: () => {},
     pause: () => {},
     resume: () => {},
-    onData: () => ({ dispose: () => {} }),
+    onData: (listener: (data: string) => void) => {
+      ptyOutput = listener;
+      return { dispose: () => {} };
+    },
     onExit: () => ({ dispose: () => {} }),
   };
   return pty as IPty;
@@ -53,15 +64,19 @@ interface Internals {
     lastOwnedPromptInput?: { owner: string; at: number };
     lastForeignPromptInputAt?: number;
     detectedAgentId?: string;
+    launchAgentId?: string;
     agentIncarnation?: number;
     agentSessionId?: string;
+    updateInstalled?: { observedAt: number; namesRestart: boolean };
+    promptUnseen?: true;
+    promptUnseenAt?: number;
   };
 }
 
-function createTerminal(): TerminalProcess {
+function createTerminal(cols = 80, rows = 24): TerminalProcess {
   return new TerminalProcess(
     "t-wake",
-    { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal" },
+    { cwd: process.cwd(), cols, rows, kind: "terminal" },
     { emitData: () => {}, onExit: () => {} },
     {
       agentStateService: { handleActivityState: () => {} } as never,
@@ -69,7 +84,7 @@ function createTerminal(): TerminalProcess {
       processTreeCache: null,
     },
     SPAWN_CONTEXT,
-    createMockPty()
+    createMockPty(cols, rows)
   );
 }
 
@@ -263,7 +278,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("writes a guarded submission to an agent settled at an empty prompt", async () => {
@@ -288,6 +307,12 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     ["at an error", { waitingReason: "error" }],
     ["idle, which may be a bare shell", { agentState: "idle" }],
     ["with no agent detected", { detectedAgentId: undefined }],
+    // A resumed Claude drawing its trust prompt reads as working, for a CLI that queues (#18014).
+    [
+      "starting up, its prompt not seen since its run began",
+      { agentState: "working", lastStateChange: Date.now() - 1_000, promptUnseen: true },
+    ],
+    ["at a prompt read before its run began", { promptUnseen: true }],
   ])("refuses a guarded submission when the agent is %s", async (_label, patch) => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
@@ -298,6 +323,23 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("starts an agent launch with its prompt not yet seen, and a plain shell with nothing (#18014)", () => {
+    const launched = new TerminalProcess(
+      "t-launch",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal", launchAgentId: "claude" },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState: () => {} } as never,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      SPAWN_CONTEXT,
+      createMockPty(80, 24)
+    );
+    expect(launched.getPublicState()).toMatchObject({ agentState: "idle", promptUnseen: true });
+    expect(createTerminal().getPublicState().promptUnseen).toBeUndefined();
   });
 
   it("queues a guarded submission behind the turn of a CLI that queues mid-turn input", async () => {
@@ -321,7 +363,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("writes one strict guarded submission per settle, before the analysis reports the turn (#13496)", async () => {
@@ -372,7 +418,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("holds a strict submission behind any line the lane wrote since the prompt settled", async () => {
@@ -443,7 +493,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake", "h"]);
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // The body is written whole and its own Enter held (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "enter",
+    });
   });
 
   it("is not refused by the working transition its own submission causes", async () => {
@@ -583,6 +637,15 @@ describe("TerminalProcess settled-prompt-exact guard, widened for a Decisions an
     ],
     ["at an approval", { waitingReason: "approval" as const }],
     ["at an error", { waitingReason: "error" as const }],
+    // A resumed Claude drawing its trust prompt before any prompt (#18014).
+    [
+      "while its run starts up, its prompt not yet seen",
+      { agentState: "working" as const, promptUnseen: true as const },
+    ],
+    [
+      "at a question read before its run began",
+      { waitingReason: "question" as const, promptUnseen: true as const },
+    ],
   ])("refuses it %s", async (_label, patch) => {
     const { phase } = await answerInto(patch);
     expect(phase).toBe("cancelled");
@@ -791,6 +854,76 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
     await expect(queuedAnswer(meanwhile)).resolves.toBe("cancelled");
   });
 
+  /**
+   * An answer for the claude run main read, queued behind a person's prompt
+   * while the pane is `before`; the pane becomes `after` (incarnation,
+   * principal and generation untouched) before that turn settles (#18116).
+   */
+  async function queuedAcrossKinds(
+    before: Partial<Internals["terminalInfo"]>,
+    after: Partial<Internals["terminalInfo"]>,
+    guard: Partial<ExactPromptGuard> = {}
+  ) {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentIncarnation: 0 }, before);
+    terminal.submit("a person's prompt");
+    terminal.submit("answer", "tok-1", undefined, {
+      ...EXACT,
+      agentIncarnation: 0,
+      agentId: "claude",
+      ...guard,
+    });
+    Object.assign(info(terminal), after, {
+      agentState: "waiting",
+      waitingReason: "prompt",
+      lastStateChange: Date.now() + 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    return terminal.getSubmission("tok-1")?.phase;
+  }
+
+  it("refuses an answer once another agent kind holds the PTY, though nothing respawned (#18116)", async () => {
+    await expect(queuedAcrossKinds({}, { detectedAgentId: "codex" })).resolves.toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("answer");
+    // As main sends a Decisions answer: mid-turn and at a prose question too.
+    await expect(
+      queuedAcrossKinds(
+        {},
+        { detectedAgentId: "codex" },
+        { acceptWorking: true, acceptQuestion: true }
+      )
+    ).resolves.toBe("cancelled");
+    await expect(
+      queuedAcrossKinds(
+        { detectedAgentId: "codex" },
+        { detectedAgentId: "claude" },
+        { agentId: "codex", acceptWorking: true }
+      )
+    ).resolves.toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("answer");
+    await expect(
+      queuedAcrossKinds(
+        { launchAgentId: "claude", detectedAgentId: undefined },
+        { detectedAgentId: "codex" }
+      )
+    ).resolves.toBe("cancelled");
+  });
+
+  it("types an answer for the same agent kind, and for a launched agent first detected as that kind (#18116)", async () => {
+    await expect(queuedAcrossKinds({}, {})).resolves.toBe("pty_written");
+    await expect(
+      queuedAcrossKinds({ detectedAgentId: "codex" }, {}, { agentId: "codex", acceptWorking: true })
+    ).resolves.toBe("pty_written");
+    await expect(
+      queuedAcrossKinds(
+        { launchAgentId: "claude", detectedAgentId: undefined },
+        { detectedAgentId: "claude" }
+      )
+    ).resolves.toBe("pty_written");
+  });
+
   it("refuses an answer for a run the PTY no longer held when the line arrived", async () => {
     await expect(
       queuedAnswer(() => {}, { ...EXACT, agentIncarnation: 1, agentSessionId: "session-1" })
@@ -922,5 +1055,683 @@ describe("TerminalProcess no-choice-dialog guard (#16209)", () => {
     terminal.submit("ls", "tok-3", undefined, "no-choice-dialog");
     await vi.advanceTimersByTimeAsync(3_000);
     expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
+describe("TerminalProcess settled-prompt-exact guard pinned to an update observation (#17908)", () => {
+  const UPDATE: ExactPromptGuard = {
+    kind: "settled-prompt-exact",
+    agentIncarnation: 0,
+    updateObservedAt: 900,
+  };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-19T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function restartInto(patch: Partial<Internals["terminalInfo"]>) {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      detectedAgentId: "claude",
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+      ...patch,
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(3_000);
+    return terminal.getSubmission("tok-1")?.phase;
+  }
+
+  it("writes the line while the terminal still reports the observation main read", async () => {
+    expect(await restartInto({})).toBe("pty_written");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart", "\r"]);
+  });
+
+  it.each([
+    ["cleared", { updateInstalled: undefined }],
+    ["seen anew", { updateInstalled: { observedAt: 1_200, namesRestart: true } }],
+    ["no longer naming /restart", { updateInstalled: { observedAt: 900, namesRestart: false } }],
+  ])("refuses it once the observation was %s", async (_label, patch) => {
+    expect(await restartInto(patch)).toBe("cancelled");
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("judges the observation when the line takes the lane, not when it was queued", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    // A line already in the lane holds it through its Enter delay.
+    terminal.submit("earlier");
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    info(terminal).updateInstalled = { observedAt: 1_234, namesRestart: true };
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("/restart");
+  });
+
+  it.each([
+    [
+      "the observation is seen anew",
+      { updateInstalled: { observedAt: 1_234, namesRestart: true } },
+    ],
+    [
+      "the observation no longer names /restart",
+      { updateInstalled: { observedAt: 900, namesRestart: false } },
+    ],
+    ["a choice dialog is reported", { agentState: "waiting", waitingReason: "approval" }],
+  ])("holds back the Enter when %s between the line and its Enter", async (_label, patch) => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    Object.assign(info(terminal), patch);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    // Its own hold said no, as a withdrawal would: no stop for anyone to resume.
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("cancelledAt");
+  });
+
+  it("leaves no draft on a run that replaced the one the line went to", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    const typedBefore = info(terminal).lastTypedInputAt;
+    // Claude relaunched under the body: a new run, its observation cleared.
+    Object.assign(info(terminal), { agentIncarnation: 1, updateInstalled: undefined });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(info(terminal).lastTypedInputAt).toBe(typedBefore);
+  });
+
+  it("still counts the line as a draft when only the agent's detection went away", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    const typedBefore = info(terminal).lastTypedInputAt;
+    // The CLI may still hold the body: the same incarnation, detection blinking.
+    Object.assign(info(terminal), { detectedAgentId: undefined, updateInstalled: undefined });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(info(terminal).lastTypedInputAt).not.toBe(typedBefore);
+  });
+});
+
+describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
+  const RULE = "─".repeat(60);
+  const CLEAR = "\x1b[2J\x1b[H";
+  const PERMISSION_DIALOG = [
+    "⏺ Bash(rm -rf build)",
+    "",
+    RULE,
+    " Bash command",
+    "",
+    "   rm -rf build",
+    "",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. No, and tell Claude what to do differently (esc)",
+    "",
+    " Esc to cancel",
+  ].join("\r\n");
+  /** Claude Code 2.1.329 drawing `/restart` over its slash-command list. */
+  const CLAUDE_SLASH = fileURLToPath(
+    new URL("../../__tests__/fixtures/input-line/claude-slash-command.cast", import.meta.url)
+  );
+
+  const GUARDS: Array<[string, TerminalSubmitGuard]> = [
+    ["a notice line", "settled-prompt"],
+    ["an assistant's line", "settled-prompt-strict"],
+    ["a held steer or another exact line", { kind: "settled-prompt-exact" }],
+    [
+      "a Decisions answer",
+      { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+    ],
+  ];
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    ptyOutput = null;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function analysisOf(terminal: TerminalProcess): AnalysisBackend {
+    return (terminal as unknown as { analysis: AnalysisBackend }).analysis;
+  }
+
+  /** What went to the pty, without the colour replies the host answers on the agent's behalf. */
+  function written(): string[] {
+    return ptyWriteMock.mock.calls.map((c) => c[0]).filter((data) => !data.startsWith("\x1b]"));
+  }
+
+  function enterDelayOf(terminal: TerminalProcess): number {
+    return getSubmitEnterDelay(info(terminal) as never);
+  }
+
+  /** The output a capture recorded before `marker`, chunk by chunk. */
+  function castOutput(path: string, marker: string): string[] {
+    const [, ...lines] = readFileSync(path, "utf8").trim().split("\n");
+    const events = lines.map((line) => JSON.parse(line) as [number, string, string]);
+    const stop = events.findIndex(([, kind, data]) => kind === "m" && data === marker);
+    return events.slice(0, stop).flatMap(([, kind, data]) => (kind === "o" ? [data] : []));
+  }
+
+  /** A guarded line submitted to an agent settled at its prompt, its body already in the composer. */
+  function submitGuarded(guard: TerminalSubmitGuard = "settled-prompt", text = "wake") {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    terminal.submit(text, "tok-1", undefined, guard);
+    expect(written()).toEqual([text]);
+    return terminal;
+  }
+
+  function expectHeld(terminal: TerminalProcess): void {
+    expect(written()).toEqual(["wake"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "enter",
+    });
+    // The body is left in the composer: a draft until the agent settles again.
+    expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
+  }
+
+  it.each(GUARDS)(
+    "holds the Enter of %s when a dialog is drawn while its body waits",
+    async (_label, guard) => {
+      const terminal = submitGuarded(guard);
+      ptyOutput!(CLEAR + PERMISSION_DIALOG);
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      // The published reading never caught up with the dialog.
+      expect(info(terminal)).toMatchObject({ agentState: "waiting", waitingReason: "prompt" });
+      expectHeld(terminal);
+    }
+  );
+
+  it("holds the Enter when the dialog is painted just before the delay ends", async () => {
+    const terminal = submitGuarded();
+    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) - 5);
+    expect(written()).toEqual(["wake"]);
+    ptyOutput!(CLEAR + PERMISSION_DIALOG);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expectHeld(terminal);
+  });
+
+  it("holds a guarded bare Enter at a dialog, leaving nothing typed", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    ptyOutput!(CLEAR + PERMISSION_DIALOG);
+    terminal.submit("", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(written()).toEqual([]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("cancelledAt");
+    expect(info(terminal).lastTypedInputAt ?? 0).toBeLessThan(info(terminal).lastStateChange!);
+  });
+
+  it("leaves the prompt settled for a strict line after a held bare Enter", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    vi.spyOn(analysisOf(terminal), "serializeScreen").mockResolvedValueOnce(null);
+    terminal.submit("", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+
+    terminal.submit("wake", "tok-2", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(written()).toEqual(["wake", "\r"]);
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("still writes a guarded bare Enter at a prompt", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    ptyOutput!(CLEAR + ["⏺ Done.", RULE, "❯ ", RULE, "  ? for shortcuts"].join("\r\n"));
+    terminal.submit("", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(written()).toEqual(["\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("holds the Enter of a Claude Code update's /restart with its footer observation unchanged", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const observed = { observedAt: 900, namesRestart: true };
+    Object.assign(info(terminal), { agentIncarnation: 0, updateInstalled: observed });
+    terminal.submit("/restart", "tok-1", undefined, {
+      kind: "settled-prompt-exact",
+      agentIncarnation: 0,
+      updateObservedAt: 900,
+    });
+    expect(written()).toEqual(["/restart"]);
+    ptyOutput!(CLEAR + PERMISSION_DIALOG);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(info(terminal)).toMatchObject({ agentState: "waiting", waitingReason: "prompt" });
+    expect(info(terminal).updateInstalled).toBe(observed);
+    expect(written()).toEqual(["/restart"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
+  });
+
+  it("holds the Enter when a selector is drawn under a composer still holding the line", async () => {
+    const terminal = submitGuarded();
+    ptyOutput!(CLEAR + ["⏺ Done.", RULE, "❯ wake", RULE, " ❯ 1. Allow", "   2. Deny"].join("\r\n"));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expectHeld(terminal);
+  });
+
+  it.each<[string, (terminal: TerminalProcess) => void]>([
+    [
+      "output arrives while it reads",
+      (terminal) => {
+        const analysis = analysisOf(terminal);
+        const read = analysis.serializeScreen.bind(analysis);
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
+          ptyOutput!("\x1b[1;1H.");
+          return screen;
+        });
+      },
+    ],
+    [
+      "a chunk answered and stripped on its way to the views arrives while it reads",
+      (terminal) => {
+        const analysis = analysisOf(terminal);
+        const read = analysis.serializeScreen.bind(analysis);
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
+          ptyOutput!("\x1b]11;?\x07");
+          return screen;
+        });
+      },
+    ],
+    [
+      "the mirror lost output while the body waited",
+      (terminal) => {
+        const analysis = analysisOf(terminal);
+        const since = analysis.observedSince()!;
+        vi.spyOn(analysis, "observedSince").mockReturnValue(since + 1);
+      },
+    ],
+    [
+      "the mirror loses output while it reads",
+      (terminal) => {
+        const analysis = analysisOf(terminal);
+        const read = analysis.serializeScreen.bind(analysis);
+        const since = analysis.observedSince()!;
+        let lost = false;
+        vi.spyOn(analysis, "observedSince").mockImplementation(() => (lost ? since + 1 : since));
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
+          lost = true;
+          return screen;
+        });
+      },
+    ],
+    [
+      "nothing reads the terminal's output",
+      (terminal) => {
+        vi.spyOn(analysisOf(terminal), "observedSince").mockReturnValue(null);
+      },
+    ],
+    [
+      "the read can't show it covers everything received",
+      (terminal) => {
+        vi.spyOn(analysisOf(terminal), "serializeScreen").mockResolvedValue(null);
+      },
+    ],
+    [
+      "the read fails",
+      (terminal) => {
+        vi.spyOn(analysisOf(terminal), "serializeScreen").mockRejectedValue(new Error("gone"));
+      },
+    ],
+    [
+      "the read throws before it starts",
+      (terminal) => {
+        vi.spyOn(analysisOf(terminal), "serializeScreen").mockImplementation(() => {
+          throw new Error("gone");
+        });
+      },
+    ],
+  ])("holds the Enter when %s", async (_label, arrange) => {
+    const terminal = submitGuarded();
+    arrange(terminal);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expectHeld(terminal);
+  });
+
+  it("holds the Enter when the read takes too long, and ignores its late answer", async () => {
+    const terminal = submitGuarded();
+    let answer: (screen: SerializedTerminalSnapshot | null) => void = () => {};
+    vi.spyOn(analysisOf(terminal), "serializeScreen").mockImplementation(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    // Given up on a second after the Enter delay, not whenever the read returns.
+    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) + 900);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "writing" });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expectHeld(terminal);
+    expect(terminal.hasPendingSubmission()).toBe(false);
+    answer({ data: "", cols: 80, rows: 24 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(written()).toEqual(["wake"]);
+  });
+
+  it("writes the Enter over a captured line drawn above Claude Code's slash-command list", async () => {
+    const terminal = createTerminal(100, 30);
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const read = vi.spyOn(analysisOf(terminal), "serializeScreen");
+    terminal.submit("/restart", "tok-1", undefined, { kind: "settled-prompt-exact" });
+    for (const chunk of castOutput(CLAUDE_SLASH, "slash-list")) ptyOutput!(chunk);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(written()).toEqual(["/restart", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("writes the Enter into a composer the box rule can't read, leaving no draft", async () => {
+    const terminal = submitGuarded("settled-prompt", "/restart");
+    const boxed = [
+      "⏺ Done.",
+      "╭" + "─".repeat(40) + "╮",
+      "│ > /restart" + " ".repeat(29) + "│",
+      "╰" + "─".repeat(40) + "╯",
+      "  ? for shortcuts",
+    ];
+    ptyOutput!(CLEAR + boxed.join("\r\n"));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(written()).toEqual(["/restart", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(info(terminal).lastTypedInputAt ?? 0).toBeLessThan(info(terminal).lastStateChange!);
+  });
+
+  it.each<[string, TerminalSubmitGuard | undefined]>([
+    ["an unguarded line", undefined],
+    ["a no-choice-dialog line", "no-choice-dialog"],
+  ])("never reads the screen for %s", async (_label, guard) => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const read = vi
+      .spyOn(analysisOf(terminal), "serializeScreen")
+      .mockImplementation(() => new Promise(() => {}));
+    terminal.submit("ls", "tok-1", undefined, guard);
+    ptyOutput!(CLEAR + PERMISSION_DIALOG);
+    // The Enter goes at the end of the delay, as before.
+    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) - 1);
+    expect(written()).toEqual(["ls"]);
+    await vi.advanceTimersByTimeAsync(2);
+
+    expect(read).not.toHaveBeenCalled();
+    expect(written()).toEqual(["ls", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
+describe("TerminalProcess guarded lines before a run is seen at its prompt (#18018)", () => {
+  /** A Decisions answer: mid-turn for a CLI that queues input, and at a question. */
+  const DECISION: TerminalSubmitGuard = {
+    kind: "settled-prompt-exact",
+    acceptWorking: true,
+    acceptQuestion: true,
+  };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** A terminal whose state is the real state service's, driven by the settles its monitor reports. */
+  function createObserved(): TerminalProcess {
+    return new TerminalProcess(
+      "t-run",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal" },
+      { emitData: () => {}, onExit: () => {} },
+      { agentStateService: new AgentStateService(), ptyPool: null, processTreeCache: null },
+      SPAWN_CONTEXT,
+      createMockPty()
+    );
+  }
+
+  /** What the activity monitor reports, as the pty-host receives it from the analysis worker. */
+  function report(
+    terminal: TerminalProcess,
+    state: "busy" | "idle",
+    metadata: ActivityStateMetadata
+  ): void {
+    (
+      terminal as unknown as {
+        handleAnalysisActivityState(
+          spawnedAt: number,
+          state: "busy" | "idle",
+          metadata: ActivityStateMetadata
+        ): void;
+      }
+    ).handleAnalysisActivityState(terminal.getInfo().spawnedAt, state, metadata);
+  }
+
+  /** A run seen at its prompt reads its own input row, read now. */
+  function settleAtInputRow(terminal: TerminalProcess): void {
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: Date.now(),
+    });
+  }
+
+  async function send(terminal: TerminalProcess, token: string, guard = DECISION) {
+    ptyWriteMock.mockClear();
+    terminal.submit("wake", token, undefined, guard);
+    await vi.advanceTimersByTimeAsync(3_000);
+    return {
+      written: ptyWriteMock.mock.calls.map((c) => c[0]),
+      phase: terminal.getSubmission(token)?.phase,
+    };
+  }
+
+  function analysisOf(terminal: TerminalProcess): AnalysisBackend {
+    return (terminal as unknown as { analysis: AnalysisBackend }).analysis;
+  }
+
+  it.each<[string, ActivityStateMetadata]>([
+    // A CLI still silent at the boot timeout, or a shell line whose glyph reads
+    // as a prompt before the CLI draws anything: the classifier's prompt, with
+    // no input row of the agent's on screen.
+    ["silent through its boot timeout", { trigger: "timeout", waitingReason: "prompt" }],
+    [
+      "behind a shell line with a prompt glyph",
+      { trigger: "pattern", patternConfidence: 0.9, waitingReason: "prompt" },
+    ],
+  ])(
+    "holds the line for a launched run %s, and types it once its input row is read",
+    async (_label, settle) => {
+      const terminal = createObserved();
+      Object.assign(info(terminal), {
+        detectedAgentId: "claude",
+        agentState: "working",
+        lastStateChange: Date.now() - 20_000,
+        promptUnseen: true,
+        promptUnseenAt: Date.now() - 20_000,
+      });
+
+      report(terminal, "idle", settle);
+      expect(info(terminal)).toMatchObject({
+        agentState: "waiting",
+        waitingReason: "prompt",
+        promptUnseen: true,
+      });
+      expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+      // The CLI draws its prompt without going busy: the re-read is its first sight.
+      const rereadAt = Date.now();
+      report(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt,
+        promptDrawnAt: rereadAt,
+      });
+      expect(info(terminal).promptUnseen).toBeUndefined();
+      expect(await send(terminal, "tok-2")).toEqual({
+        written: ["wake", "\r"],
+        phase: "pty_written",
+      });
+    }
+  );
+
+  it("holds the line when the last agent's settle lands after another agent took the pane", async () => {
+    const terminal = createObserved();
+    Object.assign(info(terminal), {
+      detectedAgentId: "claude",
+      agentState: "working",
+      lastStateChange: Date.now() - 20_000,
+    });
+    vi.spyOn(analysisOf(terminal), "hasMonitor").mockReturnValue(true);
+    vi.spyOn(analysisOf(terminal), "reconfigureMonitor").mockImplementation(() => {});
+
+    // The worker reads Claude settled at its input row and posts it in the
+    // same millisecond as Codex takes over the same PTY, under the same spawnedAt.
+    const readForClaude = Date.now();
+    terminal.handleAgentDetection(
+      { detectionState: "agent", detected: true, agentType: "codex" },
+      terminal.getInfo().spawnedAt
+    );
+    expect(info(terminal).promptUnseen).toBe(true);
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: readForClaude,
+    });
+
+    expect(info(terminal)).toMatchObject({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      promptUnseen: true,
+    });
+    expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+    // Codex's own input row, read after it took over.
+    report(terminal, "busy", { trigger: "output" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    settleAtInputRow(terminal);
+    expect(info(terminal).promptUnseen).toBeUndefined();
+    expect(await send(terminal, "tok-2")).toEqual({
+      written: ["wake", "\r"],
+      phase: "pty_written",
+    });
+  });
+
+  it("holds lines after a Claude /restart until the new process is seen at its prompt", async () => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const readBeforeEnter = Date.now();
+
+    terminal.submit("/restart", "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    // A notice queued right behind it, and a second restart.
+    terminal.submit("wake", "tok-queued", undefined, "settled-prompt");
+    terminal.submit("/restart", "tok-again", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart", "\r"]);
+    expect(terminal.getSubmission("tok-restart")?.phase).toBe("pty_written");
+    expect(terminal.getSubmission("tok-queued")?.phase).toBe("cancelled");
+    expect(terminal.getSubmission("tok-again")?.phase).toBe("cancelled");
+    expect(info(terminal).promptUnseen).toBe(true);
+
+    // The old process's settle, read before the Enter, lands after it.
+    report(terminal, "busy", { trigger: "input" });
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: readBeforeEnter,
+    });
+    expect(info(terminal).promptUnseen).toBe(true);
+    expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+    report(terminal, "busy", { trigger: "output" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    settleAtInputRow(terminal);
+    expect(await send(terminal, "tok-2")).toEqual({
+      written: ["wake", "\r"],
+      phase: "pty_written",
+    });
+  });
+
+  it("marks a /restart padded with spaces as a new run, as its Enter is written", async () => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    let enterAt: number | undefined;
+    ptyWriteMock.mockImplementation((data) => {
+      if (data === "\r") enterAt = Date.now();
+    });
+
+    terminal.submit("  /restart ", "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(enterAt).toBeDefined();
+    expect(info(terminal).promptUnseen).toBe(true);
+    expect(info(terminal).promptUnseenAt).toBe(enterAt);
+  });
+
+  it.each([
+    ["sent to another agent", "codex", "/restart"],
+    ["carrying more than the command", "claude", "/restart now"],
+    ["inside a longer line", "claude", "please /restart"],
+  ])("leaves the run seen at its prompt for a /restart %s", async (_label, agentId, text) => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    info(terminal).detectedAgentId = agentId;
+
+    terminal.submit(text, "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual([text, "\r"]);
+    expect(info(terminal).promptUnseen).toBeUndefined();
   });
 });

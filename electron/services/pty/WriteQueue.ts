@@ -3,6 +3,7 @@ import {
   MAX_RETAINED_SUBMISSIONS,
   type TerminalSubmissionPhase,
   type TerminalSubmissionRecord,
+  type TerminalSubmissionStop,
 } from "../../../shared/types/terminalSubmission.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS } from "./OutputProgressTracker.js";
 
@@ -57,6 +58,11 @@ export interface SubmitExecutionContext {
    */
   isWithdrawn?: () => boolean;
   /**
+   * A guarded submission's body is in the composer whole and its own Enter
+   * was held back (#18157): the record says so if it ends `cancelled`.
+   */
+  markEnterHeld?: () => void;
+  /**
    * Image paths the composer attached, in document order (#12792). Whether
    * they are delivered as attachments is `performSubmit`'s decision.
    */
@@ -83,6 +89,11 @@ interface SubmitJob {
    * written, and false leaves it an ordinary submission in every other way.
    */
   refuse?: () => boolean;
+  /**
+   * Asked of a guarded line again right before its Enter (#17908): false
+   * holds the Enter back as a withdrawal would, leaving the body a draft.
+   */
+  holdsAtEnter?: () => boolean;
 }
 
 /**
@@ -221,7 +232,8 @@ export class WriteQueue {
     onPtyWritten?: () => void,
     admit?: () => boolean,
     imagePaths?: readonly string[],
-    refuse?: () => boolean
+    refuse?: () => boolean,
+    holdsAtEnter?: () => boolean
   ): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
@@ -253,6 +265,7 @@ export class WriteQueue {
       admit,
       imagePaths,
       ...(refuse !== undefined ? { refuse } : {}),
+      ...(holdsAtEnter !== undefined ? { holdsAtEnter } : {}),
     });
   }
 
@@ -363,9 +376,13 @@ export class WriteQueue {
    * submission as `cancelled`. Deleting from the pending map is the one
    * operation that can only succeed once.
    */
-  private finalizeIfPending(token: string, phase: TerminalSubmissionPhase): void {
+  private finalizeIfPending(
+    token: string,
+    phase: TerminalSubmissionPhase,
+    cancelledAt?: TerminalSubmissionStop
+  ): void {
     if (this.pendingSubmissions.delete(token) === false) return;
-    this.retainFinalized(token, phase);
+    this.retainFinalized(token, phase, cancelledAt);
   }
 
   /**
@@ -373,10 +390,19 @@ export class WriteQueue {
    * reused token cannot leave two answers behind for `getSubmission` to pick
    * the wrong one of.
    */
-  private retainFinalized(token: string, phase: TerminalSubmissionPhase): void {
+  private retainFinalized(
+    token: string,
+    phase: TerminalSubmissionPhase,
+    cancelledAt?: TerminalSubmissionStop
+  ): void {
     const existing = this.finalizedSubmissions.findIndex((record) => record.token === token);
     if (existing !== -1) this.finalizedSubmissions.splice(existing, 1);
-    this.finalizedSubmissions.push({ token, phase, at: Date.now() });
+    this.finalizedSubmissions.push({
+      token,
+      phase,
+      at: Date.now(),
+      ...(phase === "cancelled" && cancelledAt !== undefined ? { cancelledAt } : {}),
+    });
     while (this.finalizedSubmissions.length > MAX_RETAINED_SUBMISSIONS) {
       this.finalizedSubmissions.shift();
     }
@@ -546,11 +572,13 @@ export class WriteQueue {
           (next.refuse !== undefined && !admitJob(() => !next.refuse!())) ||
           (next.admit !== undefined && !admitJob(next.admit))
         ) {
-          if (token !== undefined) this.finalizeIfPending(token, "cancelled");
+          // Refused with nothing written (#18157).
+          if (token !== undefined) this.finalizeIfPending(token, "cancelled", "admission");
           continue;
         }
         if (token !== undefined) this.advanceSubmission(token, "writing");
         const guarded = next.admit !== undefined;
+        let enterHeld = false;
         if (guarded) {
           this.inFlightGuardedToken = token;
           this.inFlightGuardedWithdrawn = false;
@@ -568,7 +596,11 @@ export class WriteQueue {
               ? {
                   abandonEnterOnInput: true,
                   isWithdrawn: () =>
-                    this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn,
+                    (this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn) ||
+                    next.holdsAtEnter?.() === false,
+                  markEnterHeld: () => {
+                    enterHeld = true;
+                  },
                 }
               : {}),
             ...(next.imagePaths !== undefined && next.imagePaths.length > 0
@@ -584,7 +616,9 @@ export class WriteQueue {
           // from every path that abandons the Enter. Still pending here means
           // `markPtyWritten` never fired, so the submission was dropped rather
           // than handed over (#12337).
-          if (token !== undefined) this.finalizeIfPending(token, "cancelled");
+          if (token !== undefined) {
+            this.finalizeIfPending(token, "cancelled", enterHeld ? "enter" : undefined);
+          }
         } catch (error) {
           // A rejected submit is over — it will never write again — so the lane
           // drains normally and the exclusive-ownership invariant still holds.

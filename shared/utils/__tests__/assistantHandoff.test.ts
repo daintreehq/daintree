@@ -1,0 +1,46 @@
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  ASSISTANT_HANDOFF_MAX_LENGTH,
+  AssistantHandoffPromptSchema,
+  handoffFitsLaunchCommand,
+  isSendableHandoff,
+  isUsableHandoff,
+} from "../assistantHandoff.js";
+import { setAgentCommandDialectResolver } from "../shellEscape.js";
+
+afterEach(() => setAgentCommandDialectResolver(null));
+
+describe("assistant hand-offs (#18140)", () => {
+  it("carries line breaks and tabs, and no other control character", () => {
+    expect(isSendableHandoff("Continue:\r\n- tests pass\n\tdocs next")).toBe(true);
+    for (const text of ["go\u001b[2J", "go\rnow", "go\u0000", "go\u007f"]) {
+      expect(isSendableHandoff(text)).toBe(false);
+      expect(AssistantHandoffPromptSchema.safeParse(text).success).toBe(false);
+    }
+  });
+
+  it("refuses a blank hand-off, one read as an option, and one past the cap", () => {
+    setAgentCommandDialectResolver(() => "posix");
+    expect(isUsableHandoff("Continue from here")).toBe(true);
+    for (const text of ["", " \t\n", "-p go", "  --yolo"])
+      expect(isUsableHandoff(text)).toBe(false);
+    expect(isUsableHandoff("a".repeat(ASSISTANT_HANDOFF_MAX_LENGTH))).toBe(true);
+    expect(isUsableHandoff("a".repeat(ASSISTANT_HANDOFF_MAX_LENGTH + 1))).toBe(false);
+  });
+
+  it("refuses on Windows a hand-off its launch command couldn't carry, and nowhere else", () => {
+    const long = "word ".repeat(2_000);
+    setAgentCommandDialectResolver(() => "posix");
+    expect(handoffFitsLaunchCommand(long)).toBe(true);
+
+    setAgentCommandDialectResolver(() => "windows");
+    expect(handoffFitsLaunchCommand("a".repeat(7_500))).toBe(true);
+    expect(handoffFitsLaunchCommand(long)).toBe(false);
+    expect(isUsableHandoff(long)).toBe(false);
+    // The CLI's native argument escapes each `"`, and the script doubles each
+    // `'`, so a hand-off full of either fits in fewer characters.
+    expect(handoffFitsLaunchCommand(`x${'"'.repeat(6_500)}x`)).toBe(false);
+    expect(handoffFitsLaunchCommand(`x${"'".repeat(5_000)}x`)).toBe(false);
+    expect(handoffFitsLaunchCommand(`x${"'".repeat(4_000)}x`)).toBe(true);
+  });
+});

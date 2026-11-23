@@ -54,7 +54,9 @@ export function TruncatedTooltip({
   open,
   onOpenChange,
 }: TruncatedTooltipProps) {
-  const ownDetection = useTruncationDetection();
+  const ownDetection = useTruncationDetection(
+    typeof content === "string" || typeof content === "number" ? content : undefined
+  );
   const isTruncated = isTruncatedProp ?? ownDetection.isTruncated;
   const showTooltip = isTruncated && !disabled;
 

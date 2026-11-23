@@ -122,6 +122,12 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // the three calls it exists to replace, with a worktree left behind when the
   // last one fails (#15738).
   "agent.launchInNewWorktree": "create, setup wait and launch in one call; split, it is three",
+  // One tool for every one-shot watch: a host's link or capacity, agents
+  // waiting, and plugins' notifications for an assistant (#18154), which share
+  // one per-run budget, one list and one cancel. A second watch tool would
+  // be the second channel #13496 and #16215 rule out.
+  "host.watch":
+    "every watch kind shares one budget, list and cancel; split, it is a second channel",
 };
 
 /**
@@ -621,7 +627,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // that a Claude Code pane drew its "Update installed" footer without reading
   // the screen. The result schema is closed, so the field must be advertised;
   // its one description was cut to a clause first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_500;
+  // 63_500 → 63_900 for #18151, measured at 63_870 B (+457 over develop's
+  // 63_413): `worktree` on the close result, what git showed of a finished
+  // agent's worktree when the user was asked about closing it, so the
+  // assistant can report unpushed commits and uncommitted paths. The result
+  // schema is closed, so the field must be advertised; it went from a
+  // three-way union with per-field descriptions to one flat object with a
+  // single description first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_900;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1080,7 +1093,22 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 199_336): the same `updateInstalled` the external half above pays for, on
   // `terminal.getStatus` and on the host status read, whose terminal rows
   // extend the same entry schema. Both are in-app; only the first is external.
-  const MAX_COHORT_PAYLOAD_BYTES = 200_000;
+  // 200_000 → 201_300 for #17908, measured at 201_212 B (+1_296 over develop's
+  // 199_916): `terminal.applyClaudeUpdateOwned`, so an assistant can apply a
+  // Claude Code update. Most of it is the closed output schema, which says
+  // whether `/restart` went in, why not, and Claude's refusal line as drawn;
+  // its descriptions were trimmed first. In-app only, so the external ceiling
+  // does not move.
+  // 201_300 → 202_700 for #18151, measured at 202_585 B (+1_371 over develop's
+  // 201_214): the same `worktree` the external half above pays for, on each of
+  // the three tools that answer with the close result (`terminal.close`,
+  // `terminal.closeOwned` and `terminal.closeAll`).
+  // 202_700 → 204_300 for #18154, measured at 204_229 B (+1_644 over develop's
+  // 202_585): `host.watch` on plugins' notifications for an assistant. Most of
+  // it is the closed output schema, which names each notification an arm hands
+  // over and the one a read returns, with its text; the argument descriptions
+  // were trimmed first. In-app only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

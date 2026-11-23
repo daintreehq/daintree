@@ -13,6 +13,26 @@ describe("parsePluginActionContext (#16751)", () => {
     expect(Object.isFrozen(parsed)).toBe(true);
   });
 
+  it("keeps the global Assistant's origin apart from the project Assistant's (#18153)", () => {
+    const sent = { dispatchSource: "agent", origin: "global-assistant", approval: "person" };
+    const parsed = parsePluginActionContext(sent);
+    expect(parsed).toEqual(sent);
+    expect(parsed).not.toBe(sent);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    // A standing answer let it through: who asked, and no approval.
+    expect(
+      parsePluginActionContext({ dispatchSource: "agent", origin: "global-assistant" })
+    ).toEqual({ dispatchSource: "agent", origin: "global-assistant" });
+  });
+
+  it.each(
+    (["user", "keybinding", "menu", "context-menu", "plugin"] as const).flatMap((source) =>
+      (["assistant", "global-assistant"] as const).map((origin) => [origin, source] as const)
+    )
+  )("refuses the %s origin on a %s dispatch", (origin, dispatchSource) => {
+    expect(() => parsePluginActionContext({ dispatchSource, origin })).toThrow();
+  });
+
   it("leaves out the optional fields a context doesn't carry", () => {
     expect(Object.keys(parsePluginActionContext({ dispatchSource: "menu" }))).toEqual([
       "dispatchSource",
@@ -27,6 +47,10 @@ describe("parsePluginActionContext (#16751)", () => {
     ["a non-literal origin", { dispatchSource: "agent", origin: "help" }],
     ["a non-literal approval", { dispatchSource: "agent", approval: "skip-preference" }],
     ["an origin off the agent source", { dispatchSource: "context-menu", origin: "assistant" }],
+    [
+      "a global origin off the agent source",
+      { dispatchSource: "plugin", origin: "global-assistant" },
+    ],
     ["an approval on a plugin dispatch", { dispatchSource: "plugin", approval: "person" }],
   ])("refuses %s", (_label, raw) => {
     expect(() => parsePluginActionContext(raw)).toThrow();

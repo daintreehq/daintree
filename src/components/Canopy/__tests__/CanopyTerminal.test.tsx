@@ -10,6 +10,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { keybindingService } from "@/services/KeybindingService";
 import {
   selectEffectiveTheme,
   useTerminalColorSchemeStore,
@@ -1625,6 +1626,18 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     xterm.current!.selection = "  something else";
     await act(async () => screen.getByText("Copy clean text").click());
     expect(writeText).toHaveBeenLastCalledWith("Release notes:\n- Added a clean copy");
+  });
+
+  // The frame keeps app shortcuts away from the run, so the shortcut the grid's
+  // menu shows on this row never reaches it (#18132).
+  it("shows no shortcut on Copy clean text", () => {
+    expect(keybindingService.getEffectiveCombo("terminal.copyClean")).toBeTruthy();
+    const { frame } = mount();
+    xterm.current!.selection = "some output";
+    openMenu(frame);
+    const row = screen.getByText("Copy clean text").closest('[role="menuitem"]')!;
+    expect(row.querySelectorAll("kbd")).toHaveLength(0);
+    expect(row.hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
   describe("clean copy of a Claude Code run (#15527)", () => {

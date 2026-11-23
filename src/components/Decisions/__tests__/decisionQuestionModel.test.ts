@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { DecisionThreadAnswer, DecisionThreadMessage } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionClosureNotice,
+  DecisionThreadAnswer,
+  DecisionThreadMessage,
+} from "@shared/types/decisionsQuestion";
+
+type DecisionClosureNoticeDelivery = DecisionClosureNotice["delivery"];
 import {
   choiceLabels,
+  closureNoticeText,
   emptyEntryText,
+  planHeading,
+  preparationFacts,
   positionText,
   questionStatusText,
+  replyModeText,
   threadEntryHeading,
 } from "../decisionQuestionModel";
 
@@ -155,5 +165,168 @@ describe("decisionQuestionModel", () => {
   it("gives a position only when there is more than one question", () => {
     expect(positionText(0, 1)).toBeNull();
     expect(positionText(1, 3)).toBe("2 of 3");
+  });
+
+  describe("the agent's preparation (#18042)", () => {
+    const OUTCOMES = ["agreed", "split", "not-run"] as const;
+
+    it("names each outcome apart, beside the same count", () => {
+      const facts = OUTCOMES.map((outcome) => preparationFacts({ agentsConsulted: 2, outcome }));
+      expect(new Set(facts.map(([consulted]) => consulted)).size).toBe(1);
+      expect(new Set(facts.map(([, outcome]) => outcome)).size).toBe(OUTCOMES.length);
+    });
+
+    it("counts the other agents the agent says it consulted, one apart from many", () => {
+      for (const count of [2, 5, 64]) {
+        const [consulted] = preparationFacts({ agentsConsulted: count, outcome: "agreed" });
+        expect(consulted).toMatch(new RegExp(`(^|\\D)${count} other agents\\b`));
+      }
+      const [one] = preparationFacts({ agentsConsulted: 1, outcome: "agreed" });
+      expect(one).toMatch(/(^|\D)1 other agent\b/);
+      expect(one).not.toMatch(/agents/);
+    });
+
+    it("says none were consulted without a count, whatever the outcome", () => {
+      for (const outcome of OUTCOMES) {
+        const [consulted, said] = preparationFacts({ agentsConsulted: 0, outcome });
+        expect(consulted).not.toMatch(/\d/);
+        expect(consulted).not.toBe(preparationFacts({ agentsConsulted: 2, outcome })[0]);
+        // The outcome is the agent's, kept beside a count that may disagree with it.
+        expect(said).toBe(preparationFacts({ agentsConsulted: 2, outcome })[1]);
+      }
+    });
+  });
+
+  describe("rounds and closing notices (#17943)", () => {
+    it("tells an advisory expiry, a withdrawal and a never-published question apart", () => {
+      const texts = [
+        questionStatusText({ status: "expired", closedReason: "expired", replyMode: "blocking" }),
+        questionStatusText({ status: "expired", closedReason: "expired", replyMode: "advisory" }),
+        questionStatusText({ status: "cancelled", closedReason: "withdrawn" }),
+        questionStatusText({ status: "cancelled", closedReason: "declined" }),
+        questionStatusText({ status: "publish-failed", closedReason: "never-published" }),
+        questionStatusText({ status: "publish-failed", closedReason: null }),
+      ];
+      expect(new Set(texts).size).toBe(texts.length);
+    });
+
+    it("names the mode only where its machine said", () => {
+      expect(replyModeText(undefined)).toBeNull();
+      expect(replyModeText("advisory")).not.toBe(replyModeText("blocking"));
+    });
+
+    it("heads the plan by whether it can still come", () => {
+      expect(planHeading("open")).toBe(planHeading("queued"));
+      expect(planHeading("open")).not.toBe(planHeading("expired"));
+    });
+
+    it("says how far the closing notice got, and what an advisory one says of the plan", () => {
+      expect(closureNoticeText({ closedReason: null, closureNotice: null })).toBeNull();
+      // A withdrawal types nothing.
+      expect(
+        closureNoticeText({
+          closedReason: "withdrawn",
+          closureNotice: { delivery: "pending", disposition: null },
+        })
+      ).toBeNull();
+      const delivered = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "delivered", disposition: null },
+      });
+      expect(delivered).toMatch(/was typed into the terminal\.$/);
+      const deliveries = (
+        ["pending", "delivered", "uncertain", "needs-attention", "stopped"] as const
+      ).map((delivery) =>
+        closureNoticeText({
+          closedReason: "declined",
+          closureNotice: { delivery, disposition: null },
+        })
+      );
+      expect(new Set(deliveries).size).toBe(deliveries.length);
+      const due = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+      });
+      const withheld = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "pending", disposition: "fallback-withheld" },
+      });
+      expect(due).toBe(
+        "The timeout notice was typed into the terminal. It says the agent may go ahead with its plan."
+      );
+      expect(withheld).toMatch(/It says the agent isn't cleared to go ahead/);
+    });
+
+    it("says what a notice says of the plan apart from how far it got, never that it told the agent (#17944)", () => {
+      const said = (delivery: DecisionClosureNoticeDelivery) =>
+        closureNoticeText({
+          closedReason: "expired",
+          closureNotice: { delivery, disposition: "fallback-due" },
+        });
+      expect(said("needs-attention")).toBe(
+        "The timeout notice stopped before it was typed into the terminal. It says the agent may go ahead with its plan."
+      );
+      expect(said("uncertain")).toBe(
+        "The timeout notice may or may not have been typed into the terminal. It says the agent may go ahead with its plan."
+      );
+      // It will never be typed: it says nothing of the plan.
+      expect(said("stopped")).toBe("The timeout notice won't be typed into the terminal.");
+      for (const delivery of ["pending", "needs-attention", "uncertain", "stopped"] as const) {
+        expect(said(delivery)).not.toMatch(/told|went ahead|carried out/);
+      }
+      // A question whose deadline passed before it was ever sent closed at its deadline too.
+      expect(
+        closureNoticeText({
+          closedReason: "never-published",
+          closureNotice: { delivery: "pending", disposition: null },
+        })
+      ).toBe("The timeout notice is waiting to be typed into the terminal.");
+    });
+
+    it("leaves out how far the notice got when the surface already says so, keeping what it says of the plan (#18026)", () => {
+      const due = {
+        closedReason: "expired",
+        closureNotice: { delivery: "needs-attention", disposition: "fallback-due" },
+      } as const;
+      expect(closureNoticeText(due, { closedReason: "expired", delivery: "needs-attention" })).toBe(
+        "The timeout notice says the agent may go ahead with its plan."
+      );
+      expect(
+        closureNoticeText(
+          { closedReason: "expired", closureNotice: { delivery: "uncertain", disposition: null } },
+          { closedReason: "expired", delivery: "uncertain" }
+        )
+      ).toBeNull();
+      expect(
+        closureNoticeText(
+          {
+            closedReason: "never-published",
+            closureNotice: { delivery: "uncertain", disposition: "fallback-withheld" },
+          },
+          { closedReason: "never-published", delivery: "uncertain" }
+        )
+      ).toBe("The timeout notice says the agent isn't cleared to go ahead with its plan.");
+      // Another delivery, or another notice, than the surface states is still said here: the reads can differ.
+      expect(closureNoticeText(due, { closedReason: "expired", delivery: "uncertain" })).toBe(
+        closureNoticeText(due)
+      );
+      expect(
+        closureNoticeText(
+          { closedReason: "declined", closureNotice: { delivery: "uncertain", disposition: null } },
+          { closedReason: "expired", delivery: "uncertain" }
+        )
+      ).toBe("Your decline may or may not have been typed into the terminal.");
+      expect(
+        closureNoticeText(
+          {
+            closedReason: "expired",
+            closureNotice: { delivery: "delivered", disposition: "fallback-withheld" },
+          },
+          { closedReason: "expired", delivery: "needs-attention" }
+        )
+      ).toBe(
+        "The timeout notice was typed into the terminal. It says the agent isn't cleared to go ahead with its plan."
+      );
+    });
   });
 });

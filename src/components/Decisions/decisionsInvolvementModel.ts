@@ -19,6 +19,27 @@ export const MODE_LABEL: Record<DecisionsInvolvementMode, string> = {
   recommend: "Bring a recommendation",
 };
 
+/** The mode a temporary one switches to: with two modes, always the other one. */
+export function otherMode(mode: DecisionsInvolvementMode): DecisionsInvolvementMode {
+  return mode === "recommend" ? "involve-early" : "recommend";
+}
+
+/** What a mode asks of agents, short enough for a hint under the choice. */
+export const MODE_HINT: Record<DecisionsInvolvementMode, string> = {
+  "involve-early": "Agents come to you while they explore the options.",
+  recommend: "Agents consult other agents first, then bring you a recommendation.",
+};
+
+const MODE_GERUND: Record<DecisionsInvolvementMode, string> = {
+  "involve-early": "asking while exploring",
+  recommend: "bringing a recommendation",
+};
+
+/** What follows the draft's temporary mode, under its end. */
+export function afterText(normalMode: DecisionsInvolvementMode): string {
+  return `Then back to ${MODE_GERUND[normalMode]}. At most 30 days away.`;
+}
+
 export type AvailablePreference = Extract<DecisionsInvolvementPreference, { status: "available" }>;
 
 /** What agents are asked to do in `mode`, in words. */
@@ -37,7 +58,7 @@ export function thenText(preference: AvailablePreference): string {
 
 /** What agents do while the copy may be out of date: the library tells them to keep their usual behaviour. */
 export const STALE_TEXT =
-  "This computer hasn't confirmed it since it last reconnected or heard of a change: until it does, agents use their usual behaviour.";
+  "Agents use their usual behaviour until this computer confirms it again: it hasn't since it last reconnected or heard of a change.";
 
 /**
  * Where it was set, for the person: `computer` is the owner computer, which
@@ -110,6 +131,22 @@ export function unavailableText(reason: DecisionsInvolvementUnavailableReason): 
   return `${UNAVAILABLE[reason]} Agents use their usual behaviour.`;
 }
 
+const UNAVAILABLE_LABEL: Record<DecisionsInvolvementUnavailableReason, string> = {
+  "not-set": "Not set",
+  "not-synced": "Not read from the relay yet",
+  unsupported: "Not supported by this relay",
+  "signer-revoked": "Set by a device that was removed",
+  "device-revoked": "This computer was removed from the relay",
+};
+
+/** Why no preference is in force, short enough for the inbox's one line. */
+export function unavailableLabel(reason: DecisionsInvolvementUnavailableReason): string {
+  return UNAVAILABLE_LABEL[reason];
+}
+
+/** Shown after a conflict while this computer waits to read the revision that won. */
+export const WAITING_TEXT = "Reading the newer preference before it can be changed again…";
+
 /**
  * Why the person can't change the preference here, or null when they can.
  * `refusedByRelay` is a save this opening sent that the relay turned away as
@@ -155,6 +192,13 @@ export interface InvolvementDraft {
 function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
+
+/** The earliest end a temporary mode can have at `now`, as a field's minute: the next whole one. */
+export function earliestUntil(now: number): string {
+  return localDateTime(Math.floor(now / MINUTE_MS + 1) * MINUTE_MS);
+}
+
+const MINUTE_MS = 60 * 1000;
 
 /** `ms` as a `datetime-local` value, in local time. */
 export function localDateTime(ms: number): string {
@@ -208,14 +252,16 @@ export function draftFrom(
       keptUntil: null,
     };
   }
-  const active = inForce(preference, now).until !== null ? preference.override : null;
-  const other: DecisionsInvolvementMode =
-    preference.normalMode === "recommend" ? "involve-early" : "recommend";
+  // A temporary mode the same as the usual one (a phone can set one) changes nothing agents do, so
+  // the draft starts without it: saving keeps what agents are told, where keeping it would flip it.
+  const inForceOverride = inForce(preference, now).until !== null ? preference.override : null;
+  const active = inForceOverride?.mode === preference.normalMode ? null : inForceOverride;
   return {
     normalMode: preference.normalMode,
     consultCount: preference.consultCount,
     temporary: active !== null,
-    temporaryMode: active?.mode ?? other,
+    // With two modes, a draft's temporary mode is always the other one.
+    temporaryMode: otherMode(preference.normalMode),
     until: localDateTime(active === null ? fallbackUntil : Date.parse(active.until)),
     keptUntil: active?.until ?? null,
   };
@@ -228,44 +274,81 @@ export function draftUntil(draft: InvolvementDraft): string | null {
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
+/** Whether the draft's count is used: by a recommendation, usual or for a while. */
+export function countApplies(draft: InvolvementDraft): boolean {
+  return (
+    draft.normalMode === "recommend" || (draft.temporary && draft.temporaryMode === "recommend")
+  );
+}
+
+/** Whether two drafts would save the same preference: a temporary mode's fields count only while it is on. */
+export function sameDraft(a: InvolvementDraft, b: InvolvementDraft): boolean {
+  if (
+    a.normalMode !== b.normalMode ||
+    (countApplies(a) && a.consultCount !== b.consultCount) ||
+    a.temporary !== b.temporary
+  ) {
+    return false;
+  }
+  return !a.temporary || (a.temporaryMode === b.temporaryMode && draftUntil(a) === draftUntil(b));
+}
+
 export interface DraftIssue {
   field: "count" | "until";
   text: string;
 }
 
-/** Why the draft can't be saved at `now`, and which field says so, or null. */
-export function draftIssue(draft: InvolvementDraft, now: number): DraftIssue | null {
-  const count = draft.consultCount;
-  if (!Number.isInteger(count) || count < 1 || count > CONSULT_MAX) {
-    return { field: "count", text: `Enter a whole number from 1 to ${CONSULT_MAX}.` };
+/** Why the draft can't be saved at `now`, one per field that says so, count first. */
+export function draftIssues(draft: InvolvementDraft, now: number): DraftIssue[] {
+  const issues: DraftIssue[] = [];
+  // A count no mode uses is never shown, so it can't hold the draft back.
+  if (countApplies(draft) && !validCount(draft.consultCount)) {
+    issues.push({ field: "count", text: `Enter a whole number from 1 to ${CONSULT_MAX}.` });
   }
+  const until = untilIssue(draft, now);
+  if (until !== null) issues.push({ field: "until", text: until });
+  return issues;
+}
+
+/** The first reason the draft can't be saved at `now`, or null. */
+export function draftIssue(draft: InvolvementDraft, now: number): DraftIssue | null {
+  return draftIssues(draft, now)[0] ?? null;
+}
+
+function untilIssue(draft: InvolvementDraft, now: number): string | null {
   if (!draft.temporary) return null;
   const until = draftUntil(draft);
   if (until === null) {
-    return {
-      field: "until",
-      text:
-        draft.keptUntil === null && skippedLocalTime(draft.until)
-          ? "The clocks skip that time here. Choose another."
-          : "Choose when it ends.",
-    };
+    return draft.keptUntil === null && skippedLocalTime(draft.until)
+      ? "The clocks skip that time here. Choose another."
+      : "Choose when it ends.";
   }
   const ms = Date.parse(until);
-  if (ms <= now) return { field: "until", text: "It has to end in the future." };
-  if (ms > now + OVERRIDE_MAX_MS) return { field: "until", text: "It can last at most 30 days." };
+  if (ms <= now) return "It has to end in the future.";
+  if (ms > now + OVERRIDE_MAX_MS) return "It can last at most 30 days.";
   return null;
 }
 
-/** The change to send, replacing `expectedRevision`. Call only once `draftIssue` is null. */
+function validCount(count: number): boolean {
+  return Number.isInteger(count) && count >= 1 && count <= CONSULT_MAX;
+}
+
+/**
+ * The change to send, replacing `expectedRevision`. Call only once `draftIssue`
+ * is null. A count no mode uses may have been left mid-edit when its field
+ * went: `keptCount`, the one the draft started from, goes instead.
+ */
 export function draftPayload(
   draft: InvolvementDraft,
-  expectedRevision: number
+  expectedRevision: number,
+  keptCount: number = draft.consultCount
 ): SetDecisionsInvolvementPayload {
   const until = draft.temporary ? draftUntil(draft) : null;
   return {
     expectedRevision,
     normalMode: draft.normalMode,
-    consultCount: draft.consultCount,
+    consultCount:
+      countApplies(draft) && validCount(draft.consultCount) ? draft.consultCount : keptCount,
     override: until === null ? null : { mode: draft.temporaryMode, until },
   };
 }
@@ -291,7 +374,7 @@ export function saveNotice(
     case "conflict":
       return {
         severity: "warning",
-        text: "The relay holds a different version of the preference from the one you changed, so your change wasn't saved. Review the latest before changing it again.",
+        text: "Your change wasn't saved: the relay holds a different version of the preference.",
         relayRefusal: false,
       };
     case "unsupported":

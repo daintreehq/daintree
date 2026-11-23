@@ -15,6 +15,7 @@ import {
   type HostWatchDelivery,
   type HostWatchHostCoverage,
   type HostWatchLostReason,
+  type HostWatchNotification,
   type HostWatchObserved,
   type HostWatchResult,
   type HostWatchStatus,
@@ -24,6 +25,7 @@ import {
   AGENT_DIRECTORY_ENTRIES_MAX,
   type AgentDirectory,
 } from "../../../shared/types/agentDirectory.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import {
   NOTIFY_TARGET_SETTLE_MS,
@@ -31,6 +33,10 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, LaneWakeOutcome } from "../../services/mcp-server/terminalNotify.js";
 import type { HostWatchNotice } from "../../services/mcp-server/noticeFormat.js";
+import type {
+  AssistantPluginNotification,
+  AssistantPluginNotifications,
+} from "../../services/assistantPluginNotifications.js";
 import { createLogger } from "../../utils/logger.js";
 import type { ElapsedStamp } from "../link/elapsed.js";
 import type { AgentWaitingHeard, AgentWaitingListener } from "../metrics/agentWaiting.js";
@@ -78,6 +84,16 @@ export interface HostWatchesDeps {
    * already waiting. Never dials a host. Absent, no agent watch is armed.
    */
   readAgents?(hostId: HostId, options: { projectId?: string }): Promise<AgentWatchRead>;
+  /**
+   * Plugins' notifications marked for an assistant (#18154), loaded the first
+   * time a run arms for them or reads one. Absent, neither is offered.
+   */
+  pluginNotifications?(): Promise<AssistantPluginNotifications>;
+  /**
+   * Whether a running run may still be handed work: a global session that
+   * stood down may not. Absent, every running one may.
+   */
+  mayTakeWork?(run: OpenRun): boolean;
   /** This machine's name, for an agent watch on it. */
   localName?(): string;
   /** The run's own notice line. Absent, no watch is armed: nothing could tell it. */
@@ -146,7 +162,25 @@ interface AgentsRecord extends BaseRecord {
   fired: { seen: HostWatchAgent[]; overflow: HostId[] } | null;
 }
 
-type WatchRecord = HostRecord | AgentsRecord;
+/**
+ * A watch on plugins' notifications for an assistant (#18154), on this
+ * machine. Each notification goes to one watch: the most specific, then the
+ * longest armed.
+ */
+interface PluginsRecord extends BaseRecord {
+  kind: "plugins";
+  hostId: HostId;
+  hostName: string;
+  /** Always set for a project's run: its own project. Null: every project, for the global run. */
+  projectId: string | null;
+  pluginId: string | null;
+  /** Arm order: the longest armed is the lowest, whatever the wall clock did. */
+  seq: number;
+  /** What it fired on, held for it until its notice is typed or let go; never the words. */
+  fired: HostWatchNotification | null;
+}
+
+type WatchRecord = HostRecord | AgentsRecord | PluginsRecord;
 
 type Reply = Omit<HostWatchResult, "outcome" | "detail" | "retryAfterMs">;
 
@@ -170,9 +204,20 @@ const TYPING_DETAIL =
 const ENDED_DETAIL = "It had already ended; nothing changed.";
 const AGENTS_ARMED_DETAIL =
   "Armed. One notice comes when an agent is first seen starting to wait for a reason you named, or when it expires or is lost. Those already waiting are in agents.matches; no notice comes for them. Cancel it with operation cancel and its watchId.";
+const PLUGINS_ARMED_DETAIL =
+  "Armed. One notice comes for the next plugin notification for an assistant that matches, unless another assistant's watch takes it, or when it expires. Those no assistant had taken are in notifications.matches, now yours; no notice comes for them. Read each one's text with operation read; list names the latest ones you were given.";
+const PLUGINS_ENDED_DETAIL =
+  "It was armed and has already ended; see its status. Those no assistant had taken are in notifications.matches.";
+const STANDBY_DETAIL =
+  "This session isn't the one coordinating, so it isn't handed plugins' notifications.";
+const OTHER_PROJECT_DETAIL = "A project's assistant hears only its own project's plugins.";
+const NOT_GIVEN_DETAIL =
+  "No plugin notification with that id was given to this run, or it is no longer kept or allowed.";
 const AGENTS_ENDED_DETAIL =
   "It was armed and has already ended; see its status. Those already waiting are in agents.matches.";
 
+/** Notifications given to a run that its `list` names, newest last. */
+const LISTED_NOTIFICATIONS_MAX = 8;
 /** Agents a settle keeps in full: as many as one host's directory names. */
 const PENDING_AGENTS_MAX = AGENT_DIRECTORY_ENTRIES_MAX;
 /** Agents past those it counts, so a burst across a fleet stays bounded. */
@@ -205,6 +250,10 @@ function conditionOf(args: HostWatchArgs): HostWatchCondition {
       args.agentsWaiting === true
         ? { waitingReasons: reasonsOf(args.waitingReasons), projectId: args.projectId ?? null }
         : null,
+    pluginNotifications:
+      args.pluginNotifications === true
+        ? { projectId: args.projectId ?? null, pluginId: args.pluginId ?? null }
+        : null,
   };
 }
 
@@ -215,7 +264,12 @@ function sameReasons(a: HostWatchWaitingReasons, b: HostWatchWaitingReasons): bo
 function sameCondition(a: HostWatchCondition, b: HostWatchCondition): boolean {
   const agentsA = a.agentsWaiting;
   const agentsB = b.agentsWaiting;
+  const pluginsA = a.pluginNotifications;
+  const pluginsB = b.pluginNotifications;
   return (
+    (pluginsA === null || pluginsB === null
+      ? pluginsA === pluginsB
+      : pluginsA.projectId === pluginsB.projectId && pluginsA.pluginId === pluginsB.pluginId) &&
     a.connection === b.connection &&
     a.memoryAvailableBytesAtLeast === b.memoryAvailableBytesAtLeast &&
     a.cpuIdleCoresAtLeast === b.cpuIdleCoresAtLeast &&
@@ -233,6 +287,28 @@ function reasonMatches(
   reason: HostWatchAgent["waitingReason"]
 ): boolean {
   return anyReason(reasons) || (reason !== null && reasons.includes(reason));
+}
+
+/** What an assistant is told of a plugin's notification before it reads it: never its words. */
+function summaryOf(notification: AssistantPluginNotification): HostWatchNotification {
+  return {
+    notificationId: notification.notificationId,
+    pluginId: notification.pluginId,
+    pluginName: notification.pluginName,
+    projectId: notification.projectId,
+    dedupeKey: notification.dedupeKey,
+    severity: notification.severity,
+    createdAt: notification.createdAt,
+  };
+}
+
+/** A watch naming its project, then its plugin, then the longest armed. */
+function outranks(a: PluginsRecord, b: PluginsRecord): boolean {
+  const project = Number(a.projectId !== null) - Number(b.projectId !== null);
+  if (project !== 0) return project > 0;
+  const plugin = Number(a.pluginId !== null) - Number(b.pluginId !== null);
+  if (plugin !== 0) return plugin > 0;
+  return a.seq < b.seq;
 }
 
 /** The arming run's own pane: it is never told it waits itself. */
@@ -283,6 +359,10 @@ export class HostWatches {
   private readonly watches = new Map<string, WatchRecord>();
   private unsubscribe: (() => void) | null = null;
   private unsubscribeAgents: (() => void) | null = null;
+  private unsubscribePlugins: (() => void) | null = null;
+  /** The plugin notification store, once a run armed for it or read one. */
+  private notifications: AssistantPluginNotifications | null = null;
+  private armSeq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -297,30 +377,69 @@ export class HostWatches {
         return this.cancel(caller, args.watchId ?? "");
       case "list":
         return this.list(caller, args.hostId);
+      case "read":
+        return this.refuse("unsupported", UNSUPPORTED_DETAIL);
     }
   }
 
   /** Whether anything is listening or timed: true only while a watch is armed. */
   isActive(): boolean {
-    return this.unsubscribe !== null || this.unsubscribeAgents !== null || this.timer !== null;
+    return (
+      this.unsubscribe !== null ||
+      this.unsubscribeAgents !== null ||
+      this.unsubscribePlugins !== null ||
+      this.timer !== null
+    );
   }
 
   /** A help session ended or was relaunched: what its runs armed goes, unannounced. */
   endSession(helpSessionId: string): void {
+    const gone: WatchRecord[] = [];
     for (const [watchId, record] of this.watches) {
-      if (record.run.sessionId === helpSessionId) this.watches.delete(watchId);
+      if (record.run.sessionId !== helpSessionId) continue;
+      this.watches.delete(watchId);
+      gone.push(record);
     }
+    // What its notices held and never typed goes to another watch, never back to it.
+    for (const record of gone) this.letGo(record);
+    this.release();
+  }
+
+  /**
+   * Coordination left a global session (#18143): it is handed no more
+   * plugins' notifications. Its plugin watches end, and what one held and
+   * hasn't started typing goes to another watch. What it was given stays its.
+   */
+  standDown(helpSessionId: string): void {
+    const unsettled: PluginsRecord[] = [];
+    for (const record of this.watches.values()) {
+      if (record.kind !== "plugins" || record.run.sessionId !== helpSessionId) continue;
+      if (record.status === "armed") {
+        this.end(record, "cancelled");
+      } else if (
+        record.typing !== true &&
+        (record.delivery === "queued" || record.delivery === "held")
+      ) {
+        record.delivery = "withdrawn";
+        unsettled.push(record);
+      }
+    }
+    for (const record of unsettled) this.letGo(record);
+    for (const record of unsettled) this.trimHistory(record.run);
     this.release();
   }
 
   dispose(): void {
     this.disposed = true;
+    for (const record of this.watches.values()) this.letGo(record);
     this.watches.clear();
     this.release();
   }
 
   private arm(caller: OpenRun, args: HostWatchArgs): HostWatchResult {
-    if (args.agentsWaiting === true) return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    if (args.agentsWaiting === true || args.pluginNotifications === true) {
+      return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    }
     const hostId = args.hostId ?? "";
     if (hostId === LOCAL_HOST_ID) return this.refuse("unsupported", LOCAL_DETAIL);
     if (this.deps.observe === undefined || this.deps.queueNotice === undefined || this.disposed) {
@@ -472,6 +591,137 @@ export class HostWatches {
       duplicate ? DUPLICATE_DETAIL : armed ? AGENTS_ARMED_DETAIL : AGENTS_ENDED_DETAIL,
       { armed, watches: [this.view(record)], observed: null, agents: current }
     );
+  }
+
+  /**
+   * Arms one watch on plugins' notifications for an assistant (#18154): a
+   * project's run on its own project, the global run on one or every
+   * project. Those no assistant has taken that match are handed to the
+   * caller now, in the answer, and the watch stays armed for the next.
+   */
+  async armPlugins(caller: OpenRun, args: HostWatchArgs): Promise<HostWatchResult> {
+    this.prune();
+    if (this.deps.queueNotice === undefined || this.disposed) {
+      return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    }
+    // A session standing by would take work the coordinating one should get.
+    if (caller.standby === true) return this.refuse("unsupported", STANDBY_DETAIL);
+    const global = isGlobalAssistantId(caller.projectId);
+    if (!global && args.projectId !== undefined && args.projectId !== caller.projectId) {
+      return this.refuse("not_found", OTHER_PROJECT_DETAIL);
+    }
+    const store = await this.store();
+    if (store === null || this.disposed || !this.deps.stillRunning(caller)) {
+      return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    }
+    // Coordination may have moved while the store loaded.
+    if (!this.mayTakeWork(caller)) return this.refuse("unsupported", STANDBY_DETAIL);
+    const projectId = global ? (args.projectId ?? null) : caller.projectId;
+    const pluginId = args.pluginId ?? null;
+    const condition: HostWatchCondition = {
+      ...conditionOf(args),
+      pluginNotifications: { projectId, pluginId },
+    };
+    const key = runKey(caller);
+    const mine = [...this.watches.values()].filter((record) => runKey(record.run) === key);
+    let record = mine.find(
+      (candidate): candidate is PluginsRecord =>
+        candidate.kind === "plugins" &&
+        candidate.status === "armed" &&
+        candidate.expiresAt > this.deps.now() &&
+        sameCondition(candidate.condition, condition)
+    );
+    const duplicate = record !== undefined;
+    if (record === undefined) {
+      const room = this.room(mine, null);
+      if (room !== null) return room;
+      const now = this.deps.now();
+      const note = sanitizeNotifyNote(args.note);
+      record = {
+        kind: "plugins",
+        watchId: `hw-${this.deps.newId()}`,
+        run: caller,
+        hostId: LOCAL_HOST_ID,
+        hostName: this.localName(),
+        condition,
+        projectId,
+        pluginId,
+        seq: ++this.armSeq,
+        fired: null,
+        ...(note !== undefined ? { note } : {}),
+        armedAt: now,
+        expiresAt: now + (args.expiresInSeconds ?? HOST_WATCH_EXPIRES_DEFAULT_S) * 1000,
+        status: "armed",
+        endedAt: null,
+        lostReason: null,
+        observed: null,
+        delivery: "none",
+      };
+      this.watches.set(record.watchId, record);
+      this.acquire();
+    }
+    // Nothing is awaited from here, so no notification lands between the read and the take.
+    const matches: HostWatchNotification[] = [];
+    let omitted = 0;
+    for (const notification of store.untaken({ projectId, pluginId })) {
+      const summary = summaryOf(notification);
+      // One a more specific or longer-armed watch hears goes to it, as a live one would.
+      const best = this.bestFor(summary);
+      if (best !== null && best !== record) {
+        this.offer(summary, best);
+      } else if (matches.length >= HOST_WATCH_MATCHES_MAX) {
+        omitted += 1;
+      } else if (store.take(notification.notificationId, null, key)) {
+        matches.push(summary);
+      }
+    }
+    const armed = record.status === "armed";
+    return this.answer(
+      "ok",
+      duplicate ? DUPLICATE_DETAIL : armed ? PLUGINS_ARMED_DETAIL : PLUGINS_ENDED_DETAIL,
+      {
+        armed,
+        watches: [this.view(record)],
+        observed: null,
+        notifications: { matches, omitted },
+      }
+    );
+  }
+
+  /**
+   * A plugin notification's own words (#18154), for the run it was given to
+   * only, while it is kept and the person still lets that project's assistant
+   * use that plugin's tools. Its text comes back as a tool result, never typed.
+   */
+  async read(caller: OpenRun, notificationId: string): Promise<HostWatchResult> {
+    if (this.disposed) return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    const store = await this.store();
+    if (store === null || this.disposed) return this.refuse("unsupported", UNSUPPORTED_DETAIL);
+    const notification = store.read(notificationId, runKey(caller));
+    if (notification === null) return this.refuse("not_found", NOT_GIVEN_DETAIL);
+    return this.answer("ok", null, {
+      armed: false,
+      watches: [],
+      observed: null,
+      notification: {
+        ...summaryOf(notification),
+        title: notification.title,
+        body: notification.body,
+      },
+    });
+  }
+
+  private async store(): Promise<AssistantPluginNotifications | null> {
+    if (this.notifications !== null) return this.notifications;
+    const load = this.deps.pluginNotifications;
+    if (load === undefined) return null;
+    try {
+      this.notifications ??= await load();
+    } catch (error) {
+      logger.warn("Couldn't load plugins' notifications for assistants", { error });
+      return null;
+    }
+    return this.notifications;
   }
 
   /** Null when the run and this Shell have room for one more; the refusal otherwise. */
@@ -632,6 +882,7 @@ export class HostWatches {
     } else if (record.delivery === "queued" || record.delivery === "held") {
       record.delivery = "withdrawn";
       detail = WITHDRAWN_DETAIL;
+      this.letGo(record);
     }
     return this.answer("ok", detail, {
       armed: false,
@@ -649,10 +900,24 @@ export class HostWatches {
     const ended = mine
       .filter((record) => record.status !== "armed")
       .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+    // The latest this run was given and may still read, so an answer or a line it lost is
+    // found again; few, so the answer stays small beside every watch it lists.
+    const given =
+      hostId === undefined || hostId === LOCAL_HOST_ID
+        ? (this.notifications?.takenBy(key) ?? [])
+        : [];
     return this.answer("ok", null, {
       armed: armed.length > 0,
       watches: [...armed, ...ended].map((record) => this.view(record)),
       observed: null,
+      ...(given.length > 0
+        ? {
+            notifications: {
+              matches: given.slice(-LISTED_NOTIFICATIONS_MAX).map(summaryOf),
+              omitted: Math.max(0, given.length - LISTED_NOTIFICATIONS_MAX),
+            },
+          }
+        : {}),
     });
   }
 
@@ -664,10 +929,15 @@ export class HostWatches {
       if (record.status !== "armed") continue;
       if (!this.deps.stillRunning(record.run)) {
         this.watches.delete(record.watchId);
+        this.letGo(record);
         continue;
       }
       if (record.kind === "agents") {
         this.evaluateAgents(record, now);
+        continue;
+      }
+      if (record.kind === "plugins") {
+        if (now >= record.expiresAt) this.end(record, "expired");
         continue;
       }
       const host = this.host(record.hostId);
@@ -765,6 +1035,61 @@ export class HostWatches {
     this.release();
   }
 
+  /** A plugin marked a notification for an assistant: it goes to one armed watch, if any hears it. */
+  private onNotification(notification: AssistantPluginNotification): void {
+    if (this.disposed) return;
+    this.offer(summaryOf(notification));
+    this.release();
+  }
+
+  /**
+   * Hands one notification to the watch that outranks every other that hears
+   * it, holding it there until its notice is typed. None hears it: it waits,
+   * untaken, for the next arm.
+   */
+  private offer(notification: HostWatchNotification, chosen?: PluginsRecord): void {
+    const store = this.notifications;
+    if (store === null || this.disposed || !store.mayHear(notification)) return;
+    const best = chosen ?? this.bestFor(notification);
+    if (best === null || !store.hold(notification.notificationId, best.watchId)) return;
+    best.fired = notification;
+    this.end(best, "fired");
+  }
+
+  /** The armed watch that outranks every other that hears this one; null when none does. */
+  private bestFor(notification: HostWatchNotification): PluginsRecord | null {
+    const now = this.deps.now();
+    let best: PluginsRecord | null = null;
+    for (const record of this.watches.values()) {
+      if (record.kind !== "plugins" || record.status !== "armed") continue;
+      // Past its time, though its timer hasn't run yet.
+      if (now >= record.expiresAt) continue;
+      if (record.projectId !== null && record.projectId !== notification.projectId) continue;
+      if (record.pluginId !== null && record.pluginId !== notification.pluginId) continue;
+      if (!this.mayTakeWork(record.run)) continue;
+      if (best === null || outranks(record, best)) best = record;
+    }
+    return best;
+  }
+
+  /** A running run that may still be handed work. */
+  private mayTakeWork(run: OpenRun): boolean {
+    return this.deps.stillRunning(run) && (this.deps.mayTakeWork?.(run) ?? true);
+  }
+
+  /**
+   * A plugin watch's notice won't be typed: what it held goes to the next
+   * watch that hears it, or back to wait. One already typed stays its run's.
+   */
+  private letGo(record: WatchRecord): void {
+    if (record.kind !== "plugins" || record.fired === null) return;
+    const store = this.notifications;
+    if (store === null || !store.release(record.fired.notificationId, record.watchId)) return;
+    if (this.disposed) return;
+    this.offer(record.fired);
+    this.release();
+  }
+
   private hears(record: AgentsRecord, hostId: HostId, heard: AgentWaitingHeard): boolean {
     if (record.hostId !== null && record.hostId !== hostId) return false;
     if (!this.reachable(hostId)) return false;
@@ -829,7 +1154,7 @@ export class HostWatches {
     record.endedAt = this.deps.now();
     if (record.kind === "host") {
       delete record.holdingSince;
-    } else {
+    } else if (record.kind === "agents") {
       record.pending.clear();
       record.overflow.clear();
       record.unclassified.clear();
@@ -858,6 +1183,7 @@ export class HostWatches {
             omitted: fired.overflow.filter((hostId) => this.reachable(hostId)).length,
           };
     const agents = shown();
+    const notification = record.kind === "plugins" ? record.fired : null;
     const notice: HostWatchNotice = {
       hostName: record.hostName,
       watchId: record.watchId,
@@ -868,7 +1194,17 @@ export class HostWatches {
       ...(record.note !== undefined ? { note: record.note } : {}),
       ...(record.lostReason !== null ? { lostReason: record.lostReason } : {}),
       ...(agents !== null ? { agents } : {}),
+      ...(notification !== null ? { notification } : {}),
     };
+    // A plugin's notification is typed only while the run may take work and the person allows it.
+    const pluginAllowed = (): boolean =>
+      notification === null ||
+      (this.mayTakeWork(record.run) && this.notifications?.mayHear(notification) === true);
+    // Still held for this watch: the switch turned off and on again took it away.
+    const pluginHeld = (): boolean =>
+      notification === null ||
+      record.typing === true ||
+      this.notifications?.holds(notification.notificationId, record.watchId) === true;
     const live = (): boolean =>
       !this.disposed &&
       this.watches.get(record.watchId) === record &&
@@ -881,6 +1217,9 @@ export class HostWatches {
       recheck: () => {
         if (record.delivery === "withdrawn") return { kind: "unavailable", reason: "cancelled" };
         if (!live()) return { kind: "unavailable", reason: "relaunched" };
+        if (!pluginAllowed() || !pluginHeld()) {
+          return { kind: "unavailable", reason: "control-off" };
+        }
         // What a host showed is never typed once the person turned its control off.
         const current = shown();
         if (current !== null) {
@@ -892,7 +1231,24 @@ export class HostWatches {
         return { kind: "ready" };
       },
       beforeType: () => {
-        if (!live()) return false;
+        if (!live()) {
+          this.letGo(record);
+          return false;
+        }
+        if (
+          notification !== null &&
+          (!pluginAllowed() ||
+            this.notifications?.take(
+              notification.notificationId,
+              record.watchId,
+              runKey(record.run)
+            ) !== true)
+        ) {
+          record.delivery = "unavailable";
+          this.letGo(record);
+          this.trimHistory(record.run);
+          return false;
+        }
         record.typing = true;
         // It is being typed now, whatever held it before.
         record.delivery = "queued";
@@ -901,6 +1257,7 @@ export class HostWatches {
       report: (outcome: LaneWakeOutcome) => {
         if (record.delivery === "withdrawn") return;
         record.delivery = outcome.kind;
+        if (outcome.kind === "unavailable") this.letGo(record);
         if (outcome.kind !== "held") this.trimHistory(record.run);
       },
     };
@@ -916,6 +1273,7 @@ export class HostWatches {
     } catch (error) {
       logger.warn("Couldn't queue a host watch's notice", { error });
       record.delivery = "unavailable";
+      this.letGo(record);
     }
   }
 
@@ -948,16 +1306,28 @@ export class HostWatches {
     return false;
   }
 
+  private pluginsArmed(): boolean {
+    for (const record of this.watches.values()) {
+      if (record.kind === "plugins" && record.status === "armed") return true;
+    }
+    return false;
+  }
+
   /** Forgets what runs no longer running remembered; a successor never sees them. */
   private prune(): void {
+    const gone: WatchRecord[] = [];
     for (const [watchId, record] of this.watches) {
-      if (!this.deps.stillRunning(record.run)) this.watches.delete(watchId);
+      if (this.deps.stillRunning(record.run)) continue;
+      this.watches.delete(watchId);
+      gone.push(record);
     }
+    for (const record of gone) this.letGo(record);
     this.release();
   }
 
   private acquire(): void {
-    if (this.unsubscribe === null && this.deps.observe !== undefined) {
+    // A plugin watch needs no host: only its own timer and the store.
+    if (this.unsubscribe === null && this.deps.observe !== undefined && this.hostsNeeded()) {
       this.unsubscribe = this.deps.observe({
         changed: () => this.evaluate(),
         summary: (hostId) => this.onSummary(hostId),
@@ -972,6 +1342,11 @@ export class HostWatches {
         this.onAgent(hostId, heard)
       );
     }
+    if (this.unsubscribePlugins === null && this.notifications !== null && this.pluginsArmed()) {
+      this.unsubscribePlugins = this.notifications.subscribe((notification) =>
+        this.onNotification(notification)
+      );
+    }
     this.schedule();
   }
 
@@ -982,6 +1357,16 @@ export class HostWatches {
       this.unsubscribeAgents = null;
       unsubscribeAgents?.();
     }
+    if (!this.pluginsArmed() || this.disposed) {
+      const unsubscribePlugins = this.unsubscribePlugins;
+      this.unsubscribePlugins = null;
+      unsubscribePlugins?.();
+    }
+    if (!this.hostsNeeded() || this.disposed) {
+      const unsubscribe = this.unsubscribe;
+      this.unsubscribe = null;
+      unsubscribe?.();
+    }
     if (this.armedCount() > 0 && !this.disposed) {
       this.schedule();
       return;
@@ -990,9 +1375,14 @@ export class HostWatches {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    const unsubscribe = this.unsubscribe;
-    this.unsubscribe = null;
-    unsubscribe?.();
+  }
+
+  /** A host or agent watch is armed: the link, host list and summaries are listened to. */
+  private hostsNeeded(): boolean {
+    for (const record of this.watches.values()) {
+      if (record.kind !== "plugins" && record.status === "armed") return true;
+    }
+    return false;
   }
 
   /** One timer, to the next expiry, link settle or agent settle. */

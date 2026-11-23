@@ -18,11 +18,16 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { execFileSync, spawn, type ChildProcess } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import { dispatchAction } from "./actions";
+import { FAKE_AGENT_READY, ptyWrite, readFakeAgentLaunchLog } from "./fakeAgent";
+import { getTerminalTextById } from "./terminal";
 
 export const DECISIONS_CHECKOUT =
   process.platform === "win32" ? "" : (process.env.DAINTREE_DECISIONS_CHECKOUT ?? "");
@@ -33,7 +38,20 @@ export interface LocalRelay {
   claimSecret: string;
   start(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Sets how far the relay's clock runs ahead of the real one (absolute, so a
+   * repeated call never moves it twice) and runs whatever came due, as the
+   * runtime would once that time arrived. Only a relay started `clocked` has it.
+   */
+  setClock(offsetMs: number): Promise<void>;
 }
+
+/**
+ * The Decisions checkout's e2e-only Worker entry (0.9.0 and later): the
+ * production Worker and Durable Object behind a clock a test moves with
+ * `POST /__e2e/clock`. The shipped bundle never includes it.
+ */
+export const CLOCKED_RELAY_ENTRY = "worker/tests/e2e-clock-worker.ts";
 
 /** A port nothing listens on now, so specs running side by side each get their own relay. */
 function freePort(): number {
@@ -56,10 +74,16 @@ const reachable = (url: string) =>
   );
 
 export function localRelay(
-  port = Number(process.env.DAINTREE_DECISIONS_PORT ?? freePort())
+  port = Number(process.env.DAINTREE_DECISIONS_PORT ?? freePort()),
+  options: { clocked?: boolean } = {}
 ): LocalRelay {
   if (!existsSync(path.join(DECISIONS_CHECKOUT, "app", "dist", "index.html"))) {
     throw new Error(`${DECISIONS_CHECKOUT} has no app/dist: run pnpm build there first`);
+  }
+  if (options.clocked && !existsSync(path.join(DECISIONS_CHECKOUT, CLOCKED_RELAY_ENTRY))) {
+    throw new Error(
+      `${DECISIONS_CHECKOUT} has no ${CLOCKED_RELAY_ENTRY}: check out 0.9.0 or later`
+    );
   }
   const persist = mkdtempSync(path.join(tmpdir(), "daintree-e2e-decisions-relay-"));
   const claimSecret = randomBytes(24).toString("hex");
@@ -82,6 +106,7 @@ export function localRelay(
         "exec",
         "wrangler",
         "dev",
+        ...(options.clocked ? [CLOCKED_RELAY_ENTRY] : []),
         "--port",
         String(port),
         "--ip",
@@ -169,7 +194,19 @@ export function localRelay(
     throw new Error(`The relay on ${origin} wouldn't stop`);
   };
 
-  return { origin, host: `127.0.0.1:${port}`, claimSecret, start, stop };
+  const setClock = async (offsetMs: number) => {
+    if (!options.clocked) throw new Error("This relay wasn't started clocked");
+    const res = await fetch(`${origin}/__e2e/clock`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offset_ms: offsetMs }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok)
+      throw new Error(`The relay didn't move its clock (${res.status}): ${await res.text()}`);
+  };
+
+  return { origin, host: `127.0.0.1:${port}`, claimSecret, start, stop, setClock };
 }
 
 export const DECISIONS_SETTINGS_DIALOG = '[role="dialog"]:has(.settings-sidebar)';
@@ -205,7 +242,7 @@ export async function connectRelay(
   await expect(panel.getByText(`${relay.host} is ready to claim`, { exact: true })).toBeVisible({
     timeout: 20_000,
   });
-  await panel.getByLabel("Claim secret").fill(relay.claimSecret);
+  await panel.getByRole("textbox", { name: "Claim secret" }).fill(relay.claimSecret);
   await panel.getByRole("button", { name: "Claim relay" }).click();
   await expect(panel.getByText("Setup isn't finished")).toBeVisible({ timeout: 30_000 });
   for (const name of agentNames) {
@@ -252,9 +289,10 @@ export async function pairPhone(
   const panel = page.locator(DECISIONS_SETTINGS_DIALOG);
   await panel.getByRole("button", { name: "Pair a phone" }).click();
   const dialog = page.locator('[data-testid="decisions-pairing-dialog"]');
-  const link = dialog.locator('span[title^="http"]');
+  // The whole link is the text; the dialog only clamps how much of it shows.
+  const link = dialog.locator("span.font-mono").filter({ hasText: /^https?:\/\// });
   await expect(link).toBeVisible({ timeout: 20_000 });
-  const invite = (await link.getAttribute("title"))!;
+  const invite = (await link.textContent())!.trim();
   expect(invite.startsWith(`${relay.origin}/pair#`)).toBe(true);
 
   await device.goto(invite);
@@ -316,16 +354,12 @@ export async function openPhoneNotifications(device: Page): Promise<void> {
 }
 
 export async function choosePhoneOption(device: Page, name: RegExp): Promise<void> {
-  // The composer mirrors the choices as chips. Use the full option cards here.
-  await device.locator('input[type="radio"]').and(device.getByRole("radio", { name })).check();
+  // The phone app (0.9.0) offers a question's choices as radio chips beside its composer.
+  await device.getByRole("radio", { name }).first().check();
 }
 
-/** Opens `question` on the phone, picks `option` and/or writes `text`, and submits. */
-export async function answerOnPhone(
-  phone: Page,
-  question: string,
-  answer: { option?: RegExp; text?: string }
-): Promise<void> {
+/** Opens `question` from the phone's Home. */
+export async function openQuestionOnPhone(phone: Page, question: string): Promise<void> {
   await openInbox(phone);
   const row = phone.getByRole("main").getByRole("link").filter({ hasText: question });
   const newQuestions = phone.getByRole("button", { name: /^\d+ new questions?\b/ });
@@ -334,8 +368,140 @@ export async function answerOnPhone(
   if (await newQuestions.isVisible()) await newQuestions.click();
   await row.click({ timeout: 60_000 });
   await expect(phone.getByRole("heading", { name: question })).toBeVisible();
+}
+
+/** Opens `question` on the phone, picks `option` and/or writes `text`, and submits. */
+export async function answerOnPhone(
+  phone: Page,
+  question: string,
+  answer: { option?: RegExp; text?: string }
+): Promise<void> {
+  await openQuestionOnPhone(phone, question);
   if (answer.option) await choosePhoneOption(phone, answer.option);
   if (answer.text !== undefined) await phone.locator("textarea").first().fill(answer.text);
   await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
   await expect(phone.getByText("Your answer", { exact: true })).toBeVisible({ timeout: 30_000 });
+}
+
+export interface DecisionsAgent {
+  paneId: string;
+  /** The `daintree-decisions` server its launch was handed, connected as the agent would. */
+  mcp: Client;
+}
+
+/**
+ * Launches a fake Claude (installed `perPane`) in a new pane of `page`'s
+ * project, gets it past its trust prompt, and connects to the
+ * `daintree-decisions` server its launch was handed, as Claude would: Claude
+ * gets its servers in a file named on its command line, bearer and all.
+ */
+export async function launchDecisionsAgent(page: Page, binDir: string): Promise<DecisionsAgent> {
+  const launches = readFakeAgentLaunchLog(binDir).length;
+  const launched = await dispatchAction(
+    page,
+    "agent.launch",
+    { agentId: "claude", location: "grid" },
+    { source: "test" }
+  );
+  expect(launched.ok, JSON.stringify(launched)).toBe(true);
+  await expect
+    .poll(() => readFakeAgentLaunchLog(binDir).length, { timeout: 60_000 })
+    .toBe(launches + 1);
+  const launch = readFakeAgentLaunchLog(binDir)[launches];
+  const paneId = launch.paneId!;
+  await expect
+    .poll(() => getTerminalTextById(page, paneId), { timeout: 60_000 })
+    .toContain("Enter to confirm");
+  expect(await ptyWrite(page, paneId, "\r")).toBe(true);
+  await expect
+    .poll(() => getTerminalTextById(page, paneId), { timeout: 60_000 })
+    .toContain(FAKE_AGENT_READY);
+
+  const configAt = launch.argv.indexOf("--mcp-config");
+  expect(configAt, launch.argv.join(" ")).toBeGreaterThanOrEqual(0);
+  const config = JSON.parse(readFileSync(launch.argv[configAt + 1], "utf8")) as {
+    mcpServers: Record<string, { url: string; headers?: Record<string, string> }>;
+  };
+  const server = config.mcpServers["daintree-decisions"];
+  expect(server, Object.keys(config.mcpServers).join(", ")).toBeTruthy();
+  const mcp = new Client({ name: "fake-claude", version: "9.9.9" });
+  await mcp.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: server.headers ?? {} },
+    })
+  );
+  return { paneId, mcp };
+}
+
+/** An MCP tool result's text. */
+export function toolText(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  return (result.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join("\n");
+}
+
+/** What `ask_human` returns for a question it took. */
+export interface AskReceipt {
+  question_id: string;
+  expires_at: string;
+  reply_mode: string;
+  planned_fallback: string | null;
+  enforced_requirement: string;
+}
+
+/**
+ * Calls `ask_human` as an agent would. Daintree decides advice only once it
+ * has read that a phone of the person's can show the plan, and that read ages
+ * (a moved clock ages it at once), so a `support-unknown` refusal, or a
+ * `no-capable-reader` one before a just-paired phone's declaration is read,
+ * is asked again a moment later, as the refusal itself says to.
+ */
+export async function askHuman(client: Client, args: Record<string, unknown>): Promise<AskReceipt> {
+  let refusal = "";
+  for (const end = Date.now() + 90_000; Date.now() < end;) {
+    const asked = await client.callTool({ name: "ask_human", arguments: args });
+    if (!asked.isError) return asked.structuredContent as unknown as AskReceipt;
+    refusal = toolText(asked);
+    if (!/^[a-z_]+: (support-unknown|no-capable-reader): /.test(refusal)) break;
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`ask_human was refused: ${refusal}`);
+}
+
+/** `get_decision` for `id`, as the agent that asked reads it. */
+export async function getDecision(client: Client, id: string): Promise<Record<string, unknown>> {
+  const read = await client.callTool({ name: "get_decision", arguments: { question_id: id } });
+  expect(read.isError, toolText(read)).toBeFalsy();
+  return read.structuredContent as Record<string, unknown>;
+}
+
+const BLOCK_START = "[DAINTREE DECISION ANSWER]";
+const BLOCK_END = "[END DAINTREE DECISION ANSWER]";
+
+/** Each block begun in what a terminal received, cut at its end marker, whole or not. */
+function blocksBegun(typed: string): { text: string; whole: boolean }[] {
+  return typed
+    .split(BLOCK_START)
+    .slice(1)
+    .map((b) => {
+      const end = b.indexOf(BLOCK_END);
+      return end < 0 ? { text: b, whole: false } : { text: b.slice(0, end), whole: true };
+    });
+}
+
+/** Whether a block names question `id` in its own `question_id` line, alias or not. */
+function namesQuestion(block: string, id: string): boolean {
+  return block
+    .split("\n")
+    .some((line) => line === `question_id: ${id}` || line.startsWith(`question_id: ${id} (`));
+}
+
+/** Every whole Decisions block for question `id` in what a terminal received. */
+export function decisionBlocks(typed: string, id: string): string[] {
+  return blocksBegun(typed)
+    .filter((b) => b.whole && namesQuestion(b.text, id))
+    .map((b) => b.text);
+}
+
+/** How many Decisions blocks for question `id` a terminal received, those cut short included. */
+export function decisionBlockStarts(typed: string, id: string): number {
+  return blocksBegun(typed).filter((b) => namesQuestion(b.text, id)).length;
 }

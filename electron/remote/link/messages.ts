@@ -84,6 +84,18 @@ export interface LinkClientInfo {
    * sends it none higher. Absent from older Shells, which read three.
    */
   assistantSlots?: number;
+  /**
+   * Whether this Shell tracked agent usage (#17981) when it sent the HELLO.
+   * Present, the Shell also says so with `host.agent-usage-demand` as the
+   * session opens and on every change, and the host waits for that before
+   * reading usage for it. Absent from older Shells, which always want it.
+   */
+  agentUsage?: boolean;
+  /**
+   * This Shell reads `host.agent-stop-changed` (#17933), so the host may send
+   * it its agents' stops. Absent from older Shells, which are sent none.
+   */
+  agentStopChanges?: boolean;
 }
 
 export interface HelloMessage {

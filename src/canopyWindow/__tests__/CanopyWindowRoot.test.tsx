@@ -33,6 +33,18 @@ const openAssistantFromCanopyWindow = vi.hoisted(() =>
   )
 );
 
+const inboxHosts = vi.hoisted(
+  () =>
+    [] as Array<{
+      navigateToTerminal?: (terminal: { terminalId: string; projectId: string }) => void;
+    }>
+);
+vi.mock("@/components/Decisions/DecisionsInboxHost", () => ({
+  DecisionsInboxHost: (props: (typeof inboxHosts)[number]) => {
+    inboxHosts.push(props);
+    return null;
+  },
+}));
 vi.mock("@/components/Canopy/CanopyView", () => ({
   CanopyView: ({ frame }: { frame: CanopyFrame }) => {
     shownFrames.push(frame);
@@ -121,6 +133,7 @@ function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
 
 beforeEach(() => {
   shownFrames.length = 0;
+  inboxHosts.length = 0;
   toasterProps.length = 0;
   vi.clearAllMocks();
   useCanopyStore.setState({ snapshot: null, mode: "unset" });
@@ -154,6 +167,16 @@ describe("CanopyWindowRoot", () => {
     expect(view.getByTestId("inbox")).toBeTruthy();
     expect(shownFrames[0]).toBe(CANOPY_WINDOW_FRAME);
     expect(projectShell).not.toHaveBeenCalled();
+  });
+
+  it("holds the Decisions inbox, whose Go to terminal opens the project's window on it (#18048)", async () => {
+    render(<CanopyWindowRoot />);
+    await act(async () => {});
+
+    const navigateToTerminal = inboxHosts.at(-1)?.navigateToTerminal;
+    expect(navigateToTerminal).toBeTypeOf("function");
+    navigateToTerminal!({ terminalId: "agent-1", projectId: "project-a" });
+    expect(goToRun).toHaveBeenCalledExactlyOnceWith({ workspaceId: "project-a", runId: "agent-1" });
   });
 
   it("sends double-Shift back to the last project window, as Canopy's key goes (#16578)", async () => {

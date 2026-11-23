@@ -4,21 +4,19 @@ import { DecisionsIcon } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import {
-  useDecisionsQuestionViewStore,
-  type DecisionsQuestionViewRequest,
-} from "@/store/decisionsQuestionViewStore";
+import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
+import { askerNotes } from "./decisionsInboxModel";
 import { targetKey } from "./decisionQuestionTarget";
 import { positionText } from "./decisionQuestionModel";
 import {
   useDecisionQuestionReader,
   useDecisionsReaderRetention,
   useQuestionCancel,
-  type TaggedRead,
 } from "./useDecisionQuestionReader";
 import { useDecisionQuestionSeen, useListedQuestion } from "./useDecisionQuestionSeen";
+import { useThreadMessageScroll } from "./useThreadMessageScroll";
 
 /** A pane's Decisions chip, where the close returns while it still shows. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -89,41 +87,15 @@ export function DecisionQuestionDialog() {
   const cancel = useQuestionCancel(target, reader, isOpen);
   const { dismissal } = cancel;
 
-  // A follow-up's notification opens its question at that follow-up (#17235),
-  // once per opening, so a read again stays put. A read already on screen as
-  // it opens can predate the follow-up: without it there, the thread is shown
-  // once a read made for this opening lands.
+  // A follow-up's notification opens its question at that follow-up (#17235), once per opening.
   const bodyRef = useRef<HTMLDivElement>(null);
-  const threadScroll = useRef<{
-    request: DecisionsQuestionViewRequest;
-    stale: TaggedRead | null;
-    done: boolean;
-  } | null>(null);
   const { shownRead } = reader;
   // Read here counts as seen on this computer (#17895), as in the inbox.
   const shownQuestion = reader.current?.result === "read" ? reader.current.question : null;
   const listed = useListedQuestion(shownQuestion, isOpen);
   useDecisionQuestionSeen(listed, shownQuestion, isOpen, bodyRef);
-  useEffect(() => {
-    // Content is never kept past the close, nor once it has been scrolled to.
-    if (!isOpen || request?.threadMessageId === undefined) {
-      threadScroll.current = null;
-      return;
-    }
-    let pending = threadScroll.current;
-    if (pending?.request !== request) {
-      pending = { request, stale: shownRead, done: false };
-      threadScroll.current = pending;
-    }
-    if (pending.done || shownRead?.read.result !== "read") return;
-    const body = bodyRef.current;
-    const entry = body?.querySelector(`[data-message-id="${CSS.escape(request.threadMessageId)}"]`);
-    if (entry == null && shownRead === pending.stale) return;
-    threadScroll.current = { request, stale: null, done: true };
-    (entry ?? body?.querySelector('[data-testid="decision-question-thread"]'))?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [isOpen, request, shownRead]);
+  // Content is never kept past the close, nor once it has been scrolled to.
+  useThreadMessageScroll(isOpen ? request : null, request?.threadMessageId, shownRead, bodyRef);
 
   const hasPrevious = index > 0;
   const hasNext = index < count - 1;
@@ -227,7 +199,14 @@ export function DecisionQuestionDialog() {
         </AppDialog.Header>
         <AppDialog.Body resetScrollKey={key ?? undefined}>
           <div ref={bodyRef} data-testid="decision-question-body">
-            <DecisionQuestionReadView reader={reader} target={target} active={isOpen} followUps />
+            <DecisionQuestionReadView
+              reader={reader}
+              target={target}
+              active={isOpen}
+              followUps
+              listed={listed}
+              deliveryNotice={listed === null ? null : (askerNotes(listed)?.composer ?? null)}
+            />
           </div>
         </AppDialog.Body>
         {reader.cancellable && (
@@ -282,7 +261,7 @@ export function DecisionQuestionDialog() {
                 onClick={cancel.ask}
                 data-testid="decision-question-dismiss"
               >
-                Dismiss question
+                Decline question
               </Button>
             )}
           </AppDialog.Footer>

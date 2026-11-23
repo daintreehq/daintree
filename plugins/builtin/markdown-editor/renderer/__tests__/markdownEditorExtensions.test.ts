@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -9,8 +9,8 @@ import {
   docUtf8Bytes,
   externalChange,
   followHeadingLink,
-  linkTargetAt,
 } from "../markdownEditorExtensions";
+import { linkTargetAt } from "@/components/Markdown/markdownLinkTarget";
 
 // Counts whole-document passes of the fragment resolver's pipeline: its heading
 // ids step runs once per parse, whatever the caller kept from an earlier one.
@@ -73,6 +73,25 @@ function modClick(view: EditorView): MouseEvent {
 const TWO_RISKS = "- [Risks](#risks-1)\n\n## Risks\n\nFirst.\n\n## Risks\n\nSecond.\n";
 
 let mounted: ReturnType<typeof mount> | null = null;
+
+// jsdom has no layout: scrolling the caret into view makes CodeMirror measure it
+// through Range rects jsdom lacks, and the error surfaces from the scheduled measure.
+const rangeStubs = { getClientRects: () => [], getBoundingClientRect: () => new DOMRect() };
+const rangeOriginals = new Map<string, PropertyDescriptor | undefined>();
+
+beforeAll(() => {
+  for (const [name, value] of Object.entries(rangeStubs)) {
+    rangeOriginals.set(name, Object.getOwnPropertyDescriptor(Range.prototype, name));
+    Object.defineProperty(Range.prototype, name, { configurable: true, value });
+  }
+});
+
+afterAll(() => {
+  for (const [name, descriptor] of rangeOriginals) {
+    if (descriptor) Object.defineProperty(Range.prototype, name, descriptor);
+    else Reflect.deleteProperty(Range.prototype, name);
+  }
+});
 
 beforeEach(() => {
   Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });

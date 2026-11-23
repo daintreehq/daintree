@@ -32,7 +32,11 @@ let attached = 0;
 
 function state(): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    coordinating: false,
+    occupied: true,
     generation: main.generation,
     agentId: "claude",
     terminalId: "g-1",

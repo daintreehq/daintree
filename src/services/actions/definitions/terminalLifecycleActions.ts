@@ -3,6 +3,7 @@ import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
 import { PanelCloseResultSchema } from "@shared/types/panelClose";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
+import { ApplyClaudeUpdateResultSchema } from "@shared/types/claudeUpdateApply";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import { usePanelStore } from "@/store/panelStore";
@@ -555,6 +556,72 @@ export function registerTerminalLifecycleActions(
     },
   }));
 
+  // Applying a Claude Code update an assistant asked for (#17908), executed in
+  // main like the preset move: main checks the session launched the pane (or,
+  // for the global Assistant, the steer's reach), reads that the pane offers
+  // /restart, then asks the person through `terminal.applyClaudeUpdate` and
+  // types `/restart` itself once they approve. Takes no command text.
+  actions.set("terminal.applyClaudeUpdateOwned", () => ({
+    id: "terminal.applyClaudeUpdateOwned",
+    title: "Apply Claude Code update",
+    description:
+      "After the user approves, types /restart once into a Claude Code panel whose updateInstalled names it, when it waits at its empty prompt (up to 30s). Quotes any refusal Claude prints; never says the conversation came back.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    keywords: ["update", "restart", "claude", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel `id` this session launched, or a worker the global Assistant steers."),
+      generation: RunGenerationArgSchema,
+    }),
+    resultSchema: ApplyClaudeUpdateResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.applyClaudeUpdateOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // The person's approval for `terminal.applyClaudeUpdateOwned` (#17908), asked
+  // the way the preset move asks through `terminal.restartOnPreset`: main
+  // dispatches it with the panel's id alone, never `confirmed`, so the dialog,
+  // a grant or the skip preference is the approval. It writes nothing; main
+  // types `/restart` once it answers. Off MCP and the palette, so nothing else
+  // asks for an approval that does nothing.
+  actions.set("terminal.applyClaudeUpdate", () => ({
+    id: "terminal.applyClaudeUpdate",
+    title: "Apply Claude Code update",
+    description:
+      "Approve typing /restart into a Claude Code panel once it waits at its empty prompt, to run the update it installed.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    keywords: ["update", "restart", "claude"],
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
+    resultSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = z.object({ terminalId: z.string().min(1) }).parse(args);
+      return { terminalId };
+    },
+  }));
+
   actions.set("terminal.redraw", () => ({
     id: "terminal.redraw",
     title: "Redraw terminal",
@@ -736,7 +803,9 @@ export function registerTerminalLifecycleActions(
         .trim()
         .min(1)
         .max(128)
-        .describe("Terminal panel id in this project. Required; no focus fallback."),
+        .describe(
+          "Terminal panel id in this workspace, an Assistant session's included, or the global Assistant's. Required; no focus fallback."
+        ),
     }),
     resultSchema: z.object({
       status: z.enum(["observed", "unknown"]),

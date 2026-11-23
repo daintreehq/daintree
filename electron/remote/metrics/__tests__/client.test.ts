@@ -19,8 +19,15 @@ import {
   removeTempDir,
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
-import { HostMetricsClient, type HostMetricsClientOptions } from "../client.js";
-import { MetricsLinkMethod } from "../linkMethods.js";
+import {
+  HOST_STOP_MAX_AGE_MS,
+  HostMetricsClient,
+  MAX_LIVE_STOPS_PER_HOST,
+  type HostMetricsClientOptions,
+} from "../client.js";
+import { MetricsLinkMethod, type AgentStopChangePayload } from "../linkMethods.js";
+import type { ElapsedStamp } from "../../link/elapsed.js";
+import type { HeardAgentStop } from "../agentStops.js";
 import { resetHostNoticeBudget } from "../../hybrid/hostNoticeBudget.js";
 
 let dir: string;
@@ -1090,6 +1097,7 @@ describe("HostMetricsClient", () => {
           h.openSession("studio-01", {
             on: () => () => {},
             registerCallHandler: () => {},
+            onClose: () => () => {},
           } as unknown as LinkSession);
         }, 10);
         throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
@@ -1123,6 +1131,7 @@ describe("HostMetricsClient", () => {
           h.openSession("studio-01", {
             on: () => () => {},
             registerCallHandler: () => {},
+            onClose: () => () => {},
           } as unknown as LinkSession);
         }, 10);
         throw Object.assign(new Error("Link closed"), { code: "OUTCOME_UNKNOWN" });
@@ -1184,6 +1193,49 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("keeps no host's usage while tracking is off, and drops what it held when turned off (#17981)", () => {
+    let tracking = true;
+    const h = harness([descriptor("studio-01")], { agentUsageTracking: () => tracking });
+    h.client.start();
+    const reading = {
+      agentId: "codex" as const,
+      accountNames: ["Work"],
+      isDefault: false,
+      windowDurationMins: 300,
+      usedPercent: 40,
+      resetsAt: null,
+      observedAt: 1,
+    };
+    h.client.record("studio-01", { ...summary(0), agentUsage: [reading] });
+    h.client.record("studio-01", { ...summary(1), agentUsage: [reading] });
+    const held = h.client.latest("studio-01")!;
+    expect(held.agentUsage).toEqual([reading]);
+
+    tracking = false;
+    h.client.forgetAgentUsage();
+    expect(h.client.latest("studio-01")).toBe(held);
+    expect(held).not.toHaveProperty("agentUsage");
+    // Every summary held, not only the newest.
+    expect(h.client.getSnapshots()[0]!.history).toHaveLength(2);
+    expect(h.client.getSnapshots()[0]!.history.some((s) => "agentUsage" in s)).toBe(false);
+    // A host from before the switch keeps sending it; none of it is kept or passed on.
+    h.client.record("studio-01", { ...summary(2), agentUsage: [reading] });
+    expect(h.client.latest("studio-01")).not.toHaveProperty("agentUsage");
+    expect(
+      h.client
+        .getSnapshots()
+        .flatMap((s) => s.history)
+        .some((s) => "agentUsage" in s)
+    ).toBe(false);
+    const last = h.emitted.at(-1) as { summary?: object };
+    expect(last.summary).not.toHaveProperty("agentUsage");
+
+    tracking = true;
+    h.client.record("studio-01", { ...summary(3), agentUsage: [reading] });
+    expect(h.client.latest("studio-01")?.agentUsage).toEqual([reading]);
+    h.client.dispose();
+  });
+
   it("forgets a host's history ahead of the host list, and still drops a later address change", () => {
     const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
     h.client.start();
@@ -1214,6 +1266,287 @@ describe("HostMetricsClient", () => {
     h.setHosts([{ ...descriptor("studio-01"), connection: { kind: "ssh", target: "elsewhere" } }]);
     expect(h.client.latest("studio-01")).toBeNull();
     // Notifications are off: nothing here dials it, before or after.
+    expect(h.connect).not.toHaveBeenCalled();
+    h.client.dispose();
+  });
+});
+
+describe("HostMetricsClient agent stops (#17933)", () => {
+  /** A link whose clocks the test sets: when it started, and when each ping of ours went. */
+  function fakeLink(startedAt: ElapsedStamp) {
+    const handlers = new Map<string, (payload: unknown) => unknown>();
+    const closers: Array<() => void> = [];
+    const pings = new Map<number, ElapsedStamp>();
+    const link = {
+      isOpen: true,
+      startedAt,
+      pingSentAt: (nonce: number) => pings.get(nonce) ?? null,
+      on: () => () => {},
+      registerCallHandler(
+        method: string,
+        schema: { parse(value: unknown): unknown },
+        handler: (payload: unknown) => unknown
+      ) {
+        handlers.set(method, (payload) => handler(schema.parse(payload)));
+        return () => handlers.delete(method);
+      },
+      onClose(listener: () => void) {
+        closers.push(listener);
+        return () => {};
+      },
+    };
+    const send = (payload: Partial<AgentStopChangePayload> & { terminalId: string }) =>
+      handlers.get(MetricsLinkMethod.AGENT_STOP_CHANGED)!({
+        projectId: "p1",
+        stopped: true,
+        state: "completed",
+        seenAt: 123,
+        ageMs: 0,
+        afterPing: null,
+        ...payload,
+      });
+    return {
+      session: link as unknown as LinkSession,
+      pings,
+      stop: send,
+      takeBack: (terminalId: string, extra: Partial<AgentStopChangePayload> = {}) =>
+        send({ terminalId, stopped: false, state: null, ...extra }),
+      close() {
+        link.isOpen = false;
+        for (const closer of closers) closer();
+      },
+    };
+  }
+
+  const at = (ms: number): ElapsedStamp => ({ wall: 1_000_000 + ms, mono: ms });
+
+  function setup() {
+    let now = at(0);
+    const h = harness([descriptor("studio"), descriptor("lab")], { clock: () => now });
+    h.client.start();
+    const heard: Array<[string, HeardAgentStop]> = [];
+    const off = h.client.onAgentStopChanges((hostId, change) => heard.push([hostId, change]));
+    return {
+      h,
+      heard,
+      off,
+      setNow: (ms: number) => (now = at(ms)),
+    };
+  }
+
+  it("passes on a stop it can date within the bound by the ping the host names", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    link.pings.set(3, at(10_000));
+    setNow(12_000);
+    link.stop({ terminalId: "t1", afterPing: 3, ageMs: 500 });
+    // Dated by the host's age and the time since ping 3 left: just at the bound, still taken.
+    setNow(10_000 + HOST_STOP_MAX_AGE_MS - 500);
+    link.stop({ terminalId: "t2", afterPing: 3, ageMs: 500 });
+    expect(heard).toEqual([
+      ["studio", { terminalId: "t1", stopped: true }],
+      ["studio", { terminalId: "t2", stopped: true }],
+    ]);
+    // Nothing of it reached a person.
+    expect(h.attention).toEqual([]);
+    h.client.dispose();
+  });
+
+  it("drops a stop that could be older than the bound, or that it can't date at all", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    link.pings.set(3, at(10_000));
+    // Held in a stalled link: the ping it names left long ago, however recent a later one.
+    setNow(10_000 + HOST_STOP_MAX_AGE_MS + 1);
+    link.pings.set(4, at(10_000 + HOST_STOP_MAX_AGE_MS));
+    link.stop({ terminalId: "t1", afterPing: 3 });
+    // The host saw it long before it posted.
+    setNow(11_000);
+    link.stop({ terminalId: "t2", afterPing: 3, ageMs: HOST_STOP_MAX_AGE_MS });
+    // A ping this link never sent or no longer remembers.
+    link.stop({ terminalId: "t3", afterPing: 99 });
+    expect(heard).toEqual([]);
+    h.client.dispose();
+  });
+
+  it("counts time on either clock, whichever says more has passed", () => {
+    const { h, heard } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    // Asleep since the ping went: the monotonic clock stood still, the wall clock didn't.
+    link.pings.set(1, { wall: 1_000_000 - HOST_STOP_MAX_AGE_MS - 1, mono: 0 });
+    link.stop({ terminalId: "t1", afterPing: 1 });
+    expect(heard).toEqual([]);
+    h.client.dispose();
+  });
+
+  it("dates a stop sent before the host had a ping by the link's own start", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(50_000));
+    h.openSession("studio", link.session);
+    setNow(52_000);
+    link.stop({ terminalId: "t1" });
+    setNow(50_000 + HOST_STOP_MAX_AGE_MS + 1);
+    link.stop({ terminalId: "t2" });
+    expect(heard.map(([, change]) => change.terminalId)).toEqual(["t1"]);
+    h.client.dispose();
+  });
+
+  it("passes on a stop taken back only for one it passed on, however old the word", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    setNow(1_000);
+    link.stop({ terminalId: "t1" });
+    // A take-back is never late: it can only stop a push.
+    link.takeBack("t1", { ageMs: HOST_STOP_MAX_AGE_MS * 10, afterPing: 99 });
+    // Never passed on: dropped as too old, so there's nothing to take back.
+    link.stop({ terminalId: "t2", ageMs: HOST_STOP_MAX_AGE_MS });
+    link.takeBack("t2");
+    link.takeBack("t3");
+    expect(heard).toEqual([
+      ["studio", { terminalId: "t1", stopped: true }],
+      ["studio", { terminalId: "t1", stopped: false }],
+    ]);
+    h.client.dispose();
+  });
+
+  it("takes back every stop a link passed on when it ends, but not one a newer link took", () => {
+    const { h, heard, setNow } = setup();
+    const first = fakeLink(at(0));
+    const lab = fakeLink(at(0));
+    h.openSession("studio", first.session);
+    h.openSession("lab", lab.session);
+    setNow(1_000);
+    first.stop({ terminalId: "t1" });
+    first.stop({ terminalId: "t2" });
+    lab.stop({ terminalId: "t1" });
+    // The host's new link reports t2 again before the old one's end is heard.
+    const second = fakeLink(at(1_000));
+    h.openSession("studio", second.session);
+    second.stop({ terminalId: "t2" });
+    heard.length = 0;
+
+    first.close();
+    expect(heard).toEqual([["studio", { terminalId: "t1", stopped: false }]]);
+    // Once ended, a late frame on it passes nothing on.
+    first.stop({ terminalId: "t3" });
+    second.close();
+    expect(heard).toEqual([
+      ["studio", { terminalId: "t1", stopped: false }],
+      ["studio", { terminalId: "t2", stopped: false }],
+    ]);
+    h.client.dispose();
+  });
+
+  it("keeps only the newest stops to take back, taking back each it lets go", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    setNow(1_000);
+    for (let index = 0; index <= MAX_LIVE_STOPS_PER_HOST; index += 1) {
+      link.stop({ terminalId: `t${index}` });
+    }
+    expect(heard.at(-2)).toEqual(["studio", { terminalId: "t0", stopped: false }]);
+    // Heard again, the oldest is the newest now.
+    link.stop({ terminalId: "t0" });
+    expect(heard.at(-2)).toEqual(["studio", { terminalId: "t1", stopped: false }]);
+    heard.length = 0;
+    link.close();
+    const takenBack = heard.map(([, change]) => change.terminalId);
+    expect(takenBack).toHaveLength(MAX_LIVE_STOPS_PER_HOST);
+    expect(takenBack).not.toContain("t1");
+    expect(takenBack.at(-1)).toBe("t0");
+    h.client.dispose();
+  });
+
+  it("keeps what it passed on while anyone listens, and holds nothing once no one does", () => {
+    const { h, heard, off, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    const other: Array<[string, HeardAgentStop]> = [];
+    const offOther = h.client.onAgentStopChanges((hostId, change) => other.push([hostId, change]));
+    setNow(1_000);
+    link.stop({ terminalId: "t1" });
+    // One listener leaving leaves the other's stops to take back.
+    offOther();
+    link.takeBack("t1");
+    link.stop({ terminalId: "t2" });
+    off();
+    link.stop({ terminalId: "t3" });
+    const later: Array<[string, HeardAgentStop]> = [];
+    h.client.onAgentStopChanges((hostId, change) => later.push([hostId, change]));
+    // The stop heard before the last listener left is no one's to take back now.
+    link.close();
+    expect(heard).toEqual([
+      ["studio", { terminalId: "t1", stopped: true }],
+      ["studio", { terminalId: "t1", stopped: false }],
+      ["studio", { terminalId: "t2", stopped: true }],
+    ]);
+    expect(other).toEqual([["studio", { terminalId: "t1", stopped: true }]]);
+    expect(later).toEqual([]);
+    h.client.dispose();
+  });
+
+  it("tells every listener though one throws, and nothing once disposed", () => {
+    const { h, heard, setNow } = setup();
+    const link = fakeLink(at(0));
+    h.openSession("studio", link.session);
+    h.client.onAgentStopChanges(() => {
+      throw new Error("listener broke");
+    });
+    const after: Array<[string, HeardAgentStop]> = [];
+    h.client.onAgentStopChanges((hostId, change) => after.push([hostId, change]));
+    setNow(1_000);
+    link.stop({ terminalId: "t1" });
+    expect(heard).toHaveLength(1);
+    expect(after).toEqual([["studio", { terminalId: "t1", stopped: true }]]);
+
+    h.client.dispose();
+    link.stop({ terminalId: "t2" });
+    link.close();
+    expect(heard).toHaveLength(1);
+    expect(after).toHaveLength(1);
+  });
+
+  it("hears a host's stops over a real link, as the host sends them", async () => {
+    const h = harness([descriptor("studio")]);
+    h.client.start();
+    const studio = await openSessionPair(dir);
+    open.push(studio.host, studio.client);
+    h.openSession("studio", studio.client);
+    const heard: Array<[string, HeardAgentStop]> = [];
+    h.client.onAgentStopChanges((hostId, change) => heard.push([hostId, change]));
+    const stop = { terminalId: "t1", projectId: null, seenAt: 1, ageMs: 0, afterPing: null };
+    // A stopped state a later host adds is still a stop, never refused.
+    await studio.host.call(MetricsLinkMethod.AGENT_STOP_CHANGED, {
+      ...stop,
+      stopped: true,
+      state: "a state from a later build",
+    });
+    await studio.host.call(MetricsLinkMethod.AGENT_STOP_CHANGED, {
+      ...stop,
+      stopped: false,
+      state: null,
+    });
+    expect(heard).toEqual([
+      ["studio", { terminalId: "t1", stopped: true }],
+      ["studio", { terminalId: "t1", stopped: false }],
+    ]);
+    // What no host sends is refused, never read as a stop.
+    for (const bad of [
+      { ...stop, stopped: true, state: "exited", ageMs: -1 },
+      { ...stop, stopped: true, state: "exited", afterPing: "3" },
+      { ...stop, stopped: true, state: "exited", afterPing: 1.5 },
+      { ...stop, state: "exited" },
+    ]) {
+      await expect(
+        studio.host.call(MetricsLinkMethod.AGENT_STOP_CHANGED, bad)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(heard).toHaveLength(2);
     expect(h.connect).not.toHaveBeenCalled();
     h.client.dispose();
   });

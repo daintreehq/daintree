@@ -523,20 +523,20 @@ The second argument says what the host knows about this dispatch. The host build
 ```ts
 interface PluginActionContext {
   readonly dispatchSource: "user" | "keybinding" | "menu" | "context-menu" | "agent" | "plugin";
-  readonly origin?: "assistant";
+  readonly origin?: "assistant" | "global-assistant";
   readonly approval?: "person";
 }
 ```
 
 - `dispatchSource` is the surface that dispatched the action. `"user"` is the command palette, and `"agent"` is a Daintree MCP session. `"plugin"` covers what no host surface attested: a `host.dispatch`, a panel calling `invoke(pluginId, actionId)` itself, and an [event route](./contribution-points.md).
-- `origin: "assistant"` means the person's Daintree Assistant made the MCP call. Like [`caller.consumer`](#mcpregistertools), it is provenance: the Assistant acts on what its pane is sent, and other agents' replies are sent there.
+- `origin: "assistant"` means the person's Daintree Assistant made the MCP call, and `origin: "global-assistant"` means their global Assistant made it through `host.call` from outside the project. Like [`caller.consumer`](#mcpregistertools), it is provenance: the Assistant acts on what its pane is sent, and other agents' replies are sent there.
 - `approval: "person"` means someone answered Daintree's confirm dialog for this very dispatch, either the palette's dialog for your `"confirm"` action or the MCP dialog the Assistant's call raised. A standing answer never sets it: an automation grant, "Allow for this session", and the Assistant's **Never ask** let the call through with no dialog, so it runs with `origin` and no `approval`.
 
 Read `approval` for a decision only the person should make, such as lifting a stop they placed. Whether the Assistant may make that decision unattended is then your own setting, read in the handler: the host has no signal that tells a person's standing permission apart from a process that read the Assistant's credential, so it doesn't offer one.
 
 ### Actions the Assistant can run
 
-An action declared `danger: "confirm"` with `assistantReach: "confirm-only"` is listed to the project's Daintree Assistant at both of its tool sets, `core` and `full`. Each call goes through the ordinary MCP confirm dialog, the Assistant's Never ask setting and the MCP audit log, and the handler's context reports what happened. Agent panes, api-key clients, another machine's assistant and the global Assistant never reach it, and a call from one is refused as `TIER_NOT_PERMITTED`. Reach is read when each call arrives, so unloading the plugin, or registering the action again without the opt-in, takes it away at once.
+An action declared `danger: "confirm"` with `assistantReach: "confirm-only"` is listed to the project's Daintree Assistant at both of its tool sets, `core` and `full`. Each call goes through the ordinary MCP confirm dialog, the Assistant's Never ask setting and the MCP audit log, and the handler's context reports what happened. The person's global Assistant on the same machine reaches it too, through `host.call` into the project, while a window shows that project: the call meets the confirm dialog in that window every time, and the handler sees `origin: "global-assistant"`. With no window open the call is refused, since a plugin action has no form that runs without one. Agent panes, api-key clients and another machine's assistants never reach it, and a call from one is refused as `TIER_NOT_PERMITTED`. Reach is read when each call arrives, so unloading the plugin, or registering the action again without the opt-in, takes it away at once.
 
 ## `registerHandler` and `broadcastToRenderer`
 
@@ -585,7 +585,7 @@ await host.registerHandler("build-site", buildSite, { timeoutMs: 20 * 60_000 });
 await host.registerHandler("tail-log", tailLog, { timeoutMs: 0 });
 ```
 
-**Deadlines.** `registerHandler(channel, handler, options?)` and `registerHandler(channel, schema, handler, options?)` take `PluginHandlerOptions { timeoutMs?: number }`. Omitted, the deadline is five minutes (`PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS`); `0` disables it; anything that is not a number from `0` to `2147483647` throws at registration, so a typo fails `activate()` rather than the first call. When the deadline passes, the view's `invoke` rejects with `PLUGIN_INVOKE_TIMEOUT: plugin "<id>" handler "<channel>" did not settle within <ms> ms`, and `useHostChannel` surfaces that on `error`. The handler itself is not interrupted: an in-process builtin's keeps running with nobody waiting on it, and a worker plugin's keeps running but its result is dropped in the worker instead of being cloned back. Write handlers so a retry after a timeout is safe. Actions registered with `registerAction` have no invoke deadline; they are long-running by design.
+**Deadlines.** `registerHandler(channel, handler, options?)` and `registerHandler(channel, schema, handler, options?)` take `PluginHandlerOptions { timeoutMs?: number }`. Omitted, the deadline is five minutes (`PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS`); `0` disables it (except on `CONTEXT_MENU_AVAILABILITY_CHANNEL`, which the host always holds to three seconds or less: see [Showing an item as unavailable](./contribution-points.md#showing-an-item-as-unavailable)); anything that is not a number from `0` to `2147483647` throws at registration, so a typo fails `activate()` rather than the first call. When the deadline passes, the view's `invoke` rejects with `PLUGIN_INVOKE_TIMEOUT: plugin "<id>" handler "<channel>" did not settle within <ms> ms`, and `useHostChannel` surfaces that on `error`. The handler itself is not interrupted: an in-process builtin's keeps running with nobody waiting on it, and a worker plugin's keeps running but its result is dropped in the worker instead of being cloned back. Write handlers so a retry after a timeout is safe. Actions registered with `registerAction` have no invoke deadline; they are long-running by design.
 
 **Size limits.** Payloads are measured by an estimate of their structured-clone size (UTF-8 bytes for strings and keys, `byteLength` for binary data, a small fixed cost per other value), stopping as soon as a cap is passed, so an oversize payload costs about the cap in work however large it is:
 
@@ -1907,14 +1907,14 @@ if (file?.status === "observed") {
 }
 ```
 
-The session file the Codex or Claude Code agent in one of the project's terminals is writing, for a plugin that carries a conversation somewhere else (an index, another agent's CLI). It is an action rather than a host method, dispatched with an explicit `terminalId` and refused for any caller but a plugin; it is hidden from the palette and from MCP. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes).
+The session file the Codex or Claude Code agent in one of the workspace's terminals is writing (its Assistant sessions included, and the global Assistant's running session from any project or scratch on this machine), for a plugin that carries a conversation somewhere else (an index, another agent's CLI). It is an action rather than a host method, dispatched with an explicit `terminalId` and refused for any caller but a plugin; it is hidden from the palette and from MCP. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes), which lists the project's grid panes and no Assistant session, or from the `panelId` a `terminal` `contextMenus` entry is dispatched with.
 
 Each answer says how it was seen in `observedBy`, because the two agents allow different evidence:
 
 - `open-for-writing` (Codex): the terminal's Codex (the outermost `codex` process in it, never one its tools started) holds the rollout file open for writing, so it is the file being written right now. That holds for any `CODEX_HOME`, an account switch included, and for a `codex` typed into a shell, which Daintree never learned an id for. A rollout opens a few seconds into a session, so a lookup straight after launch can answer `not-observed`.
-- `recorded-session-id` (Claude Code): the transcript of the session id Daintree recorded for the run it launched, in the store that pane was launched against. Claude Code keeps no file open, so a session the CLI switched to by itself (`/clear`, a fork) isn't seen, and a `claude` the user started by hand in the pane answers `session-id-unknown`.
+- `recorded-session-id` (Claude Code): the transcript of the session id Daintree recorded for the run it launched, in the store that pane was launched against. Claude Code keeps no file open, so a session the CLI switched to by itself (`/clear`, or a launch that forks the session it resumes with `--fork-session`) isn't seen: the answer is still the recorded id's transcript, not the one the CLI moved on to. A `claude` the user started by hand in the pane answers `session-id-unknown`.
 
-Anything short of that is `{ status: "unknown", reason }`, and never a guess: `terminal-unavailable` (no such terminal in this project, or an assistant's own), `no-live-agent`, `unsupported-agent`, `unsupported-platform` (Windows), `remote-pane` (the terminal runs on a remote host), `session-id-unknown`, `store-unknown` (the pane's Claude store was never certain), `not-observed` (nothing seen, which is not proof there is no file), `ambiguous` (no one answer: two Codex processes side by side in the terminal, two root sessions open in its Codex, or two Claude transcripts with the id), `unverified` (a file was seen but failed a check), `probe-failed`, `pane-changed` (the terminal restarted or changed agent during the lookup) and `busy` (two lookups are already running; ask again later).
+Anything short of that is `{ status: "unknown", reason }`, and never a guess: `terminal-unavailable` (no such terminal in this workspace, and not the global Assistant's running session), `no-live-agent`, `unsupported-agent`, `unsupported-platform` (Windows), `remote-pane` (the terminal runs on a remote host), `session-id-unknown`, `store-unknown` (the pane's Claude store was never certain), `not-observed` (nothing seen, which is not proof there is no file), `ambiguous` (no one answer: two Codex processes side by side in the terminal, two root sessions open in its Codex, or two Claude transcripts with the id), `unverified` (a file was seen but failed a check), `probe-failed`, `pane-changed` (the terminal restarted or changed agent during the lookup) and `busy` (two lookups are already running; ask again later).
 
 Nothing is kept between calls, and nothing runs until you ask: each Codex lookup lists the terminal's processes once, its Codex's open files once, and then checks that process is still the same one before answering. The path is a moment's observation of the CLI's own file. Read it and never write it: the CLI keeps appending, and Daintree's rule for agent files is the user's own (see [Trust model](./trust-model.md)). Check the file again when you open it, and keep what you read on the machine.
 
@@ -2153,6 +2153,7 @@ const { id } = await host.notify({
   severity: "warning", // "info" | "warning" | "error" — defaults to "info"
   delivery: "active", // "passive" puts it in the inbox only
   target: { worktreeId }, // or { panelId } — the inbox row's Go to source
+  audience: "assistant", // also offer it to one Daintree Assistant watching for plugin notifications
 });
 ```
 
@@ -2171,6 +2172,8 @@ The same silence and project mute as [`showToast`](#showtoast) apply: a call hel
 `dedupeKey` (up to 200 characters) replaces your earlier notification with the same key — its toast, its inbox row and its banner — rather than adding beside it. Keys are scoped to your plugin. The returned `id` is fresh per call and says nothing about which surfaces showed it.
 
 When the project is driven from a window on another machine, that window gets a plain toast with the title and body (in the inbox only for a passive one), and no banner is shown on either machine.
+
+`audience: "assistant"` also offers the notification to a Daintree Assistant, for items a person would otherwise have to pick up: a run stopped at a stage gate, a blocker, a question. It reaches one only in a project where the user turned on **Daintree Assistant can use this plugin's tools** (see [Agent extensions](./agent-extensions.md#the-daintree-assistant)), and only one that is watching for plugin notifications. Each notification goes to one Assistant, by how specific its watch is: one that names the project before one that doesn't, then one that names your plugin, then the one that has waited longest. A project's own Assistant always names its project, so it comes before a global Assistant watching every project. When none is watching, it waits for the next Assistant that starts to, for up to 30 minutes, or less once many are waiting. The Assistant is told your plugin's id, the project, severity and time, and the `dedupeKey` when it is short and plain (letters, digits and `._:#/-`, up to 64 characters); never your display name, title or body. It reads those with a call of its own, as your plugin's words, and acts on them, if at all, through your plugin's own tools, which it reaches only as far as the user allowed them. Everything else is unchanged, including the person's toast, inbox row and banner, and a call the person's silence, mute or your rate budget holds back reaches no Assistant either. The notification needs a project: the one a plugin instance runs for, or for an app-wide installed plugin a `worktreeId` target; without one it reaches no Assistant. Only this machine's Assistants hear it.
 
 ## `tasks` — long-running work
 

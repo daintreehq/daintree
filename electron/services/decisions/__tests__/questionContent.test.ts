@@ -16,6 +16,7 @@ import {
   MemoryKeyStore,
   RelayError,
   loadIdentity,
+  openQuestionContent,
   sealAnswerContent,
   sealQuestionContent,
   serializeAnswers,
@@ -41,12 +42,14 @@ import {
 } from "@daintreehq/decisions-protocol";
 import {
   inScope,
+  questionDetail,
   readQuestionContent,
   QUESTION_IMAGE_PART_BYTES,
   readQuestionImage,
   readQuestionSummary,
   type ImageReadContext,
 } from "../questionContent.js";
+import { NO_ADVISORY_HOST } from "../questionRound.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 import { row as baseRow } from "./questionRows.js";
 
@@ -207,7 +210,7 @@ describe("readQuestionContent", () => {
       delivery_status: "terminal-delivered",
     });
 
-    const read = await readQuestionContent(ctx(), row);
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
 
     expect(read).toEqual({
       result: "read",
@@ -235,6 +238,10 @@ describe("readQuestionContent", () => {
         expiresAt: "2026-11-02T10:00:00.000Z",
         status: "human-answered",
         closedReason: null,
+        replyMode: "blocking",
+        plannedFallback: null,
+        preparation: null,
+        closureNotice: null,
         deliveryStatus: "terminal-delivered",
         attachments: [
           {
@@ -252,7 +259,11 @@ describe("readQuestionContent", () => {
   });
 
   it("fills what the agent left out with the protocol's defaults", async () => {
-    const read = await readQuestionContent(ctx(), await question({ question: "Ship it?" }));
+    const read = await readQuestionContent(
+      ctx(),
+      await question({ question: "Ship it?" }),
+      NO_ADVISORY_HOST
+    );
 
     expect(read).toMatchObject({
       result: "read",
@@ -302,7 +313,7 @@ describe("readQuestionContent", () => {
       messages_json: serializeMessages([fromAgent, fromPerson]),
     });
 
-    const read = await readQuestionContent(ctx(), row);
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
     if (read.result !== "read") throw new Error(read.result);
     const { thread } = read.question;
 
@@ -366,6 +377,8 @@ describe("readQuestionContent", () => {
       ],
       sentAt: corrected.created_at,
       unreadable: false,
+      // Its own delivery, apart from the question's (#17943).
+      delivered: corrected.delivered,
     });
     expect(thread[5]).toMatchObject({
       type: "message",
@@ -375,6 +388,228 @@ describe("readQuestionContent", () => {
       images: [{ attachmentId: "phoneimg_0001" }],
     });
     expect(thread[6]).toEqual({ type: "expired", entryId: "entry-e", sentAt: expired.created_at });
+  });
+
+  it("shows no answer for a question that never reached the relay, only that it never did (#17939, #17943)", async () => {
+    const unpublished: AnswerEntry = {
+      entry_id: "unpublished-1",
+      kind: "unpublished",
+      action: "expire",
+      revision: 0,
+      source: "system",
+      correction: false,
+      created_at: "2026-11-01T11:00:00.000Z",
+      deliver: true,
+      delivered: false,
+      sealed: null,
+    };
+    const row = await question(CONTENT, {
+      local_status: "publish-failed",
+      error_code: "never_published",
+      answers_json: serializeAnswers([unpublished]),
+    });
+
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({
+      status: "publish-failed",
+      closedReason: "never-published",
+      closureNotice: { delivery: "pending", disposition: null },
+    });
+    expect(read.question.thread).toEqual([]);
+  });
+
+  /** A question as the publisher stores an advisory one: its envelope, AAD and all (#17943). */
+  async function advisory(content: object, over: Partial<QuestionRow> = {}): Promise<QuestionRow> {
+    const envelope = await encryptEnvelope({
+      epochKey: identity.epochs.get(1)!,
+      installationId: identity.config.installationId,
+      questionId: QID,
+      recordId: QID,
+      recordType: "question",
+      revision: 0,
+      senderDeviceId: identity.config.deviceId,
+      purpose: "question-content",
+      plaintext: content,
+      replyMode: "advisory",
+    });
+    return question(CONTENT, {
+      question_revision: 0,
+      expires_at: "2026-11-02T10:00:00.000Z",
+      content_sealed: JSON.stringify(envelope),
+      ...over,
+    });
+  }
+
+  it("says of each answer whether typing it in was confirmed, apart from a later correction (#17943)", async () => {
+    const first = await answer({ entry_id: "entry-a", revision: 1, delivered: true, event_seq: 2 });
+    const correction = await answer({
+      entry_id: "entry-b",
+      revision: 2,
+      correction: true,
+      delivered: false,
+      event_seq: 3,
+    });
+    const row = await question(CONTENT, {
+      local_status: "human-answered",
+      delivery_status: "desktop-received",
+      answers_json: serializeAnswers([first, correction]),
+    });
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(
+      read.question.thread.map((entry) => (entry.type === "answer" ? entry.delivered : null))
+    ).toEqual([true, false]);
+  });
+
+  it("leaves a decline from a source the library doesn't know out of the thread (#17943)", async () => {
+    const decline: AnswerEntry = {
+      entry_id: "decline-x",
+      kind: "declined",
+      action: "cancel",
+      revision: 1,
+      source: "proxy",
+      correction: false,
+      created_at: "2026-11-01T11:00:00.000Z",
+      deliver: true,
+      delivered: false,
+      sealed: null,
+    };
+    const row = await question(CONTENT, {
+      local_status: "cancelled",
+      answers_json: serializeAnswers([decline]),
+    });
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question.closedReason).toBe("withdrawn");
+    expect(read.question.thread).toEqual([]);
+  });
+
+  it("names no reason or notice for a question the relay refused (#17943)", async () => {
+    const row = await question(CONTENT, { local_status: "publish-failed", error_code: "invalid" });
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({ closedReason: null, closureNotice: null });
+  });
+
+  it("reads an advisory round's mode and the plan its content states (#17943)", async () => {
+    const row = await advisory({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({
+      replyMode: "advisory",
+      plannedFallback: "Use the existing fixture",
+      expiresAt: "2026-11-02T10:00:00.000Z",
+    });
+
+    // A blocking question's stray plan is never shown as one.
+    const blocking = await question({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    const plain = await readQuestionContent(ctx(), blocking, NO_ADVISORY_HOST);
+    if (plain.result !== "read") throw new Error(plain.result);
+    expect(plain.question).toMatchObject({ replyMode: "blocking", plannedFallback: null });
+  });
+
+  it("carries the agent's account of how it prepared the question (#18042)", async () => {
+    const row = await question({
+      ...CONTENT,
+      preparation: {
+        preference_revision: 4,
+        agents_consulted: 2,
+        outcome: "split",
+        summary: "Codex preferred Redis for the cache; Gemini held out for Postgres.",
+      },
+    });
+
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question.preparation).toEqual({
+      agentsConsulted: 2,
+      outcome: "split",
+      summary: "Codex preferred Redis for the cache; Gemini held out for Postgres.",
+    });
+  });
+
+  it("reads no preparation where the agent gave none or the protocol drops it, and no summary where it gave none (#18042)", async () => {
+    const none = await readQuestionContent(ctx(), await question(CONTENT), NO_ADVISORY_HOST);
+    if (none.result !== "read") throw new Error(none.result);
+    expect(none.question.preparation).toBeNull();
+
+    const blank = await readQuestionContent(
+      ctx(),
+      await question({
+        ...CONTENT,
+        preparation: { agents_consulted: 0, outcome: "not-run", summary: "  " },
+      }),
+      NO_ADVISORY_HOST
+    );
+    if (blank.result !== "read") throw new Error(blank.result);
+    expect(blank.question.preparation).toEqual({
+      agentsConsulted: 0,
+      outcome: "not-run",
+      summary: null,
+    });
+
+    const unsummarised = await readQuestionContent(
+      ctx(),
+      await question({ ...CONTENT, preparation: { agents_consulted: 3, outcome: "agreed" } }),
+      NO_ADVISORY_HOST
+    );
+    if (unsummarised.result !== "read") throw new Error(unsummarised.result);
+    expect(unsummarised.question.preparation).toEqual({
+      agentsConsulted: 3,
+      outcome: "agreed",
+      summary: null,
+    });
+
+    // Malformed preparation is caught by the content parse: the question still reads, without it.
+    const malformed = await readQuestionContent(
+      ctx(),
+      await question({ ...CONTENT, preparation: { agents_consulted: 2, outcome: "maybe" } }),
+      NO_ADVISORY_HOST
+    );
+    if (malformed.result !== "read") throw new Error(malformed.result);
+    expect(malformed.question.preparation).toBeNull();
+  });
+
+  it("won't show advisory content the protocol refuses (#17943)", async () => {
+    const approval = await advisory({
+      ...CONTENT,
+      kind: "approval",
+      planned_fallback: "Ship it anyway",
+    });
+    expect(await readQuestionContent(ctx(), approval, NO_ADVISORY_HOST)).toEqual({
+      result: "unreadable",
+    });
+    // No plan: blank plans are dropped by the content parse, so this is the same as none.
+    const planless = await advisory({ ...CONTENT, planned_fallback: "   " });
+    expect(await readQuestionContent(ctx(), planless, NO_ADVISORY_HOST)).toEqual({
+      result: "unreadable",
+    });
+  });
+
+  it("hands the attention list the whole question and the plan the view shows, and nothing it refuses (#18055)", async () => {
+    const detail = async (row: QuestionRow) =>
+      questionDetail(row, await openQuestionContent(ctx(), row));
+
+    const row = await advisory({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    expect(await detail(row)).toEqual({
+      question: CONTENT.question,
+      plan: "Use the existing fixture",
+    });
+    // A blocking question's stray plan is never shown as one; its words still are.
+    const blocking = await question({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    expect(await detail(blocking)).toEqual({ question: CONTENT.question, plan: null });
+    // What the view refuses as unreadable, the list doesn't show either.
+    const approval = await advisory({
+      ...CONTENT,
+      kind: "approval",
+      planned_fallback: "Ship it anyway",
+    });
+    expect(await detail(approval)).toBeNull();
+    expect(questionDetail(blocking, null)).toBeNull();
+    // Content that opens but isn't the protocol's shape is refused like the view refuses it.
+    expect(questionDetail(blocking, { question: ["Ship it?"], kind: "choice" })).toBeNull();
   });
 
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {
@@ -399,7 +634,7 @@ describe("readQuestionContent", () => {
       answers_json: serializeAnswers([onPhone, onComputer, byModel]),
     });
 
-    const read = await readQuestionContent(ctx(), row);
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
     if (read.result !== "read") throw new Error(read.result);
 
     expect(read.question.revision).toBe(3);
@@ -430,7 +665,11 @@ describe("readQuestionContent", () => {
     };
     const fromAgent = await message("msg_agent_01", "agent", "Still needed?", 4);
     const read = async (over: Partial<QuestionRow>) => {
-      const result = await readQuestionContent(ctx(), await question(CONTENT, over));
+      const result = await readQuestionContent(
+        ctx(),
+        await question(CONTENT, over),
+        NO_ADVISORY_HOST
+      );
       if (result.result !== "read") throw new Error(result.result);
       return result.question;
     };
@@ -481,7 +720,7 @@ describe("readQuestionContent", () => {
       messages_json: serializeMessages([fromAgent, fromPhone, fromComputer, legacy]),
     });
 
-    const read = await readQuestionContent(ctx(), row);
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
     if (read.result !== "read") throw new Error(read.result);
 
     expect(
@@ -519,7 +758,7 @@ describe("readQuestionContent", () => {
       messages_json: serializeMessages([tampered, last]),
     });
 
-    const read = await readQuestionContent(ctx(), row);
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
     if (read.result !== "read") throw new Error(read.result);
 
     expect(read.question.thread).toMatchObject([
@@ -541,7 +780,9 @@ describe("readQuestionContent", () => {
       await question({ question: "" }),
       await question({ ...CONTENT, kind: "poll" }),
     ]) {
-      await expect(readQuestionContent(ctx(), row)).resolves.toEqual({ result: "unreadable" });
+      await expect(readQuestionContent(ctx(), row, NO_ADVISORY_HOST)).resolves.toEqual({
+        result: "unreadable",
+      });
     }
   });
 
@@ -555,8 +796,12 @@ describe("readQuestionContent", () => {
       },
     };
 
-    await expect(readQuestionContent(missingKey, row)).resolves.toEqual({ result: "unreadable" });
-    await expect(readQuestionContent(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
+    await expect(readQuestionContent(missingKey, row, NO_ADVISORY_HOST)).resolves.toEqual({
+      result: "unreadable",
+    });
+    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(
+      RetiredAttemptError
+    );
     await expect(readQuestionSummary(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
   });
 
@@ -582,11 +827,13 @@ describe("readQuestionContent", () => {
       },
     };
 
-    await expect(readQuestionContent(ctx(), row)).resolves.toMatchObject({
+    await expect(readQuestionContent(ctx(), row, NO_ADVISORY_HOST)).resolves.toMatchObject({
       result: "read",
       question: { thread: [{ entryId: "entry-9", unreadable: true }] },
     });
-    await expect(readQuestionContent(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
+    await expect(readQuestionContent(retired, row, NO_ADVISORY_HOST)).rejects.toBeInstanceOf(
+      RetiredAttemptError
+    );
   });
 });
 

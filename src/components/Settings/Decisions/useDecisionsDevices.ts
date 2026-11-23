@@ -20,20 +20,21 @@ export interface UseDecisionsDevicesResult {
  * the relay through main when the section mounts, on `reload`, when main says
  * the devices changed (#16010), and when the window regains focus (a phone
  * may have just turned on notifications).
- * `enabled` false (no relay set up) reads nothing. Only the last read asked
- * for lands.
+ * `relayOrigin` null (no relay set up) reads nothing. Only the last read asked
+ * for lands, and what was read of one relay is never shown for another.
  */
-export function useDecisionsDevices(enabled: boolean): UseDecisionsDevicesResult {
-  const [devices, setDevices] = useState<DecisionsDevice[] | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+export function useDecisionsDevices(relayOrigin: string | null): UseDecisionsDevicesResult {
+  const [listed, setListed] = useState<{ origin: string; devices: DecisionsDevice[] } | null>(null);
+  const [failed, setFailed] = useState<{ origin: string; message: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [generation, setGeneration] = useState(0);
   const lastRead = useRef(0);
+  const enabled = relayOrigin !== null;
 
   useEffect(() => {
-    if (!enabled) {
-      setDevices(null);
-      setFailure(null);
+    if (relayOrigin === null) {
+      setListed(null);
+      setFailed(null);
       setLoading(false);
       return;
     }
@@ -44,23 +45,26 @@ export function useDecisionsDevices(enabled: boolean): UseDecisionsDevicesResult
       (read) => {
         if (!current) return;
         if (read.result === "listed") {
-          setDevices(read.devices);
-          setFailure(null);
+          setListed({ origin: relayOrigin, devices: read.devices });
+          setFailed(null);
         } else {
-          setFailure(describeRelayRequestFailure(read));
+          setFailed({ origin: relayOrigin, message: describeRelayRequestFailure(read) });
         }
         setLoading(false);
       },
       (error: unknown) => {
         if (!current) return;
-        setFailure(formatErrorMessage(error, "The paired devices couldn't be read."));
+        setFailed({
+          origin: relayOrigin,
+          message: formatErrorMessage(error, "The paired devices couldn't be read."),
+        });
         setLoading(false);
       }
     );
     return () => {
       current = false;
     };
-  }, [enabled, generation]);
+  }, [relayOrigin, generation]);
 
   // A device revoked or a key rotated, here, in another window or as the
   // relay's ledger reports it (#16010): read the list again now.
@@ -80,5 +84,10 @@ export function useDecisionsDevices(enabled: boolean): UseDecisionsDevicesResult
     return () => window.removeEventListener("focus", onFocus);
   }, [enabled]);
 
-  return { devices, failure, loading, reload: () => setGeneration((n) => n + 1) };
+  return {
+    devices: listed !== null && listed.origin === relayOrigin ? listed.devices : null,
+    failure: failed !== null && failed.origin === relayOrigin ? failed.message : null,
+    loading,
+    reload: () => setGeneration((n) => n + 1),
+  };
 }

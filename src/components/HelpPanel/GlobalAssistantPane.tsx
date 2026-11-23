@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
+import { ArrowLeftRight, CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -8,6 +8,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -19,18 +20,56 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import {
+  GLOBAL_ASSISTANT_SESSION_LIMIT,
+  GLOBAL_ASSISTANT_SLOT,
+  globalAssistantSessionNumber,
+  type GlobalAssistantSlot,
+} from "@shared/config/globalAssistantSessions";
 import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { GlobalAssistantInputStamp, GlobalAssistantView } from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
+import { useGlobalAssistantSessions } from "./useGlobalAssistantSessions";
+import { GlobalSessionTabs, globalSessionPanelId, globalSessionTabId } from "./GlobalSessionTabs";
+import {
+  GLOBAL_CEILING_SENTENCE,
+  NewSessionWithAgentLabel,
+  SessionCeilingReason,
+  announceSessionCeiling,
+} from "./NewSessionWithAgentLabel";
 import { useAssistantSendFailure } from "./useAssistantSendFailure";
 import { GlobalAssistantTerminal } from "./GlobalAssistantTerminal";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { refocusStartAfterCancel } from "./refocusStartAfterCancel";
 import { HEADER_ACTION_CLASS } from "./HelpPanelHeader";
 import { TabAgentMark } from "./HelpSessionTabs";
+import { AssistantPluginMenuItems } from "@/components/Plugin/AssistantPluginMenuItems";
 
 function subscribeViewCache(onChange: () => void): () => void {
   return subscribeProjectViewLifecycle(() => onChange());
+}
+
+/** What stopping a session does, for its confirmation: a second session closes with it. */
+function discardConsequence(
+  slot: GlobalAssistantSlot,
+  running: boolean,
+  /** The session that takes over coordination when this one stops (#18143). */
+  handsTo: GlobalAssistantSlot | null
+): string {
+  if (handsTo !== null) {
+    const stops = running
+      ? "Its agent stops in every window and the session closes with its conversation"
+      : "The session closes in every window and its conversation is forgotten";
+    return `${stops}. Session ${globalAssistantSessionNumber(handsTo)} takes over coordination and the workers this one launched`;
+  }
+  if (slot !== GLOBAL_ASSISTANT_SLOT) {
+    return running
+      ? "Its agent stops in every window and the session closes with its conversation"
+      : "The session closes in every window and its conversation is forgotten";
+  }
+  return running
+    ? "Its agent stops in every window and the next start opens a new conversation"
+    : "Its kept conversation is forgotten and the next start opens a new one";
 }
 
 function runningSubject(view: GlobalAssistantView | null): AgentDirectorySubject | null {
@@ -70,12 +109,17 @@ function canTypeTo(
  * so once input moves — even away and back — its stream is reopened and
  * anything still queued under the old ownership is refused by main. Each
  * window's composer keeps its own draft through all of that.
+ *
+ * A machine may run a second session beside the first (#18142). The pane
+ * shows the one this window picked, switches between them, starts a new one
+ * on a chosen agent, and clears or stops only the one on screen.
  */
 export function GlobalAssistantPane({
   isVisible,
   controlsHost,
   onOpenDocs,
   focusHandledThrough = -1,
+  newSessionAgentIds = [],
 }: {
   isVisible: boolean;
   /**
@@ -87,9 +131,12 @@ export function GlobalAssistantPane({
   /** The panel header's slot for this run's agent and menu; nothing is drawn there without one. */
   controlsHost: HTMLElement | null;
   onOpenDocs: () => void;
+  /** The installed agents a new session can start on. */
+  newSessionAgentIds?: readonly string[];
 }) {
   const isOpen = useHelpPanelStore((s) => s.isOpen);
   const target = useHelpPanelStore((s) => s.globalTarget);
+  const slot = useHelpPanelStore((s) => s.globalSlot);
   const focusRequest = useHelpPanelStore((s) => s.focusRequest);
   const passiveFocusHandledThrough = useHelpPanelStore((s) => s.globalFocusHandledThrough);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
@@ -99,18 +146,68 @@ export function GlobalAssistantPane({
   const active = isOpen && isVisible && !viewCached && !boundElsewhere;
   // Attached behind Canopy or an ended run, the pane can't type, so input
   // nobody holds passes it over.
-  const { view, attachmentId, error, start, claimInput, restart, discard, cancelLaunch } =
-    useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown));
+  const {
+    view,
+    attachmentId,
+    error,
+    start,
+    claimInput,
+    restart,
+    discard,
+    cancelLaunch,
+    startNew,
+    handCoordination,
+  } = useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown), false, slot);
+  const sessions = useGlobalAssistantSessions(active);
+  const occupiedCount = sessions?.filter((session) => session.occupied).length ?? 0;
+  const atLimit = occupiedCount >= GLOBAL_ASSISTANT_SESSION_LIMIT;
+  // Named by number once a second session exists, so every window agrees which is which.
+  const several =
+    slot !== GLOBAL_ASSISTANT_SLOT ||
+    (sessions?.some((session) => session.slot !== GLOBAL_ASSISTANT_SLOT && session.occupied) ??
+      false);
+  const sessionNumber = globalAssistantSessionNumber(slot);
+  // A window bound to another host can't start this machine's sessions.
+  const offersNewSession = newSessionAgentIds.length > 0 && !boundElsewhere;
+  // The strip, and the panel it names, once the listing has said what there is.
+  const tabsShown = several && sessions !== null && !boundElsewhere;
+  const tabsId = useId();
   const [pendingConfirm, setPendingConfirm] = useState<{
     kind: "restart" | "discard";
+    slot: GlobalAssistantSlot;
     generation: number;
+    running: boolean;
+    /** The session a stop of the coordinator hands coordination to, as the person is told (#18143). */
+    handsTo?: GlobalAssistantSlot | null;
   } | null>(null);
-  // The generation a Start was pressed at. A Cancel moves the generation on,
-  // so Start is offered again at once, before the stopped launch has wound down.
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+  // The session and generation a Start was pressed at. A Cancel moves the generation
+  // on, so Start is offered again at once, before the stopped launch has wound down.
+  const [startedAt, setStartedAt] = useState<{ slot: number; generation: number } | null>(null);
+  const [newPending, setNewPending] = useState(false);
   // As the header's own menu: Escape closes the open menu, not the panel.
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
+  const handleMenuOpenChange = (open: boolean) => {
+    setIsMenuOpen(open);
+    if (open && atLimit && offersNewSession) {
+      announceSessionCeiling(GLOBAL_CEILING_SENTENCE);
+    }
+  };
+
+  // A question asked about one session is put down once another is shown, and
+  // never comes back with it.
+  useEffect(() => {
+    setPendingConfirm((current) => (current !== null && current.slot !== slot ? null : current));
+  }, [slot]);
+
+  // A second session stopped (here or in another window) is gone: the pane
+  // goes back to the first rather than offering to start one nobody chose.
+  // Read off this attachment's own news, never a state cached from before it.
+  const vacated =
+    slot !== GLOBAL_ASSISTANT_SLOT && attachmentId !== null && view !== null && !view.occupied;
+  useEffect(() => {
+    if (vacated) useHelpPanelStore.getState().selectGlobal(null, GLOBAL_ASSISTANT_SLOT);
+  }, [vacated]);
   const rootRef = useRef<HTMLDivElement>(null);
   const startRef = useRef<HTMLButtonElement>(null);
 
@@ -175,12 +272,15 @@ export function GlobalAssistantPane({
   // Restart and stop act on the run this pane shows, never on a successor it
   // is hiding behind "ended".
   const controllable = view?.phase === "running" && !targetEnded;
+  // A session with nothing running that still counts toward the limit can be
+  // stopped too, so the limit is never a dead end.
+  const stoppable = controllable || (view?.phase === "absent" && view.occupied && !targetEnded);
   const generation = view?.generation ?? 0;
-  const starting = startedAt === generation;
+  const starting = startedAt?.slot === slot && startedAt.generation === generation;
 
   const handleStart = async () => {
     if (starting) return;
-    const at = generation;
+    const at = { slot, generation };
     setStartedAt(at);
     try {
       await start();
@@ -188,6 +288,55 @@ export function GlobalAssistantPane({
       setStartedAt((current) => (current === at ? null : current));
     }
   };
+
+  const handleNewSession = async (agentId: string) => {
+    if (newPending) return;
+    setNewPending(true);
+    try {
+      // Shown only if the panel still shows what it did when New was pressed:
+      // a person who moved on meanwhile stays where they went.
+      const asked = useHelpPanelStore.getState();
+      await startNew(agentId, (claimed) => {
+        const panel = useHelpPanelStore.getState();
+        if (
+          panel.isOpen === asked.isOpen &&
+          panel.globalSelected &&
+          panel.globalSlot === asked.globalSlot &&
+          panel.globalTarget === asked.globalTarget
+        ) {
+          panel.selectGlobal(null, claimed);
+        }
+      });
+    } finally {
+      setNewPending(false);
+    }
+  };
+
+  // With both sessions open, coordination can go to the one that hasn't it
+  // (#18143). Named by the session it goes to, from either session's menu.
+  const otherSession = sessions?.find((session) => session.slot !== slot) ?? null;
+  const coordinationTarget =
+    view?.occupied && otherSession?.occupied && !boundElsewhere && !targetEnded
+      ? view.coordinating
+        ? otherSession.slot
+        : otherSession.coordinating
+          ? slot
+          : null
+      : null;
+  const [handingOver, setHandingOver] = useState(false);
+  const handleHandCoordination = async (to: GlobalAssistantSlot) => {
+    if (handingOver) return;
+    setHandingOver(true);
+    try {
+      await handCoordination(to);
+    } finally {
+      setHandingOver(false);
+    }
+  };
+
+  const confirmingHere = pendingConfirm !== null && pendingConfirm.slot === slot;
+  const confirmName = several ? `global assistant session ${sessionNumber}` : "global assistant";
+  const stopLabel = several ? `Stop session ${sessionNumber}` : "Stop global assistant";
 
   const handleCancelLaunch = () => {
     refocusStartAfterCancel(
@@ -214,7 +363,7 @@ export function GlobalAssistantPane({
               {agentId && <TabAgentMark agentId={agentId} />}
               <span className="truncate">{agentName ?? ""}</span>
             </span>
-            <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+            <DropdownMenu open={isMenuOpen} onOpenChange={handleMenuOpenChange}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
@@ -238,7 +387,9 @@ export function GlobalAssistantPane({
                     <DropdownMenuItem
                       destructive
                       focusHandoff
-                      onSelect={() => setPendingConfirm({ kind: "restart", generation })}
+                      onSelect={() =>
+                        setPendingConfirm({ kind: "restart", slot, generation, running: true })
+                      }
                     >
                       <Eraser className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Clear conversation
@@ -246,20 +397,82 @@ export function GlobalAssistantPane({
                     <DropdownMenuSeparator />
                   </>
                 )}
+                {coordinationTarget !== null && (
+                  <>
+                    <DropdownMenuItem
+                      disabled={handingOver}
+                      onSelect={() => void handleHandCoordination(coordinationTarget)}
+                      data-testid="help-global-hand-coordination"
+                    >
+                      <ArrowLeftRight className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      {`Hand coordination to session ${globalAssistantSessionNumber(coordinationTarget)}`}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {offersNewSession && (
+                  <>
+                    {newSessionAgentIds.map((agentId) => (
+                      <DropdownMenuItem
+                        key={agentId}
+                        disabled={atLimit || newPending}
+                        onSelect={() => void handleNewSession(agentId)}
+                        className={atLimit ? "data-[disabled]:opacity-100" : undefined}
+                        data-testid={`help-global-new-${agentId}`}
+                      >
+                        <NewSessionWithAgentLabel agentId={agentId} parked={atLimit} />
+                        {atLimit && (
+                          <SessionCeilingReason
+                            open={occupiedCount}
+                            meta={DropdownMenuMeta}
+                            limit={GLOBAL_ASSISTANT_SESSION_LIMIT}
+                            sentence={GLOBAL_CEILING_SENTENCE}
+                          />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem onSelect={onOpenDocs}>
                   <CircleHelp className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Open docs
                 </DropdownMenuItem>
-                {controllable && (
+                {/* Only for the run on screen: never one this pane isn't attached
+                    to, or the successor behind an ended run. Always mounted, so it
+                    holds the run the menu opened on through a restart's gap. */}
+                <AssistantPluginMenuItems
+                  subject={
+                    active && shown
+                      ? {
+                          assistantScope: "global",
+                          terminalId: shown.terminalId,
+                          incarnation: shown.incarnation,
+                          agentId: agentId ?? undefined,
+                        }
+                      : null
+                  }
+                />
+                {stoppable && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       destructive
                       focusHandoff
-                      onSelect={() => setPendingConfirm({ kind: "discard", generation })}
+                      onSelect={() =>
+                        setPendingConfirm({
+                          kind: "discard",
+                          slot,
+                          generation,
+                          running: controllable,
+                          handsTo:
+                            view?.coordinating && otherSession?.occupied ? otherSession.slot : null,
+                        })
+                      }
+                      data-testid="help-global-stop"
                     >
                       <CircleStop className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Stop global assistant
+                      {stopLabel}
                     </DropdownMenuItem>
                   </>
                 )}
@@ -269,119 +482,143 @@ export function GlobalAssistantPane({
           controlsHost
         )}
 
-      {error !== null && (
-        <div className="shrink-0 px-3 pb-2">
-          <Callout severity="error" size="compact" title="Global assistant">
-            {error}
-          </Callout>
-        </div>
-      )}
-
-      {boundElsewhere ? (
-        <p className="px-6 py-8 text-center text-xs text-text-secondary">
-          This window runs on another host. Open the global assistant from a window on this machine.
-        </p>
-      ) : targetEnded ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-          <p className="max-w-[30ch] text-sm text-text-secondary">
-            The global assistant session you opened has ended
-          </p>
-          <Button
-            variant="outline"
-            onClick={() => useHelpPanelStore.getState().selectGlobal(null)}
-            data-testid="help-global-show-current"
-            data-global-focus-target=""
-          >
-            Show the global assistant
-          </Button>
-        </div>
-      ) : view === null ? (
-        <div className="flex-1" aria-busy="true" />
-      ) : view.phase === "absent" ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8 text-center">
-          <p className="max-w-[32ch] text-sm text-text-secondary">
-            One assistant for every project and window. It picks up its last conversation when there
-            is one.
-          </p>
-          <Button
-            ref={startRef}
-            type="button"
-            variant="contrast"
-            onClick={() => void handleStart()}
-            disabled={starting}
-            data-testid="help-global-start"
-            data-global-focus-target=""
-          >
-            <Globe aria-hidden="true" />
-            Start global assistant
-          </Button>
-        </div>
-      ) : view.phase === "launching" ? (
-        // Keyed by the launch, so a new one counts its wait afresh.
-        <HelpLaunchingState
-          key={view.generation}
-          phase="launching"
-          isLoading
-          onCancel={handleCancelLaunch}
-        />
-      ) : !shown || paneKey === null ? (
-        // Running with no terminal to watch: its PTY is being brought back, or
-        // couldn't be. Clear conversation stays in the menu above either way.
-        <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
-          The global assistant's terminal isn't available. Clear the conversation from the menu if
-          it doesn't come back.
-        </p>
-      ) : canopyOpen ? (
-        <p className="px-6 py-8 text-center text-xs text-text-secondary">
-          Canopy is open in this window. Close it to see the global assistant here.
-        </p>
-      ) : !active ? (
-        // Hidden or cached, nothing streams: the draft is in the composer's store.
-        <div className="flex-1" />
-      ) : (
-        <GlobalAssistantTerminal
-          key={paneKey}
-          subject={shown}
-          stamp={stamp}
-          agentId={composerAgentId}
-          inputOwner={view.inputOwner}
-          sendFailure={sendFailure}
-          startSend={startSend}
-          canClaimInput={controllable && attachmentId !== null}
-          onClaimInput={() => {
-            // Taking input remounts the terminal under the new ownership, which
-            // drops the focused button; the keyboard follows to the composer.
-            void claimInput().then((claimed) => {
-              if (claimed) useHelpPanelStore.getState().requestFocus();
-            });
-          }}
+      {tabsShown && (
+        <GlobalSessionTabs
+          idBase={tabsId}
+          sessions={sessions}
+          shownSlot={slot}
+          onSelect={(next) => useHelpPanelStore.getState().selectGlobal(null, next)}
         />
       )}
 
+      <div
+        id={globalSessionPanelId(tabsId)}
+        role={tabsShown ? "tabpanel" : undefined}
+        aria-labelledby={tabsShown ? globalSessionTabId(tabsId, slot) : undefined}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {error !== null && (
+          <div className="shrink-0 px-3 pb-2">
+            <Callout severity="error" size="compact" title="Global assistant">
+              {error}
+            </Callout>
+          </div>
+        )}
+
+        {boundElsewhere ? (
+          <p className="px-6 py-8 text-center text-xs text-text-secondary">
+            This window runs on another host. Open the global assistant from a window on this
+            machine.
+          </p>
+        ) : targetEnded ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+            <p className="max-w-[30ch] text-sm text-text-secondary">
+              The global assistant session you opened has ended
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => useHelpPanelStore.getState().selectGlobal(null)}
+              data-testid="help-global-show-current"
+              data-global-focus-target=""
+            >
+              Show the global assistant
+            </Button>
+          </div>
+        ) : view === null ? (
+          <div className="flex-1" aria-busy="true" />
+        ) : view.phase === "absent" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8 text-center">
+            <p className="max-w-[32ch] text-sm text-text-secondary">
+              One assistant for every project and window. It picks up its last conversation when
+              there is one.
+            </p>
+            <Button
+              ref={startRef}
+              type="button"
+              variant="contrast"
+              onClick={() => void handleStart()}
+              disabled={starting}
+              data-testid="help-global-start"
+              data-global-focus-target=""
+            >
+              <Globe aria-hidden="true" />
+              Start global assistant
+            </Button>
+          </div>
+        ) : view.phase === "launching" ? (
+          // Keyed by the launch, so a new one counts its wait afresh.
+          <HelpLaunchingState
+            key={view.generation}
+            phase="launching"
+            isLoading
+            onCancel={handleCancelLaunch}
+          />
+        ) : !shown || paneKey === null ? (
+          // Running with no terminal to watch: its PTY is being brought back, or
+          // couldn't be. Clear conversation stays in the menu above either way.
+          <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
+            The global assistant's terminal isn't available. Clear the conversation from the menu if
+            it doesn't come back.
+          </p>
+        ) : canopyOpen ? (
+          <p className="px-6 py-8 text-center text-xs text-text-secondary">
+            Canopy is open in this window. Close it to see the global assistant here.
+          </p>
+        ) : !active ? (
+          // Hidden or cached, nothing streams: the draft is in the composer's store.
+          <div className="flex-1" />
+        ) : (
+          <GlobalAssistantTerminal
+            key={paneKey}
+            subject={shown}
+            stamp={stamp}
+            agentId={composerAgentId}
+            inputOwner={view.inputOwner}
+            sendFailure={sendFailure}
+            startSend={startSend}
+            canClaimInput={controllable && attachmentId !== null}
+            onClaimInput={() => {
+              // Taking input remounts the terminal under the new ownership, which
+              // drops the focused button; the keyboard follows to the composer.
+              void claimInput().then((claimed) => {
+                if (claimed) useHelpPanelStore.getState().requestFocus();
+              });
+            }}
+          />
+        )}
+      </div>
+
+      {/* Asked about the session on screen: switching away puts the question down. */}
       <ConfirmDialog
-        isOpen={pendingConfirm !== null}
+        isOpen={confirmingHere}
         title={
           pendingConfirm?.kind === "discard"
-            ? "Stop the global assistant?"
-            : "Clear the global assistant's conversation?"
+            ? several
+              ? `Stop ${confirmName}?`
+              : "Stop the global assistant?"
+            : several
+              ? `Clear ${confirmName}'s conversation?`
+              : "Clear the global assistant's conversation?"
         }
         description={
           pendingConfirm?.kind === "discard"
-            ? "Its agent stops in every window and the next start opens a new conversation"
+            ? discardConsequence(
+                pendingConfirm.slot,
+                pendingConfirm.running,
+                pendingConfirm.handsTo ?? null
+              )
             : "Its agent stops in every window and a new conversation starts"
         }
-        confirmLabel={
-          pendingConfirm?.kind === "discard" ? "Stop global assistant" : "Clear conversation"
-        }
+        confirmLabel={pendingConfirm?.kind === "discard" ? stopLabel : "Clear conversation"}
         variant="destructive"
         onConfirm={() => {
           const pending = pendingConfirm;
           setPendingConfirm(null);
-          if (!pending) return;
+          if (!pending || pending.slot !== slot) return;
           // Acting on the run on screen: whatever replaces it is the one to follow.
-          useHelpPanelStore.getState().selectGlobal(null);
+          useHelpPanelStore.getState().selectGlobal(null, pending.slot);
           void (pending.kind === "discard"
-            ? discard(pending.generation)
+            ? discard(pending.generation, pending.running, pending.handsTo)
             : restart(pending.generation));
         }}
         onClose={() => setPendingConfirm(null)}

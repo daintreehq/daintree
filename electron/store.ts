@@ -306,6 +306,17 @@ export interface StoreSchema {
    * `electron/services/agentToolbarPins.ts`.
    */
   agentToolbarPins?: Record<string, boolean>;
+  /**
+   * The agent each global assistant session was started on by choice
+   * (#18142), by slot, kept until that session is stopped. See
+   * `electron/services/globalAssistant.ts`.
+   */
+  globalAssistantPinnedAgents?: Record<string, string>;
+  /**
+   * This machine's agent usage tracking switch (#17981); absent reads as on.
+   * See `electron/services/agentUsage/AgentUsageTracking.ts`.
+   */
+  agentUsageTrackingEnabled?: boolean;
   /** Sounds imported on this device, by id; the WAVs live under `<userData>/sounds/custom/`. */
   customNotificationSounds?: CustomNotificationSound[];
   notificationSettings: {

@@ -6,6 +6,10 @@
  * nothing.
  */
 
+import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntimeObservation } from "../../shared/types/decisionsHosts.js";
 import type {
   DecisionQuestionCancelResult,
@@ -13,6 +17,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionLastRead,
   DecisionQuestionListItem,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "../../shared/types/decisionsQuestion.js";
@@ -180,6 +185,14 @@ export interface DecisionsHostsPort {
     reference: DecisionQuestionReference
   ): Promise<HostCallOutcome<DecisionQuestionCancelResult>> | null;
   /**
+   * Reads or acts on one of a Host's stopped deliveries on that Host
+   * (#18031); null when no Host's questions list the reference. A Host from
+   * before it answers `needs-update`, and isn't asked again on that link.
+   */
+  hostAttention(
+    request: DecisionsHostAttentionRequest
+  ): Promise<HostCallOutcome<DecisionsHostAttentionAnswer>> | null;
+  /**
    * What this computer last read of one of a Host's questions over its link
    * (#17946), for the owner to dismiss it by while the Host is away: only
    * while the Host whose questions name `reference.hostId` is still reported
@@ -187,6 +200,19 @@ export interface DecisionsHostsPort {
    * its last report lists the question as waiting for the person. Null otherwise.
    */
   lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null;
+  /**
+   * Each connected Host's agents seen reaching `completed` or `exited`, and
+   * each of those stops taken back: the agent took up work again, its run was
+   * put aside, or the link it came on ended (#17933). Only links already up
+   * report, and a stop is passed on only as it happens, never late.
+   */
+  onAgentStopChanges(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
+}
+
+/** One of a Host's agents' stops: `stopped` false takes back the one before it. */
+export interface HostAgentStopChange {
+  terminalId: string;
+  stopped: boolean;
 }
 
 /** One Host's questions, as this computer last heard them (#17230). */
@@ -216,7 +242,9 @@ export type DecisionsHostQuestionRead =
       attachmentId: string;
       offset: number;
     }
-  | { read: "summaries"; references: DecisionQuestionReference[] };
+  | { read: "summaries"; references: DecisionQuestionReference[] }
+  /** The pane that asked it, as it shows now (#18037). */
+  | { read: "pane"; reference: DecisionQuestionReference };
 
 export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R extends {
   read: "content";
@@ -224,4 +252,6 @@ export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R
   ? DecisionQuestionContentResult
   : R extends { read: "image" }
     ? DecisionQuestionImagePartResult
-    : DecisionQuestionSummariesResult;
+    : R extends { read: "pane" }
+      ? DecisionQuestionPaneResult
+      : DecisionQuestionSummariesResult;

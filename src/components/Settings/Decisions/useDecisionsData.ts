@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   DecisionsExportResult,
+  DecisionsKeyErasurePayload,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
 } from "@shared/types/decisions";
 
-export type DecisionsDataAction = "export" | "delete-relay" | "delete-local";
+export type DecisionsDataAction = "export" | "remove-history" | "delete-relay" | "delete-local";
 
 export type DecisionsDataOutcome =
   | { action: "export"; result: DecisionsExportResult }
+  | { action: "remove-history"; result: DecisionsHistoryRemoveResult }
   | { action: "delete-relay"; result: DecisionsRelayDeleteResult }
   | { action: "delete-local"; result: DecisionsLocalDeleteResult };
 
@@ -23,15 +26,18 @@ export interface UseDecisionsDataResult {
   error: { action: DecisionsDataAction; message: string } | null;
   /** Each resolves true once main answered, whatever it observed; false when it couldn't (see `error`). */
   exportHistory(passphrase: string): Promise<boolean>;
+  removeSettledQuestions(): Promise<boolean>;
   deleteRelayData(origin: string): Promise<boolean>;
-  deleteLocalData(): Promise<boolean>;
+  /** How it was confirmed, which main checks still holds before deleting anything (#18064). */
+  deleteLocalData(confirmed: DecisionsKeyErasurePayload): Promise<boolean>;
   /** Forgets the last outcome; an action already sent still finishes in main. */
   reset(): void;
 }
 
 /**
- * Exporting the decision history and deleting the relay's or this
- * computer's data, asked of main (#16025). The export's passphrase is handed
+ * Exporting the decision history, removing this computer's settled questions
+ * (#18033) and deleting the relay's or this computer's data, asked of main
+ * (#16025). The export's passphrase is handed
  * to main and kept nowhere here. `onLocalDeleted` runs after every local
  * deletion with the status main answered, or null when it didn't say, since
  * the relay record goes with the data. Promise chains rather than
@@ -97,6 +103,13 @@ export function useDecisionsData(
         .then((result) => ({ action: "export" as const, result }))
     );
 
+  const removeSettledQuestions = () =>
+    run("remove-history", () =>
+      window.electron.decisions
+        .removeSettledQuestions()
+        .then((result) => ({ action: "remove-history" as const, result }))
+    );
+
   const deleteRelayData = (origin: string) =>
     run("delete-relay", () =>
       window.electron.decisions
@@ -104,10 +117,10 @@ export function useDecisionsData(
         .then((result) => ({ action: "delete-relay" as const, result }))
     );
 
-  const deleteLocalData = () =>
+  const deleteLocalData = (confirmed: DecisionsKeyErasurePayload) =>
     run("delete-local", () =>
       window.electron.decisions
-        .deleteLocalData()
+        .deleteLocalData(confirmed)
         .then((result) => ({ action: "delete-local" as const, result }))
     );
 
@@ -117,5 +130,14 @@ export function useDecisionsData(
     setError(null);
   };
 
-  return { pending, outcome, error, exportHistory, deleteRelayData, deleteLocalData, reset };
+  return {
+    pending,
+    outcome,
+    error,
+    exportHistory,
+    removeSettledQuestions,
+    deleteRelayData,
+    deleteLocalData,
+    reset,
+  };
 }

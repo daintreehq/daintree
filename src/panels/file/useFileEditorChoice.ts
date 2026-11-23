@@ -20,6 +20,85 @@ function fitsFile(maxBytes: number, loadedBytes: number | null): boolean {
   return loadedBytes === null || loadedBytes <= maxBytes;
 }
 
+/**
+ * Whether a viewer can show the file: only once its size is known and within
+ * the viewer's ceiling. Unlike Edit there is no draft to reach, and the size
+ * the panel's own read knows is the only thing standing between a viewer and a
+ * file its document read would refuse.
+ */
+function fitsViewer(maxBytes: number, fileBytes: number | null): boolean {
+  return fileBytes !== null && fileBytes <= maxBytes;
+}
+
+/**
+ * Which plugin viewer fills Rendered for a file the host can't render itself
+ * (#13809, #17336), shared by the file panel and the file browser's viewer.
+ *
+ * A viewer is on offer once the file's size is known to fit it. The user's
+ * remembered "View with…" answer wins while it is on offer; otherwise a
+ * built-in viewer, then the rest in their deterministic order. Until the
+ * answers have loaded only a built-in may show, as with Edit. Which viewers
+ * ship with Daintree comes with the hosted-view snapshot that offers them, so
+ * no ordering of snapshots can hand an installed viewer the file first.
+ * `builtinOnly` narrows the offer to those, for the browser.
+ */
+export function useFileViewerChoice({
+  filePath,
+  rootPath,
+  enabled,
+  fileBytes,
+  builtinOnly = false,
+}: {
+  filePath: string | undefined;
+  rootPath: string;
+  /** Viewers may fill Rendered here at all: a governed root, a type the host can't render. */
+  enabled: boolean;
+  /** The file's size as the latest read saw it, else null. */
+  fileBytes: number | null;
+  builtinOnly?: boolean;
+}) {
+  const candidates = usePluginFileEditorCandidates(filePath, rootPath, "view", enabled);
+  const initEditorChoices = useFileEditorChoicesStore((s) => s.init);
+  useEffect(() => {
+    initEditorChoices();
+  }, [initEditorChoices]);
+  const editorChoicesLoaded = useFileEditorChoicesStore((s) => s.loaded);
+  const editorChoices = useFileEditorChoicesStore((s) => s.choices);
+
+  const pluginViewCandidates = useMemo(() => {
+    const offered = candidates.filter(
+      (candidate) =>
+        (!builtinOnly || candidate.builtin) && fitsViewer(candidate.editor.maxBytes, fileBytes)
+    );
+    return [
+      ...offered.filter((candidate) => candidate.builtin),
+      ...offered.filter((candidate) => !candidate.builtin),
+    ];
+  }, [candidates, builtinOnly, fileBytes]);
+  const viewOptions = useMemo(
+    () => pluginViewCandidates.map((candidate) => candidate.choiceId),
+    [pluginViewCandidates]
+  );
+  const builtinViewer = pluginViewCandidates.find((candidate) => candidate.builtin) ?? null;
+  const viewChoice =
+    filePath === undefined
+      ? null
+      : editorChoicesLoaded
+        ? pickFileEditorChoice(viewOptions, editorChoices, fileEditorChoiceKey("view", filePath))
+        : (builtinViewer?.choiceId ?? null);
+  const pluginViewer =
+    pluginViewCandidates.find((candidate) => candidate.choiceId === viewChoice) ?? null;
+
+  return {
+    pluginViewCandidates,
+    viewOptions,
+    viewChoice,
+    pluginViewer,
+    /** A viewer that ships with Daintree can show the file: what a file opens in by default. */
+    hasBuiltinViewer: builtinViewer !== null,
+  };
+}
+
 /** "Edit with…" option labels: the plugin's name, disambiguated when one plugin offers two. */
 function pickerOptions(
   candidates: readonly PluginFileEditorCandidate[],
@@ -52,6 +131,7 @@ export function useFileEditorChoice({
   pluginEditorsAllowed,
   isRenderable,
   loadedBytes,
+  fileBytes,
   pinnedEditor,
 }: {
   panelId: string;
@@ -63,6 +143,8 @@ export function useFileEditorChoice({
   isRenderable: boolean;
   /** The file's size once it has loaded as text, else null. */
   loadedBytes: number | null;
+  /** The file's size as the latest read saw it, loaded or refused for its size, else null. */
+  fileBytes: number | null;
   /** The editor pinned to the panel: the one a default opened it with, or the one last picked in it. */
   pinnedEditor: string | undefined;
 }) {
@@ -80,12 +162,13 @@ export function useFileEditorChoice({
     "edit",
     pluginEditorsAllowed
   );
-  const pluginViewCandidates = usePluginFileEditorCandidates(
-    filePath,
-    effectiveRootPath,
-    "view",
-    pluginEditorsAllowed && !isRenderable
-  );
+  const { pluginViewCandidates, viewOptions, viewChoice, pluginViewer, hasBuiltinViewer } =
+    useFileViewerChoice({
+      filePath,
+      rootPath: effectiveRootPath,
+      enabled: pluginEditorsAllowed && !isRenderable,
+      fileBytes,
+    });
   // The default editor a project plugin set for this file (#13811). Opening
   // with it is `file.openPanel`'s call; the pane asks the user about it.
   const fileDefault = useFileEditorDefault(filePath, effectiveRootPath, pluginEditorsAllowed);
@@ -117,15 +200,22 @@ export function useFileEditorChoice({
     if (!projection?.dirty) return null;
     return isPluginFileDocumentIdentity(projection.identityKey) ? "plugin" : "host";
   });
+  // The draft's owner stays on offer whatever the file grew to: its own
+  // oversized state is the way back to the draft.
   const editOptions = useMemo(
     () => [
-      ...(editor && draftOwner !== "plugin" && fitsFile(editor.registration.maxBytes, loadedBytes)
+      ...(editor &&
+      draftOwner !== "plugin" &&
+      (draftOwner === "host" || fitsFile(editor.registration.maxBytes, loadedBytes))
         ? [HOST_FILE_EDITOR_CHOICE]
         : []),
       ...(draftOwner === "host"
         ? []
         : pluginEditCandidates
-            .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
+            .filter(
+              (candidate) =>
+                draftOwner === "plugin" || fitsFile(candidate.editor.maxBytes, loadedBytes)
+            )
             .map((candidate) => candidate.choiceId)),
     ],
     [editor, draftOwner, pluginEditCandidates, loadedBytes]
@@ -146,20 +236,6 @@ export function useFileEditorChoice({
   const builtinEditor = editChoice === HOST_FILE_EDITOR_CHOICE ? editor : null;
   const pluginEditor =
     pluginEditCandidates.find((candidate) => candidate.choiceId === editChoice) ?? null;
-  const viewOptions = useMemo(
-    () =>
-      pluginViewCandidates
-        .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
-        .map((candidate) => candidate.choiceId),
-    [pluginViewCandidates, loadedBytes]
-  );
-  const viewChoice =
-    filePath === undefined || !editorChoicesLoaded
-      ? null
-      : pickFileEditorChoice(viewOptions, editorChoices, fileEditorChoiceKey("view", filePath));
-  const pluginViewer =
-    pluginViewCandidates.find((candidate) => candidate.choiceId === viewChoice) ?? null;
-
   return {
     editor,
     builtinEditorName,
@@ -174,6 +250,7 @@ export function useFileEditorChoice({
     viewOptions,
     viewChoice,
     pluginViewer,
+    hasBuiltinViewer,
   };
 }
 
