@@ -38,6 +38,7 @@ import {
 import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import { readWorktreeGitObservation } from "./mcp-server/worktreeRetirementGit.js";
+import { readWorktreesLocalWork } from "./git/worktreeLocalWork.js";
 import {
   helpConversationKey,
   helpOwnershipPrincipal,
@@ -222,6 +223,12 @@ export interface McpWakeHold {
   /** Idempotent. Ends the hold's wakes, each reporting why. */
   release(): void;
 }
+
+/**
+ * How long the global Assistant's close question waits on git for the panels'
+ * worktrees (#18151) before what hasn't answered reads as unreadable.
+ */
+const GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS = 20_000;
 
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
@@ -623,6 +630,17 @@ export class McpServerService {
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
       readWorktreeGit: (worktreePath, signal) => readWorktreeGitObservation(worktreePath, signal),
+      // On this host, where the agents run, and only for the project the
+      // global Assistant's session is bound to.
+      readCloseWorktrees: async (projectId, worktreeIds, signal) => {
+        // Loaded on first use: the store opens its database when imported.
+        const { projectStore } = await import("./ProjectStore.js");
+        const projectPath = projectStore.getProjectById(projectId)?.path ?? null;
+        return readWorktreesLocalWork(
+          worktreeIds.map((worktreeId) => ({ projectPath, worktreeId })),
+          { signal, deadlineMs: GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS }
+        );
+      },
       terminalGenerationOf: (terminalId) => {
         const client = getPtyClient();
         if (!client) return undefined;

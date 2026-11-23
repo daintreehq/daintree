@@ -319,6 +319,7 @@ export const CHANNELS = {
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_READ_INPUT_LINES: "canopy:read-input-lines",
+  CANOPY_READ_WORKTREES: "canopy:read-worktrees",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
   CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",

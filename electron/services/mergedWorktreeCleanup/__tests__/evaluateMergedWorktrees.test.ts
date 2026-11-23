@@ -63,6 +63,7 @@ function reads(overrides: Partial<MergedWorktreeReads> = {}): MergedWorktreeRead
       unstaged: 0,
       untracked: 0,
       conflicted: 0,
+      changedEntries: 0,
       hiddenFromStatus: 0,
     })),
     countTerminals: vi.fn(async () => ({ count: 0, complete: true })),
@@ -129,6 +130,7 @@ describe("evaluateMergedWorktrees", () => {
           unstaged: 0,
           untracked: 0,
           conflicted: 0,
+          changedEntries: 0,
           hiddenFromStatus: 0,
           [field]: 1,
         })),
@@ -261,6 +263,7 @@ describe("evaluateMergedWorktrees", () => {
         unstaged: 0,
         untracked: 0,
         conflicted: 0,
+        changedEntries: 0,
         hiddenFromStatus: 0,
       })),
     });
@@ -285,6 +288,7 @@ describe("evaluateMergedWorktrees", () => {
           unstaged: 0,
           untracked: 0,
           conflicted: 0,
+          changedEntries: 0,
           hiddenFromStatus: 0,
         })),
       })

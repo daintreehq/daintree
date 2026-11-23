@@ -168,6 +168,7 @@ class Destination {
     unstaged: 0,
     untracked: 0,
     conflicted: 0,
+    changedEntries: 0,
     hiddenFromStatus: 0,
     unpushedCommits: 0,
   };

@@ -28,6 +28,7 @@ import type {
   CanopyTrashOutcome,
   CanopyTrashTarget,
   CanopyUntrashOutcome,
+  CanopyWorktreeReading,
 } from "../../../shared/types/ipc/canopy.js";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
@@ -63,6 +64,7 @@ import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { readInputLines } from "../../services/canopy/canopyInputLines.js";
+import { readRunWorktrees } from "../../services/canopy/canopyWorktrees.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
@@ -2379,6 +2381,26 @@ export const canopyNamespace = defineIpcNamespace({
           live.has(`${target.runId}\u0000${target.spawnedAt}`)
         );
         return readInputLines(requirePtyClient(), known);
+      }
+    ),
+
+    /**
+     * What each run's worktree holds that exists only on this machine
+     * (#18151), so the panel's bulk trash can leave unpushed or uncommitted
+     * work unticked. Read here, where the worktree is: only the counts go
+     * back. Only runs the fleet holds in the same incarnation are read.
+     */
+    readWorktrees: op(
+      CANOPY_METHOD_CHANNELS.readWorktrees,
+      async (targets: CanopyRunTarget[]): Promise<CanopyWorktreeReading[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readWorktrees, 10, 10_000);
+        assertRunTargets(targets);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        return readRunWorktrees(
+          runs,
+          targets,
+          (workspaceId) => projectStore.getProjectById(workspaceId)?.path ?? null
+        );
       }
     ),
 

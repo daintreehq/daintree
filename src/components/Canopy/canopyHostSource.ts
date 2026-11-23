@@ -38,6 +38,7 @@ export type CanopyApi = Pick<
   | "runBranch"
   | "searchScreens"
   | "readInputLines"
+  | "readWorktrees"
   | "setMode"
   | "rename"
   | "trash"
@@ -62,6 +63,7 @@ export const ownCanopyApi: CanopyApi = {
   runBranch: (...args) => window.electron.canopy.runBranch(...args),
   searchScreens: (...args) => window.electron.canopy.searchScreens(...args),
   readInputLines: (...args) => window.electron.canopy.readInputLines(...args),
+  readWorktrees: (...args) => window.electron.canopy.readWorktrees(...args),
   setMode: (...args) => window.electron.canopy.setMode(...args),
   rename: (...args) => window.electron.canopy.rename(...args),
   trash: (...args) => window.electron.canopy.trash(...args),
@@ -91,6 +93,7 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     runBranch: on("canopy:run-branch"),
     searchScreens: on("canopy:search-screens"),
     readInputLines: on("canopy:read-input-lines"),
+    readWorktrees: on("canopy:read-worktrees"),
     setMode: on("canopy:set-mode"),
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),

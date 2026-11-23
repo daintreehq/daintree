@@ -12,6 +12,7 @@
 import type { FleetRunRow } from "./fleet.js";
 import type { GlobalAssistantSlot } from "../../config/globalAssistantSessions.js";
 import type { TerminalInputLineState } from "../terminalStatus.js";
+import type { WorktreeLocalWork } from "../worktreeLocalWork.js";
 
 /** The screen's current state, as the classifier read it. */
 export type CanopyCategory =
@@ -660,6 +661,15 @@ export interface CanopyRunTarget extends CanopyTarget {
 export interface CanopyInputLineReading {
   runId: string;
   state: TerminalInputLineState;
+}
+
+/**
+ * What git showed of a run's worktree when the panel asked (#18151), read on
+ * the machine it runs on: only the counts leave, never a path or a file name.
+ */
+export interface CanopyWorktreeReading {
+  runId: string;
+  work: WorktreeLocalWork;
 }
 
 /** One run of a bulk trash: the receipt Undo takes back, or why that run alone was not trashed. */

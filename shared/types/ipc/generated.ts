@@ -231,6 +231,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
         | "canopy:read-input-lines"
+        | "canopy:read-worktrees"
         | "canopy:refresh"
         | "canopy:remove-trashed"
         | "canopy:rename"
@@ -274,6 +275,7 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopyInputLineReading[]
       | import("./canopy.js").CanopyTrashOutcome[]
       | import("./canopy.js").CanopyUntrashOutcome[]
+      | import("./canopy.js").CanopyWorktreeReading[]
       | null;
   };
   "canopy-host:list-assistants": {
@@ -452,6 +454,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:read-input-lines": {
     args: [targets: import("./canopy.js").CanopyRunTarget[]];
     result: import("./canopy.js").CanopyInputLineReading[];
+  };
+  "canopy:read-worktrees": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyWorktreeReading[];
   };
   "canopy:refresh": {
     args: [];

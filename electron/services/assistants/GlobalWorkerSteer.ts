@@ -56,6 +56,8 @@ export interface GlobalCloseTarget {
   lastTypedInputAt?: number;
   /** The panel's title, for the question put to the person. */
   title?: string;
+  /** The worktree the panel sits in, whose git state the question reports (#18151). */
+  worktreeId?: string;
 }
 
 /** The pty-host record fields a steer reads. */
@@ -680,6 +682,7 @@ export class GlobalWorkerSteer {
       ...(record.title !== undefined && record.title.trim().length > 0
         ? { title: record.title.trim() }
         : {}),
+      ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
     };
   }
 

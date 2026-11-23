@@ -97,6 +97,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:mark-seen": "free",
   "canopy:note-sent": "free",
   "canopy:read-input-lines": "free",
+  "canopy:read-worktrees": "free",
   "canopy:refresh": "free",
   "canopy:rename": "driver",
   "canopy:rename-requested": "free",

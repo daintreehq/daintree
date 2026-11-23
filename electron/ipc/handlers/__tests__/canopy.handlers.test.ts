@@ -11,7 +11,13 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const state = vi.hoisted(() => ({
-  runs: [] as Array<{ runId: string; spawnedAt: number; workspaceId?: string; cwd?: string }>,
+  runs: [] as Array<{
+    runId: string;
+    spawnedAt: number;
+    workspaceId?: string;
+    cwd?: string;
+    worktreeId?: string;
+  }>,
   views: [] as Array<{ send: (channel: string, payload: unknown) => void }>,
   record: null as {
     spawnedAt: number;
@@ -221,6 +227,7 @@ const saved = vi.hoisted(() => ({
   } | null,
 }));
 const projectStore = vi.hoisted(() => ({
+  getProjectById: vi.fn((_projectId: string): { path: string } | null => null),
   enqueueProjectStateUpdate: vi.fn(
     async (_projectId: string, updater: (state: unknown) => unknown) => {
       const next = await updater(saved.state);
@@ -1657,6 +1664,29 @@ describe("canopy IPC", () => {
         ])
       );
       expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
+
+    it("reads worktrees only for runs the fleet holds in the incarnation named, never as clean unchecked", async () => {
+      state.runs = [
+        { runId: "run-0", spawnedAt: 100, workspaceId: "project-1" },
+        { runId: "run-1", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-1" },
+        { runId: "run-2", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-2" },
+      ];
+      const readings = answer<Array<{ runId: string; work: { kind: string } }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readWorktrees, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 99 },
+          // Named only in an incarnation the fleet doesn't hold.
+          { runId: "run-2", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      // run-1's project isn't known here, so its worktree can't be checked against it.
+      expect(readings).toEqual([
+        { runId: "run-0", work: { kind: "not-applicable" } },
+        { runId: "run-1", work: { kind: "unreadable" } },
+      ]);
     });
   });
 

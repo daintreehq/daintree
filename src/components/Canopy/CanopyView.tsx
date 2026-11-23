@@ -2515,6 +2515,7 @@ function CanopyInbox({
         entries={bulkTrash?.entries ?? NO_BULK_TRASH}
         more={bulkTrash?.more ?? 0}
         readInputLines={api.readInputLines}
+        readWorktrees={api.readWorktrees}
         onTrash={trashMany}
         // The selected row, where Z takes the trash back; once it leaves with
         // the trash, the panel moves the keyboard on as for any row that goes.

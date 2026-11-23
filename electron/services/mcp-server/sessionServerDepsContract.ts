@@ -304,6 +304,18 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     signal: AbortSignal
   ) => Promise<import("./worktreeRetirementGit.js").WorktreeGitObservation>;
   /**
+   * What each worktree named holds that exists only on this machine (#18151),
+   * for the global Assistant's close question, one answer per id in order:
+   * `undefined` for a panel with no worktree. Never rejects; whatever git
+   * couldn't report is unreadable. Absent, a panel in a worktree reads as
+   * unreadable.
+   */
+  readCloseWorktrees?: (
+    projectId: string,
+    worktreeIds: ReadonlyArray<string | undefined>,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/worktreeLocalWork.js").WorktreeLocalWork[]>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already

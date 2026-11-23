@@ -1,5 +1,10 @@
-import type { CanopyInputLineReading, CanopyRunTarget } from "@shared/types/ipc/canopy";
+import type {
+  CanopyInputLineReading,
+  CanopyRunTarget,
+  CanopyWorktreeReading,
+} from "@shared/types/ipc/canopy";
 import type { TerminalInputLineState } from "@shared/types/terminalStatus";
+import type { WorktreeLocalWork } from "@shared/types/worktreeLocalWork";
 import type { HostId } from "@shared/types/remoteHosts";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { allHostsKey } from "./canopyAllHosts";
@@ -11,15 +16,53 @@ import { placeOf } from "./canopyInboxPlace";
  * person may still want it, never a guess. A suggestion the agent drew in its
  * own input box is not one: nobody typed it.
  */
-export type BulkTrashHold = "working" | "answer" | "question" | "typed" | "reply";
+export type BulkTrashHold =
+  "working" | "answer" | "question" | "typed" | "reply" | "unpushed" | "uncommitted" | "unreadable";
 
-export const BULK_TRASH_HOLD_LABEL: Record<BulkTrashHold, string> = {
+/** The holds that come from the run's worktree, whose row says what git counted instead. */
+export type BulkTrashWorktreeHold = Extract<
+  BulkTrashHold,
+  "unpushed" | "uncommitted" | "unreadable"
+>;
+
+export const BULK_TRASH_HOLD_LABEL: Record<
+  Exclude<BulkTrashHold, BulkTrashWorktreeHold>,
+  string
+> = {
   working: "Working",
   answer: "Answer needs attention",
   question: "Question open in Decisions",
   typed: "Text typed in its terminal",
   reply: "Reply drafted here",
 };
+
+export function isWorktreeHold(hold: BulkTrashHold): hold is BulkTrashWorktreeHold {
+  return hold === "unpushed" || hold === "uncommitted" || hold === "unreadable";
+}
+
+/**
+ * What the review goes on for a run's worktree (#18151): its host's answer,
+ * or for a run in a worktree that no answer came back for, unreadable. A run
+ * with no worktree has nothing to read.
+ */
+export function bulkTrashWorktree(
+  item: CanopyItem,
+  work: WorktreeLocalWork | undefined
+): WorktreeLocalWork {
+  if (work !== undefined) return work;
+  return item.row.run.worktreeId === undefined
+    ? { kind: "not-applicable" }
+    : { kind: "unreadable" };
+}
+
+/** Why the run's worktree holds it back, if it does: work only on this machine, or no answer. */
+export function worktreeHold(work: WorktreeLocalWork): BulkTrashWorktreeHold | null {
+  if (work.kind === "not-applicable") return null;
+  if (work.kind === "unreadable") return "unreadable";
+  if (work.unpushedCommits === null || work.unpushedCommits > 0) return "unpushed";
+  if (work.changedEntries > 0 || work.hiddenFromStatus > 0) return "uncommitted";
+  return null;
+}
 
 /**
  * The first thing seen that holds a run back, by the order the person would
@@ -29,7 +72,8 @@ export const BULK_TRASH_HOLD_LABEL: Record<BulkTrashHold, string> = {
 export function bulkTrashHold(
   item: CanopyItem,
   inputLine: TerminalInputLineState | undefined,
-  replyDraft: boolean
+  replyDraft: boolean,
+  worktree: WorktreeLocalWork = { kind: "not-applicable" }
 ): BulkTrashHold | null {
   const state = item.row.run.agentState;
   if (state === "working" || state === "directing") return "working";
@@ -37,7 +81,7 @@ export function bulkTrashHold(
   if (itemQuestionAttention(item) > 0) return "question";
   if (inputLine === "typed") return "typed";
   if (replyDraft) return "reply";
-  return null;
+  return worktreeHold(worktree);
 }
 
 /**
@@ -67,4 +111,11 @@ export function inputLinesByRun(
   readings: readonly CanopyInputLineReading[]
 ): Map<string, TerminalInputLineState> {
   return new Map(readings.map((reading) => [reading.runId, reading.state]));
+}
+
+/** The readings as a lookup; a run left out was not answered for. */
+export function worktreesByRun(
+  readings: readonly CanopyWorktreeReading[]
+): Map<string, WorktreeLocalWork> {
+  return new Map(readings.map((reading) => [reading.runId, reading.work]));
 }

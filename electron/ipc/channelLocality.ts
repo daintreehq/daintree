@@ -163,6 +163,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:rename": "host",
   "canopy:rename-requested": "host",
   "canopy:read-input-lines": "host",
+  "canopy:read-worktrees": "host",
   "canopy:reread": "host",
   "canopy:resolve-assistant": "hybrid",
   "canopy:restore-reads": "host",
