@@ -3252,6 +3252,24 @@ describe("decision wakes (#16015)", () => {
       expect(h.client.submitted[2].text).toBe("Daintree Decisions: third");
     });
 
+    it("keeps the release deadline of the written line a refused answer followed", async () => {
+      const h = setup({ enabled: false });
+      const scope = h.service.openWakeScope();
+      scope.enqueueWake(PANE, PROJECT, decisionWake("Daintree Decisions: first").wake);
+      await flushWake();
+      expect(h.service.getPaneState(OWN)?.delivery.status).toBe("outstanding");
+
+      h.client.linePhase = "cancelled";
+      h.client.lineStop = "admission";
+      scope.enqueueWake(PANE, PROJECT, nextDecision().wake);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS + NOTIFY_COALESCE_MS);
+      expect(h.client.submitted).toHaveLength(2);
+
+      // The written line is let go a minute after it was written, not a minute after the refusal.
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(h.service.getPaneState(OWN)?.delivery.status ?? "idle").not.toBe("outstanding");
+    });
+
     it("lets no answer follow a held line that carried none", async () => {
       const h = setup({ enabled: false });
       h.client.linePhase = "cancelled";

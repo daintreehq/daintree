@@ -89,8 +89,13 @@ interface StagedBlock {
   /** The injection id its staged text carries. */
   injectionId: string;
   at: number;
-  /** Its marker was seen submitted, while another block of its chunk was still to type. */
-  seen?: true;
+}
+
+/** A staged answer or follow-up whose marker the screen showed submitted, while its chunk's others were still to type. */
+interface ProvenBlock {
+  target: TerminalTarget;
+  injectionId: string;
+  at: number;
 }
 
 /** What an empty composer showed of a chunk with staged blocks: what is left to type, and why the rest isn't. */
@@ -184,6 +189,12 @@ export class DaintreeTerminalSink implements TerminalSink {
    */
   private readonly staged = new Map<string, StagedBlock>();
   /**
+   * Staged blocks the screen showed submitted, by `blockKey` (#18157), kept
+   * until their chunk is delivered or left uncertain: however its other
+   * blocks fare, these are never typed again.
+   */
+  private readonly proven = new Map<string, ProvenBlock>();
+  /**
    * Runs whose composer an Enter-held line left text in, by pane (#18157):
    * the engine lets answers follow that line, so every attempt into the run
    * reads an empty composer off the screen before anything is typed, until
@@ -257,7 +268,8 @@ export class DaintreeTerminalSink implements TerminalSink {
         this.settling.delete(target.paneId);
       }
       if (settled.kind === "result") {
-        if (settled.result.outcome !== "held") this.unstage(keys);
+        const { outcome } = settled.result;
+        if (outcome === "delivered" || outcome === "ambiguous") this.unstage(keys);
         return settled.result;
       }
       // The screen read clear: the attempt types, unless one joined or a
@@ -281,8 +293,9 @@ export class DaintreeTerminalSink implements TerminalSink {
       settled = true;
       if (this.pending.get(id) === entry) this.pending.delete(id);
       for (const key of keys) this.inFlight.delete(key);
-      // Staged blocks are settled once the chunk is, whichever way.
-      if (raw.outcome !== "held") this.unstage(keys);
+      // Settled once the chunk is delivered or left uncertain; held or
+      // unavailable, the library tries the chunk again.
+      if (raw.outcome === "delivered" || raw.outcome === "ambiguous") this.unstage(keys);
       settle(
         raw.outcome === "delivered" && seenProof !== null
           ? { outcome: "delivered", proof: `${seenProof};${raw.proof}` }
@@ -434,9 +447,10 @@ export class DaintreeTerminalSink implements TerminalSink {
     const screen = await this.readScreen(target, askerKinds, STAGED_SEARCH_ROWS);
     if (typeof screen !== "string") return null;
     const ids = blocks.map((block) => block.injectionId);
-    return ids.every((id) => screen.includes(markerText(id)))
-      ? { outcome: "delivered", proof: `marker:${ids.join(",")}` }
-      : null;
+    if (!ids.every((id) => screen.includes(markerText(id)))) return null;
+    // Still empty after the search: a draft redrawn between the reads put no marker there.
+    if ((await this.readComposer(target, askerKinds)) !== "empty") return null;
+    return { outcome: "delivered", proof: `marker:${ids.join(",")}` };
   }
 
   /** Whether an attempt into `target` reads its composer first: staged text may be in it. */
@@ -448,10 +462,12 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     let found = this.drafted.has(target.paneId);
     for (const key of keys) {
-      const staged = this.staged.get(key);
-      if (staged === undefined) continue;
-      if (!sameRun(staged.target, target)) this.staged.delete(key);
-      else found = true;
+      for (const map of [this.staged, this.proven]) {
+        const entry = map.get(key);
+        if (entry === undefined) continue;
+        if (!sameRun(entry.target, target)) map.delete(key);
+        else found = true;
+      }
     }
     return found;
   }
@@ -464,8 +480,10 @@ export class DaintreeTerminalSink implements TerminalSink {
    */
   private stage(target: TerminalTarget, blocks: readonly DecisionBlock[]): boolean {
     const at = this.now();
-    for (const [key, entry] of this.staged) {
-      if (at - entry.at >= STAGED_FORGET_MS) this.staged.delete(key);
+    for (const map of [this.staged, this.proven]) {
+      for (const [key, entry] of map) {
+        if (at - entry.at >= STAGED_FORGET_MS) map.delete(key);
+      }
     }
     for (const [pane, entry] of this.drafted) {
       if (at - entry.at >= STAGED_FORGET_MS) this.drafted.delete(pane);
@@ -483,7 +501,10 @@ export class DaintreeTerminalSink implements TerminalSink {
   }
 
   private unstage(keys: readonly string[]): void {
-    for (const key of keys) this.staged.delete(key);
+    for (const key of keys) {
+      this.staged.delete(key);
+      this.proven.delete(key);
+    }
   }
 
   /**
@@ -491,21 +512,22 @@ export class DaintreeTerminalSink implements TerminalSink {
    * typed into it (#18157). Text in the composer waits: nothing is typed on
    * top of it, however long it stays, though staged blocks under it are left
    * uncertain after `STAGED_WAIT_MS`. A composer that can't be read waits
-   * that long, then lets the chunk go on its gate. An empty composer with
-   * none of the chunk's staged markers on screen means the text was dropped,
-   * and the chunk is typed afresh; all of them there means it was submitted,
-   * and only the chunk's other blocks are typed. A mix can't be settled from
-   * the screen and is left uncertain.
+   * that long, then lets the chunk go on its gate. With the composer empty,
+   * staged blocks whose markers all show were submitted and are proven;
+   * none showing means their text was dropped, to be typed afresh; a mix
+   * can't be settled from the screen and is left uncertain. Only the
+   * chunk's unproven blocks are typed.
    */
   private async settleStaged(
     target: TerminalTarget,
     askerKinds: readonly string[],
     blocks: readonly DecisionBlock[]
   ): Promise<StagedSettlement> {
+    const keys = blocks.map(blockKey);
     const staged = new Map<string, StagedBlock>();
-    for (const block of blocks) {
-      const entry = this.staged.get(blockKey(block));
-      if (entry !== undefined) staged.set(blockKey(block), entry);
+    for (const key of keys) {
+      const entry = this.staged.get(key);
+      if (entry !== undefined) staged.set(key, entry);
     }
     const held: StagedSettlement = {
       kind: "result",
@@ -525,29 +547,36 @@ export class DaintreeTerminalSink implements TerminalSink {
       const drafted = this.drafted.get(target.paneId);
       if (now - Math.min(stagedSince, drafted?.at ?? Infinity) < STAGED_WAIT_MS) return held;
       this.drafted.delete(target.paneId);
-      return staged.size > 0
-        ? uncertain("enter-held-unresolved")
-        : { kind: "type", blocks, proof: null };
+      if (staged.size > 0) return uncertain("enter-held-unresolved");
+    } else if (staged.size > 0) {
+      const screen = await this.readScreen(target, askerKinds, STAGED_SEARCH_ROWS);
+      if (typeof screen !== "string") {
+        return now - stagedSince >= STAGED_WAIT_MS ? uncertain("enter-held-unresolved") : held;
+      }
+      const seen = [...staged].filter(([, entry]) =>
+        screen.includes(markerText(entry.injectionId))
+      );
+      if (seen.length > 0 && seen.length < staged.size) return uncertain("enter-held-partial");
+      // Still empty after the search: a draft redrawn between the reads put no marker there.
+      if ((await this.readComposer(target, askerKinds)) !== "empty") return held;
+      this.drafted.delete(target.paneId);
+      for (const [key, entry] of staged) {
+        this.staged.delete(key);
+        if (seen.length > 0) this.proven.set(key, { ...entry, at: now });
+      }
+    } else {
+      this.drafted.delete(target.paneId);
     }
-    this.drafted.delete(target.paneId);
-    if (staged.size === 0) return { kind: "type", blocks, proof: null };
-    const screen = await this.readScreen(target, askerKinds, STAGED_SEARCH_ROWS);
-    if (typeof screen !== "string") {
-      return now - stagedSince >= STAGED_WAIT_MS ? uncertain("enter-held-unresolved") : held;
-    }
-    const seen = [...staged.values()].filter(
-      (entry) => entry.seen === true || screen.includes(markerText(entry.injectionId))
-    );
-    if (seen.length === 0) return { kind: "type", blocks, proof: null };
-    if (seen.length < staged.size) return uncertain("enter-held-partial");
-    // Kept as seen until the chunk settles: should its other blocks be held
-    // again, the next attempt still knows these went.
-    for (const entry of seen) entry.seen = true;
-    const proof = `marker:${seen.map((entry) => entry.injectionId).join(",")}`;
-    const rest = blocks.filter((block) => !staged.has(blockKey(block)));
-    return rest.length === 0
-      ? { kind: "result", result: { outcome: "delivered", proof } }
-      : { kind: "type", blocks: rest, proof };
+    const proven = keys.flatMap((key) => {
+      const entry = this.proven.get(key);
+      return entry === undefined ? [] : [entry];
+    });
+    const proof =
+      proven.length === 0 ? null : `marker:${proven.map((entry) => entry.injectionId).join(",")}`;
+    const rest = blocks.filter((block) => !this.proven.has(blockKey(block)));
+    if (rest.length === 0)
+      return { kind: "result", result: { outcome: "delivered", proof: proof! } };
+    return { kind: "type", blocks: rest, proof };
   }
 
   /**

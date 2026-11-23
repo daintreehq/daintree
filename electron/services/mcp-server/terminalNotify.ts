@@ -2763,8 +2763,15 @@ export class TerminalNotifyService {
               this.settleOutstanding(owner);
               return;
             }
-            if (follows.status === "outstanding" && follows.confirmed === true && follows.token) {
-              this.armRelease(owner, follows.token);
+            // Its own release keeps its deadline: one that came while this
+            // line was out found another token, so the deadline has passed.
+            if (
+              follows.status === "outstanding" &&
+              follows.confirmed === true &&
+              owner.releaseTimer === undefined
+            ) {
+              this.settleOutstanding(owner);
+              return;
             }
             this.schedule(owner);
           } else {

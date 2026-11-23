@@ -1287,6 +1287,43 @@ describe("DaintreeTerminalSink", () => {
       );
     });
 
+    it.each<[string, TerminalSubmissionStop]>([
+      ["held at its Enter again, with the dialog dropping it", "enter"],
+      ["refused at the lane", "admission"],
+    ])(
+      "never types a proven answer again when the rest of its chunk is %s",
+      async (_label, stop) => {
+        const h = setup();
+        await stopped(h, "enter");
+        h.client.screens.set(PANE, submittedPrompt(I1));
+        const chunk = () =>
+          track(
+            h.sink.inject(
+              TARGET,
+              notice({ injectionId: I2 }, { questionId: Q2, injectionId: I3 }),
+              I2
+            )
+          );
+
+        h.client.linePhase = "cancelled";
+        h.client.lineStop = stop;
+        const second = chunk();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.client.submitted).toHaveLength(2);
+        expect(second.value).toMatchObject({ outcome: "held" });
+
+        h.client.linePhase = "pty_written";
+        h.client.lineStop = undefined;
+        const third = chunk();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.client.submitted).toHaveLength(3);
+        expect(h.client.submitted[2].text).toContain(markerFor(I3));
+        expect(h.client.submitted[2].text).not.toContain(markerFor(I2));
+        expect(third.value).toMatchObject({ outcome: "delivered" });
+        expect((third.value as { proof: string }).proof).toMatch(new RegExp(`^marker:${I1};`));
+      }
+    );
+
     it("leaves a chunk uncertain when only some of its staged answers show submitted", async () => {
       const h = setup();
       h.client.linePhase = "cancelled";
