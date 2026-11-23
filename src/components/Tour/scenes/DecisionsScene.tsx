@@ -41,21 +41,30 @@ function DecisionsMark({ className }: { className?: string }) {
 export const CURSOR: readonly CursorStep[] = [
   { cue: "enable", at: { anchor: "decisions-toggle" } },
   { cue: "enable", offset: 0.4, at: { anchor: "decisions-toggle" }, click: true },
+  // Turning it on asks for the relay and a phone, each set up from its own control.
+  { cue: "enable", offset: 0.75, at: { anchor: "setup-relay" } },
+  { cue: "enable", offset: 1.2, at: { anchor: "setup-relay" }, click: true },
+  { cue: "enable", offset: 1.5, at: { anchor: "setup-pair" } },
+  { cue: "enable", offset: 1.95, at: { anchor: "setup-pair" }, click: true },
   { cue: "answer", at: { anchor: "phone-answer" } },
   { cue: "answer", offset: 0.5, at: { anchor: "phone-answer" }, click: true },
   { cue: "inbox", at: { anchor: "decisions-inbox" } },
   { cue: "inbox", offset: 0.4, at: { anchor: "decisions-inbox" }, click: true },
   // History opens shut; the answered question is in it.
-  { cue: "inbox", offset: 0.9, at: { anchor: "inbox-history" }, click: true },
+  { cue: "inbox", offset: 0.6, at: { anchor: "inbox-history" } },
+  { cue: "inbox", offset: 1.1, at: { anchor: "inbox-history" }, click: true },
 ];
 
 /** A setup step that turns from to-do to done. */
+/** A setup control that turns from to-do to done once it's pressed. */
 function SetupStep({
+  anchor,
   icon: Icon,
   label,
   done,
   doneLabel,
 }: {
+  anchor: string;
   icon: typeof Cloud;
   label: string;
   done: boolean;
@@ -64,7 +73,15 @@ function SetupStep({
   return (
     <span className="flex items-center gap-1.5 text-3xs text-text-secondary">
       <Icon className="size-2.5" aria-hidden="true" />
-      <span className={done ? "text-text-primary" : undefined}>{done ? doneLabel : label}</span>
+      <span
+        data-tour-anchor={anchor}
+        className={cn(
+          "rounded-sm",
+          done ? "text-text-primary" : "border border-border-subtle px-1.5 py-px text-text-primary"
+        )}
+      >
+        {done ? doneLabel : label}
+      </span>
       {done && <Check className="size-2.5 text-text-primary" aria-hidden="true" />}
     </span>
   );
@@ -121,12 +138,19 @@ function SettingsDialog({
         className={cn("flex flex-col gap-1", reveal(on, "none"))}
       >
         <SetupStep
+          anchor="setup-relay"
           icon={Cloud}
           label="Deploy one to your own Cloudflare account"
           done={relayed}
           doneLabel="Relay deployed · your Cloudflare account"
         />
-        <SetupStep icon={Smartphone} label="Pair a phone" done={paired} doneLabel="Phone paired" />
+        <SetupStep
+          anchor="setup-pair"
+          icon={Smartphone}
+          label="Pair a phone"
+          done={paired}
+          doneLabel="Phone paired"
+        />
       </div>
     </div>
   );
@@ -245,8 +269,8 @@ function Inbox({ open, history }: { open: boolean; history: boolean }) {
 export function DecisionsScene() {
   const settingsOpen = useCue("enable", -0.3);
   const on = useCue("enable", 0.5);
-  const relayed = useCue("enable", 1.1);
-  const paired = useCue("enable", 1.8);
+  const relayed = useCue("enable", 1.4);
+  const paired = useCue("enable", 2.15);
   const asked = useCue("ask");
   // The agent finishes what didn't need the answer, then ends its turn at its prompt.
   const yielded = useCue("ask", 4.5);
@@ -259,7 +283,7 @@ export function DecisionsScene() {
   const resumed = useCue("deliver", 1.0);
   const inboxCue = useCue("inbox");
   const inboxOpen = useCue("inbox", 0.5);
-  const historyOpen = useCue("inbox", 1.1);
+  const historyOpen = useCue("inbox", 1.3);
   const cursor = useMockCursor({ x: 420, y: 220 }, CURSOR);
 
   const settings = settingsOpen && !asked;

@@ -16,6 +16,7 @@ import {
   type AppRegion,
   GRID_RECT,
   MockApp,
+  MockEmptyGrid,
   MockGrid,
   MockPane,
   MockWorktreeCard,
@@ -40,14 +41,22 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "add", at: { anchor: "add-host" } },
   { cue: "add", offset: 0.4, at: { anchor: "add-host" }, click: true },
   { cue: "ssh", offset: -0.4, at: { anchor: "add-host-target", dx: 30, dy: -3 } },
-  // The real dialog does nothing with an address until Check host is pressed.
+  // The real dialog does nothing with an address until Check host is pressed,
+  // and a fresh host then takes Review install, Turn on Host mode and Connect,
+  // each from the same footer button.
   { cue: "install", offset: -0.8, at: { anchor: "add-host-check" } },
-  { cue: "install", offset: -0.25, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: -0.3, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: 0.2, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: 0.65, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: 1.1, at: { anchor: "add-host-check" }, click: true },
   // The cloud is the other way in: Add host again, then its own entry.
   { cue: "cloud", offset: -0.9, at: { anchor: "add-host" } },
   { cue: "cloud", offset: -0.3, at: { anchor: "add-host" }, click: true },
   { cue: "cloud", offset: 0.2, at: { anchor: "add-host-cloud" } },
   { cue: "cloud", offset: 0.7, at: { anchor: "add-host-cloud" }, click: true },
+  // With no account yet, the cloud dialog's first step is connecting one.
+  { cue: "cloud", offset: 1.2, at: { anchor: "cloud-connect-account" } },
+  { cue: "cloud", offset: 1.7, at: { anchor: "cloud-connect-account" }, click: true },
   { cue: "provision", offset: -0.7, at: { anchor: "cloud-create" } },
   { cue: "provision", offset: -0.2, at: { anchor: "cloud-create" }, click: true },
   { cue: "chip", at: { anchor: "host-chip" } },
@@ -67,8 +76,11 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "fresh", offset: 0.2, at: { anchor: "placement-option-3" }, click: true },
   { cue: "fresh", offset: 0.6, at: { anchor: "placement-create" } },
   { cue: "fresh", offset: 1.1, at: { anchor: "placement-create" }, click: true },
+  // A worktree made for a new machine starts no agent, so launch one there.
+  { cue: "running", offset: -1.0, at: { anchor: "agent-codex" } },
+  { cue: "running", offset: -0.5, at: { anchor: "agent-codex" }, click: true },
   // Rest on the new worktree once the form is gone, never on a control that left.
-  { cue: "running", at: { anchor: `worktree-${NEW_BRANCH}` } },
+  { cue: "running", offset: 0.3, at: { anchor: `worktree-${NEW_BRANCH}` } },
 ];
 
 /** One step of the add-host run, as the real dialog's checklist. */
@@ -116,12 +128,23 @@ function FooterButton({
 
 /** Add host over SSH, as the real dialog: an address, Check host, then its setup steps. */
 function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
-  // Opened a second time, for the cloud, it starts empty.
-  const checking = useCue("install") && !again;
-  const installing = useCue("install", 0.35) && !again;
+  // Opened a second time, for the cloud, it starts empty. Each stage waits on
+  // its own press of the footer button, whose label names the next one.
+  const checking = useCue("install", -0.25) && !again;
+  const checked = useCue("install", 0.05) && !again;
+  const installing = useCue("install", 0.25) && !again;
+  const installed = useCue("install", 0.55) && !again;
   const hostMode = useCue("install", 0.7) && !again;
-  const connected = useCue("install", 1.05) && !again;
+  const hostModeOn = useCue("install", 0.95) && !again;
+  const connected = useCue("install", 1.15) && !again;
   const step = (at: boolean, done: boolean) => (done ? "done" : at ? "running" : "todo");
+  const action = hostModeOn
+    ? "Connect"
+    : installed
+      ? "Turn on Host mode"
+      : checked
+        ? "Review install"
+        : "Check host";
   return (
     <div
       className={cn(
@@ -146,15 +169,15 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
             text={SSH_TARGET}
             delay={0.2}
             charsPerSecond={16}
-            finishBy={{ cue: "install", offset: -0.4 }}
+            finishBy={{ cue: "install", offset: -0.7 }}
           />
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2 pl-0.5">
-        <InstallStep label="Find" state={step(checking, checking)} />
-        <InstallStep label="Check" state={step(checking, installing)} />
-        <InstallStep label="Install" state={step(installing, hostMode)} />
-        <InstallStep label="Host mode" state={step(hostMode, connected)} />
+        <InstallStep label="Find" state={step(checking, checked)} />
+        <InstallStep label="Check" state={step(checking, checked)} />
+        <InstallStep label="Install" state={step(installing, installed)} />
+        <InstallStep label="Host mode" state={step(hostMode, hostModeOn)} />
         <InstallStep label="Connect" state={step(connected, connected)} />
       </div>
       <span className="flex-1" />
@@ -162,15 +185,18 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
         <FooterButton anchor="add-host-cloud">Create a cloud machine instead</FooterButton>
         <span className="flex-1" />
         <FooterButton anchor="add-host-check" primary>
-          Check host
+          {action}
         </FooterButton>
       </div>
     </div>
   );
 }
 
-/** The cloud machine dialog: an account from one of the providers, then Create and connect. */
-function CloudMachineDialog({ open }: { open: boolean }) {
+/**
+ * The cloud machine dialog. With no account connected it asks for one first,
+ * as the real one does; then the provider, account and name, and Create and connect.
+ */
+function CloudMachineDialog({ open, account }: { open: boolean; account: boolean }) {
   return (
     <div
       className={cn(
@@ -179,36 +205,57 @@ function CloudMachineDialog({ open }: { open: boolean }) {
       )}
     >
       <span className="text-2xs font-semibold text-text-primary">New cloud machine</span>
-      <div className="flex gap-1.5">
-        {["DigitalOcean", "AWS", "Google Cloud"].map((provider, i) => (
-          <span
-            key={provider}
-            className={cn(
-              "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-3xs",
-              i === 0
-                ? "border-border-interactive bg-overlay-selected text-text-primary"
-                : "border-border-subtle text-text-secondary"
-            )}
-          >
-            <Cloud className="size-2.5" aria-hidden="true" />
-            {provider}
+      <div
+        className={cn("absolute inset-x-2.5 top-8 flex flex-col gap-2", reveal(!account, "none"))}
+      >
+        <span className="text-3xs text-text-secondary">
+          Connect a cloud provider account first. Daintree uses its API key to create, start and
+          stop machines; the account pays for them.
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {["DigitalOcean", "AWS", "Google Cloud"].map((provider, i) => (
+            <span
+              key={provider}
+              data-tour-anchor={i === 0 ? "cloud-connect-account" : undefined}
+              className="rounded-md border border-border-subtle px-1.5 py-0.5 text-3xs text-text-primary"
+            >
+              Connect {provider} account
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className={cn("flex flex-col gap-2", reveal(account, "none"))}>
+        <div className="flex gap-1.5">
+          {["DigitalOcean", "AWS", "Google Cloud"].map((provider, i) => (
+            <span
+              key={provider}
+              className={cn(
+                "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-3xs",
+                i === 0
+                  ? "border-border-interactive bg-overlay-selected text-text-primary"
+                  : "border-border-subtle text-text-secondary"
+              )}
+            >
+              <Cloud className="size-2.5" aria-hidden="true" />
+              {provider}
+            </span>
+          ))}
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-3xs font-medium text-text-secondary">Account</span>
+          <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+            Personal
           </span>
-        ))}
-      </div>
-      <div className="flex flex-col gap-1">
-        <span className="text-3xs font-medium text-text-secondary">Account</span>
-        <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
-          Personal
-        </span>
-      </div>
-      <div className="flex flex-col gap-1">
-        <span className="text-3xs font-medium text-text-secondary">Name</span>
-        <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
-          gpu-runner
-        </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-3xs font-medium text-text-secondary">Name</span>
+          <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-primary">
+            gpu-runner
+          </span>
+        </div>
       </div>
       <span className="flex-1" />
-      <div className="flex justify-end">
+      <div className={cn("flex justify-end", reveal(account, "none"))}>
         <FooterButton anchor="cloud-create" primary>
           Create and connect
         </FooterButton>
@@ -220,9 +267,10 @@ function CloudMachineDialog({ open }: { open: boolean }) {
 function SettingsDialog({ open }: { open: boolean }) {
   const hostsPage = useCue("hosts", 0.3);
   const adding = useCue("add", 0.6);
-  const sshAdded = useCue("install", 1.25);
+  const sshAdded = useCue("install", 1.3);
   const addingAgain = useCue("cloud", -0.2);
   const cloudForm = useCue("cloud", 0.8);
+  const accountConnected = useCue("cloud", 1.9);
   const provisioning = useCue("provision");
   const provisioned = useCue("provision", 1.6);
   const sshOpen = (adding && !sshAdded) || (addingAgain && !cloudForm);
@@ -302,7 +350,7 @@ function SettingsDialog({ open }: { open: boolean }) {
           </div>
         </div>
         <AddHostDialog open={sshOpen} again={addingAgain} />
-        <CloudMachineDialog open={cloudForm && !provisioning} />
+        <CloudMachineDialog open={cloudForm && !provisioning} account={accountConnected} />
       </div>
     </div>
   );
@@ -387,9 +435,11 @@ export function HostsScene() {
   const hostsCue = useCue("hosts");
   const sshCue = useCue("ssh");
   const installCue = useCue("install");
-  const sshAdded = useCue("install", 1.25);
+  const pressing = useCue("install", -0.8);
+  const sshAdded = useCue("install", 1.3);
   const addingAgain = useCue("cloud", -0.2);
   const cloudForm = useCue("cloud", 0.8);
+  const accountConnected = useCue("cloud", 1.9);
   const provisionCue = useCue("provision");
   const chip = useCue("chip");
   const settingsClosed = useCue("chip", -0.4);
@@ -403,6 +453,8 @@ export function HostsScene() {
   const freshCue = useCue("fresh");
   const fresh = useCue("fresh", 0.3);
   const created = useCue("fresh", 1.2);
+  const launching = useCue("running", -1.0);
+  const launched = useCue("running", -0.4);
   const running = useCue("running");
   const away = useCue("running", 0.6);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
@@ -421,27 +473,33 @@ export function HostsScene() {
 
   const spotlight = running
     ? [`worktree-${NEW_BRANCH}`]
-    : placing && freshCue
-      ? ["placement-host", "placement-create"]
-      : placing && choosing
-        ? ["placement-host"]
-        : switched && !backMenu
-          ? ["host-chip", "worktree-list"]
-          : chip && !firstMenu
-            ? ["host-chip"]
-            : settings && provisionCue
-              ? ["host-row-cloud"]
-              : settings && cloudForm
-                ? ["cloud-create"]
-                : settings && addingAgain
-                  ? ["add-host-cloud"]
-                  : settings && sshAdded
-                    ? ["host-row-ssh"]
-                    : settings && (sshCue || installCue)
-                      ? ["add-host-target"]
-                      : settings && hostsCue
-                        ? ["settings-nav-hosts"]
-                        : [];
+    : created && launching
+      ? ["agent-codex"]
+      : placing && freshCue
+        ? ["placement-host", "placement-create"]
+        : placing && choosing
+          ? ["placement-host"]
+          : switched && !backMenu
+            ? ["host-chip", "worktree-list"]
+            : chip && !firstMenu
+              ? ["host-chip"]
+              : settings && provisionCue
+                ? ["host-row-cloud"]
+                : settings && accountConnected
+                  ? ["cloud-create"]
+                  : settings && cloudForm
+                    ? ["cloud-connect-account"]
+                    : settings && addingAgain
+                      ? ["add-host-cloud"]
+                      : settings && sshAdded
+                        ? ["host-row-ssh"]
+                        : settings && pressing
+                          ? ["add-host-check"]
+                          : settings && (sshCue || installCue)
+                            ? ["add-host-target"]
+                            : settings && hostsCue
+                              ? ["settings-nav-hosts"]
+                              : [];
 
   return (
     <MockApp
@@ -456,7 +514,7 @@ export function HostsScene() {
               name={NEW_BRANCH}
               branch={NEW_BRANCH}
               selected
-              states={["working"]}
+              states={launched ? ["working"] : []}
               className={reveal(created, "left")}
             />
           </>
@@ -474,7 +532,9 @@ export function HostsScene() {
         )
       }
       grid={
-        created ? (
+        created && !launched ? (
+          <MockEmptyGrid label={NEW_BRANCH} />
+        ) : created ? (
           <MockGrid columns={1}>
             <MockPane agent="codex" state="working" focused={running}>
               <MockStreamingLines cue="running" widths={[80, 56, 90, 64, 72, 50]} perSecond={2} />

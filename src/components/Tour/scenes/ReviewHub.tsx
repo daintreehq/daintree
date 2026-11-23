@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, FileCode, GitBranch } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, FileCode, GitBranch, X } from "lucide-react";
 import { cn, reveal } from "@daintreehq/tour/kit";
 import { GRID_RECT } from "@daintreehq/tour/mock-app";
 
@@ -46,10 +46,11 @@ const DIFF_ROW: Record<DiffKind, string> = {
 };
 
 /**
- * Review Hub over the grid: the worktree's changed files, the diff of the one
- * selected, the commit bar, and the push confirm that Commit & push opens. Cue
- * reads stay in the scene, which hands in where the timeline is and the typed
- * message.
+ * Review Hub over the grid: the worktree's changed files, the commit bar, and
+ * the push confirm that Commit & push opens. Clicking a file opens its diff in
+ * a dialog of its own, as the real Hub does, whose ‹ › stepper walks the other
+ * files. Cue reads stay in the scene, which hands in where the timeline is and
+ * the typed message.
  */
 export function ReviewHub({
   visible,
@@ -63,7 +64,7 @@ export function ReviewHub({
   visible: boolean;
   branch: string;
   files: readonly ReviewFile[];
-  /** The file whose diff is open, or -1 before one is picked. */
+  /** The file whose diff dialog is open, or -1 while none is. */
   selected: number;
   /** The commit message as typed so far; null shows the placeholder. */
   message: ReactNode;
@@ -71,7 +72,9 @@ export function ReviewHub({
   confirming: boolean;
   pushed: boolean;
 }) {
-  const diff = selected >= 0 ? REVIEW_DIFFS[selected % REVIEW_DIFFS.length]! : [];
+  // The dialog keeps its last file while it fades out, so its content doesn't blank mid-exit.
+  const shown = Math.max(selected, 0);
+  const diff = REVIEW_DIFFS[shown % REVIEW_DIFFS.length]!;
   return (
     <div
       className={cn(
@@ -104,7 +107,7 @@ export function ReviewHub({
         Working tree clean
       </div>
       <div className={cn("min-h-0 flex-1", pushed ? "hidden" : "flex")}>
-        <div className="flex w-[150px] shrink-0 flex-col gap-0.5 border-r border-border-subtle p-1.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 p-1.5">
           <span className="px-1.5 pb-0.5 text-3xs font-semibold text-text-secondary">Staged</span>
           {files.map((file, i) => (
             <div
@@ -127,37 +130,6 @@ export function ReviewHub({
             </div>
           ))}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1 p-2.5">
-          {selected >= 0 && (
-            <span className="flex h-3 items-center gap-1 text-3xs text-text-secondary">
-              <FileCode className="size-2.5" aria-hidden="true" />
-              {files[selected]?.name}
-            </span>
-          )}
-          {selected < 0 && (
-            <span className="m-auto text-3xs text-text-secondary">
-              Select a file to see its diff
-            </span>
-          )}
-          {/* Keyed by file, so each file's diff arrives as its own. */}
-          {diff.map((row, i) => (
-            <div
-              key={`${selected}-${i}`}
-              className={cn(
-                "flex h-3.5 items-center rounded-sm px-1.5 motion-safe:animate-in motion-safe:fade-in",
-                DIFF_ROW[row.kind]
-              )}
-            >
-              <span className="w-3 shrink-0 text-3xs text-text-secondary">
-                {row.kind === "insert" ? "+" : row.kind === "delete" ? "−" : ""}
-              </span>
-              <span
-                className="h-1 rounded-full bg-overlay-strong"
-                style={{ width: `${row.width}%` }}
-              />
-            </div>
-          ))}
-        </div>
       </div>
       <div
         className={cn(
@@ -174,6 +146,59 @@ export function ReviewHub({
         >
           Commit &amp; push
         </span>
+      </div>
+      {/* A file's diff, in its own dialog over the Hub. */}
+      <div
+        className={cn(
+          "absolute inset-0 flex items-center justify-center bg-scrim-soft",
+          reveal(selected >= 0, "none")
+        )}
+      >
+        <div className="flex h-[200px] w-[320px] flex-col overflow-hidden rounded-lg border border-border-strong bg-surface-dialog shadow-[var(--theme-shadow-ambient)]">
+          <div className="flex h-6 shrink-0 items-center gap-1 border-b border-border-subtle px-2 text-3xs text-text-primary">
+            <FileCode className="size-2.5 text-text-secondary" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{files[shown]?.name}</span>
+            <span data-tour-anchor="review-diff-close" className="flex text-text-secondary">
+              <X className="size-3" aria-hidden="true" />
+            </span>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-1 p-2">
+            {/* Keyed by file, so each file's diff arrives as its own. */}
+            {diff.map((row, i) => (
+              <div
+                key={`${shown}-${i}`}
+                className={cn(
+                  "flex h-3 items-center rounded-sm px-1.5 motion-safe:animate-in motion-safe:fade-in",
+                  DIFF_ROW[row.kind]
+                )}
+              >
+                <span className="w-3 shrink-0 text-3xs text-text-secondary">
+                  {row.kind === "insert" ? "+" : row.kind === "delete" ? "−" : ""}
+                </span>
+                <span
+                  className="h-1 rounded-full bg-overlay-strong"
+                  style={{ width: `${row.width}%` }}
+                />
+              </div>
+            ))}
+          </div>
+          {/* The real diff's file stepper: previous, "n of total", next. */}
+          <div className="flex h-6 shrink-0 items-center gap-1 border-t border-border-subtle px-2 text-text-secondary">
+            <ChevronLeft
+              className={cn("size-3", shown === 0 && "text-text-muted")}
+              aria-hidden="true"
+            />
+            <span className="text-3xs tabular-nums">
+              {shown + 1} of {files.length}
+            </span>
+            <span data-tour-anchor="review-diff-next" className="flex">
+              <ChevronRight
+                className={cn("size-3", shown === files.length - 1 && "text-text-muted")}
+                aria-hidden="true"
+              />
+            </span>
+          </div>
+        </div>
       </div>
       {/* The push confirm, on by default per worktree: the destination is the point. */}
       <div

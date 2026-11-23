@@ -50,11 +50,13 @@ const REQUEST_TYPED = { cue: "pr", offset: 0.3 } as const;
 const COMMIT_ICON = { anchor: "review-commit" };
 const COMMIT_BUTTON = { anchor: "review-commit-push", dx: 13, dy: 5 };
 const PUSH_CONFIRM = { anchor: "review-push-confirm" };
-// "Steps you through every change": the first file's diff, then the next one's.
+// "Steps you through every change": a file opens its diff dialog, whose ›
+// steps to the next file; closing it is back in the Hub to commit.
 const FIRST_FILE = { anchor: "review-file-0", dx: -30 };
-const SECOND_FILE = { anchor: "review-file-1", dx: -30 };
-// The message is written as Review Hub opens, so it's ready by "commits".
-const MESSAGE_TYPED = { cue: "diff", offset: -0.3 } as const;
+const NEXT_FILE = { anchor: "review-diff-next" };
+const CLOSE_DIFF = { anchor: "review-diff-close" };
+// The message is written as Review Hub opens, before the pointer goes to the files.
+const MESSAGE_TYPED = { cue: "diff", offset: -0.7 } as const;
 
 const FILES: readonly ReviewFile[] = [
   { name: "SettingsPage.tsx", added: 31, removed: 6 },
@@ -83,11 +85,13 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "ask", at: PANE_INPUT, click: true },
   { cue: "files", offset: 0.2, at: COMMIT_ICON },
   { cue: "open", offset: 0.4, at: COMMIT_ICON, click: true },
-  { cue: "diff", offset: -0.45, at: FIRST_FILE },
-  { cue: "diff", offset: 0.1, at: FIRST_FILE, click: true },
-  { cue: "diff", offset: 0.5, at: SECOND_FILE },
-  { cue: "diff", offset: 1.0, at: SECOND_FILE, click: true },
-  { cue: "commit", offset: -0.3, at: COMMIT_BUTTON },
+  { cue: "diff", offset: -0.6, at: FIRST_FILE },
+  { cue: "diff", offset: -0.1, at: FIRST_FILE, click: true },
+  { cue: "diff", offset: 0.05, at: NEXT_FILE },
+  { cue: "diff", offset: 0.55, at: NEXT_FILE, click: true },
+  { cue: "diff", offset: 0.65, at: CLOSE_DIFF },
+  { cue: "diff", offset: 1.15, at: CLOSE_DIFF, click: true },
+  { cue: "commit", offset: -0.45, at: COMMIT_BUTTON },
   { cue: "commit", offset: 0.2, at: COMMIT_BUTTON, click: true },
   // Commit & push opens the push confirm; its button names the destination.
   { cue: "commit", offset: 0.5, at: PUSH_CONFIRM },
@@ -111,8 +115,9 @@ export function GitHubScene() {
   const lookFirst = useCue("files");
   const opened = useCue("open", 0.6);
   const typing = useCue("open", 1.0);
-  const firstFile = useCue("diff", 0.15);
-  const secondFile = useCue("diff", 1.05);
+  const diffOpen = useCue("diff", -0.05);
+  const nextFile = useCue("diff", 0.6);
+  const diffClosed = useCue("diff", 1.25);
   const confirming = useCue("commit", 0.3);
   const pushed = useCue("commit", 1.2);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
@@ -216,7 +221,7 @@ export function GitHubScene() {
           visible={opened}
           branch={BRANCH}
           files={FILES}
-          selected={secondFile ? 1 : firstFile ? 0 : -1}
+          selected={diffOpen && !diffClosed ? (nextFile ? 1 : 0) : -1}
           message={
             typing ? (
               <MockTyping
