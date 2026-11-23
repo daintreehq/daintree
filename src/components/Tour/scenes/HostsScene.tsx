@@ -92,7 +92,7 @@ function InstallStep({ label, state }: { label: string; state: "todo" | "running
   return (
     <span className="flex items-center gap-1 text-3xs text-text-secondary">
       {state === "done" ? (
-        <Check className="size-2.5 text-status-success" aria-hidden="true" />
+        <Check className="size-2.5" aria-hidden="true" />
       ) : state === "running" ? (
         <LoaderCircle
           className="size-2.5 animate-spin-slow motion-reduce:animate-none"

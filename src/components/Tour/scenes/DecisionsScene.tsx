@@ -366,13 +366,11 @@ export function DecisionsScene() {
       focus={focus}
       signals={
         on ? (
-          <MockToolbarButton anchor="decisions-inbox" className="relative">
-            <DecisionsMark />
-            {pending > 0 && (
-              <span className="absolute -right-1 -top-1 flex size-3 items-center justify-center rounded-full bg-state-waiting text-3xs leading-none font-semibold tabular-nums text-text-inverse">
-                {pending}
-              </span>
-            )}
+          <MockToolbarButton anchor="decisions-inbox">
+            <span className="relative inline-flex">
+              <DecisionsMark />
+              {pending > 0 && <span className="toolbar-count bg-state-waiting">{pending}</span>}
+            </span>
           </MockToolbarButton>
         ) : undefined
       }
