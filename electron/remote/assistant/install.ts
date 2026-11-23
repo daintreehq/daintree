@@ -397,6 +397,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     noteAnswered: (answer) => noteHostCallAnswer(answer, deps.listHostProjects),
     ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
     watchAgents: (listener) => watchAgentsHere(listener, deps.watchHostAgents),
+    pluginNotifications: async () =>
+      (await import("../../services/assistantPluginNotifications.js")).assistantPluginNotifications(),
     ...(deps.listAgentTargets ? { listAgentTargets: deps.listAgentTargets } : {}),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the

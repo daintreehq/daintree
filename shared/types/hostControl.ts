@@ -566,14 +566,16 @@ export const HOST_WATCH_DEFAULT_WAITING_REASONS = ["approval", "question"] as co
 export const HOST_WATCH_AGENTS_MAX = 8;
 /** Agents already waiting that one arm names; the rest are counted. */
 export const HOST_WATCH_MATCHES_MAX = 16;
+/** Longest plugin instance id a plugin-notification watch names, as the plugin settings take one. */
+export const HOST_WATCH_PLUGIN_ID_MAX = 512;
 
 const waitingReasonSchema = z.enum(HOST_WATCH_WAITING_REASONS);
 
 export const HostWatchArgsSchema = z.object({
   operation: z
-    .enum(["arm", "cancel", "list"])
+    .enum(["arm", "cancel", "list", "read"])
     .describe(
-      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
+      "arm: one notice when first observed. cancel: end one. list: yours, armed and ended. read: a plugin notification's text."
     ),
   hostId: hostIdSchema
     .optional()
@@ -609,7 +611,20 @@ export const HostWatchArgsSchema = z.object({
     .min(1)
     .max(256)
     .optional()
-    .describe("With agentsWaiting: only that project."),
+    .describe("With agentsWaiting or pluginNotifications: only that project."),
+  pluginNotifications: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Arm on plugins' notifications for an assistant: one goes to one watcher. Arm returns those no assistant took."
+    ),
+  pluginId: z
+    .string()
+    .min(1)
+    .max(HOST_WATCH_PLUGIN_ID_MAX)
+    .optional()
+    .describe("With pluginNotifications: only that plugin."),
+  notificationId: z.string().uuid().optional().describe("For read: one given to you."),
   expiresInSeconds: z
     .number()
     .int()
@@ -633,6 +648,10 @@ const hostWatchConditionSchema = z.object({
       waitingReasons: z.array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"])),
       projectId: z.string().nullable(),
     })
+    .nullable(),
+  /** A plugin-notification watch (#18154): its one project and one plugin, if any. */
+  pluginNotifications: z
+    .object({ projectId: z.string().nullable(), pluginId: z.string().nullable() })
     .nullable(),
 });
 export type HostWatchCondition = z.infer<typeof hostWatchConditionSchema>;
@@ -659,6 +678,22 @@ export const HostWatchAgentSchema = z.object({
   seenAt: z.number().nullable(),
 });
 export type HostWatchAgent = z.infer<typeof HostWatchAgentSchema>;
+
+/**
+ * A plugin's notification for an assistant (#18154), as Daintree recorded it:
+ * which plugin raised it, for which project, and when. Never its text, which
+ * only `read` returns.
+ */
+export const HostWatchNotificationSchema = z.object({
+  notificationId: z.string(),
+  pluginId: z.string(),
+  pluginName: z.string(),
+  projectId: z.string(),
+  dedupeKey: z.string().nullable(),
+  severity: z.enum(["info", "warning", "error"]),
+  createdAt: z.number(),
+});
+export type HostWatchNotification = z.infer<typeof HostWatchNotificationSchema>;
 
 /**
  * How an agent watch hears one host. `events`: every waiting transition, with
@@ -757,6 +792,12 @@ export const HostWatchResultSchema = z.object({
       hosts: z.array(HostWatchHostCoverageSchema),
     })
     .optional(),
+  /** A plugin-notification arm only: those no assistant had taken, now yours; no notice comes for them. */
+  notifications: z
+    .object({ matches: z.array(HostWatchNotificationSchema), omitted: z.number() })
+    .optional(),
+  /** read only: the plugin's own words, as it sent them. */
+  notification: HostWatchNotificationSchema.extend({ title: z.string(), body: z.string() }).optional(),
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 

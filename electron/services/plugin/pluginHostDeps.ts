@@ -3,6 +3,7 @@ import {
   getPluginCapabilityConsentService,
   getPluginCapabilityConsentStore,
 } from "../plugin-capability/instances.js";
+import type { AssistantPluginNotification } from "../assistantPluginNotifications.js";
 import type { PluginArtifactService } from "./PluginArtifactService.js";
 import { type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
@@ -256,6 +257,12 @@ export interface PluginHostFactoryDeps {
    * the plugin nothing.
    */
   pluginNotificationsBlocked: (pluginId: string, projectId: string | null) => Promise<boolean>;
+  /**
+   * Offers a notification the plugin marked for an assistant (#18154) to the
+   * assistants watching for one, once it passed the user's silence, mute and
+   * budget. Absent, no notification reaches an assistant.
+   */
+  publishAssistantNotification?: (notification: AssistantPluginNotification) => void;
 }
 
 /**

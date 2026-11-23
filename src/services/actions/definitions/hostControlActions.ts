@@ -143,7 +143,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.watch",
     title: "Watch a host",
     description:
-      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
+      "One notice when a host's link or a fresh load sample first meets your condition, an agent here or on a host starts to wait, or a plugin notifies an assistant, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     category: "help",
     kind: "command",
     danger: "safe",
@@ -160,6 +160,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       "agents",
       "waiting",
       "approval",
+      "plugin",
     ],
     palette: { mode: "hidden" },
     argsSchema: HostWatchArgsSchema,

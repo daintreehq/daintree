@@ -4171,6 +4171,16 @@ export class PluginService {
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
       pluginNotificationsBlocked: (pluginId, projectId) =>
         this.pluginNotificationsBlocked(pluginId, projectId),
+      // Loaded only once a plugin marks a notification for an assistant (#18154).
+      publishAssistantNotification: (notification) => {
+        void import("./assistantPluginNotifications.js")
+          .then(({ assistantPluginNotifications }) =>
+            assistantPluginNotifications().publish(notification)
+          )
+          .catch((error: unknown) => {
+            console.warn("[PluginService] Couldn't offer a notification to assistants", error);
+          });
+      },
     };
   }
 

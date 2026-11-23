@@ -271,6 +271,12 @@ function auditWatchId(value: unknown): string | null {
   return typeof value === "string" && WATCH_ID_PATTERN.test(value) ? value : null;
 }
 
+const NOTIFICATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function auditNotificationId(value: unknown): string | null {
+  return typeof value === "string" && NOTIFICATION_ID_PATTERN.test(value) ? value : null;
+}
+
 /** A watch's id, host, kind of condition and where it stands. */
 function projectHostWatch(value: unknown): Record<string, unknown> {
   const watch = asRecord(value);
@@ -285,7 +291,9 @@ function projectHostWatch(value: unknown): Record<string, unknown> {
           ? "connection"
           : condition.agentsWaiting != null
             ? "agents"
-            : "capacity",
+            : condition.pluginNotifications != null
+              ? "plugins"
+              : "capacity",
     status: fromSet(watch?.status, WATCH_STATUSES),
     lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
     delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
@@ -386,15 +394,24 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ],
   [
     "host.watch",
-    // Which watches and where each stands, never the note or what the host's figures were (#14463).
+    // Which watches and where each stands, never the note or what the host's figures were (#14463),
+    // nor a plugin notification's words, key or plugin (#18154): only which ones were handed over.
     (result) => {
       const record = asRecord(result);
       if (record === null) return { status: "unrecognized" };
       const listed = Array.isArray(record.watches) ? record.watches : [];
+      const handed = asRecord(record.notifications);
+      const matches = Array.isArray(handed?.matches) ? handed.matches : null;
       return {
         outcome: fromSet(record.outcome, HOST_OUTCOMES),
         armed: record.armed === true,
         watches: listed.map(projectHostWatch),
+        notificationIds:
+          matches === null
+            ? null
+            : matches.map((match) => auditNotificationId(asRecord(match)?.notificationId)),
+        omittedNotifications: finiteNumber(handed?.omitted),
+        read: auditNotificationId(asRecord(record.notification)?.notificationId),
       };
     },
   ],
@@ -447,7 +464,8 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         operation:
           record?.operation === "arm" ||
           record?.operation === "cancel" ||
-          record?.operation === "list"
+          record?.operation === "list" ||
+          record?.operation === "read"
             ? record.operation
             : null,
         hostId: auditHostId(record?.hostId),
@@ -461,10 +479,13 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
               WATCH_WAITING_REASONS.has(reason as string)
             )
           : null,
+        pluginNotifications: record?.pluginNotifications === true,
+        pluginNamed: typeof record?.pluginId === "string",
         projectId: typeof record?.projectId === "string" ? record.projectId : null,
         expiresInSeconds: finiteNumber(record?.expiresInSeconds),
         noted: typeof record?.note === "string",
         watchId: auditWatchId(record?.watchId),
+        notificationId: auditNotificationId(record?.notificationId),
       };
     },
   ],

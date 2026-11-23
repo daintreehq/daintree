@@ -312,6 +312,7 @@ export interface PluginHostNotificationsContext {
     | "panelLifecycleBroker"
     | "pluginDisplayName"
     | "pluginNotificationsBlocked"
+    | "publishAssistantNotification"
     | "pluginTasks"
     | "plugins"
     | "safeAppendAudit"
@@ -759,7 +760,7 @@ export function buildNotificationsHostApi(
             .join("; ")}`
         );
       }
-      const { title, body, os, dedupeKey } = parsed.data;
+      const { title, body, os, dedupeKey, audience } = parsed.data;
       const severity = parsed.data.severity ?? "info";
       const passive = parsed.data.delivery === "passive";
       const actions = (parsed.data.actions ?? []).map((action, index) => ({
@@ -793,6 +794,25 @@ export function buildNotificationsHostApi(
         if (!admitPluginToast(pluginId)) return { id };
         const displayName = deps.pluginDisplayName(pluginId);
         const displayTitle = `${displayName}: ${title}`;
+        // An assistant hears only what the person was let see, and only for a
+        // project, whose Agent tools switch is the grant (#18154).
+        if (audience === "assistant" && projectId !== null && deps.publishAssistantNotification) {
+          try {
+            deps.publishAssistantNotification({
+              notificationId: id,
+              pluginId,
+              pluginName: displayName,
+              projectId,
+              dedupeKey: dedupeKey ?? null,
+              severity,
+              createdAt: Date.now(),
+              title,
+              body,
+            });
+          } catch (error) {
+            console.warn("[PluginHost] Couldn't offer a notification to assistants", error);
+          }
+        }
         const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
         pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: severity,
