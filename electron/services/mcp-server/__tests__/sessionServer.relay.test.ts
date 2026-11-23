@@ -1145,6 +1145,7 @@ describe("plugin actions for this machine's global Assistant", () => {
     const { listed, searched, called } = await session.probe("call-1");
     expect(listed).not.toContain(REACH);
     expect(searched).not.toContain(REACH);
+    expect(called.isError).toBe(true);
     expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
     expect(session.dispatchedReach()).toBe(0);
   });
@@ -1158,6 +1159,7 @@ describe("plugin actions for this machine's global Assistant", () => {
     const { listed, searched, called } = await session.probe("call-2");
     expect(listed).not.toContain(REACH);
     expect(searched).not.toContain(REACH);
+    expect(called.isError).toBe(true);
     expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
     expect(session.dispatchedReach()).toBe(1);
   });

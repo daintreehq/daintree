@@ -35,5 +35,6 @@ describe("HostCallArgsSchema tool ids", () => {
       HostCallArgsSchema.safeParse({ hostId, projectId, tool: "x".repeat(length) }).success;
     expect([parses("local", 256), parses("local", 257)]).toEqual([true, false]);
     expect([parses("studio", 128), parses("studio", 129)]).toEqual([true, false]);
+    expect([parses("local", 0), parses("studio", 0)]).toEqual([false, false]);
   });
 });

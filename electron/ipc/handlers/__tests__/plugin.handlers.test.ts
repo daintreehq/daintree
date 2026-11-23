@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1325,28 +1326,74 @@ describe("registerPluginHandlers", () => {
 
   // ── #16751: plugin:actions-invoke carries a dispatch context beside the args ──
 
-  it("PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the context, apart from the args", async () => {
-    mockDispatchHandler.mockResolvedValue({ resumed: true });
-    const handler = getHandler("plugin:actions-invoke");
-    const sent = { dispatchSource: "agent", origin: "assistant", approval: "person" };
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the %s context, apart from the args",
+    async (origin) => {
+      const uninstall = setPluginAssistantReachSource({
+        has: (id) => id === "acme.my-plugin.resume",
+        ids: () => ["acme.my-plugin.resume"],
+      });
+      onTestFinished(uninstall);
+      mockDispatchHandler.mockResolvedValue({ resumed: true });
+      const handler = getHandler("plugin:actions-invoke");
+      const sent = { dispatchSource: "agent", origin, approval: "person" };
 
-    const result = await handler(
+      const result = await handler(
+        { sender: { id: 33 } },
+        "acme.my-plugin",
+        "acme.my-plugin.resume",
+        { approval: "forged" },
+        sent
+      );
+
+      expect(result).toEqual({ resumed: true });
+      const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
+      expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
+      expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
+      // The args stay the plugin's payload, whatever they say.
+      expect(args).toEqual([{ approval: "forged" }]);
+      expect(actionContext).toEqual(sent);
+      expect(actionContext).not.toBe(sent);
+      expect(Object.isFrozen(actionContext)).toBe(true);
+    }
+  );
+
+  // #18153: the plugin may drop the opt-in between admission and the handler running.
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE refuses a %s call to an action no longer offered to it",
+    async (origin) => {
+      const handler = getHandler("plugin:actions-invoke");
+      await expect(
+        handler(
+          { sender: { id: 33 } },
+          "acme.my-plugin",
+          "acme.my-plugin.resume",
+          {},
+          {
+            dispatchSource: "agent",
+            origin,
+            approval: "person",
+          }
+        )
+      ).rejects.toThrow(/no longer offered to the assistant/);
+      expect(mockDispatchHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_ACTIONS_INVOKE still runs an agent call that names no assistant", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    const handler = getHandler("plugin:actions-invoke");
+    await handler(
       { sender: { id: 33 } },
       "acme.my-plugin",
       "acme.my-plugin.resume",
-      { approval: "forged" },
-      sent
+      {},
+      {
+        dispatchSource: "agent",
+        approval: "person",
+      }
     );
-
-    expect(result).toEqual({ resumed: true });
-    const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
-    expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
-    expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
-    // The args stay the plugin's payload, whatever they say.
-    expect(args).toEqual([{ approval: "forged" }]);
-    expect(actionContext).toEqual(sent);
-    expect(actionContext).not.toBe(sent);
-    expect(Object.isFrozen(actionContext)).toBe(true);
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
   });
 
   it.each([

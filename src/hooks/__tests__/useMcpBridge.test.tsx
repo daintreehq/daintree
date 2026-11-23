@@ -648,6 +648,13 @@ describe("useMcpBridge", () => {
 
       if (decision === "rejected") {
         expect(mocks.dispatch).not.toHaveBeenCalled();
+        // The caller hears the refusal now rather than waiting out its deadline.
+        expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestId: "req-global-rejected",
+            confirmationDecision: "rejected",
+          })
+        );
         return;
       }
       expect(mocks.dispatch).toHaveBeenCalledTimes(1);

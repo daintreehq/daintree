@@ -19,6 +19,10 @@ describe("parsePluginActionContext (#16751)", () => {
     expect(parsed).toEqual(sent);
     expect(parsed).not.toBe(sent);
     expect(Object.isFrozen(parsed)).toBe(true);
+    // A standing answer let it through: who asked, and no approval.
+    expect(
+      parsePluginActionContext({ dispatchSource: "agent", origin: "global-assistant" })
+    ).toEqual({ dispatchSource: "agent", origin: "global-assistant" });
   });
 
   it.each(
