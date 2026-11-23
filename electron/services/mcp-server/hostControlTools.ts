@@ -217,7 +217,9 @@ function watchArgsFit(args: HostWatchArgs): boolean {
     case "arm":
       if (args.watchId !== undefined || args.notificationId !== undefined) return false;
       if (agents) {
-        return !plugins && args.pluginId === undefined && args.connection === undefined && !capacity;
+        return (
+          !plugins && args.pluginId === undefined && args.connection === undefined && !capacity
+        );
       }
       if (plugins) {
         return (

@@ -126,7 +126,8 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // waiting, and plugins' notifications for an assistant (#18154), which share
   // one per-run budget, one list and one cancel. A second watch tool would
   // be the second channel #13496 and #16215 rule out.
-  "host.watch": "every watch kind shares one budget, list and cancel; split, it is a second channel",
+  "host.watch":
+    "every watch kind shares one budget, list and cancel; split, it is a second channel",
 };
 
 /**

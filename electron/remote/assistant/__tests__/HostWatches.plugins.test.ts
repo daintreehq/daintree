@@ -11,7 +11,13 @@ import type { OpenRun } from "../HostCallRuntime.js";
 import { HostWatches } from "../HostWatches.js";
 
 function run(sessionId: string, projectId: string, generation: number): OpenRun {
-  return { projectId, slot: 0, sessionId, terminalId: `t-${sessionId}`, launchGeneration: generation };
+  return {
+    projectId,
+    slot: 0,
+    sessionId,
+    terminalId: `t-${sessionId}`,
+    launchGeneration: generation,
+  };
 }
 
 const PROJECT_A = run("pa", "proj-a", 1);

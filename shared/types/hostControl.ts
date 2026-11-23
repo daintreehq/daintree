@@ -795,7 +795,10 @@ export const HostWatchResultSchema = z.object({
     .object({ matches: z.array(HostWatchNotificationSchema), omitted: z.number() })
     .optional(),
   /** read only: the plugin's own words, as it sent them. */
-  notification: HostWatchNotificationSchema.extend({ title: z.string(), body: z.string() }).optional(),
+  notification: HostWatchNotificationSchema.extend({
+    title: z.string(),
+    body: z.string(),
+  }).optional(),
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
 

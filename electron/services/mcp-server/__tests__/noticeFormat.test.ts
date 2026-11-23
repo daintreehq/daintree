@@ -378,7 +378,10 @@ describe("the plugin notification watch line (#18154)", () => {
       formatHostWatchLine({
         ...base,
         event: "expired",
-        condition: { ...condition, pluginNotifications: { projectId: null, pluginId: "acme.stages" } },
+        condition: {
+          ...condition,
+          pluginNotifications: { projectId: null, pluginId: "acme.stages" },
+        },
       })
     ).toBe(
       "Daintree: watch hw-1 expired without seeing a plugin notification for an assistant from plugin acme.stages. Arm it again if you still want to hear."

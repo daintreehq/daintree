@@ -2530,7 +2530,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
     return this.settle(helpSessionId, async (caller) => {
-      if (args.operation === "read") return this.hostWatches.read(caller, args.notificationId ?? "");
+      if (args.operation === "read")
+        return this.hostWatches.read(caller, args.notificationId ?? "");
       if (args.operation === "arm" && args.agentsWaiting === true) {
         return this.hostWatches.armAgents(caller, args);
       }

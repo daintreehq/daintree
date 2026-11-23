@@ -794,7 +794,10 @@ describe("host.watch audit on plugins' notifications (#18154)", () => {
       note: "NOTE-SENTINEL",
     });
     const readArgs = projectAuditArgs("host.watch", { operation: "read", notificationId: id });
-    const badRead = projectAuditArgs("host.watch", { operation: "read", notificationId: "ID-SENTINEL" });
+    const badRead = projectAuditArgs("host.watch", {
+      operation: "read",
+      notificationId: "ID-SENTINEL",
+    });
 
     expect(armed).toMatchObject({
       watches: [{ hostId: "local", on: "plugins", status: "armed" }],
