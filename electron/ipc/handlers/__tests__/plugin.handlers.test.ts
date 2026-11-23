@@ -1355,6 +1355,10 @@ describe("registerPluginHandlers", () => {
     ["an origin other than the assistant", { dispatchSource: "agent", origin: "pane" }],
     ["an approval other than a person", { dispatchSource: "agent", approval: "grant" }],
     ["an assistant origin off the agent source", { dispatchSource: "user", origin: "assistant" }],
+    [
+      "a global Assistant origin off the agent source",
+      { dispatchSource: "menu", origin: "global-assistant" },
+    ],
     ["a person's approval on a plugin dispatch", { dispatchSource: "plugin", approval: "person" }],
     ["no context at all", undefined],
   ])("PLUGIN_ACTIONS_INVOKE refuses %s without dispatching", async (_label, context) => {
@@ -4423,6 +4427,23 @@ describe("plugin:invoke over the link", () => {
     expect(call[3]).toEqual([{ id: "n1" }]);
     expect(call[4]).toEqual({ dispatchSource: "user", approval: "person" });
     expect(Object.isFrozen(call[4])).toBe(true);
+  });
+
+  // #18153: main marks the global Assistant only on a send to this machine's own view.
+  it("refuses a window on another machine claiming this machine's global Assistant", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:actions-invoke",
+      [
+        "acme.graph",
+        "acme.graph.resume",
+        { id: "n1" },
+        { dispatchSource: "agent", origin: "global-assistant", approval: "person" },
+      ]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 
   it("refuses another project's plugin by the endpoint's own binding", async () => {

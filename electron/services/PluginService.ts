@@ -9064,6 +9064,12 @@ export class PluginService {
         );
       }
     }
+    // A plugin whose id spells a built-in action's namespace (`worktree.resource`)
+    // would otherwise shadow it here, as the manifest path already refuses: an
+    // assistant admitted for the plugin's action would run the built-in.
+    if (BUILT_IN_ACTION_ID_SET.has(id)) {
+      throw new Error(`Plugin "${pluginId}" action id "${id}" collides with a built-in action id`);
+    }
 
     if (typeof title !== "string" || !title.trim()) {
       throw new Error(`Plugin action "${id}" must have a non-empty title`);

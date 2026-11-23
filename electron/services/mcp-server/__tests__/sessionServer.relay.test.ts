@@ -1063,19 +1063,23 @@ describe("plugin actions for this machine's global Assistant", () => {
 
   afterEach(() => uninstall());
 
-  async function reached(
-    tier: "core" | "full",
-    caller: { global?: true; local?: true },
-    found: ActionManifestEntry[] = PLUGIN_MANIFEST
-  ) {
+  function install(): void {
     uninstall = setPluginAssistantReachSource({
       has: (id) => id === REACH,
       ids: () => [REACH],
     });
-    const dispatchAction = vi.fn(async (actionId: string) =>
+  }
+
+  async function open(tier: "core" | "full", caller: { global?: true; local?: true }) {
+    const dispatchAction = vi.fn(async (actionId: string, _args: unknown) =>
       actionId === "actions.search"
-        ? { result: { ok: true, result: { totalMatches: found.length, results: found } } }
-        : { result: { ok: true, result: { ran: true } } }
+        ? {
+            result: {
+              ok: true as const,
+              result: { totalMatches: PLUGIN_MANIFEST.length, results: PLUGIN_MANIFEST },
+            },
+          }
+        : { result: { ok: true as const, result: { ran: true } } }
     );
     const relay = await relayed(tier, {
       requestManifest: vi.fn().mockResolvedValue(PLUGIN_MANIFEST),
@@ -1083,53 +1087,78 @@ describe("plugin actions for this machine's global Assistant", () => {
       dispatchAction,
       relay: { shellName: "greg-mbp", ...caller, refuseWrite: vi.fn(() => null) },
     });
-    const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
-    const search = await relay.client.callTool({
-      name: "actions.search",
-      arguments: { query: "stages" },
-    });
-    const [first] = search.content as Array<{ text: string }>;
-    const searchedIds = (JSON.parse(first!.text) as { results: ActionManifestEntry[] }).results.map(
-      (hit) => hit.id
-    );
-    const called = await relay.client.callTool({ name: REACH, arguments: { stageId: "s1" } });
-    return { listed, searchedIds, called, dispatchAction };
+    // Read the surface, a search and a call the way a relayed `host.call` sends one.
+    const probe = async (callId: string) => {
+      const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+      const search = await relay.client.callTool({
+        name: "actions.search",
+        arguments: { query: "stages" },
+      });
+      const [first] = search.content as Array<{ text: string }>;
+      const searched = (JSON.parse(first!.text) as { results: ActionManifestEntry[] }).results.map(
+        (hit) => hit.id
+      );
+      const called = (await relay.client.callTool({
+        name: REACH,
+        arguments: { stageId: "s1" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: callId },
+      })) as { content: unknown; isError?: boolean };
+      return { listed, searched, called };
+    };
+    const dispatchedReach = () =>
+      dispatchAction.mock.calls.filter(([actionId]) => actionId === REACH).length;
+    return { probe, dispatchAction, dispatchedReach };
   }
 
   it.each(["core", "full"] as const)(
     "lists, finds and dispatches it unconfirmed, so the project's view asks, at %s",
     async (tier) => {
-      const { listed, searchedIds, called, dispatchAction } = await reached(tier, {
-        global: true,
-        local: true,
-      });
+      install();
+      const session = await open(tier, { global: true, local: true });
+      const { listed, searched, called } = await session.probe("call-1");
       expect(listed).toContain(REACH);
-      expect(searchedIds).toContain(REACH);
+      expect(searched).toContain(REACH);
       expect(called.isError).not.toBe(true);
-      expect(dispatchAction).toHaveBeenCalledWith(REACH, { stageId: "s1" }, false);
+      expect(session.dispatchAction).toHaveBeenCalledWith(
+        REACH,
+        { stageId: "s1" },
+        false,
+        undefined,
+        "call-1"
+      );
     }
   );
 
-  it.each([
-    ["another machine's global Assistant", { global: true as const }],
-    ["one of this machine's project assistants", { local: true as const }],
-    ["another machine's project assistant", {}],
-  ])("keeps it from %s", async (_label, caller) => {
-    const { listed, searchedIds, called, dispatchAction } = await reached("full", caller);
+  it.each(
+    (["core", "full"] as const).flatMap((tier) =>
+      (
+        [
+          ["another machine's global Assistant", { global: true as const }],
+          ["one of this machine's project assistants", { local: true as const }],
+          ["another machine's project assistant", {}],
+        ] as const
+      ).map(([label, caller]) => [label, tier, caller] as const)
+    )
+  )("keeps it from %s at %s", async (_label, tier, caller) => {
+    install();
+    const session = await open(tier, caller);
+    const { listed, searched, called } = await session.probe("call-1");
     expect(listed).not.toContain(REACH);
-    expect(searchedIds).not.toContain(REACH);
-    expect(called.isError).toBe(true);
+    expect(searched).not.toContain(REACH);
     expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
-    expect(dispatchAction.mock.calls.map(([actionId]) => actionId)).not.toContain(REACH);
+    expect(session.dispatchedReach()).toBe(0);
   });
 
-  it("reaches nothing once the plugin stops naming it", async () => {
-    // `reached` installs the source before its first await; dropping it right
-    // after leaves the session to list, search and call with no plugin action live.
-    const pending = reached("full", { global: true, local: true });
+  it("reaches nothing on the same session once the plugin stops naming it", async () => {
+    install();
+    const session = await open("full", { global: true, local: true });
+    expect((await session.probe("call-1")).called.isError).not.toBe(true);
+
     uninstall();
-    const { listed, called } = await pending;
+    const { listed, searched, called } = await session.probe("call-2");
     expect(listed).not.toContain(REACH);
+    expect(searched).not.toContain(REACH);
     expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(session.dispatchedReach()).toBe(1);
   });
 });

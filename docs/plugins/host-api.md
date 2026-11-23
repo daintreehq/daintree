@@ -523,7 +523,7 @@ The second argument says what the host knows about this dispatch. The host build
 ```ts
 interface PluginActionContext {
   readonly dispatchSource: "user" | "keybinding" | "menu" | "context-menu" | "agent" | "plugin";
-  readonly origin?: "assistant";
+  readonly origin?: "assistant" | "global-assistant";
   readonly approval?: "person";
 }
 ```

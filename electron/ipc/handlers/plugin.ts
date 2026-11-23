@@ -697,6 +697,15 @@ export async function handleActionInvoke(
       message: `plugin:actions-invoke rejected: ${formatErrorMessage(err, "invalid context")}`,
     });
   }
+  // Main marks a global Assistant's call only on a send to this machine's own
+  // view (#18153), so another machine's view can never have one to report.
+  if (ctx.event === null && actionContext.origin === "global-assistant") {
+    throw new AppError({
+      code: "VALIDATION",
+      message:
+        "plugin:actions-invoke rejected: another machine's view can't report this machine's global Assistant",
+    });
+  }
   const result =
     ctx.event !== null
       ? await invokeFromLocalSender(

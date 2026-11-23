@@ -1029,21 +1029,24 @@ describe("ActionService", () => {
         );
       });
 
-      it("ignores both facts on an agent dispatch's contextOverride, confirmed or not", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
+      it.each(["assistant", "global-assistant"] as const)(
+        "ignores both facts on an agent dispatch's contextOverride claiming %s",
+        async (origin) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register(confirmAction(mockRun));
 
-        await service.dispatch("actions.list", undefined, {
-          source: "agent",
-          confirmed: true,
-          contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
-        });
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            confirmed: true,
+            contextOverride: { hostCallerOrigin: origin, hostPersonApproved: true },
+          });
 
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
-        );
-      });
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
+          );
+        }
+      );
 
       it.each(["user", "plugin", "keybinding"] as const)(
         "drops both for a %s dispatch, from the options and from a contextOverride",

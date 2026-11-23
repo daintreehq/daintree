@@ -459,6 +459,29 @@ describe("usePluginActions", () => {
     ]);
   });
 
+  // #18153: a standing answer lets the global Assistant's call through with no
+  // dialog, so the handler hears who asked and no approval.
+  it("passes the global Assistant's origin without an approval nobody gave", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor({ danger: "confirm", effectiveDanger: "confirm" });
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockResolvedValue({ ok: true });
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    await actionService.dispatch(
+      action.id,
+      {},
+      { source: "agent", confirmed: true, hostCallerOrigin: "global-assistant" }
+    );
+    expect(invokeMock.mock.calls.map((call) => call[3])).toEqual([
+      { dispatchSource: "agent", origin: "global-assistant" },
+    ]);
+  });
+
   it("returns CONFIRMATION_REQUIRED and never invokes for agent dispatch without confirmed:true", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");

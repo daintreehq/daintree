@@ -288,6 +288,28 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBe(expected);
   });
 
+  // #18153: the session reads `local` beside `global` to reach plugin actions,
+  // so the projection must carry it, and only for the in-process relay.
+  it.each([
+    ["this machine's own relay", { local: true as const }, true],
+    ["another machine's relay", {}, undefined],
+  ])("hands %s session its locality", (_label, caller, expected) => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: {
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        helpSessionId: "help-1",
+        shellName: "Shell",
+        global: true,
+        ...caller,
+      },
+    });
+
+    expect(sessionDeps.relay?.local).toBe(expected);
+  });
+
   // #15698: the Shell's view can only match a dispatch to its own call if the call is named.
   it("names the Shell's own call on each of a relay session's dispatches, and only its own", async () => {
     const bound = (relay?: Record<string, unknown>) => {

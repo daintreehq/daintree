@@ -1462,6 +1462,7 @@ describe("plugin actions opted into the project Assistant (#16751)", () => {
     const builtIn = getTierPermittedActionIds("full", false);
     const widened = getTierPermittedActionIds("full", false, true);
     expect([...widened].filter((id) => !builtIn.has(id))).toEqual([REACH]);
+    expect([...builtIn].every((id) => widened.has(id))).toBe(true);
   });
 
   it("keeps it from another machine's global Assistant, and from the external tier", () => {

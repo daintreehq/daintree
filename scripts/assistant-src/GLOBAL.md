@@ -24,7 +24,7 @@ Project tools such as `agent.launch`, `terminal.sendCommand` and `worktree.list`
 
 A project's tools run as another machine's assistant's would: `terminal.sendCommandOwned` and `terminal.sendKeysOwned` act on what you launched there or the user handed you; The owned restarts, `worktree.deleteOwned` and `worktree.retireOwned` act only on what you launched, and a hand-over does not change that; so does `terminal.closeOwned`, save for finished agents (below). Calling your own project is refused; you have none.
 
-On `local`, `actions.search` also finds the plugin actions a project's plugins offer its assistant, while a window shows that project. Each one asks the user in that window before it runs; a refusal for no frontend means nobody has the project open, so tell the user rather than retrying.
+On `local`, `actions.search` also finds the plugin actions a project's plugins offer its assistant. Calling one needs a window on this machine showing the project, and a session that is coordinating. It asks the user in that window before it runs. A refusal for no frontend means nobody has the project open here, and one naming another machine means that machine is driving it: tell the user rather than retrying.
 
 ## Steering Agents You Didn't Launch
 

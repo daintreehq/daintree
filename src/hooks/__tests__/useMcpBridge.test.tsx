@@ -614,6 +614,57 @@ describe("useMcpBridge", () => {
     });
   });
 
+  // #18153: the global Assistant's relayed call is external, so its confirm-class
+  // dispatch waits on this view's dialog like any other, and only an answered
+  // dialog reaches the action as the person's approval.
+  it.each(["approved", "rejected"] as const)(
+    "asks before running the global Assistant's confirm-class call, %s",
+    async (decision) => {
+      mocks.get.mockReturnValue(
+        confirmManifestEntry({
+          id: "acme.stages.resume" as ActionManifestEntry["id"],
+          title: "Resume stage",
+        })
+      );
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: `req-global-${decision}`,
+        actionId: "acme.stages.resume",
+        args: { stageId: "s1" },
+        confirmed: false,
+        sessionOrigin: "external",
+        callerOrigin: "global-assistant",
+      });
+
+      await Promise.resolve();
+      expect(useMcpConfirmStore.getState().current).not.toBeNull();
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+
+      useMcpConfirmStore.getState().resolveCurrent(decision);
+      await dispatched;
+
+      if (decision === "rejected") {
+        expect(mocks.dispatch).not.toHaveBeenCalled();
+        return;
+      }
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "acme.stages.resume",
+        { stageId: "s1" },
+        {
+          source: "agent",
+          confirmed: true,
+          hostCallerOrigin: "global-assistant",
+          hostPersonApproved: true,
+          dispatchDeadlineAt: expect.any(Number),
+        }
+      );
+    }
+  );
+
   it("threads the action's dangerRationale into the confirm store so the dialog can show it (#11342)", async () => {
     mocks.get.mockReturnValue(
       confirmManifestEntry({

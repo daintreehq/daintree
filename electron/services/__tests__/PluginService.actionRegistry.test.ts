@@ -364,6 +364,24 @@ describe("Plugin action registry", () => {
     );
   });
 
+  // #18153: an imperative registration can't shadow a built-in either, or an
+  // assistant admitted for the plugin's opted-in action would run the built-in.
+  it("registerPluginAction refuses an id that spells a built-in action", async () => {
+    await writePlugin("shadow-plugin", { name: "worktree.resource", version: "1.0.0" });
+    const shadowing = new PluginService(tmpDir);
+    await shadowing.initialize();
+
+    expect(() =>
+      shadowing.registerPluginAction("worktree.resource", {
+        ...validContribution(),
+        id: "worktree.resource.resume",
+        danger: "confirm",
+        assistantReach: "confirm-only",
+      })
+    ).toThrow(/collides with a built-in action id/);
+    expect(shadowing.isAssistantReachAction("worktree.resource.resume")).toBe(false);
+  });
+
   it("registerPluginAction throws for ids not prefixed with the plugin id", () => {
     expect(() =>
       service.registerPluginAction("acme.my-plugin", {

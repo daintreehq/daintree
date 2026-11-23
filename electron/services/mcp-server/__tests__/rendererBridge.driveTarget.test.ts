@@ -439,9 +439,11 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
       );
 
+      // As a real `host.call` dispatch, naming its call.
+      const call = { callId: "call-1", helpSessionId: "help-g" };
       await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {}, false, "external", {
         callerOrigin: "global-assistant",
-        relay: { linkSessionId: "local", readOnly: true, local: true },
+        relay: { linkSessionId: "local", readOnly: true, local: true, call },
       });
       // A change, which a plugin's opted-in action always counts as, is refused outright.
       await expect(
@@ -453,6 +455,7 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
 
       expect(endpoint.request).toHaveBeenCalledTimes(1);
       const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+      expect(payload).toMatchObject({ relayCall: call });
       expect(payload).not.toHaveProperty("callerOrigin");
     });
 

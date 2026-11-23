@@ -630,13 +630,30 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
 
       afterEach(() => uninstall());
 
-      it("sends the global Assistant's call into the project, marked global", async () => {
+      it.each(["core", "full"] as const)(
+        "sends the global Assistant's call into the project, marked global, at %s",
+        async (tier) => {
+          const settled = await runtime.call("g", RESUME, { tier });
+
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
+          expect(opened).toHaveLength(1);
+          expect(opened[0]!.spec).toMatchObject({
+            projectId: "proj-2",
+            tier,
+            global: true,
+            local: true,
+          });
+          expect(opened[0]!.calls.map((call) => call.tool)).toEqual([REACH]);
+        }
+      );
+
+      it("reads the plugin's opt-in again at each call", async () => {
+        await runtime.call("g", RESUME, { tier: "core" });
+        uninstall();
         const settled = await runtime.call("g", RESUME, { tier: "core" });
 
-        expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
-        expect(opened).toHaveLength(1);
-        expect(opened[0]!.spec).toMatchObject({ projectId: "proj-2", global: true, local: true });
-        expect(opened[0]!.calls.map((call) => call.tool)).toEqual([REACH]);
+        expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        expect(opened.flatMap((session) => session.calls)).toHaveLength(1);
       });
 
       it("refuses it on another machine, from a session that isn't coordinating, and once unnamed", async () => {
