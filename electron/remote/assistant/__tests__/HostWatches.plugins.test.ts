@@ -432,4 +432,36 @@ describe("HostWatches on plugins' notifications for an assistant (#18154)", () =
     expect(queued[0]!.wake.beforeType()).toBe(false);
     expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g", "pa"]);
   });
+
+  it("types nothing the switch took away while its notice waited, even with it on again", async () => {
+    await arm(PROJECT_A);
+    publish();
+    store.forget("proj-a", "acme.stages");
+    expect(queued[0]!.wake.recheck()).toEqual({ kind: "unavailable", reason: "control-off" });
+    queued[0]!.wake.report({ kind: "unavailable", reason: "control-off" });
+    // Settled, so it no longer holds the run's room.
+    expect(watches.run(PROJECT_A, { operation: "list" }).watches[0]).toMatchObject({
+      status: "fired",
+      delivery: "unavailable",
+    });
+  });
+
+  it("lists only the latest eight given, and none for another host", async () => {
+    Array.from({ length: 10 }, () => publish());
+    await arm(PROJECT_A);
+    const listed = watches.run(PROJECT_A, { operation: "list" });
+    expect(listed.notifications?.matches).toHaveLength(8);
+    expect(listed.notifications?.omitted).toBe(2);
+    expect(
+      watches.run(PROJECT_A, { operation: "list", hostId: "studio" }).notifications
+    ).toBeUndefined();
+  });
+
+  it("arms anew rather than reuse an identical watch past its time", async () => {
+    const first = await arm(PROJECT_A, { expiresInSeconds: 60 });
+    now += 60_000;
+    const second = await arm(PROJECT_A, { expiresInSeconds: 60 });
+    expect(second.watches[0]?.watchId).not.toBe(first.watches[0]?.watchId);
+    expect(second).toMatchObject({ armed: true });
+  });
 });

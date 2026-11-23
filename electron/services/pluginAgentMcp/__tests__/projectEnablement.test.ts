@@ -25,6 +25,7 @@ import {
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
   assistantAgentMcpAccess,
+  assistantAgentMcpAccessOffSince,
   assistantAgentMcpScopeFor,
   hasAnyAgentMcpEnablement,
   hasAnyAssistantAgentMcpAccess,
@@ -41,6 +42,7 @@ import {
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
   setProjectAssistantAgentMcpAccess,
+  onAssistantAgentMcpAccessOff,
 } from "../projectEnablement.js";
 import { _resetProjectMcpDefaultsForTests, refreshProjectMcpDefaults } from "../projectDefaults.js";
 import {
@@ -834,6 +836,21 @@ describe("projectEnablement", () => {
 
   describe("the Daintree Assistant's answer", () => {
     const WRITES = declared({ hasDatabaseWrites: true });
+
+    it("tells who listens, and remembers when, each time the user turns it off (#18154)", () => {
+      const heard = vi.fn();
+      const off = onAssistantAgentMcpAccessOff(heard);
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "read-only");
+      expect(heard).not.toHaveBeenCalled();
+      const before = Date.now();
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(heard).toHaveBeenCalledWith(PROJECT_A, LEDGER);
+      expect(assistantAgentMcpAccessOffSince(PROJECT_A, LEDGER)).toBeGreaterThanOrEqual(before);
+      expect(assistantAgentMcpAccessOffSince(PROJECT_B, LEDGER)).toBeNull();
+      off();
+      setProjectAssistantAgentMcpAccess(PROJECT_A, LEDGER, "off");
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
 
     it("is off until the user answers, and caps nothing in by itself", () => {
       setProjectAgentMcpAccess(PROJECT_A, LEDGER, "read-write");

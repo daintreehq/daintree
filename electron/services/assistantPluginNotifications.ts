@@ -1,6 +1,7 @@
 import type { HostWatchNotification } from "../../shared/types/hostControl.js";
 import {
   assistantAgentMcpAccess,
+  assistantAgentMcpAccessOffSince,
   onAssistantAgentMcpAccessOff,
 } from "./pluginAgentMcp/projectEnablement.js";
 
@@ -20,6 +21,11 @@ export const ASSISTANT_NOTIFICATION_KEEP_MS = 30 * 60_000;
 export interface AssistantPluginNotificationsDeps {
   /** The person let this project's Assistant use this plugin's tools: the whole grant. */
   mayHear(projectId: string, pluginId: string): boolean;
+  /**
+   * When that grant last ended, or null. One raised before then was raised
+   * under the grant that ended, even if it is on again now.
+   */
+  offSince?(projectId: string, pluginId: string): number | null;
   now(): number;
 }
 
@@ -54,6 +60,8 @@ export class AssistantPluginNotifications {
   /** Keeps one and tells the listeners, unless its project's Assistant may not hear that plugin. */
   publish(notification: AssistantPluginNotification): void {
     if (!this.deps.mayHear(notification.projectId, notification.pluginId)) return;
+    const offSince = this.deps.offSince?.(notification.projectId, notification.pluginId) ?? null;
+    if (offSince !== null && notification.createdAt <= offSince) return;
     this.prune();
     if (this.rows.size >= ASSISTANT_NOTIFICATIONS_MAX && !this.evictOne()) return;
     const pluginName = notification.pluginName.slice(0, ASSISTANT_NOTIFICATION_PLUGIN_NAME_MAX);
@@ -102,6 +110,11 @@ export class AssistantPluginNotifications {
     if (row === undefined || row.heldBy !== null || row.takenBy !== null) return false;
     row.heldBy = watchId;
     return true;
+  }
+
+  /** Whether that watch still holds it: a row the person's switch took away is held by no one. */
+  holds(notificationId: string, watchId: string): boolean {
+    return this.rows.get(notificationId)?.heldBy === watchId;
   }
 
   /**
@@ -199,6 +212,7 @@ export function assistantPluginNotifications(): AssistantPluginNotifications {
   if (shared !== null) return shared;
   const created = new AssistantPluginNotifications({
     mayHear: (projectId, pluginId) => assistantAgentMcpAccess(projectId, pluginId) !== "off",
+    offSince: assistantAgentMcpAccessOffSince,
     now: () => Date.now(),
   });
   onAssistantAgentMcpAccessOff((projectId, pluginId) => created.forget(projectId, pluginId));

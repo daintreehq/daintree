@@ -790,7 +790,10 @@ export const HostWatchResultSchema = z.object({
       hosts: z.array(HostWatchHostCoverageSchema),
     })
     .optional(),
-  /** A plugin-notification arm only: those no assistant had taken, now yours; no notice comes for them. */
+  /**
+   * A plugin-notification arm: those no assistant had taken, now yours; no
+   * notice comes for them. A list: the latest this run was given (#18154).
+   */
   notifications: z
     .object({ matches: z.array(HostWatchNotificationSchema), omitted: z.number() })
     .optional(),

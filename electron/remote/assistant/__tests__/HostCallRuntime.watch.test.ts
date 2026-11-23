@@ -263,6 +263,7 @@ describe("HostCallRuntime host.watch on plugins' notifications (#18154)", () => 
   let queued: Array<{ lane: { helpSessionId: string }; wake: LaneWake }>;
   let store: AssistantPluginNotifications;
   let runtime: HostCallRuntime;
+  let ids = 0;
 
   const make = (withStore: boolean) =>
     new HostCallRuntime({
@@ -278,7 +279,7 @@ describe("HostCallRuntime host.watch on plugins' notifications (#18154)", () => 
       connect: vi.fn(async () => undefined),
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
       ...(withStore ? { pluginNotifications: async () => store } : {}),
-      newId: () => "00000000-0000-4000-8000-000000000001",
+      newId: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, "0")}`,
     });
 
   const publish = (notificationId: string) =>
@@ -338,6 +339,14 @@ describe("HostCallRuntime host.watch on plugins' notifications (#18154)", () => 
         notificationId: "11111111-1111-4111-8111-000000000001",
       })
     ).resolves.toMatchObject({ ok: true, value: { outcome: "unsupported" } });
+  });
+
+  it("ends a session's plugin watches and hands on what it held when coordination leaves it", async () => {
+    await runtime.watch("g", { operation: "arm", pluginNotifications: true });
+    publish("11111111-1111-4111-8111-000000000004");
+    await runtime.watch("a", { operation: "arm", pluginNotifications: true });
+    runtime.standDown("g");
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g", "a"]);
   });
 
   it("passes over a global session once it stands down, as its caller says", async () => {

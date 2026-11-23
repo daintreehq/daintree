@@ -4543,8 +4543,8 @@ interface PluginNotifyOptions {
     /**
      * `"assistant"` also offers it to one Daintree Assistant that is watching for
      * plugins' notifications, in a project where the user lets the Assistant use
-     * this plugin's tools. The Assistant is told which plugin raised it, the
-     * project, the key, severity and time; it reads the title and body with a
+     * this plugin's tools. The Assistant is told this plugin's id, the project,
+     * severity, time and a short plain key; it reads the title and body with a
      * call of its own, and acts only through this plugin's tools. The person's
      * toast, inbox row and banner are unchanged. Needs a project: a project
      * plugin's own, or for an installed plugin a `worktreeId` target.

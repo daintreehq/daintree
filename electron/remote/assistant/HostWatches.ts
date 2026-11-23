@@ -205,7 +205,7 @@ const ENDED_DETAIL = "It had already ended; nothing changed.";
 const AGENTS_ARMED_DETAIL =
   "Armed. One notice comes when an agent is first seen starting to wait for a reason you named, or when it expires or is lost. Those already waiting are in agents.matches; no notice comes for them. Cancel it with operation cancel and its watchId.";
 const PLUGINS_ARMED_DETAIL =
-  "Armed. One notice comes for the next plugin notification for an assistant that matches, unless another assistant's watch takes it, or when it expires. Those no assistant had taken are in notifications.matches, now yours; no notice comes for them. Read each one's text with operation read; list names every one you were given.";
+  "Armed. One notice comes for the next plugin notification for an assistant that matches, unless another assistant's watch takes it, or when it expires. Those no assistant had taken are in notifications.matches, now yours; no notice comes for them. Read each one's text with operation read; list names the latest ones you were given.";
 const PLUGINS_ENDED_DETAIL =
   "It was armed and has already ended; see its status. Those no assistant had taken are in notifications.matches.";
 const STANDBY_DETAIL =
@@ -216,6 +216,8 @@ const NOT_GIVEN_DETAIL =
 const AGENTS_ENDED_DETAIL =
   "It was armed and has already ended; see its status. Those already waiting are in agents.matches.";
 
+/** Notifications given to a run that its `list` names, newest last. */
+const LISTED_NOTIFICATIONS_MAX = 8;
 /** Agents a settle keeps in full: as many as one host's directory names. */
 const PENDING_AGENTS_MAX = AGENT_DIRECTORY_ENTRIES_MAX;
 /** Agents past those it counts, so a burst across a fleet stays bounded. */
@@ -423,6 +425,7 @@ export class HostWatches {
       }
     }
     for (const record of unsettled) this.letGo(record);
+    for (const record of unsettled) this.trimHistory(record.run);
     this.release();
   }
 
@@ -625,6 +628,7 @@ export class HostWatches {
       (candidate): candidate is PluginsRecord =>
         candidate.kind === "plugins" &&
         candidate.status === "armed" &&
+        candidate.expiresAt > this.deps.now() &&
         sameCondition(candidate.condition, condition)
     );
     const duplicate = record !== undefined;
@@ -664,7 +668,7 @@ export class HostWatches {
       // One a more specific or longer-armed watch hears goes to it, as a live one would.
       const best = this.bestFor(summary);
       if (best !== null && best !== record) {
-        this.offer(summary);
+        this.offer(summary, best);
       } else if (matches.length >= HOST_WATCH_MATCHES_MAX) {
         omitted += 1;
       } else if (store.take(notification.notificationId, null, key)) {
@@ -896,8 +900,12 @@ export class HostWatches {
     const ended = mine
       .filter((record) => record.status !== "armed")
       .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
-    // What this run was given and may still read, so an answer or a line it lost is found again.
-    const given = this.notifications?.takenBy(key) ?? [];
+    // The latest this run was given and may still read, so an answer or a line it lost is
+    // found again; few, so the answer stays small beside every watch it lists.
+    const given =
+      hostId === undefined || hostId === LOCAL_HOST_ID
+        ? (this.notifications?.takenBy(key) ?? [])
+        : [];
     return this.answer("ok", null, {
       armed: armed.length > 0,
       watches: [...armed, ...ended].map((record) => this.view(record)),
@@ -905,8 +913,8 @@ export class HostWatches {
       ...(given.length > 0
         ? {
             notifications: {
-              matches: given.slice(-HOST_WATCH_MATCHES_MAX).map(summaryOf),
-              omitted: Math.max(0, given.length - HOST_WATCH_MATCHES_MAX),
+              matches: given.slice(-LISTED_NOTIFICATIONS_MAX).map(summaryOf),
+              omitted: Math.max(0, given.length - LISTED_NOTIFICATIONS_MAX),
             },
           }
         : {}),
@@ -1039,10 +1047,10 @@ export class HostWatches {
    * it, holding it there until its notice is typed. None hears it: it waits,
    * untaken, for the next arm.
    */
-  private offer(notification: HostWatchNotification): void {
+  private offer(notification: HostWatchNotification, chosen?: PluginsRecord): void {
     const store = this.notifications;
     if (store === null || this.disposed || !store.mayHear(notification)) return;
-    const best = this.bestFor(notification);
+    const best = chosen ?? this.bestFor(notification);
     if (best === null || !store.hold(notification.notificationId, best.watchId)) return;
     best.fired = notification;
     this.end(best, "fired");
@@ -1192,6 +1200,11 @@ export class HostWatches {
     const pluginAllowed = (): boolean =>
       notification === null ||
       (this.mayTakeWork(record.run) && this.notifications?.mayHear(notification) === true);
+    // Still held for this watch: the switch turned off and on again took it away.
+    const pluginHeld = (): boolean =>
+      notification === null ||
+      record.typing === true ||
+      this.notifications?.holds(notification.notificationId, record.watchId) === true;
     const live = (): boolean =>
       !this.disposed &&
       this.watches.get(record.watchId) === record &&
@@ -1204,7 +1217,9 @@ export class HostWatches {
       recheck: () => {
         if (record.delivery === "withdrawn") return { kind: "unavailable", reason: "cancelled" };
         if (!live()) return { kind: "unavailable", reason: "relaunched" };
-        if (!pluginAllowed()) return { kind: "unavailable", reason: "control-off" };
+        if (!pluginAllowed() || !pluginHeld()) {
+          return { kind: "unavailable", reason: "control-off" };
+        }
         // What a host showed is never typed once the person turned its control off.
         const current = shown();
         if (current !== null) {

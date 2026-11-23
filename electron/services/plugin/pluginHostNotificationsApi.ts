@@ -751,6 +751,9 @@ export function buildNotificationsHostApi(
     // what the plugin could already put in its own panel menu.
     notify: async (options) => {
       const id = randomUUID();
+      // When it was raised, before any wait: one raised before the person ends
+      // an assistant's grant never reaches an assistant under a later one.
+      const raisedAt = Date.now();
       if (!deps.plugins.has(pluginId)) return { id };
       const parsed = PluginNotifyOptionsSchema.safeParse(options);
       if (!parsed.success) {
@@ -873,7 +876,7 @@ export function buildNotificationsHostApi(
               projectId,
               dedupeKey: dedupeKey ?? null,
               severity,
-              createdAt: Date.now(),
+              createdAt: raisedAt,
               title,
               body,
             });

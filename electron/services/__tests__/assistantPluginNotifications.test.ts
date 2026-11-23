@@ -140,4 +140,34 @@ describe("AssistantPluginNotifications (#18154)", () => {
     expect(kept?.notificationId).toBe(added.notificationId);
     expect(kept?.pluginName.length).toBeLessThan(1_000);
   });
+
+  it("keeps none raised before the grant last ended, even with it on again", () => {
+    let offSince: number | null = now;
+    const gated = new AssistantPluginNotifications({
+      mayHear: () => true,
+      offSince: () => offSince,
+      now: () => now,
+    });
+    gated.publish(notification({ createdAt: now - 1 }));
+    gated.publish(notification({ createdAt: now }));
+    const after = notification({ createdAt: now + 1 });
+    gated.publish(after);
+    expect(gated.untaken({ projectId: null, pluginId: null })).toEqual([after]);
+    offSince = null;
+    const any = notification({ createdAt: 0 });
+    gated.publish(any);
+    expect(gated.untaken({ projectId: null, pluginId: null })).toContain(any);
+  });
+
+  it("forgets only that plugin's, and a held one is held by no one after", () => {
+    const mine = notification();
+    const theirs = notification({ pluginId: "other" });
+    store.publish(mine);
+    store.publish(theirs);
+    store.hold(mine.notificationId, "w1");
+    expect(store.holds(mine.notificationId, "w1")).toBe(true);
+    store.forget("p1", "acme");
+    expect(store.holds(mine.notificationId, "w1")).toBe(false);
+    expect(store.untaken({ projectId: null, pluginId: null })).toEqual([theirs]);
+  });
 });
