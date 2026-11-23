@@ -523,20 +523,20 @@ The second argument says what the host knows about this dispatch. The host build
 ```ts
 interface PluginActionContext {
   readonly dispatchSource: "user" | "keybinding" | "menu" | "context-menu" | "agent" | "plugin";
-  readonly origin?: "assistant";
+  readonly origin?: "assistant" | "global-assistant";
   readonly approval?: "person";
 }
 ```
 
 - `dispatchSource` is the surface that dispatched the action. `"user"` is the command palette, and `"agent"` is a Daintree MCP session. `"plugin"` covers what no host surface attested: a `host.dispatch`, a panel calling `invoke(pluginId, actionId)` itself, and an [event route](./contribution-points.md).
-- `origin: "assistant"` means the person's Daintree Assistant made the MCP call. Like [`caller.consumer`](#mcpregistertools), it is provenance: the Assistant acts on what its pane is sent, and other agents' replies are sent there.
+- `origin: "assistant"` means the person's Daintree Assistant made the MCP call, and `origin: "global-assistant"` means their global Assistant made it through `host.call` from outside the project. Like [`caller.consumer`](#mcpregistertools), it is provenance: the Assistant acts on what its pane is sent, and other agents' replies are sent there.
 - `approval: "person"` means someone answered Daintree's confirm dialog for this very dispatch, either the palette's dialog for your `"confirm"` action or the MCP dialog the Assistant's call raised. A standing answer never sets it: an automation grant, "Allow for this session", and the Assistant's **Never ask** let the call through with no dialog, so it runs with `origin` and no `approval`.
 
 Read `approval` for a decision only the person should make, such as lifting a stop they placed. Whether the Assistant may make that decision unattended is then your own setting, read in the handler: the host has no signal that tells a person's standing permission apart from a process that read the Assistant's credential, so it doesn't offer one.
 
 ### Actions the Assistant can run
 
-An action declared `danger: "confirm"` with `assistantReach: "confirm-only"` is listed to the project's Daintree Assistant at both of its tool sets, `core` and `full`. Each call goes through the ordinary MCP confirm dialog, the Assistant's Never ask setting and the MCP audit log, and the handler's context reports what happened. Agent panes, api-key clients, another machine's assistant and the global Assistant never reach it, and a call from one is refused as `TIER_NOT_PERMITTED`. Reach is read when each call arrives, so unloading the plugin, or registering the action again without the opt-in, takes it away at once.
+An action declared `danger: "confirm"` with `assistantReach: "confirm-only"` is listed to the project's Daintree Assistant at both of its tool sets, `core` and `full`. Each call goes through the ordinary MCP confirm dialog, the Assistant's Never ask setting and the MCP audit log, and the handler's context reports what happened. The person's global Assistant on the same machine reaches it too, through `host.call` into the project, while a window shows that project: the call meets the confirm dialog in that window every time, and the handler sees `origin: "global-assistant"`. With no window open the call is refused, since a plugin action has no form that runs without one. Agent panes, api-key clients and another machine's assistants never reach it, and a call from one is refused as `TIER_NOT_PERMITTED`. Reach is read when each call arrives, so unloading the plugin, or registering the action again without the opt-in, takes it away at once.
 
 ## `registerHandler` and `broadcastToRenderer`
 

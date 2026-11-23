@@ -340,6 +340,49 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         .map(([, payload]) => (payload as { actionsListWalk?: boolean }).actionsListWalk);
       expect(sent).toEqual([true, undefined, undefined]);
     });
+    it("tells the local view when this machine's global Assistant asked (#18153)", async () => {
+      const wc = makeWebContents(7, (channel, payload) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        queueMicrotask(() =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id: 7 } },
+            { requestId: payload.requestId, result: { ok: true, result: null } }
+          )
+        );
+      });
+      mockWebContentsRegistry.set(7, wc);
+      mockProjectViews.set(WORKSPACE, [wc]);
+      const relay = { linkSessionId: "local", readOnly: false, local: true as const };
+
+      await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "acme.stages.resume",
+        {},
+        false,
+        "external",
+        {
+          callerOrigin: "global-assistant",
+          relay,
+        }
+      );
+      await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "acme.stages.resume",
+        {},
+        false,
+        "external",
+        {
+          relay,
+        }
+      );
+
+      const sent = vi
+        .mocked(wc.send)
+        .mock.calls.filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+        .map(([, payload]) => (payload as { callerOrigin?: string }).callerOrigin);
+      expect(sent).toEqual(["global-assistant", undefined]);
+    });
   });
 
   describe("with a drive lease", () => {
@@ -388,6 +431,32 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         dispatchedWorkspace: { workspaceId: WORKSPACE },
       });
       expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    it("never names this machine's global Assistant to another machine's view (#18153)", async () => {
+      const endpoint = makeRemoteEndpoint(async () => ({ result: { ok: true, result: null } }));
+      setMcpDriveTargetResolver((projectId) =>
+        projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
+      );
+
+      // As a real `host.call` dispatch, naming its call.
+      const call = { callId: "call-1", helpSessionId: "help-g" };
+      await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {}, false, "external", {
+        callerOrigin: "global-assistant",
+        relay: { linkSessionId: "local", readOnly: true, local: true, call },
+      });
+      // A change, which a plugin's opted-in action always counts as, is refused outright.
+      await expect(
+        bridge.dispatchActionForWorkspace(WORKSPACE, "acme.stages.resume", {}, false, "external", {
+          callerOrigin: "global-assistant",
+          relay: { linkSessionId: "local", readOnly: false, local: true },
+        })
+      ).rejects.toBeInstanceOf(RelayDrivenElsewhereError);
+
+      expect(endpoint.request).toHaveBeenCalledTimes(1);
+      const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+      expect(payload).toMatchObject({ relayCall: call });
+      expect(payload).not.toHaveProperty("callerOrigin");
     });
 
     it("never asks another machine's view for main's own actions.list walk (#17036)", async () => {

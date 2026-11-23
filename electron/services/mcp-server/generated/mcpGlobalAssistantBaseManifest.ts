@@ -154,7 +154,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
         tool: {
           type: "string",
           minLength: 1,
-          maxLength: 128,
+          maxLength: 256,
           description:
             "A Daintree tool on the host, by id. Search the host's own tools through this.",
         },

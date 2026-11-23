@@ -11,6 +11,7 @@ import {
   buildToolOutputSchema,
   callerGatedMinimumTier,
   pluginActionMinimumTier,
+  sessionReachesPluginActions,
   shouldExposeTool,
   UNBOUND_SESSION_SURFACE,
   type SessionSurfacePolicy,
@@ -75,13 +76,13 @@ export const MCP_SURFACE_MANIFEST_VERSION = 4;
 function resolveToolTier(
   entry: ActionManifestEntry,
   tier: McpTier,
-  rendererOwnedOrigin: boolean
+  session: SessionSurfacePolicy
 ): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
   return (
     callerGatedMinimumTier(entry.id) ??
-    minimumPermittingTier(entry.id, rendererOwnedOrigin) ??
-    pluginActionMinimumTier(entry.id, rendererOwnedOrigin) ??
+    minimumPermittingTier(entry.id, session.rendererOwnedOrigin === true) ??
+    pluginActionMinimumTier(entry.id, sessionReachesPluginActions(session)) ??
     tier
   );
 }
@@ -125,7 +126,7 @@ export function buildSurfaceManifest(
     const annotations = buildAnnotations(entry);
     const tool: McpSurfaceTool = {
       id: entry.id,
-      tier: resolveToolTier(entry, tier, session.rendererOwnedOrigin === true),
+      tier: resolveToolTier(entry, tier, session),
       kind: entry.kind,
       readOnlyHint: annotations.readOnlyHint ?? false,
       idempotentHint: annotations.idempotentHint ?? false,

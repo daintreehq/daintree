@@ -814,7 +814,11 @@ export class ActionService {
         // which may let an operator-only step through on them. A person's
         // approval needs the confirmation the gate above already required.
         hostCallerOrigin:
-          source === "agent" && options?.hostCallerOrigin === "assistant" ? "assistant" : undefined,
+          source === "agent" &&
+          (options?.hostCallerOrigin === "assistant" ||
+            options?.hostCallerOrigin === "global-assistant")
+            ? options.hostCallerOrigin
+            : undefined,
         hostPersonApproved:
           source === "agent" && options?.confirmed === true && options.hostPersonApproved === true
             ? true

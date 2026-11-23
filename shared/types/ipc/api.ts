@@ -2760,6 +2760,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * by main; the view settles it from the pane's own state.
          */
         confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
+        /**
+         * This machine's global Assistant made the call, through `host.call`
+         * into this project (#18153), set only by main on a local send. An
+         * action's handler is told so; it grants nothing.
+         */
+        callerOrigin?: "global-assistant";
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

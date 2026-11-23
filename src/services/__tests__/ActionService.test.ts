@@ -994,22 +994,25 @@ describe("ActionService", () => {
 
       // #16751: who asked and whether a person answered, for a plugin action's
       // handler. Narrower than hostConfirmed, and only the agent source has them.
-      it("stamps the Assistant origin and a person's approval for an agent dispatch", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
+      it.each(["assistant", "global-assistant"] as const)(
+        "stamps the %s origin and a person's approval for an agent dispatch (#18153)",
+        async (origin) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register(confirmAction(mockRun));
 
-        await service.dispatch("actions.list", undefined, {
-          source: "agent",
-          confirmed: true,
-          hostCallerOrigin: "assistant",
-          hostPersonApproved: true,
-        });
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            confirmed: true,
+            hostCallerOrigin: origin,
+            hostPersonApproved: true,
+          });
 
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostCallerOrigin: "assistant", hostPersonApproved: true })
-        );
-      });
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: origin, hostPersonApproved: true })
+          );
+        }
+      );
 
       it("never stamps a person's approval on a dispatch the gate didn't see confirmed", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
@@ -1026,21 +1029,24 @@ describe("ActionService", () => {
         );
       });
 
-      it("ignores both facts on an agent dispatch's contextOverride, confirmed or not", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
+      it.each(["assistant", "global-assistant"] as const)(
+        "ignores both facts on an agent dispatch's contextOverride claiming %s",
+        async (origin) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register(confirmAction(mockRun));
 
-        await service.dispatch("actions.list", undefined, {
-          source: "agent",
-          confirmed: true,
-          contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
-        });
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            confirmed: true,
+            contextOverride: { hostCallerOrigin: origin, hostPersonApproved: true },
+          });
 
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
-        );
-      });
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
+          );
+        }
+      );
 
       it.each(["user", "plugin", "keybinding"] as const)(
         "drops both for a %s dispatch, from the options and from a contextOverride",
@@ -1051,7 +1057,7 @@ describe("ActionService", () => {
           await service.dispatch("actions.list", undefined, {
             source,
             confirmed: true,
-            hostCallerOrigin: "assistant",
+            hostCallerOrigin: source === "plugin" ? "global-assistant" : "assistant",
             hostPersonApproved: true,
             contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
           });

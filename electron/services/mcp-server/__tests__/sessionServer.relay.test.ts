@@ -15,6 +15,7 @@ import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
 import { relayOwnershipPrincipal } from "../resourceOwnership.js";
 import type { HostCallContext } from "../hostControlTools.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 
 function entry(
   id: string,
@@ -1047,5 +1048,119 @@ describe("a relayed session for the calling Shell's global Assistant", () => {
       "project.runCheck",
     ]);
     expect(listed).toContain("project.runCommand");
+  });
+});
+
+// #18153: this machine's global Assistant reaches a project's plugin actions
+// that opted into `assistantReach`, through `host.call`; no other relay does.
+describe("plugin actions for this machine's global Assistant", () => {
+  const REACH = "acme.stages.resume";
+  const PLUGIN_MANIFEST = [
+    ...MANIFEST,
+    { ...entry(REACH, "command", "confirm"), pluginId: "acme.stages" },
+  ];
+  let uninstall: () => void = () => {};
+
+  afterEach(() => uninstall());
+
+  function install(): void {
+    uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+  }
+
+  async function open(tier: "core" | "full", caller: { global?: true; local?: true }) {
+    const dispatchAction = vi.fn(async (actionId: string, _args: unknown) =>
+      actionId === "actions.search"
+        ? {
+            result: {
+              ok: true as const,
+              result: { totalMatches: PLUGIN_MANIFEST.length, results: PLUGIN_MANIFEST },
+            },
+          }
+        : { result: { ok: true as const, result: { ran: true } } }
+    );
+    const relay = await relayed(tier, {
+      requestManifest: vi.fn().mockResolvedValue(PLUGIN_MANIFEST),
+      getCachedManifest: vi.fn(() => PLUGIN_MANIFEST),
+      dispatchAction,
+      relay: { shellName: "greg-mbp", ...caller, refuseWrite: vi.fn(() => null) },
+    });
+    // Read the surface, a search and a call the way a relayed `host.call` sends one.
+    const probe = async (callId: string) => {
+      const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+      const search = await relay.client.callTool({
+        name: "actions.search",
+        arguments: { query: "stages" },
+      });
+      const [first] = search.content as Array<{ text: string }>;
+      const searched = (JSON.parse(first!.text) as { results: ActionManifestEntry[] }).results.map(
+        (hit) => hit.id
+      );
+      const called = (await relay.client.callTool({
+        name: REACH,
+        arguments: { stageId: "s1" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: callId },
+      })) as { content: unknown; isError?: boolean };
+      return { listed, searched, called };
+    };
+    const dispatchedReach = () =>
+      dispatchAction.mock.calls.filter(([actionId]) => actionId === REACH).length;
+    return { probe, dispatchAction, dispatchedReach };
+  }
+
+  it.each(["core", "full"] as const)(
+    "lists, finds and dispatches it unconfirmed, so the project's view asks, at %s",
+    async (tier) => {
+      install();
+      const session = await open(tier, { global: true, local: true });
+      const { listed, searched, called } = await session.probe("call-1");
+      expect(listed).toContain(REACH);
+      expect(searched).toContain(REACH);
+      expect(called.isError).not.toBe(true);
+      expect(session.dispatchAction).toHaveBeenCalledWith(
+        REACH,
+        { stageId: "s1" },
+        false,
+        undefined,
+        "call-1"
+      );
+    }
+  );
+
+  it.each(
+    (["core", "full"] as const).flatMap((tier) =>
+      (
+        [
+          ["another machine's global Assistant", { global: true as const }],
+          ["one of this machine's project assistants", { local: true as const }],
+          ["another machine's project assistant", {}],
+        ] as const
+      ).map(([label, caller]) => [label, tier, caller] as const)
+    )
+  )("keeps it from %s at %s", async (_label, tier, caller) => {
+    install();
+    const session = await open(tier, caller);
+    const { listed, searched, called } = await session.probe("call-1");
+    expect(listed).not.toContain(REACH);
+    expect(searched).not.toContain(REACH);
+    expect(called.isError).toBe(true);
+    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(session.dispatchedReach()).toBe(0);
+  });
+
+  it("reaches nothing on the same session once the plugin stops naming it", async () => {
+    install();
+    const session = await open("full", { global: true, local: true });
+    expect((await session.probe("call-1")).called.isError).not.toBe(true);
+
+    uninstall();
+    const { listed, searched, called } = await session.probe("call-2");
+    expect(listed).not.toContain(REACH);
+    expect(searched).not.toContain(REACH);
+    expect(called.isError).toBe(true);
+    expect(errorCode(called)).toBe("TIER_NOT_PERMITTED");
+    expect(session.dispatchedReach()).toBe(1);
   });
 });

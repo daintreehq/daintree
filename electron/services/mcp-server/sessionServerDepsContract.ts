@@ -391,6 +391,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     /** The calling Shell's global Assistant (#14545), as its relay caller recorded it. */
     global?: true;
     /**
+     * One of this machine's own assistants calling in process (#14024), never
+     * set for a call that arrived over a link.
+     */
+    local?: true;
+    /**
      * Asked right before a change this process makes itself rather than
      * through a view: why it may not, or null while the requesting Shell's own
      * view drives the bound project and `projectId`, when named, is that one.

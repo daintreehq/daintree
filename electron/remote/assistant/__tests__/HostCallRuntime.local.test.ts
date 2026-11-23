@@ -24,6 +24,7 @@ import {
   type LocalMcpRelay,
 } from "../localMcpRelay.js";
 import type { RelayMcpSession, RelayMcpSessionSpec } from "../mcpRelayExecutor.js";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -604,6 +605,76 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           ["g", true],
         ]);
         expect(opened[0]!.calls[0]!.args).toEqual({ owned: true, global: true });
+      });
+    });
+
+    // #18153: the global Assistant reaches a plugin's opted-in action on this machine only.
+    describe("a plugin action that opted into assistantReach (#18153)", () => {
+      const REACH = "acme.stages.resume";
+      const RESUME = { hostId: "local", projectId: "proj-2", tool: REACH, args: { stageId: "s1" } };
+      let uninstall: () => void = () => {};
+
+      beforeEach(() => {
+        uninstall = setPluginAssistantReachSource({
+          has: (id) => id === REACH,
+          ids: () => [REACH],
+        });
+        const global = { ...RUN_A, projectId: GLOBAL_ASSISTANT_ID, terminalId: "t-g" };
+        runs.set("g", { ...global, sessionId: "g" });
+        runs.set("standby", { ...global, slot: 1, sessionId: "standby", standby: true });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      afterEach(() => uninstall());
+
+      it.each(["core", "full"] as const)(
+        "sends the global Assistant's call into the project, marked global, at %s",
+        async (tier) => {
+          const settled = await runtime.call("g", RESUME, { tier });
+
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
+          expect(opened).toHaveLength(1);
+          expect(opened[0]!.spec).toMatchObject({
+            projectId: "proj-2",
+            tier,
+            global: true,
+            local: true,
+          });
+          expect(opened[0]!.calls.map((call) => call.tool)).toEqual([REACH]);
+        }
+      );
+
+      it("reads the plugin's opt-in again at each call", async () => {
+        await runtime.call("g", RESUME, { tier: "core" });
+        uninstall();
+        const settled = await runtime.call("g", RESUME, { tier: "core" });
+
+        expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        expect(opened.flatMap((session) => session.calls)).toHaveLength(1);
+      });
+
+      it("refuses it on another machine, from a session that isn't coordinating, and once unnamed", async () => {
+        const refused = [
+          await runtime.call(
+            "g",
+            { ...RESUME, hostId: "studio", projectId: "host-p" },
+            {
+              tier: "core",
+            }
+          ),
+          await runtime.call("standby", RESUME, { tier: "core" }),
+        ];
+        uninstall();
+        refused.push(await runtime.call("g", RESUME, { tier: "core" }));
+
+        for (const settled of refused) {
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        }
+        expect(opened).toEqual([]);
+        expect(relayCall).not.toHaveBeenCalled();
       });
     });
 

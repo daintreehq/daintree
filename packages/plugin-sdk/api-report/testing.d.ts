@@ -4704,8 +4704,10 @@ interface PluginConfirmOptions {
  *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
  *   a call from a panel through `plugin.invoke`, or an event route).
  * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
- *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
- *   and that includes other agents' replies.
+ *   call, and `origin: "global-assistant"` that their global Assistant made it
+ *   through `host.call` from outside the project. Provenance, not proof: an
+ *   assistant acts on what its pane is sent, and that includes other agents'
+ *   replies.
  * - `approval: "person"` means someone answered the host's confirm dialog for
  *   this very dispatch. It is never set by a standing answer: an automation
  *   grant, "Allow for this session", or the Assistant's Never ask leave it
@@ -4715,7 +4717,7 @@ interface PluginConfirmOptions {
  */
 interface PluginActionContext {
     readonly dispatchSource: ActionSource;
-    readonly origin?: "assistant";
+    readonly origin?: "assistant" | "global-assistant";
     readonly approval?: "person";
 }
 /**
@@ -7047,8 +7049,10 @@ interface PluginActionContribution {
      * call the Assistant makes goes through the host's confirm dialog unless the
      * person has told Daintree not to ask (an automation grant, or the
      * Assistant's Never ask). The handler's {@link PluginActionContext} then says
-     * which: `approval: "person"` only when the dialog was answered. Agent panes
-     * and the global Assistant never reach it.
+     * which: `approval: "person"` only when the dialog was answered. The global
+     * Assistant reaches it too, through `host.call` on this machine while a view
+     * of the project is open, and always meets that view's dialog. Agent panes
+     * never reach it.
      */
     assistantReach?: "confirm-only";
     keywords?: string[];

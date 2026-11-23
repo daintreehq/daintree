@@ -65,6 +65,7 @@ import {
   MCP_REMOTE_CONFIRM_MARGIN_MS,
 } from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
+import { isPluginAssistantReachAction } from "../plugin/pluginAssistantReach.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
 
@@ -957,13 +958,22 @@ export function createSessionServerDeps(
       }
       const holdUntil =
         callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
+      // A plugin's opted-in action (#18153) runs only in this machine's own
+      // view, where its dialog is asked, so even a query never counts as a
+      // read another machine's driving view could answer.
+      const relayPluginAction = relay !== undefined && isPluginAssistantReachAction(actionId);
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
             ...(holdUntil !== undefined ? { holdUntil } : {}),
+            ...(relay.local === true && relay.global === true
+              ? { callerOrigin: "global-assistant" as const }
+              : {}),
             relay: {
               linkSessionId: relay.linkSessionId,
               readOnly:
-                relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                !relayPluginAction &&
+                relayEntry !== undefined &&
+                buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
               ...(relayCallId !== undefined
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
@@ -1216,6 +1226,7 @@ export function createSessionServerDeps(
           relay: {
             shellName: relay.shellName,
             ...(relay.global === true ? { global: true as const } : {}),
+            ...(relay.local === true ? { local: true as const } : {}),
             // Only the global Assistant's: no other caller closes what it didn't launch.
             ...(relay.global === true && relay.requestApproval !== undefined
               ? {

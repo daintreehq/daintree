@@ -312,6 +312,9 @@ export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 export const HostListResultSchema = z.object({ hosts: z.array(HostListEntrySchema) });
 export type HostListResult = z.infer<typeof HostListResultSchema>;
 
+/** The longest tool id a host's link carries. */
+const MAX_LINK_TOOL_ID_CHARS = 128;
+
 /** A call names exactly one target: one of the host's projects, or a throwaway agent (#14444). */
 function namesOneTarget(args: { projectId?: string; throwaway?: true }): boolean {
   return (args.projectId === undefined) !== (args.throwaway === undefined);
@@ -327,10 +330,12 @@ export const HostCallArgsSchema = z
       .describe(
         "Instead of projectId: a short-lived agent this session owns, in a host folder. Tools: throwaway.launch, status, output, sendCommand, sendKeys, close."
       ),
+    // Longer on this machine, where a project plugin's action id carries its
+    // 64-character project id (#18153); a host's link still takes 128.
     tool: z
       .string()
       .min(1)
-      .max(128)
+      .max(256)
       .describe("A Daintree tool on the host, by id. Search the host's own tools through this."),
     args: z.record(z.string(), z.unknown()).optional().describe("The tool's own arguments."),
     callId: idSchema
@@ -345,6 +350,7 @@ export const HostCallArgsSchema = z
   // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
   .refine((args) => args.callId === undefined || args.newCallId === undefined)
   .refine(namesOneTarget)
+  .refine((args) => args.hostId === "local" || args.tool.length <= MAX_LINK_TOOL_ID_CHARS)
   // A throwaway target takes only its own tools, with their own arguments.
   .refine(
     (args) =>
