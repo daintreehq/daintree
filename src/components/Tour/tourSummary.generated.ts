@@ -3,9 +3,9 @@ import type { TourPlatform } from "@daintreehq/tour";
 
 /** The tour's length in whole minutes on each platform, from the same timings the player uses. */
 export const TOUR_MINUTES: Readonly<Record<TourPlatform, number>> = {
-  darwin: 9,
-  linux: 9,
-  win32: 8,
+  darwin: 6,
+  linux: 6,
+  win32: 6,
 };
 
 /** Every chapter in play order; `platforms` limits one to the platforms it plays on. */
