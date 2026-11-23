@@ -497,6 +497,22 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  it("arms no wake for a watch its own listener released during publish", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [claudeReading({ resetsAt: START + TICK / 2 })]),
+    ];
+    let release: (() => void) | null = null;
+    h.watch.onChange((readings) => {
+      if (readings.length > 0) release?.();
+    });
+    release = h.watch.acquire();
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+    h.watch.dispose();
+  });
+
   it("withdraws its readings while a pty host doesn't answer, and shows them again once it does", async () => {
     const h = harness();
     h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };

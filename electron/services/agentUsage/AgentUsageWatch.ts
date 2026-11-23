@@ -370,6 +370,8 @@ export class AgentUsageWatch {
     const now = this.deps.now();
     const shown = agentUsageWithSuccessors(readings, now);
     this.publish(shown);
+    // A listener that released the last hold during publish stopped the watch.
+    if (generation !== this.generation) return;
     this.wakeAtNextReset(shown, now);
   }
 
