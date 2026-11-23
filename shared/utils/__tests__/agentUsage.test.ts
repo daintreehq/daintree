@@ -111,9 +111,9 @@ describe("tightestAgentUsage", () => {
     expect(tightestAgentUsage([old], (r) => r, NOW)).toEqual([]);
     // Observed again, the same limit shows for another full span.
     const again = { ...old, observedAt: NOW - 1 };
-    expect(tightestAgentUsage([again, fresh], (r) => r, NOW + AGENT_USAGE_SHOWN_FOR_MS - 2)).toEqual(
-      [again]
-    );
+    expect(
+      tightestAgentUsage([again, fresh], (r) => r, NOW + AGENT_USAGE_SHOWN_FOR_MS - 2)
+    ).toEqual([again]);
   });
 
   it("ages out a reading that names no reset as well", () => {
