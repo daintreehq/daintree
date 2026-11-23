@@ -11,7 +11,8 @@ import {
   tourKeycaps,
   tourShortcutHint,
 } from "../tourKeys";
-import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
+import { playableChapters, TOUR_PLATFORMS } from "../tourPlatform";
+import { TOUR_CHAPTER_CATALOG, TOUR_MINUTES } from "../tourSummary.generated";
 import { resolveChapterTiming, resolveTourTimings, tourMinutes } from "../tourTiming";
 import { TOUR_TIMING_MANIFEST } from "../tourTiming.generated";
 
@@ -24,11 +25,12 @@ const SCENE_FILES: Record<string, string> = {
   state: "StateScene.tsx",
   fleet: "FleetScene.tsx",
   files: "FilesScene.tsx",
-  context: "ContextScene.tsx",
   preview: "PreviewScene.tsx",
   github: "GitHubScene.tsx",
-  review: "ReviewScene.tsx",
   pilot: "PilotScene.tsx",
+  hosts: "HostsScene.tsx",
+  canopy: "CanopyScene.tsx",
+  decisions: "DecisionsScene.tsx",
   assistant: "AssistantScene.tsx",
   palette: "PaletteScene.tsx",
   outro: "OutroScene.tsx",
@@ -194,8 +196,15 @@ describe("tour content", () => {
       );
       // Captions are the narration as voiced, word for word.
       expect(entry.captions.map((caption) => caption.text).join(" "), key).toBe(parsed.text);
+      // One voice for the whole tour, each take in that voice's CDN folder.
+      const voice = entry.voice ?? TOUR_TIMING_MANIFEST.voice;
+      expect(voice, `${key} is in another voice — run npm run tour:audio`).toBe(
+        TOUR_TIMING_MANIFEST.voice
+      );
       expect(entry.audioUrl, `${key} has no published audio`).toMatch(
-        /^https:\/\/cdn\.daintree\.org\//
+        new RegExp(
+          `^https://cdn\\.daintree\\.org/tour/${voice}/${key.replace(".", "\\.")}-[0-9a-f]{12}\\.ogg$`
+        )
       );
     }
     // Nothing left over from a chapter or keyboard that no longer exists.
@@ -208,17 +217,24 @@ describe("tour content", () => {
 // The invitation renders at startup and reads only the registered summary, so
 // the summary has to say what the player would.
 describe("tour summary", () => {
-  it("quotes the length the player's timings add up to", () => {
-    expect(TOUR_MINUTES, "the tour summary is stale — run npm run tour:audio").toBe(
-      Math.max(...TOUR_KEYBOARDS.map((keyboard) => tourMinutes(resolveTourTimings(keyboard))))
+  it.each(TOUR_PLATFORMS)("quotes the length %s's cut adds up to", (platform) => {
+    const keyboard = platform === "darwin" ? "mac" : "pc";
+    expect(TOUR_MINUTES[platform], "the tour summary is stale — run npm run tour:audio").toBe(
+      tourMinutes(resolveTourTimings(keyboard, playableChapters(TOUR_CHAPTERS, platform)))
     );
   });
 
-  it("lists the chapter titles in play order", () => {
+  it("lists every chapter in play order, with the platforms it plays on", () => {
     expect(
-      TOUR_CHAPTER_TITLES,
+      TOUR_CHAPTER_CATALOG,
       "the tour summary is stale — run npm run tour:audio -- --no-upload for a title-only change"
-    ).toEqual(TOUR_CHAPTERS.map((chapter) => chapter.title));
+    ).toEqual(
+      TOUR_CHAPTERS.map(({ id, title, platforms }) => ({
+        id,
+        title,
+        ...(platforms ? { platforms } : {}),
+      }))
+    );
   });
 
   // One static import of these anywhere below a startup module pulls the

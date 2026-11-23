@@ -306,7 +306,7 @@ daintree-plugin tour voice [--tour <id>] [--narration <file>] [--voice <id>] [--
 | --- | --- | --- |
 | `--tour` | The only tour | Needed when the plugin declares more than one. |
 | `--narration` | `tours/<tourId>.narration.json` |  |
-| `--voice` | `Simon` | The Daintree Tour's voice; keep it unless you have a reason not to. |
+| `--voice` | `Simon` | Articulate and steady, made for technical tutorials; keep it unless you have a reason not to. |
 | `--model` | `inworld-tts-2` |  |
 | `--only` | All chapters | Comma-separated chapter ids. |
 | `--force` | Off | Re-voice chapters whose narration is unchanged. |

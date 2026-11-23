@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { DAINTREE_TOUR_ID } from "@shared/utils/tourIds";
 import type { TourRegistration } from "../tourDefinition";
-import { TOUR_CHAPTER_TITLES, TOUR_MINUTES } from "../tourSummary.generated";
+import { currentTourPlatform, playableChapters } from "../tourPlatform";
+import { TOUR_CHAPTER_CATALOG, TOUR_MINUTES } from "../tourSummary.generated";
 import { createPluginTourRegistration } from "../pluginTours";
 import {
   getRegisteredTourIdsSnapshot,
@@ -19,11 +20,14 @@ const registration = (id: string): TourRegistration => ({
 describe("tourRegistry", () => {
   it("registers the Daintree tour like any other, summary first", () => {
     const daintree = getTour(DAINTREE_TOUR_ID)!;
+    const chapters = playableChapters(TOUR_CHAPTER_CATALOG, currentTourPlatform());
     expect(daintree.summary).toEqual({
       id: DAINTREE_TOUR_ID,
       title: "Daintree Tour",
-      minutes: TOUR_MINUTES,
-      chapterTitles: TOUR_CHAPTER_TITLES,
+      minutes: TOUR_MINUTES[currentTourPlatform()],
+      chapterTitles: chapters.map((chapter) => chapter.title),
+      chapterIds: chapters.map((chapter) => chapter.id),
+      version: "2",
     });
   });
 
@@ -52,7 +56,10 @@ describe("tourRegistry", () => {
   it("loads the full Daintree definition only on request", async () => {
     const tour = await getTour(DAINTREE_TOUR_ID)!.load();
     expect(tour.id).toBe(DAINTREE_TOUR_ID);
-    expect(tour.chapters.map((chapter) => chapter.title)).toEqual(TOUR_CHAPTER_TITLES);
+    expect(tour.chapters.map((chapter) => chapter.id)).toEqual(
+      getTour(DAINTREE_TOUR_ID)!.summary.chapterIds
+    );
+    expect(tour.version).toBe(getTour(DAINTREE_TOUR_ID)!.summary.version);
     expect(tour.chapters.every((chapter) => typeof chapter.scene === "function")).toBe(true);
     expect(tour.resolveTimings("mac")).toHaveLength(tour.chapters.length);
   });
