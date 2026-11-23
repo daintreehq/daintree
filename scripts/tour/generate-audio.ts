@@ -1,7 +1,7 @@
 /**
  * Voices the Daintree Tour and publishes the narration to the CDN.
  *
- *   npm run tour:audio                          # Inworld TTS for stale chapters
+ *   npm run tour:audio                          # ElevenLabs TTS for stale chapters
  *   npm run tour:audio -- --force               # re-voice every chapter
  *   npm run tour:audio -- --recordings <dir>    # use your own recordings
  *   npm run tour:audio -- --recordings <dir> --stt-model groq/whisper-large-v3
@@ -19,11 +19,11 @@
  * Word timestamps come from Inworld speech-to-text, so every scene cue lands
  * on the word you actually spoke — no hand-timing.
  *
- * The Inworld calls, encoding, duration and alignment are the plugin CLI's own
- * (`daintree-plugin tour voice|align`); only the chapters, the keyboard variants
- * and publishing to R2 are ours.
+ * Transcription, encoding, duration and alignment are the plugin CLI's own
+ * (`daintree-plugin tour align`); the ElevenLabs voice, the chapters, the
+ * keyboard variants and publishing to R2 are ours.
  *
- * Env: INWORLD_API_KEY (TTS and STT), CLOUDFLARE_API_TOKEN
+ * Env: ELEVENLABS_API_KEY (TTS), INWORLD_API_KEY (recordings' STT), CLOUDFLARE_API_TOKEN
  * (upload, via wrangler; CLOUDFLARE_ACCOUNT_ID if the token spans accounts).
  */
 import { execFileSync } from "node:child_process";
@@ -42,7 +42,6 @@ import { encodeOggOpus, oggOpusDuration } from "../../packages/daintree-plugin/s
 import {
   DEFAULT_STT_MODEL,
   inworldKeyFromEnv,
-  synthesizeSpeech,
   transcribeSpeech,
 } from "../../packages/daintree-plugin/src/tour/inworld";
 import { timeChapter } from "../../packages/daintree-plugin/src/tour/timing";
@@ -50,12 +49,13 @@ import { TOUR_CHAPTERS } from "../../src/components/Tour/tourChapters";
 import { narrationVariants, TOUR_KEYBOARDS } from "../../src/components/Tour/tourKeys";
 import { resolveTourTimings } from "../../src/components/Tour/tourTiming";
 import { TOUR_TIMING_MANIFEST } from "../../src/components/Tour/tourTiming.generated";
+import { elevenLabsKeyFromEnv, synthesizeElevenLabs } from "./elevenlabs";
 
-// Inworld's "Simon" — articulate and steady, made for technical tutorials —
-// read plainly, the way the tour was first voiced. The slug names its CDN
-// folder and also marks chapters as current, so it changes with the voice.
-const INWORLD_VOICE = "Simon";
-const INWORLD_VOICE_SLUG = "simon";
+// A relaxed, conversational ElevenLabs voice on Eleven v4. The slug names its
+// CDN folder and also marks chapters as current, so it changes with the voice.
+const ELEVENLABS_VOICE_ID = "Mfk8L0DQ8Aj3aRtDY3oo";
+const ELEVENLABS_MODEL = "eleven_v4";
+const VOICE_SLUG = `elevenlabs-${ELEVENLABS_VOICE_ID}`;
 const BUCKET = "daintree-assets";
 const CDN_ORIGIN = "https://cdn.daintree.org";
 const MANIFEST_PATH = resolve(
@@ -273,14 +273,17 @@ async function voiceVariant(
       model: args.sttModel,
     });
   } else {
-    console.log(`→ ${key}: voicing with ${INWORLD_VOICE_SLUG}`);
-    const result = await synthesizeSpeech({
-      apiKey: inworldKeyFromEnv(),
+    console.log(`→ ${key}: voicing with ${VOICE_SLUG}`);
+    const result = await synthesizeElevenLabs({
+      apiKey: elevenLabsKeyFromEnv(),
       text: parsed.spoken,
-      voice: INWORLD_VOICE,
+      voiceId: ELEVENLABS_VOICE_ID,
+      modelId: ELEVENLABS_MODEL,
     });
+    const mp3 = join(workDir, `${key}.tts.mp3`);
+    writeFileSync(mp3, result.audio);
     encoded = join(workDir, `${key}.tts.ogg`);
-    writeFileSync(encoded, result.audio);
+    await encodeOggOpus(mp3, encoded);
     alignment = result.alignment;
   }
 
@@ -332,7 +335,7 @@ async function main(): Promise<void> {
   }
   if (args.upload) requireEnv("CLOUDFLARE_API_TOKEN");
 
-  const voice = args.recordings ? "recorded" : `inworld-${INWORLD_VOICE_SLUG}`;
+  const voice = args.recordings ? "recorded" : VOICE_SLUG;
   const workDir = mkdtempSync(join(tmpdir(), "daintree-tour-"));
   const manifest: TourTimingManifest = {
     version: 1,
