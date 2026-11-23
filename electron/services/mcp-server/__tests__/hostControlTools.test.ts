@@ -407,6 +407,52 @@ describe("runHostControlTool (#13493)", () => {
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
+  it("arms a plugin notification watch on this machine, and reads one only by its id (#18154)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const id = "0b7a0000-0000-4000-8000-000000000001";
+    const accepted = [
+      { operation: "arm", pluginNotifications: true },
+      {
+        operation: "arm",
+        pluginNotifications: true,
+        projectId: "p1",
+        pluginId: "acme.stages",
+        expiresInSeconds: 600,
+        note: "gates",
+      },
+      { operation: "read", notificationId: id },
+    ];
+    for (const args of accepted) await runHostControlTool("host.watch", args, access);
+    const refused = await Promise.all(
+      [
+        // Plugins' notifications are this machine's: no host, and one kind of condition.
+        { operation: "arm", pluginNotifications: true, hostId: "h" },
+        { operation: "arm", pluginNotifications: true, agentsWaiting: true },
+        { operation: "arm", pluginNotifications: true, waitingReasons: ["approval"] },
+        { operation: "arm", pluginNotifications: true, connection: "connected" },
+        { operation: "arm", pluginNotifications: true, cpuIdleCoresAtLeast: 2 },
+        { operation: "arm", pluginNotifications: true, notificationId: id },
+        // Its plugin filter belongs to it alone.
+        { operation: "arm", agentsWaiting: true, pluginId: "acme.stages" },
+        { operation: "arm", hostId: "h", connection: "connected", pluginId: "acme.stages" },
+        { operation: "list", pluginId: "acme.stages" },
+        { operation: "cancel", watchId: "hw-1", notificationId: id },
+        // A read takes its id and nothing else.
+        { operation: "read" },
+        { operation: "read", notificationId: id, watchId: "hw-1" },
+        { operation: "read", notificationId: id, hostId: "h" },
+        { operation: "read", notificationId: id, pluginNotifications: true },
+        { operation: "read", notificationId: id, projectId: "p1" },
+      ].map((args) => runHostControlTool("host.watch", args, access))
+    );
+    uninstall();
+    expect(runtime.watch).toHaveBeenCalledTimes(accepted.length);
+    expect(runtime.watch).toHaveBeenCalledWith("hub", accepted[2]);
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
   it("refuses with no access at all", async () => {
     await expect(runHostControlTool("host.list", {}, undefined)).resolves.toMatchObject({
       ok: false,

@@ -6,6 +6,8 @@ import type { AgentWaitingListener } from "../../metrics/agentWaiting.js";
 import type { AgentDirectory } from "../../../../shared/types/agentDirectory.js";
 import type { AgentsAnswer } from "../linkMethods.js";
 import type { HostWatchResult } from "../../../../shared/types/hostControl.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
+import { AssistantPluginNotifications } from "../../../services/assistantPluginNotifications.js";
 
 const RUN: OpenRun = {
   projectId: "proj-1",
@@ -246,5 +248,99 @@ describe("HostCallRuntime host.watch on agents (#16188)", () => {
     expect(agentListener).not.toBeNull();
     runtime.endHelpSession("a");
     expect(agentListener).toBeNull();
+  });
+});
+
+describe("HostCallRuntime host.watch on plugins' notifications (#18154)", () => {
+  const GLOBAL_RUN: OpenRun = {
+    projectId: GLOBAL_ASSISTANT_ID,
+    slot: 0,
+    sessionId: "g",
+    terminalId: "t-g",
+    launchGeneration: 7,
+  };
+  let runs: Map<string, OpenRun>;
+  let queued: Array<{ lane: { helpSessionId: string }; wake: LaneWake }>;
+  let store: AssistantPluginNotifications;
+  let runtime: HostCallRuntime;
+
+  const make = (withStore: boolean) =>
+    new HostCallRuntime({
+      getSessionLane: (id) => {
+        const run = runs.get(id);
+        return run ? { projectId: run.projectId, slot: run.slot } : null;
+      },
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => null,
+      hosts: () => [],
+      inLocalView: () => true,
+      controlEnabled: () => true,
+      connect: vi.fn(async () => undefined),
+      queueNotice: (lane, wake) => queued.push({ lane, wake }),
+      ...(withStore ? { pluginNotifications: async () => store } : {}),
+      newId: () => "00000000-0000-4000-8000-000000000001",
+    });
+
+  const publish = (notificationId: string) =>
+    store.publish({
+      notificationId,
+      pluginId: "acme",
+      pluginName: "Acme",
+      projectId: "proj-1",
+      dedupeKey: null,
+      severity: "info",
+      createdAt: 1,
+      title: "TITLE",
+      body: "BODY",
+    });
+
+  beforeEach(() => {
+    runs = new Map([
+      ["a", { ...RUN }],
+      ["g", { ...GLOBAL_RUN }],
+    ]);
+    queued = [];
+    store = new AssistantPluginNotifications({ mayHear: () => true, now: () => 1 });
+    runtime = make(true);
+  });
+
+  afterEach(() => {
+    runtime.dispose();
+  });
+
+  it("arms, hands over and reads through the calling run, and offers neither with no store", async () => {
+    publish("11111111-1111-4111-8111-000000000001");
+    const armed = await runtime.watch("a", { operation: "arm", pluginNotifications: true });
+    expect(armed).toMatchObject({
+      ok: true,
+      value: { outcome: "ok", armed: true, notifications: { matches: [{ projectId: "proj-1" }] } },
+    });
+    const read = await runtime.watch("a", {
+      operation: "read",
+      notificationId: "11111111-1111-4111-8111-000000000001",
+    });
+    expect(read).toMatchObject({ ok: true, value: { notification: { body: "BODY" } } });
+    await expect(
+      runtime.watch("g", {
+        operation: "read",
+        notificationId: "11111111-1111-4111-8111-000000000001",
+      })
+    ).resolves.toMatchObject({ ok: true, value: { outcome: "not_found" } });
+
+    runtime.dispose();
+    runtime = make(false);
+    await expect(
+      runtime.watch("a", { operation: "arm", pluginNotifications: true })
+    ).resolves.toMatchObject({ ok: true, value: { outcome: "unsupported", armed: false } });
+  });
+
+  it("passes over a global session once it stands down, as its caller says", async () => {
+    await runtime.watch("g", { operation: "arm", pluginNotifications: true });
+    runs.set("g", { ...GLOBAL_RUN, standby: true });
+    publish("11111111-1111-4111-8111-000000000002");
+    expect(queued).toEqual([]);
+    runs.set("g", { ...GLOBAL_RUN });
+    publish("11111111-1111-4111-8111-000000000003");
+    expect(queued.map((entry) => entry.lane.helpSessionId)).toEqual(["g"]);
   });
 });

@@ -712,3 +712,70 @@ describe("delivery order and paging (#13818)", () => {
     );
   });
 });
+
+describe("a notification for an assistant (#18154)", () => {
+  it("offers only a marked one with a project, under the id the plugin got, once it passed the person's gates", async () => {
+    const deps = makeDeps();
+    const publish = vi.fn();
+    deps.publishAssistantNotification = publish;
+    const { host } = createHost(deps, PLUGIN_ID, BOUND);
+
+    await host.notify({ title: "Run blocked", body: "Needs criteria", dedupeKey: "run-42" });
+    expect(publish).not.toHaveBeenCalled();
+
+    const { id } = await host.notify({
+      title: "Run blocked",
+      body: "Needs criteria",
+      severity: "warning",
+      delivery: "passive",
+      dedupeKey: "run-42",
+      audience: "assistant",
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith({
+      notificationId: id,
+      pluginId: PLUGIN_ID,
+      pluginName: "Acme",
+      projectId: PROJECT_A,
+      dedupeKey: "run-42",
+      severity: "warning",
+      createdAt: expect.any(Number),
+      title: "Run blocked",
+      body: "Needs criteria",
+    });
+    // The person's own row is unchanged by it.
+    expect(lastToast()).toMatchObject({ title: "Acme: Run blocked", priority: "low" });
+
+    const blocked = deps.pluginNotificationsBlocked as unknown as ReturnType<typeof vi.fn>;
+    blocked.mockResolvedValueOnce(true);
+    await host.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing without a project, and a publisher that throws costs the person nothing", async () => {
+    const deps = makeDeps();
+    const publish = vi.fn(() => {
+      throw new Error("boom");
+    });
+    deps.publishAssistantNotification = publish;
+    const unbound = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    await unbound.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(publish).not.toHaveBeenCalled();
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bound = createHost(deps, PLUGIN_ID, BOUND).host;
+    await expect(
+      bound.notify({ title: "shown", body: "b", audience: "assistant" })
+    ).resolves.toEqual({ id: expect.any(String) });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(lastToast()).toMatchObject({ title: "Acme: shown" });
+    warn.mockRestore();
+  });
+
+  it("refuses any other audience", async () => {
+    const { host } = createHost(makeDeps(), PLUGIN_ID, BOUND);
+    await expect(
+      host.notify({ title: "t", body: "b", audience: "everyone" as "assistant" })
+    ).rejects.toThrow(/audience/);
+  });
+});

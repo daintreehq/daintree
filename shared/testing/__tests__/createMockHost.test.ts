@@ -433,7 +433,14 @@ describe("createMockHost", () => {
     await expect(host.notify({ title: "t", body: "b", os: true })).rejects.toThrow(
       /PERMISSION_REQUIRED/
     );
+    await expect(
+      host.notify({ title: "t", body: "b", audience: "everyone" as "assistant" })
+    ).rejects.toThrow(/audience/);
     expect(host.notifications).toEqual([]);
+    // One marked for an assistant is a shape the real host takes (#18154).
+    const marked = createMockHost({ pluginId: "acme.demo" });
+    await marked.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(marked.notifications).toHaveLength(1);
 
     const withArgs = (args: unknown) =>
       host.notify({

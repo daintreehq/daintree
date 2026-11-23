@@ -2153,6 +2153,7 @@ const { id } = await host.notify({
   severity: "warning", // "info" | "warning" | "error" — defaults to "info"
   delivery: "active", // "passive" puts it in the inbox only
   target: { worktreeId }, // or { panelId } — the inbox row's Go to source
+  audience: "assistant", // also offer it to one Daintree Assistant watching for plugin notifications
 });
 ```
 
@@ -2171,6 +2172,8 @@ The same silence and project mute as [`showToast`](#showtoast) apply: a call hel
 `dedupeKey` (up to 200 characters) replaces your earlier notification with the same key — its toast, its inbox row and its banner — rather than adding beside it. Keys are scoped to your plugin. The returned `id` is fresh per call and says nothing about which surfaces showed it.
 
 When the project is driven from a window on another machine, that window gets a plain toast with the title and body (in the inbox only for a passive one), and no banner is shown on either machine.
+
+`audience: "assistant"` also offers the notification to a Daintree Assistant, for items a person would otherwise have to pick up: a run stopped at a stage gate, a blocker, a question. It reaches one only in a project where the user turned on **Daintree Assistant can use this plugin's tools** (see [Agent extensions](./agent-extensions.md#the-daintree-assistant)), and only one that is watching for plugin notifications. Each notification goes to one Assistant: one watching that project before one watching every project, one watching your plugin before one that isn't, then the one that has waited longest. When none is watching, it waits, for up to 30 minutes, for the next Assistant that starts to. The Assistant is told which plugin raised it, for which project, its `dedupeKey`, severity and time, never the title and body: it reads those with a call of its own, as your plugin's words, and acts on them, if at all, through your plugin's own tools. Everything else is unchanged, including the person's toast, inbox row and banner, and a call the person's silence, mute or your rate budget holds back reaches no Assistant either. The notification needs a project: a project plugin's own, or for an installed plugin a `worktreeId` target; without one it reaches no Assistant. Only this machine's Assistants hear it.
 
 ## `tasks` — long-running work
 
