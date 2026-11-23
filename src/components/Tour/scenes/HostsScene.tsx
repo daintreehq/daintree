@@ -42,12 +42,13 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "add", offset: 0.4, at: { anchor: "add-host" }, click: true },
   { cue: "ssh", offset: -0.4, at: { anchor: "add-host-target", dx: 30, dy: -3 } },
   // The real dialog does nothing with an address until Check host is pressed,
-  // and a fresh host then takes Review install, Turn on Host mode and Connect,
-  // each from the same footer button.
-  { cue: "install", offset: -0.8, at: { anchor: "add-host-check" } },
-  { cue: "install", offset: -0.3, at: { anchor: "add-host-check" }, click: true },
-  { cue: "install", offset: 0.2, at: { anchor: "add-host-check" }, click: true },
-  { cue: "install", offset: 0.65, at: { anchor: "add-host-check" }, click: true },
+  // and a fresh host then takes Review install, Install on build-box, Turn on
+  // Host mode and Connect, each from the same footer button.
+  { cue: "install", offset: -1.0, at: { anchor: "add-host-check" } },
+  { cue: "install", offset: -0.5, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: -0.1, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: 0.3, at: { anchor: "add-host-check" }, click: true },
+  { cue: "install", offset: 0.7, at: { anchor: "add-host-check" }, click: true },
   { cue: "install", offset: 1.1, at: { anchor: "add-host-check" }, click: true },
   // The cloud is the other way in: Add host again, then its own entry.
   { cue: "cloud", offset: -0.9, at: { anchor: "add-host" } },
@@ -57,6 +58,9 @@ export const CURSOR: readonly CursorStep[] = [
   // With no account yet, the cloud dialog's first step is connecting one.
   { cue: "cloud", offset: 1.2, at: { anchor: "cloud-connect-account" } },
   { cue: "cloud", offset: 1.7, at: { anchor: "cloud-connect-account" }, click: true },
+  // Connecting asks for the provider's API token and its own Connect account.
+  { cue: "cloud", offset: 2.6, at: { anchor: "cloud-connect-confirm" } },
+  { cue: "cloud", offset: 3.1, at: { anchor: "cloud-connect-confirm" }, click: true },
   { cue: "provision", offset: -0.7, at: { anchor: "cloud-create" } },
   { cue: "provision", offset: -0.2, at: { anchor: "cloud-create" }, click: true },
   { cue: "chip", at: { anchor: "host-chip" } },
@@ -130,11 +134,13 @@ function FooterButton({
 function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
   // Opened a second time, for the cloud, it starts empty. Each stage waits on
   // its own press of the footer button, whose label names the next one.
-  const checking = useCue("install", -0.25) && !again;
-  const checked = useCue("install", 0.05) && !again;
-  const installing = useCue("install", 0.25) && !again;
+  const checking = useCue("install", -0.45) && !again;
+  const checked = useCue("install", -0.2) && !again;
+  // Review install shows the plan, which waits for Install on build-box.
+  const reviewing = useCue("install", -0.05) && !again;
+  const installing = useCue("install", 0.35) && !again;
   const installed = useCue("install", 0.55) && !again;
-  const hostMode = useCue("install", 0.7) && !again;
+  const hostMode = useCue("install", 0.75) && !again;
   const hostModeOn = useCue("install", 0.95) && !again;
   const connected = useCue("install", 1.15) && !again;
   const step = (at: boolean, done: boolean) => (done ? "done" : at ? "running" : "todo");
@@ -142,9 +148,11 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
     ? "Connect"
     : installed
       ? "Turn on Host mode"
-      : checked
-        ? "Review install"
-        : "Check host";
+      : reviewing && !installing
+        ? "Install on build-box"
+        : checked
+          ? "Review install"
+          : "Check host";
   return (
     <div
       className={cn(
@@ -167,9 +175,9 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
           <MockTyping
             cue="ssh"
             text={SSH_TARGET}
-            delay={0.2}
-            charsPerSecond={16}
-            finishBy={{ cue: "install", offset: -0.7 }}
+            delay={0}
+            charsPerSecond={22}
+            finishBy={{ cue: "install", offset: -1.1 }}
           />
         )}
       </div>
@@ -180,6 +188,14 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
         <InstallStep label="Host mode" state={step(hostMode, hostModeOn)} />
         <InstallStep label="Connect" state={step(connected, connected)} />
       </div>
+      <span
+        className={cn(
+          "pl-0.5 text-3xs text-text-secondary",
+          reveal(reviewing && !installed, "none")
+        )}
+      >
+        Installs Daintree in your home folder on build-box
+      </span>
       <span className="flex-1" />
       <div className="flex items-center gap-1.5">
         <FooterButton anchor="add-host-cloud">Create a cloud machine instead</FooterButton>
@@ -196,7 +212,15 @@ function AddHostDialog({ open, again }: { open: boolean; again: boolean }) {
  * The cloud machine dialog. With no account connected it asks for one first,
  * as the real one does; then the provider, account and name, and Create and connect.
  */
-function CloudMachineDialog({ open, account }: { open: boolean; account: boolean }) {
+function CloudMachineDialog({
+  open,
+  connecting,
+  account,
+}: {
+  open: boolean;
+  connecting: boolean;
+  account: boolean;
+}) {
   return (
     <div
       className={cn(
@@ -206,7 +230,10 @@ function CloudMachineDialog({ open, account }: { open: boolean; account: boolean
     >
       <span className="text-2xs font-semibold text-text-primary">New cloud machine</span>
       <div
-        className={cn("absolute inset-x-2.5 top-8 flex flex-col gap-2", reveal(!account, "none"))}
+        className={cn(
+          "absolute inset-x-2.5 top-8 flex flex-col gap-2",
+          reveal(!account && !connecting, "none")
+        )}
       >
         <span className="text-3xs text-text-secondary">
           Connect a cloud provider account first. Daintree uses its API key to create, start and
@@ -222,6 +249,25 @@ function CloudMachineDialog({ open, account }: { open: boolean; account: boolean
               Connect {provider} account
             </span>
           ))}
+        </div>
+      </div>
+      <div
+        className={cn(
+          "absolute inset-x-2.5 top-8 flex flex-col gap-2",
+          reveal(connecting && !account, "none")
+        )}
+      >
+        <span className="text-3xs text-text-secondary">Connect DigitalOcean account</span>
+        <div className="flex flex-col gap-1">
+          <span className="text-3xs font-medium text-text-secondary">API token</span>
+          <span className="flex h-5 items-center rounded-md border border-border-interactive bg-surface-input px-2 font-mono text-3xs text-text-primary">
+            dop_v1_••••••••••••
+          </span>
+        </div>
+        <div className="flex justify-end">
+          <FooterButton anchor="cloud-connect-confirm" primary>
+            Connect account
+          </FooterButton>
         </div>
       </div>
       <div className={cn("flex flex-col gap-2", reveal(account, "none"))}>
@@ -270,8 +316,11 @@ function SettingsDialog({ open }: { open: boolean }) {
   const sshAdded = useCue("install", 1.3);
   const addingAgain = useCue("cloud", -0.2);
   const cloudForm = useCue("cloud", 0.8);
-  const accountConnected = useCue("cloud", 1.9);
+  const connectingAccount = useCue("cloud", 1.9);
+  const accountConnected = useCue("cloud", 3.3);
   const provisioning = useCue("provision");
+  // A new cloud machine runs Host setup before it can be used.
+  const settingUp = useCue("provision", 0.8);
   const provisioned = useCue("provision", 1.6);
   const sshOpen = (adding && !sshAdded) || (addingAgain && !cloudForm);
 
@@ -343,14 +392,22 @@ function SettingsDialog({ open }: { open: boolean }) {
                 <span className="text-3xs text-text-secondary">{detail}</span>
                 <span className="flex-1" />
                 <span className="text-3xs text-text-secondary">
-                  {i === 1 && !provisioned ? "Creating…" : "Connected"}
+                  {i === 1 && !provisioned
+                    ? settingUp
+                      ? "Setting up host…"
+                      : "Creating…"
+                    : "Connected"}
                 </span>
               </div>
             ))}
           </div>
         </div>
         <AddHostDialog open={sshOpen} again={addingAgain} />
-        <CloudMachineDialog open={cloudForm && !provisioning} account={accountConnected} />
+        <CloudMachineDialog
+          open={cloudForm && !provisioning}
+          connecting={connectingAccount}
+          account={accountConnected}
+        />
       </div>
     </div>
   );
@@ -435,11 +492,12 @@ export function HostsScene() {
   const hostsCue = useCue("hosts");
   const sshCue = useCue("ssh");
   const installCue = useCue("install");
-  const pressing = useCue("install", -0.8);
+  const pressing = useCue("install", -1.0);
   const sshAdded = useCue("install", 1.3);
   const addingAgain = useCue("cloud", -0.2);
   const cloudForm = useCue("cloud", 0.8);
-  const accountConnected = useCue("cloud", 1.9);
+  const connectingAccount = useCue("cloud", 1.9);
+  const accountConnected = useCue("cloud", 3.3);
   const provisionCue = useCue("provision");
   const chip = useCue("chip");
   const settingsClosed = useCue("chip", -0.4);
@@ -487,19 +545,21 @@ export function HostsScene() {
                 ? ["host-row-cloud"]
                 : settings && accountConnected
                   ? ["cloud-create"]
-                  : settings && cloudForm
-                    ? ["cloud-connect-account"]
-                    : settings && addingAgain
-                      ? ["add-host-cloud"]
-                      : settings && sshAdded
-                        ? ["host-row-ssh"]
-                        : settings && pressing
-                          ? ["add-host-check"]
-                          : settings && (sshCue || installCue)
-                            ? ["add-host-target"]
-                            : settings && hostsCue
-                              ? ["settings-nav-hosts"]
-                              : [];
+                  : settings && connectingAccount
+                    ? ["cloud-connect-confirm"]
+                    : settings && cloudForm
+                      ? ["cloud-connect-account"]
+                      : settings && addingAgain
+                        ? ["add-host-cloud"]
+                        : settings && sshAdded
+                          ? ["host-row-ssh"]
+                          : settings && pressing
+                            ? ["add-host-check"]
+                            : settings && (sshCue || installCue)
+                              ? ["add-host-target"]
+                              : settings && hostsCue
+                                ? ["settings-nav-hosts"]
+                                : [];
 
   return (
     <MockApp

@@ -222,6 +222,7 @@ export function GitHubScene() {
           branch={BRANCH}
           files={FILES}
           selected={diffOpen && !diffClosed ? (nextFile ? 1 : 0) : -1}
+          lastShown={nextFile ? 1 : 0}
           message={
             typing ? (
               <MockTyping

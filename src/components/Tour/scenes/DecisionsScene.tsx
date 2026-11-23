@@ -41,11 +41,12 @@ function DecisionsMark({ className }: { className?: string }) {
 export const CURSOR: readonly CursorStep[] = [
   { cue: "enable", at: { anchor: "decisions-toggle" } },
   { cue: "enable", offset: 0.4, at: { anchor: "decisions-toggle" }, click: true },
-  // Turning it on asks for the relay and a phone, each set up from its own control.
+  // Turning it on asks for the relay and a phone: Guided deploy for one, a QR
+  // code to scan for the other.
   { cue: "enable", offset: 0.75, at: { anchor: "setup-relay" } },
   { cue: "enable", offset: 1.2, at: { anchor: "setup-relay" }, click: true },
-  { cue: "enable", offset: 1.5, at: { anchor: "setup-pair" } },
-  { cue: "enable", offset: 1.95, at: { anchor: "setup-pair" }, click: true },
+  { cue: "enable", offset: 1.55, at: { anchor: "setup-pair" } },
+  { cue: "enable", offset: 2.0, at: { anchor: "setup-pair" }, click: true },
   { cue: "answer", at: { anchor: "phone-answer" } },
   { cue: "answer", offset: 0.5, at: { anchor: "phone-answer" }, click: true },
   { cue: "inbox", at: { anchor: "decisions-inbox" } },
@@ -55,47 +56,81 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "inbox", offset: 1.1, at: { anchor: "inbox-history" }, click: true },
 ];
 
-/** A setup step that turns from to-do to done. */
-/** A setup control that turns from to-do to done once it's pressed. */
+/** A setup row: what it needs, its control, then done once that control's flow finishes. */
 function SetupStep({
   anchor,
   icon: Icon,
   label,
+  action,
+  busy,
+  busyLabel,
   done,
   doneLabel,
 }: {
   anchor: string;
   icon: typeof Cloud;
   label: string;
+  action: string;
+  busy: boolean;
+  busyLabel: string;
   done: boolean;
   doneLabel: string;
 }) {
   return (
     <span className="flex items-center gap-1.5 text-3xs text-text-secondary">
       <Icon className="size-2.5" aria-hidden="true" />
-      <span
-        data-tour-anchor={anchor}
-        className={cn(
-          "rounded-sm",
-          done ? "text-text-primary" : "border border-border-subtle px-1.5 py-px text-text-primary"
-        )}
-      >
-        {done ? doneLabel : label}
-      </span>
-      {done && <Check className="size-2.5 text-text-primary" aria-hidden="true" />}
+      <span className={done ? "text-text-primary" : undefined}>{done ? doneLabel : label}</span>
+      <span className="flex-1" />
+      {done ? (
+        <span data-tour-anchor={anchor} className="flex">
+          <Check className="size-2.5 text-text-primary" aria-hidden="true" />
+        </span>
+      ) : (
+        <span
+          data-tour-anchor={anchor}
+          className="rounded-sm border border-border-subtle px-1.5 py-px text-text-primary"
+        >
+          {busy ? busyLabel : action}
+        </span>
+      )}
     </span>
+  );
+}
+
+/** A flash of the pairing dialog's QR code, scanned from the phone. */
+function PairingQr({ visible }: { visible: boolean }) {
+  return (
+    <div
+      className={cn(
+        "absolute right-3 bottom-3 flex flex-col items-center gap-1 rounded-md border border-border-strong bg-surface-panel p-1.5",
+        reveal(visible, "none")
+      )}
+    >
+      <span className="grid size-10 grid-cols-5 gap-px">
+        {[1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1].map(
+          (on, i) => (
+            <span key={i} className={on ? "bg-text-primary" : "bg-transparent"} />
+          )
+        )}
+      </span>
+      <span className="text-3xs text-text-secondary">Scan with your phone</span>
+    </div>
   );
 }
 
 function SettingsDialog({
   open,
   on,
+  deploying,
   relayed,
+  pairing,
   paired,
 }: {
   open: boolean;
   on: boolean;
+  deploying: boolean;
   relayed: boolean;
+  pairing: boolean;
   paired: boolean;
 }) {
   return (
@@ -140,18 +175,25 @@ function SettingsDialog({
         <SetupStep
           anchor="setup-relay"
           icon={Cloud}
-          label="Deploy one to your own Cloudflare account"
+          label="Relay in your own Cloudflare account"
+          action="Guided deploy"
+          busy={deploying}
+          busyLabel="Deploying…"
           done={relayed}
           doneLabel="Relay deployed · your Cloudflare account"
         />
         <SetupStep
           anchor="setup-pair"
           icon={Smartphone}
-          label="Pair a phone"
+          label="A paired phone"
+          action="Pair a phone"
+          busy={pairing}
+          busyLabel="Waiting for scan…"
           done={paired}
           doneLabel="Phone paired"
         />
       </div>
+      <PairingQr visible={pairing && !paired} />
     </div>
   );
 }
@@ -269,8 +311,10 @@ function Inbox({ open, history }: { open: boolean; history: boolean }) {
 export function DecisionsScene() {
   const settingsOpen = useCue("enable", -0.3);
   const on = useCue("enable", 0.5);
-  const relayed = useCue("enable", 1.4);
-  const paired = useCue("enable", 2.15);
+  const deploying = useCue("enable", 1.25);
+  const relayed = useCue("enable", 1.55);
+  const pairing = useCue("enable", 2.05);
+  const paired = useCue("enable", 2.55);
   const asked = useCue("ask");
   // The agent finishes what didn't need the answer, then ends its turn at its prompt.
   const yielded = useCue("ask", 4.5);
@@ -389,7 +433,14 @@ export function DecisionsScene() {
       }
       overlay={
         <>
-          <SettingsDialog open={settings} on={on} relayed={relayed} paired={paired} />
+          <SettingsDialog
+            open={settings}
+            on={on}
+            deploying={deploying}
+            relayed={relayed}
+            pairing={pairing}
+            paired={paired}
+          />
           <Inbox open={inboxOpen} history={historyOpen} />
         </>
       }

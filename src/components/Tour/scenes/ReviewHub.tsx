@@ -57,6 +57,7 @@ export function ReviewHub({
   branch,
   files,
   selected,
+  lastShown = Math.max(selected, 0),
   message,
   confirming,
   pushed,
@@ -66,14 +67,16 @@ export function ReviewHub({
   files: readonly ReviewFile[];
   /** The file whose diff dialog is open, or -1 while none is. */
   selected: number;
+  /** The file the dialog last showed, which it keeps while it fades out after closing. */
+  lastShown?: number;
   /** The commit message as typed so far; null shows the placeholder. */
   message: ReactNode;
   /** Commit & push was pressed: the push confirm names where the branch goes. */
   confirming: boolean;
   pushed: boolean;
 }) {
-  // The dialog keeps its last file while it fades out, so its content doesn't blank mid-exit.
-  const shown = Math.max(selected, 0);
+  // The dialog keeps its last file while it fades out, so its content doesn't jump mid-exit.
+  const shown = selected >= 0 ? selected : lastShown;
   const diff = REVIEW_DIFFS[shown % REVIEW_DIFFS.length]!;
   return (
     <div
