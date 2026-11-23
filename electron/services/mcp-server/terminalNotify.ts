@@ -4,7 +4,10 @@ import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
-import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
+import type {
+  TerminalSubmissionRecord,
+  TerminalSubmissionStop,
+} from "../../../shared/types/terminalSubmission.js";
 import {
   MAX_PENDING_NOTICES_PER_PANE,
   MAX_UNDELIVERED_NOTICES_PER_PANE,
@@ -431,6 +434,12 @@ export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
 export const LANE_WAKE_LONGEST_PENDING_MS = 60 * 60_000;
 /** How often a waiting wake is rechecked: a pause or lease ending raises no event. */
 export const LANE_WAKE_RECHECK_MS = 5_000;
+
+/** Why a Decisions wake ended untyped: the host refused its line before writing any of it (#18157). */
+export const LINE_REFUSED = "line-refused";
+/** Why a wake ended ambiguous with its body in the composer and its Enter held by the host (#18157). */
+export const ENTER_HELD = "enter-held";
+
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
 
 /**
@@ -595,8 +604,12 @@ interface PaneOwner {
   wakeTimer?: ReturnType<typeof setTimeout>;
   droppedCount: number;
   delivery: DeliveryState;
-  /** The line the host may still hold, until its outcome is known. */
-  inHost?: { token: string };
+  /**
+   * The line the host may still hold, until its outcome is known. `follows`:
+   * it went out behind a written line whose turn was still to come
+   * (#16282), which a refusal of this one must not let a notice overtake.
+   */
+  inHost?: { token: string; follows?: true };
   timer?: ReturnType<typeof setTimeout>;
   timerDueAt?: number;
   releaseTimer?: ReturnType<typeof setTimeout>;
@@ -1587,13 +1600,26 @@ export class TerminalNotifyService {
    * Put the notices a line carried back in the queue after the line did not
    * land, except those a later prompt superseded while it was in flight.
    */
-  private requeue(owner: PaneOwner, token: string): void {
+  private requeue(owner: PaneOwner, token: string, stoppedAt?: TerminalSubmissionStop): void {
     owner.fired = owner.fired.filter(
       (entry) => entry.wakeToken !== token || entry.superseded !== true
     );
     for (const entry of owner.fired) if (entry.wakeToken === token) entry.wakeToken = undefined;
-    // A wake is never typed twice: part of its line may have landed.
-    this.finishWakes(owner, token, { kind: "ambiguous", reason: "unconfirmed" });
+    // A wake is never typed twice: part of its line may have landed. Only
+    // where the host saw the line stop does a wake hear more (#18157): a
+    // Decisions answer refused before any of it was written ended untyped,
+    // and its sink types it again; one whose Enter the host held is left to
+    // its sink to find on the screen.
+    for (const [id, entry] of owner.wakes) {
+      if (entry.token !== token) continue;
+      owner.wakes.delete(id);
+      reportWake(
+        entry.wake,
+        stoppedAt === "admission" && entry.wake.kind === "decision"
+          ? { kind: "unavailable", reason: LINE_REFUSED }
+          : { kind: "ambiguous", reason: stoppedAt === "enter" ? ENTER_HELD : "unconfirmed" }
+      );
+    }
   }
 
   /** End the wakes a line carried with `outcome`. */
@@ -2567,7 +2593,7 @@ export class TerminalNotifyService {
     const steer = wakes.find(({ wake }) => wake.kind === "steer")?.wake.steer;
     const composerSend = wakes.find(({ wake }) => wake.kind === "composer")?.wake.composer;
     const deliveredAt = this.now();
-    owner.inHost = { token };
+    owner.inHost = { token, ...(owner.delivery.status === "outstanding" ? { follows: true } : {}) };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
     // A held prompt is never typed into a working pane, even one whose CLI
@@ -2695,12 +2721,25 @@ export class TerminalNotifyService {
         return;
       }
       if (phase === "failed" || phase === "cancelled" || phase === "unknown") {
-        logger.warn("Notice line not written", { pane: owner.terminalId, phase });
+        const stoppedAt = phase === "cancelled" ? info?.submission?.cancelledAt : undefined;
+        logger.warn("Notice line not written", { pane: owner.terminalId, phase, stoppedAt });
+        const follows = owner.inHost?.follows === true;
         owner.inHost = undefined;
-        this.requeue(owner, token);
+        this.requeue(owner, token, stoppedAt);
         owner.droppedCount += dropped;
-        // Part of the line may be sitting in the composer, and a guard refusal
-        // looks the same from here. Neither makes sending again safe.
+        // Refused before any of it was written (#18157): the composer is as
+        // it was, so what the line carried waits only on the pane's gate,
+        // unless it followed a line whose turn is still to come.
+        if (stoppedAt === "admission" && !follows && owner.delivery.token === token) {
+          const waiting = this.hasUndelivered(owner);
+          this.setDelivery(owner, { status: waiting ? "scheduled" : "idle" });
+          if (waiting) this.armRecheck(owner);
+          this.publish(owner);
+          this.maybeDispose(owner);
+          return;
+        }
+        // Part of the line may be sitting in the composer, and an unclassified
+        // stop looks the same from here. Neither makes sending again safe.
         if (owner.delivery.token === token) {
           const turnEnded = owner.delivery.settledSinceDelivery === true;
           this.failDelivery(owner, phase === "failed" ? "unknown" : phase);

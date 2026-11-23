@@ -11,6 +11,11 @@ import {
 } from "@daintreehq/decisions-client";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
+  inputSuggestionRuleFor,
+  observeInputLine,
+} from "../../../shared/utils/terminalInputLine.js";
+import {
+  ENTER_HELD,
   paneNotifyKey,
   type LaneWake,
   type LaneWakeEvidence,
@@ -76,6 +81,22 @@ interface PendingInjection {
   result: Promise<InjectResult>;
 }
 
+/** An answer or follow-up whose body the host left in the composer, its Enter held (#18157). */
+interface StagedBlock {
+  target: TerminalTarget;
+  /** The injection id its staged text carries. */
+  injectionId: string;
+  at: number;
+}
+
+/** What a screen read shows of the run's composer and the markers on screen. */
+interface ScreenRead {
+  /** `empty` takes in a CLI's suggested prompt, which nobody typed. */
+  composer: "empty" | "typed" | "unknown";
+  /** The screen with wrap noise stripped, for a marker search. */
+  text: string;
+}
+
 const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set<UnavailableReason>([
   "host-offline",
   "relaunched",
@@ -90,6 +111,14 @@ const MARKER_SEARCH_ROWS = 2_000;
 const MARKER_ID = /^[A-Za-z0-9_-]{8,80}$/;
 /** Whitespace and the gutter glyphs a TUI paints between the rows of a wrapped line. */
 const WRAP_NOISE = /[\s─-▟⎿⏺|>›❯•●◦·]/gu;
+
+/**
+ * How long a staged answer may wait for its composer to come back empty
+ * before it is left to the person as uncertain (#18157).
+ */
+export const STAGED_WAIT_MS = 30 * 60_000;
+/** Staged answers remembered, oldest dropped first; each is one answer or follow-up. */
+const MAX_STAGED = 256;
 
 const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" };
 const SUPERSEDED: InjectResult = { outcome: "held", reason: DECISION_SUPERSEDED };
@@ -121,6 +150,12 @@ export class DaintreeTerminalSink implements TerminalSink {
   private readonly pending = new Map<string, PendingInjection>();
   /** The answers and follow-ups an attempt is typing, by `blockKey`. */
   private readonly inFlight = new Set<string>();
+  /**
+   * Answers and follow-ups left in a composer behind a held Enter, by
+   * `blockKey` (#18157): the library is told nothing was typed and tries
+   * again, and that attempt reads the screen before anything is typed.
+   */
+  private readonly staged = new Map<string, StagedBlock>();
 
   constructor(private readonly deps: DaintreeTerminalSinkDeps) {}
 
@@ -172,6 +207,15 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
+    if (this.hasStaged(keys, target)) {
+      const settled = await this.settleStaged(target, askerKinds, blocks);
+      if (settled !== null) return settled;
+      // Read clear of the staged text: the attempt types afresh, unless one
+      // joined or a reopen came while the screen was read.
+      const rejoined = this.joinOrRefuse(id, target, injectionIds, keys);
+      if (rejoined !== null) return rejoined;
+      if (superseded()) return SUPERSEDED;
+    }
 
     let settle!: (result: InjectResult) => void;
     const result = new Promise<InjectResult>((resolve) => {
@@ -211,7 +255,7 @@ export class DaintreeTerminalSink implements TerminalSink {
           finish(SUPERSEDED);
           return;
         }
-        this.resultFor(target, askerKinds, outcome, evidence).then(
+        this.resultFor(target, askerKinds, blocks, outcome, evidence).then(
           (result) => finish(untyped(result)),
           () => finish({ outcome: "ambiguous", reason: "report-failed" })
         );
@@ -254,11 +298,24 @@ export class DaintreeTerminalSink implements TerminalSink {
     askerKind?: string
   ): Promise<boolean | null> {
     if (!MARKER_ID.test(injectionId)) return false;
-    const askerKinds = askerKind === undefined ? [] : [askerKind];
+    const screen = await this.readScreen(target, askerKind === undefined ? [] : [askerKind]);
+    if (screen === undefined) return false;
+    return screen === null ? null : screen.text.includes(injectionId);
+  }
+
+  /**
+   * The run's screen, read between two checks that it is still the run
+   * `target` names: null when it couldn't be read or the run changed,
+   * undefined when this host can't read screens at all.
+   */
+  private async readScreen(
+    target: TerminalTarget,
+    askerKinds: readonly string[]
+  ): Promise<ScreenRead | null | undefined> {
     const observed = await this.observe(target, askerKinds);
     if (observed.state !== "alive") return null;
     const client = this.deps.getPtyClient();
-    if (client?.getSerializedStateAsync === undefined) return false;
+    if (client?.getSerializedStateAsync === undefined) return undefined;
     let data: string | undefined;
     try {
       data = (await client.getSerializedStateAsync(target.paneId, { tailRows: MARKER_SEARCH_ROWS }))
@@ -269,10 +326,102 @@ export class DaintreeTerminalSink implements TerminalSink {
     // The pty client answers a read that failed with nothing.
     if (data === undefined) return null;
     // The run may have changed while the screen was read, its agent kind with it.
-    if ((await this.observe(target, askerKinds)).state !== "alive") return null;
+    const after = await this.observe(target, askerKinds);
+    if (after.state !== "alive") return null;
+    const input = observeInputLine(data, inputSuggestionRuleFor(after.info.detectedAgentId))
+      .inputLine.state;
     const screen = tailCapturedOutput(data, MARKER_SEARCH_ROWS, true).content;
-    // The id is random hex, so it is found whole even across a wrapped row.
-    return screen.replace(WRAP_NOISE, "").includes(injectionId);
+    return {
+      composer: input === "empty" || input === "suggestion" ? "empty" : input,
+      // The id is random hex, so it is found whole even across a wrapped row.
+      text: screen.replace(WRAP_NOISE, ""),
+    };
+  }
+
+  /**
+   * An empty composer with every block's marker on screen: the line was
+   * submitted, by the person if not by Daintree (#18157). Null when the
+   * screen can't show that.
+   */
+  private async seenSubmitted(
+    target: TerminalTarget,
+    askerKinds: readonly string[],
+    blocks: readonly DecisionBlock[]
+  ): Promise<InjectResult | null> {
+    const screen = await this.readScreen(target, askerKinds);
+    if (screen === null || screen === undefined || screen.composer !== "empty") return null;
+    const ids = blocks.map((block) => block.injectionId);
+    return ids.every((id) => screen.text.includes(id))
+      ? { outcome: "delivered", proof: `marker:${ids.join(",")}` }
+      : null;
+  }
+
+  private hasStaged(keys: readonly string[], target: TerminalTarget): boolean {
+    let found = false;
+    for (const key of keys) {
+      const staged = this.staged.get(key);
+      if (staged === undefined) continue;
+      // Another run starts with its own composer: the text was never there.
+      if (!sameTarget(staged.target, target)) this.staged.delete(key);
+      else found = true;
+    }
+    return found;
+  }
+
+  /** Remember blocks the host left in the composer, for the next attempt to look for. */
+  private stage(target: TerminalTarget, blocks: readonly DecisionBlock[]): void {
+    const at = this.now();
+    for (const block of blocks) {
+      const key = blockKey(block);
+      this.staged.delete(key);
+      this.staged.set(key, { target: { ...target }, injectionId: block.injectionId, at });
+    }
+    while (this.staged.size > MAX_STAGED) {
+      const oldest = this.staged.keys().next().value;
+      if (oldest === undefined) break;
+      this.staged.delete(oldest);
+    }
+  }
+
+  /**
+   * What became of staged text, read off the run's screen before anything is
+   * typed again (#18157). Typed text in the composer, or a screen that can't
+   * be read, waits: nothing is typed on top of it. An empty composer with
+   * none of the staged markers on screen means the text was dropped, and
+   * null lets the attempt type it afresh. All of them there means it was
+   * submitted. A mix, or a wait past `STAGED_WAIT_MS`, can't be settled
+   * from the screen and is left uncertain.
+   */
+  private async settleStaged(
+    target: TerminalTarget,
+    askerKinds: readonly string[],
+    blocks: readonly DecisionBlock[]
+  ): Promise<InjectResult | null> {
+    const keys = blocks.map(blockKey);
+    const staged = keys.flatMap((key) => {
+      const entry = this.staged.get(key);
+      return entry === undefined ? [] : [entry];
+    });
+    const unstage = () => {
+      for (const key of keys) this.staged.delete(key);
+    };
+    const screen = await this.readScreen(target, askerKinds);
+    if (screen === null || screen === undefined || screen.composer !== "empty") {
+      const since = Math.min(...staged.map((entry) => entry.at));
+      if (this.now() - since < STAGED_WAIT_MS) return { outcome: "held", reason: ENTER_HELD };
+      unstage();
+      return { outcome: "ambiguous", reason: "enter-held-unresolved" };
+    }
+    const seen = staged.filter((entry) => screen.text.includes(entry.injectionId));
+    unstage();
+    if (seen.length === 0) return null;
+    if (seen.length === blocks.length) {
+      return {
+        outcome: "delivered",
+        proof: `marker:${seen.map((entry) => entry.injectionId).join(",")}`,
+      };
+    }
+    return { outcome: "ambiguous", reason: "enter-held-partial" };
   }
 
   /**
@@ -317,6 +466,7 @@ export class DaintreeTerminalSink implements TerminalSink {
   private async resultFor(
     target: TerminalTarget,
     askerKinds: readonly string[],
+    blocks: readonly DecisionBlock[],
     outcome: Exclude<LaneWakeOutcome, { kind: "held" }>,
     evidence: LaneWakeEvidence | undefined
   ): Promise<InjectResult> {
@@ -326,7 +476,20 @@ export class DaintreeTerminalSink implements TerminalSink {
           ? { outcome: "delivered", proof: `pty_written:${evidence.submissionToken}` }
           : { outcome: "ambiguous", reason: "unproven" };
       case "ambiguous":
-        return { outcome: "ambiguous", reason: outcome.reason };
+        // The body sits in the composer, its Enter held for a dialog or for
+        // input (#18157): nothing more is typed until the screen says what
+        // became of it, which the next attempt reads first.
+        if (outcome.reason === ENTER_HELD) {
+          this.stage(target, blocks);
+          return { outcome: "held", reason: ENTER_HELD };
+        }
+        // Submitted after all, as far as the screen shows (#18157).
+        return (
+          (await this.seenSubmitted(target, askerKinds, blocks)) ?? {
+            outcome: "ambiguous",
+            reason: outcome.reason,
+          }
+        );
       case "unavailable": {
         // Ended untyped for a reopen, whatever the pane is now: the whole chunk
         // goes back to the engine, which rebuilds it once the reopen applies.

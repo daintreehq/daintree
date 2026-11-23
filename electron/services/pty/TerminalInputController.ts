@@ -847,6 +847,7 @@ export class TerminalInputController {
       ctx?.abandonEnterOnInput === true &&
       this.host.terminalInfo.lastTypedInputAt !== typedAtBodyWrite
     ) {
+      ctx.markEnterHeld?.();
       return;
     }
     // Its requester took it back — the user stopped the pane's notices, or
@@ -874,6 +875,7 @@ export class TerminalInputController {
     // Enter as a pick. Held, the body stays in the composer as a draft.
     if (screen !== undefined && (screen === null || !screen.unchanged())) {
       leaveDraft();
+      ctx?.markEnterHeld?.();
       return;
     }
 

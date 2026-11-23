@@ -278,7 +278,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("writes a guarded submission to an agent settled at an empty prompt", async () => {
@@ -359,7 +363,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("writes one strict guarded submission per settle, before the analysis reports the turn (#13496)", async () => {
@@ -410,7 +418,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock).not.toHaveBeenCalled();
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // Refused before any of it was written (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "admission",
+    });
   });
 
   it("holds a strict submission behind any line the lane wrote since the prompt settled", async () => {
@@ -481,7 +493,11 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake", "h"]);
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // The body is written whole and its own Enter held (#18157).
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "enter",
+    });
   });
 
   it("is not refused by the working transition its own submission causes", async () => {
@@ -1127,6 +1143,8 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
     await vi.advanceTimersByTimeAsync(3_000);
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
     expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    // Its own hold said no, as a withdrawal would: no stop for anyone to resume.
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("cancelledAt");
   });
 
   it("leaves no draft on a run that replaced the one the line went to", async () => {
@@ -1240,7 +1258,10 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
 
   function expectHeld(terminal: TerminalProcess): void {
     expect(written()).toEqual(["wake"]);
-    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(terminal.getSubmission("tok-1")).toMatchObject({
+      phase: "cancelled",
+      cancelledAt: "enter",
+    });
     // The body is left in the composer: a draft until the agent settles again.
     expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
   }
@@ -1277,6 +1298,7 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
 
     expect(written()).toEqual([]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("cancelledAt");
     expect(info(terminal).lastTypedInputAt ?? 0).toBeLessThan(info(terminal).lastStateChange!);
   });
 

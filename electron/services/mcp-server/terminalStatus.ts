@@ -281,7 +281,13 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
   // holds nothing for that token. Reported as `unknown` rather than omitted,
   // which a caller could not tell from "the field was never asked for".
   if (submissionToken !== undefined) {
-    entry.submission = record.submission ?? { token: submissionToken, phase: "unknown" };
+    if (record.submission === undefined) {
+      entry.submission = { token: submissionToken, phase: "unknown" };
+    } else {
+      // Main's own reading of a guarded line (#18157), not part of this surface.
+      const { cancelledAt: _cancelledAt, ...submission } = record.submission;
+      entry.submission = submission;
+    }
   }
 
   return entry;
