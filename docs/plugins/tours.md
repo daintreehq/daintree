@@ -264,9 +264,10 @@ From `@daintreehq/tour/mock-app`: the whole Daintree window compressed onto the 
 
 | Export | Notes |
 | --- | --- |
-| `MockApp` | The frame. Props: `worktrees` and `grid` (required), `focus` (the `AppRegion`s kept at full strength: `toolbar`, `sidebar`, `grid`, `dock`, `right`), `toolbarAgents`, `branch`, `dock`, `rightPanel`, `overlay` (dialogs and menus above the main area), and `children` (drawn over everything, for the spotlight and cursor). |
+| `MockApp` | The frame. Props: `worktrees` and `grid` (required), `focus` (the `AppRegion`s kept at full strength: `toolbar`, `sidebar`, `grid`, `dock`, `right`), `toolbarAgents`, `branch`, `dock`, `rightPanel`, `overlay` (dialogs and menus above the main area), `signals` (extra toolbar buttons before the bell; everything left of them, the forge counts included, moves left by their width), `hostChip` (beside the project pill), `sidebarArm` (whether the sidebar header's fleet bolt shows; defaults to shown), and `children` (drawn over everything, for the spotlight and cursor). |
 | `MockGrid`, `MockPane`, `MockEmptyGrid` | The panel grid, a terminal pane (`agent`, `state`, `title`, `input`, …), and an empty grid. |
-| `MockWorktreeCard`, `MockWaitingPill` | A sidebar worktree card and the dock's waiting pill. |
+| `MockWorktreeCard`, `MockWaitingPill` | A sidebar worktree card and the dock's attention pill (`count`, and `label`, which defaults to `Attention`). |
+| `MockToolbarButton` | A toolbar button for `signals`, named by its `anchor`. |
 | `MockAgentIcon`, `MockStateGlyph`, `MockCIGlyph`, `MockAppMark` | Individual glyphs. |
 | `MockAgentGlyph` | An agent's bare glyph, uncoloured, as a menu row or a line of text draws it. |
 | `APP_LAYOUT`, `GRID_RECT`, `ANCHOR` | Layout constants for placing overlays in canvas pixels. |
@@ -283,7 +284,7 @@ The mock window's regions, layout constants and anchor names are a contract plug
 The cursor and the spotlight never target hand-placed coordinates. They target `data-tour-anchor` names measured from the render, so they land on the element even when the layout shifts.
 
 - **Name your own elements** with `data-tour-anchor="<name>"`. Names are matched by value, not as a selector, so any string without a `|` is safe (`MockSpotlight` joins its targets with one). Prefix yours with something of your own (`acme-publish`) so they can't collide with the mock window's.
-- **The mock window names its own.** Toolbar: `sidebar-toggle`, `launcher`, `toolbar-agents`, `agent-<id>`, `terminal`, `file-browser`, `project`, `forge`, `forge-issues`, `forge-prs`, `notifications`, `copy-context`, `palette`, `settings`, `assistant`. Sidebar: `sidebar-arm`, `sidebar-plus`, `worktree-list`, `worktree-<name>`, `worktree-<name>-branch`. Dock: `dock-launcher`, `dock-waiting`. A `MockPane` names `<prefix>-titlebar`, `-glyph`, `-body`, `-input` and `-armed`, where the prefix is its `anchor` prop or its agent id.
+- **The mock window names its own.** Toolbar: `sidebar-toggle`, `launcher`, `toolbar-agents`, `agent-<id>`, `terminal`, `file-browser`, `project`, `forge`, `forge-issues`, `forge-prs`, `notifications`, `copy-context`, `palette`, `settings`, `assistant`. Sidebar: `sidebar-header`, `sidebar-arm`, `sidebar-plus`, `worktree-list`, `worktree-<name>`, `worktree-<name>-branch`. Dock: `dock-launcher`, `dock-waiting`. A `MockPane` names `<prefix>-titlebar`, `-glyph`, `-body`, `-input` and `-armed`, where the prefix is its `anchor` prop or its agent id.
 - **An anchor that isn't rendered is skipped**, not an error: the spotlight rings the others and the cursor holds its last position. `tour preview` outlines every anchor on screen so you can see what's reachable.
 - The cursor and spotlight measure an anchor as soon as they target it and again 260 ms later, once the target's own entrance transition has settled.
 

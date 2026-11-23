@@ -7,13 +7,13 @@ import {
   OpenCodeIcon,
 } from "@/components/icons";
 import {
-  STATE_COLORS,
-  STATE_ICONS,
-  STATE_PRIORITY,
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_PRIORITY,
 } from "@/components/Worktree/terminalStateConfig";
 import { getAgentConfig } from "@/config/agents";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
-import type { AgentState } from "@/types";
+import type { SessionPresentationState } from "@/lib/paneSessionPresentation";
 import type { CIStatus } from "@shared/types/forge";
 import type { MockAgent, MockCIVisual, MockKit, MockStateVisual } from "@daintreehq/tour/mock-app";
 
@@ -21,11 +21,12 @@ function agent(id: string, name: string, Icon: MockAgent["Icon"]): MockAgent {
   return { id, name, Icon, color: getAgentConfig(id)?.color };
 }
 
-function state(id: AgentState): MockStateVisual {
+// The session states, so a finished pane can show its unread disc before the check.
+function state(id: SessionPresentationState): MockStateVisual {
   return {
     // Idle keeps the header's glyph box empty, as a real pane does.
-    Icon: id === "idle" ? null : STATE_ICONS[id],
-    colorClass: STATE_COLORS[id],
+    Icon: id === "idle" ? null : SESSION_ICONS[id],
+    colorClass: SESSION_COLORS[id],
     // The working spinner turns exactly as it does in a real pane header.
     iconClassName: id === "working" ? "animate-spin-slow motion-reduce:animate-none" : undefined,
   };
@@ -56,8 +57,8 @@ export const DAINTREE_MOCK_KIT: MockKit = {
     cursor: agent("cursor", "Cursor", CursorIcon),
     opencode: agent("opencode", "OpenCode", OpenCodeIcon),
   },
-  states: Object.fromEntries(STATE_PRIORITY.map((id) => [id, state(id)])),
-  statePriority: STATE_PRIORITY,
+  states: Object.fromEntries(SESSION_PRIORITY.map((id) => [id, state(id)])),
+  statePriority: SESSION_PRIORITY,
   ci: {
     success: ci("success"),
     failure: ci("failure"),

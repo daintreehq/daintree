@@ -111,6 +111,7 @@ export const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly 
     "MockKitContext",
     "MockPane",
     "MockStateGlyph",
+    "MockToolbarButton",
     "MockWaitingPill",
     "MockWorktreeCard",
     "TOOLBAR_AGENTS",

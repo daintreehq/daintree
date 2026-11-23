@@ -2,6 +2,8 @@ import { stripDirectionTags, type WordAlignment } from "@daintreehq/tour";
 
 const API_ORIGIN = "https://api.elevenlabs.io";
 const ERROR_BODY_LIMIT = 500;
+const ATTEMPTS = 3;
+const MAX_RETRY_WAIT_MS = 30_000;
 
 export interface ElevenLabsSpeechOptions {
   apiKey: string;
@@ -10,6 +12,7 @@ export interface ElevenLabsSpeechOptions {
   modelId: string;
   /** Injected in tests. */
   fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface ElevenLabsCharacterAlignment {
@@ -65,14 +68,21 @@ function isCharacterAlignment(value: unknown): value is ElevenLabsCharacterAlign
   const a = value as Partial<ElevenLabsCharacterAlignment>;
   const finite = (xs: unknown) =>
     Array.isArray(xs) && xs.every((x) => typeof x === "number" && Number.isFinite(x) && x >= 0);
-  return (
-    Array.isArray(a.characters) &&
-    a.characters.every((c) => typeof c === "string") &&
-    finite(a.character_start_times_seconds) &&
-    finite(a.character_end_times_seconds) &&
-    a.character_start_times_seconds!.length === a.characters.length &&
-    a.character_end_times_seconds!.length === a.characters.length
-  );
+  if (
+    !Array.isArray(a.characters) ||
+    a.characters.length === 0 ||
+    !a.characters.every((c) => typeof c === "string") ||
+    !finite(a.character_start_times_seconds) ||
+    !finite(a.character_end_times_seconds) ||
+    a.character_start_times_seconds!.length !== a.characters.length ||
+    a.character_end_times_seconds!.length !== a.characters.length
+  ) {
+    return false;
+  }
+  // Cues are placed from these starts, so time must only move forward.
+  const starts = a.character_start_times_seconds!;
+  const ends = a.character_end_times_seconds!;
+  return starts.every((start, i) => ends[i]! >= start && (i === 0 || start >= starts[i - 1]!));
 }
 
 /**
@@ -85,16 +95,30 @@ export async function synthesizeElevenLabs(
 ): Promise<{ audio: Buffer; alignment: WordAlignment }> {
   const url = `${API_ORIGIN}/v1/text-to-speech/${encodeURIComponent(opts.voiceId)}/with-timestamps?output_format=mp3_44100_128`;
   const doFetch = opts.fetch ?? fetch;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
   let response: Response;
-  try {
-    response = await doFetch(url, {
-      method: "POST",
-      headers: { "xi-api-key": opts.apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ text: opts.text, model_id: opts.modelId }),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(redact(`ElevenLabs TTS request failed: ${message}`, opts.apiKey));
+  for (let attempt = 1; ; attempt++) {
+    try {
+      response = await doFetch(url, {
+        method: "POST",
+        headers: { "xi-api-key": opts.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: opts.text, model_id: opts.modelId }),
+      });
+    } catch (error) {
+      // Not retried: the request may have been voiced, and billed, before it failed.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(redact(`ElevenLabs TTS request failed: ${message}`, opts.apiKey));
+    }
+    // Throttling and server errors are refused before anything is voiced.
+    const transient = response.status === 429 || response.status >= 500;
+    if (!transient || attempt >= ATTEMPTS) break;
+    await response.body?.cancel().catch(() => {});
+    const retryAfter = Number(response.headers.get("retry-after"));
+    await sleep(
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, MAX_RETRY_WAIT_MS)
+        : 2000 * attempt
+    );
   }
   if (!response.ok) {
     // Redact before truncating, or a key cut at the limit would leak its prefix.

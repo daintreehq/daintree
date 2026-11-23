@@ -87,3 +87,62 @@ describe("synthesizeElevenLabs", () => {
     expect(String(error)).not.toContain("secret-key");
   });
 });
+
+describe("synthesizeElevenLabs retries", () => {
+  const body = {
+    audio_base64: Buffer.from("mp3").toString("base64"),
+    alignment: characterAlignment("Hi"),
+  };
+
+  it("waits out throttling, then succeeds", async () => {
+    const responses = [
+      new Response("busy", { status: 429, headers: { "retry-after": "1" } }),
+      new Response(JSON.stringify(body), { status: 200 }),
+    ];
+    const sleep = vi.fn(async () => {});
+    const result = await synthesizeElevenLabs({
+      apiKey: "k",
+      text: "Hi",
+      voiceId: "v",
+      modelId: "m",
+      fetch: vi.fn<typeof fetch>(async () => responses.shift()!),
+      sleep,
+    });
+    expect(sleep).toHaveBeenCalledWith(1000);
+    expect(result.alignment.words).toEqual(["Hi"]);
+  });
+
+  it("does not retry a refused request", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("no", { status: 400 }));
+    await expect(
+      synthesizeElevenLabs({
+        apiKey: "k",
+        text: "Hi",
+        voiceId: "v",
+        modelId: "m",
+        fetch: fetchMock,
+      })
+    ).rejects.toThrow(/\(400\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses timings that run backwards", async () => {
+    const alignment = {
+      characters: ["H", "i"],
+      character_start_times_seconds: [0.5, 0.1],
+      character_end_times_seconds: [0.6, 0.2],
+    };
+    await expect(
+      synthesizeElevenLabs({
+        apiKey: "k",
+        text: "Hi",
+        voiceId: "v",
+        modelId: "m",
+        fetch: vi.fn<typeof fetch>(
+          async () =>
+            new Response(JSON.stringify({ audio_base64: "AA==", alignment }), { status: 200 })
+        ),
+      })
+    ).rejects.toThrow(/no usable character alignment/);
+  });
+});

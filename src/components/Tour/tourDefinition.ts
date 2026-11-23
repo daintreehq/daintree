@@ -14,6 +14,8 @@ export interface TourSummary {
   minutes: number;
   /** Chapter titles in play order. */
   chapterTitles: readonly string[];
+  /** Chapter ids in play order, so saved progress can be placed without loading the tour. */
+  chapterIds?: readonly string[];
   /** Declared content version; saved progress resumes by chapter id only while it matches. */
   version?: string;
 }
