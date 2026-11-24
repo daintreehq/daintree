@@ -10,6 +10,9 @@ export const LIVE_DRAFT_FLUSH_DELAY_MS = 300;
 /** The longest an edit waits while typing continues, so watchers keep up within a second. */
 export const LIVE_DRAFT_FLUSH_MAX_WAIT_MS = 700;
 
+/** Per terminal, the texts the host may hold because this view saved them. */
+export type SavedDrafts = ReadonlyMap<string, ReadonlySet<string>>;
+
 function projectRecord(drafts: Map<string, string>, projectId: string): Record<string, string> {
   const prefix = `${projectId}:`;
   const record: Record<string, string> = {};
@@ -67,7 +70,12 @@ class DraftInputPersistence {
    * answer was lost). A clear of one still has to go up as a removal, though
    * the acknowledged baseline never had it.
    */
-  private readonly unackedByProject = new Map<string, { hostEpoch: number; ids: Set<string> }>();
+  private readonly unackedByProject = new Map<
+    string,
+    { hostEpoch: number; drafts: Map<string, string> }
+  >();
+  /** The drafts a write that has gone out and not yet been answered is saving. */
+  private readonly inFlightByProject = new Map<string, Record<string, string>>();
   private liveTimer: ReturnType<typeof setTimeout> | null = null;
   private liveMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -97,6 +105,28 @@ class DraftInputPersistence {
     this.rebaseEpochByProject.set(projectId, (this.rebaseEpochByProject.get(projectId) ?? 0) + 1);
   }
 
+  /**
+   * The drafts the host may hold because this view saved them there: its last
+   * acknowledged record, a save still waiting on its answer, and one whose
+   * answer was lost. A host draft among them that this view no longer holds
+   * was sent or cleared here, and its removal hasn't landed yet (#18161).
+   * Matched by exact text, so another screen's different draft still shows.
+   */
+  savedFromHere(projectId: string): SavedDrafts {
+    const drafts = new Map<string, Set<string>>();
+    const add = (record: Iterable<[string, string]>) => {
+      for (const [id, text] of record) {
+        const texts = drafts.get(id) ?? new Set<string>();
+        texts.add(text);
+        drafts.set(id, texts);
+      }
+    };
+    add(Object.entries(this.persistedByProject.get(projectId) ?? {}));
+    add(Object.entries(this.inFlightByProject.get(projectId) ?? {}));
+    add(this.getUnacked(projectId) ?? []);
+    return drafts;
+  }
+
   /** A copy of the project's last-acknowledged baseline; undefined before one is primed. */
   getBaseline(projectId: string): Record<string, string> | undefined {
     const baseline = this.persistedByProject.get(projectId);
@@ -110,6 +140,16 @@ class DraftInputPersistence {
    */
   computeDelta(projectId: string, current: Record<string, string>): IdArrayDelta {
     return computeRecordDelta(this.persistedByProject.get(projectId) ?? {}, current);
+  }
+
+  /**
+   * The project-switch capture sent these drafts with the switch, which no
+   * answer acknowledges here. Held as possibly saved, so a send that clears
+   * one afterwards still goes up as a removal, and a read of the host that
+   * answers with it doesn't bring it back (#18161).
+   */
+  noteOutgoingSave(projectId: string, drafts: Record<string, string>, changedIds: string[]): void {
+    this.markUnacked(projectId, getHostOwnedStateEpoch(), changedIds, drafts);
   }
 
   /**
@@ -155,17 +195,24 @@ class DraftInputPersistence {
           this.persistedByProject.get(projectId) ?? {},
           snapshot
         );
-        for (const id of this.getUnacked(projectId) ?? []) {
+        for (const id of this.getUnacked(projectId)?.keys() ?? []) {
           if (!(id in snapshot) && !removedIds.includes(id)) removedIds.push(id);
         }
         if (changedIds.length === 0 && removedIds.length === 0) {
           return;
         }
+        const sent = snapshot;
+        const saving: Record<string, string> = {};
+        for (const id of changedIds) saving[id] = sent[id]!;
+        const unackedAtSend = new Map(this.getUnacked(projectId) ?? []);
         try {
-          const sent = snapshot;
           const outcome = await sendHostOwnedWrite(
             `project-drafts:${projectId}`,
-            () => projectClient.setDraftInputs(projectId, sent, changedIds, removedIds),
+            () => {
+              // From when it goes out: a write held back never reached the host.
+              this.inFlightByProject.set(projectId, saving);
+              return projectClient.setDraftInputs(projectId, sent, changedIds, removedIds);
+            },
             // Re-read at replay: whatever the view holds then is the latest.
             () =>
               this.flushProject(
@@ -174,10 +221,17 @@ class DraftInputPersistence {
               )
           );
           // Not acknowledged: the baseline stays for the replay to diff against.
-          if (outcome === "deferred") this.markUnacked(projectId, hostEpoch, changedIds);
+          if (outcome === "deferred") this.markUnacked(projectId, hostEpoch, changedIds, sent);
           if (outcome !== "sent") return;
+          // Settled only as this write left them: one recorded since (the
+          // switch's capture) is a newer save that this answer doesn't cover.
           const unacked = this.getUnacked(projectId);
-          for (const id of [...changedIds, ...removedIds]) unacked?.delete(id);
+          for (const id of [...changedIds, ...removedIds]) {
+            const text = unacked?.get(id);
+            if (text !== undefined && (text === unackedAtSend.get(id) || text === saving[id])) {
+              unacked?.delete(id);
+            }
+          }
           if (unacked?.size === 0) this.unackedByProject.delete(projectId);
           // The store merged exactly this delta, so apply it to the baseline as
           // it stands now: a rebase made while the write was in flight keeps
@@ -189,9 +243,14 @@ class DraftInputPersistence {
         } catch (error) {
           // Leave the baseline untouched so the next flush resends the
           // unacknowledged delta.
-          this.markUnacked(projectId, hostEpoch, changedIds);
+          this.markUnacked(projectId, hostEpoch, changedIds, snapshot);
           logError("Failed to persist draft inputs", error);
           throw error;
+        } finally {
+          // Only its own: a project cleared meanwhile may have a newer write out.
+          if (this.inFlightByProject.get(projectId) === saving) {
+            this.inFlightByProject.delete(projectId);
+          }
         }
       });
     this.writeTailByProject.set(
@@ -264,19 +323,24 @@ class DraftInputPersistence {
    * host's drafts are that screen's, and a removal sent for one would delete
    * its newer draft.
    */
-  private getUnacked(projectId: string): Set<string> | undefined {
+  private getUnacked(projectId: string): Map<string, string> | undefined {
     const entry = this.unackedByProject.get(projectId);
     if (!entry) return undefined;
-    if (entry.hostEpoch === getHostOwnedStateEpoch()) return entry.ids;
+    if (entry.hostEpoch === getHostOwnedStateEpoch()) return entry.drafts;
     this.unackedByProject.delete(projectId);
     return undefined;
   }
 
-  private markUnacked(projectId: string, hostEpoch: number, ids: readonly string[]): void {
+  private markUnacked(
+    projectId: string,
+    hostEpoch: number,
+    ids: readonly string[],
+    sent: Record<string, string>
+  ): void {
     if (ids.length === 0 || hostEpoch !== getHostOwnedStateEpoch()) return;
-    const unacked = this.getUnacked(projectId) ?? new Set<string>();
-    for (const id of ids) unacked.add(id);
-    this.unackedByProject.set(projectId, { hostEpoch, ids: unacked });
+    const unacked = this.getUnacked(projectId) ?? new Map<string, string>();
+    for (const id of ids) unacked.set(id, sent[id]!);
+    this.unackedByProject.set(projectId, { hostEpoch, drafts: unacked });
   }
 
   /** Await all in-flight per-project writes. Primarily for tests. */
@@ -293,6 +357,7 @@ class DraftInputPersistence {
    */
   clearProject(projectId: string): void {
     this.persistedByProject.delete(projectId);
+    this.inFlightByProject.delete(projectId);
     this.writeTailByProject.delete(projectId);
     this.rebaseEpochByProject.delete(projectId);
     this.unackedByProject.delete(projectId);

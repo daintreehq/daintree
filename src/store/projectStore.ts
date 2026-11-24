@@ -194,6 +194,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // silently drops a sibling window's concurrent drafts (#11352). Same delta
   // contract as terminals/tab groups.
   const draftDelta = draftInputPersistence.computeDelta(projectId, draftInputs);
+  draftInputPersistence.noteOutgoingSave(projectId, draftInputs, draftDelta.changedIds);
   // Persist the *durable* selection, not whatever is incidentally active. A
   // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
   // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
