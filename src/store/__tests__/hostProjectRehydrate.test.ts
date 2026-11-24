@@ -280,6 +280,37 @@ describe("rehydrateHostProjectState", () => {
     expect(setDraftInputs).toHaveBeenCalledWith("proj-1", { t3: "edited here" }, ["t3"], []);
   });
 
+  it.each([true, false])(
+    "doesn't bring back a draft sent here whose removal hasn't reached the host (authoritative: %s)",
+    async (authoritative) => {
+      draftInputPersistence.primeProject("proj-1", {});
+      // Uploaded as the view was hidden, then sent before the removal went up.
+      drafts.local = { t1: "sent prompt" };
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      drafts.local = {};
+      setDraftInputs.mockClear();
+      hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt", t2: "unsent" } }));
+
+      await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative });
+
+      expect(drafts.local).toEqual({ t2: "unsent" });
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      expect(setDraftInputs).toHaveBeenCalledWith("proj-1", { t2: "unsent" }, [], ["t1"]);
+    }
+  );
+
+  it("still restores a host draft that differs from the one sent here", async () => {
+    draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });
+    drafts.local = {};
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "a newer draft" } }));
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+
+    expect(drafts.local).toEqual({ t1: "a newer draft" });
+  });
+
   it("keeps a draft whose own write was acknowledged while the host's answer travelled", async () => {
     draftInputPersistence.primeProject("proj-1", {});
     drafts.local = { t1: "mine" };

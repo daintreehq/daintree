@@ -234,6 +234,16 @@ function applyHostDrafts(
     if (!context.authoritative && local[terminalId]) continue;
     if ((local[terminalId] ?? "") !== (draftsBefore[terminalId] ?? "")) continue;
     if (local[terminalId] === text) continue;
+    // This view saved that text and has sent or cleared it since; the host
+    // holds it only until the removal lands. The rebase below keeps it in
+    // the baseline, so the next flush still sends that removal.
+    if (
+      !local[terminalId] &&
+      (baselineBefore[terminalId] === text ||
+        draftInputPersistence.savedFromHere(projectId, terminalId, text))
+    ) {
+      continue;
+    }
     incoming[terminalId] = text;
   }
   let draftsChanged = Object.keys(incoming).length > 0;

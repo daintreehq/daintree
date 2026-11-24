@@ -152,6 +152,31 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
   });
 
+  it("knows the text of a save it made, acknowledged or with its answer lost (#18161)", async () => {
+    const projectId = freshProjectId();
+    setDraft(projectId, "t1", "acknowledged");
+    setDraft(projectId, "t2", "maybe saved");
+    setDraftInputsMock.mockImplementationOnce(async (_id, _drafts, changedIds) => {
+      // t2's save goes up alone below; this first one carries both.
+      expect(changedIds).toEqual(["t1", "t2"]);
+    });
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    setDraft(projectId, "t2", "maybe saved, edited");
+    setDraftInputsMock.mockImplementationOnce(() => Promise.reject(new Error("answer lost")));
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(draftInputPersistence.savedFromHere(projectId, "t1", "acknowledged")).toBe(true);
+    expect(draftInputPersistence.savedFromHere(projectId, "t2", "maybe saved, edited")).toBe(true);
+    expect(draftInputPersistence.savedFromHere(projectId, "t1", "someone else's")).toBe(false);
+    expect(draftInputPersistence.savedFromHere(projectId, "t3", "acknowledged")).toBe(false);
+
+    // Another screen drove: what the host holds unacknowledged may be its own.
+    dropDeferredHostOwnedWrites("another screen took the project");
+    expect(draftInputPersistence.savedFromHere(projectId, "t2", "maybe saved, edited")).toBe(false);
+  });
+
   it("sends no removal for an unacknowledged save once another screen has driven (#13283)", async () => {
     const projectId = freshProjectId();
     setDraft(projectId, "t1", "maybe saved");
