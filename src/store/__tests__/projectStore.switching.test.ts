@@ -87,6 +87,7 @@ vi.mock("../persistence/panelPersistence", () => ({
 vi.mock("../persistence/draftInputPersistence", () => ({
   draftInputPersistence: {
     computeDelta: vi.fn(() => ({ changedIds: ["terminal-1"], removedIds: [] })),
+    noteOutgoingSave: vi.fn(),
     flushAll: vi.fn(),
     primeProject: vi.fn(),
     whenIdle: vi.fn(() => Promise.resolve()),
@@ -218,6 +219,13 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     expect(draftInputPersistence.computeDelta).toHaveBeenCalledWith(projectA.id, {
       "terminal-1": "hello",
     });
+    // What the switch saves is held as possibly saved, so a send that clears it
+    // afterwards still removes it from the saved record (#18161).
+    expect(draftInputPersistence.noteOutgoingSave).toHaveBeenCalledWith(
+      projectA.id,
+      { "terminal-1": "hello" },
+      ["terminal-1"]
+    );
     expect(projectClientMock.switch).toHaveBeenCalledWith(
       projectB.id,
       expect.objectContaining({ draftDelta: { changedIds: ["terminal-1"], removedIds: [] } }),

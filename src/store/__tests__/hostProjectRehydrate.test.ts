@@ -70,7 +70,12 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 
 import { refreshHostDrafts, rehydrateHostProjectState } from "../hostProjectRehydrate";
 import { draftInputPersistence } from "../persistence/draftInputPersistence";
-import { dropDeferredHostOwnedWrites } from "../persistence/hostOwnedWrites";
+import {
+  _resetHostOwnedWritesForTesting,
+  dropDeferredHostOwnedWrites,
+  holdHostOwnedWrites,
+  releaseHostOwnedWrites,
+} from "../persistence/hostOwnedWrites";
 import {
   resetStoreAccessorsForTesting,
   setWorktreeIdSetAccessor,
@@ -302,26 +307,68 @@ describe("rehydrateHostProjectState", () => {
     }
   );
 
-  it("doesn't bring back a draft sent here whose first save was still on its way", async () => {
+  it.each([true, false])(
+    "doesn't bring back a draft sent here whose first save was still on its way (authoritative: %s)",
+    async (authoritative) => {
+      draftInputPersistence.primeProject("proj-1", {});
+      let answerSave!: () => void;
+      setDraftInputs.mockImplementationOnce(
+        () => new Promise<undefined>((resolve) => (answerSave = () => resolve(undefined)))
+      );
+      drafts.local = { t1: "sent prompt" };
+      draftInputPersistence.flushAll();
+      await vi.waitFor(() => expect(setDraftInputs).toHaveBeenCalledTimes(1));
+      drafts.local = {};
+      hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
+
+      await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative });
+      const shownBeforeTheAnswer = { ...drafts.local };
+      answerSave();
+      await draftInputPersistence.whenIdle();
+
+      expect(shownBeforeTheAnswer).toEqual({});
+      expect(drafts.local).toEqual({});
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      expect(setDraftInputs).toHaveBeenLastCalledWith("proj-1", {}, [], ["t1"]);
+    }
+  );
+
+  it("doesn't bring back a draft saved and sent while the host's answer travelled", async () => {
     draftInputPersistence.primeProject("proj-1", {});
-    let answerSave!: () => void;
-    setDraftInputs.mockImplementationOnce(
-      () => new Promise<undefined>((resolve) => (answerSave = () => resolve(undefined)))
-    );
-    drafts.local = { t1: "sent prompt" };
-    draftInputPersistence.flushAll();
-    await vi.waitFor(() => expect(setDraftInputs).toHaveBeenCalledTimes(1));
     drafts.local = {};
-    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
+    hydrate.mockImplementation(async () => {
+      drafts.local = { t1: "sent prompt" };
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      drafts.local = {};
+      return hostSaved({ draftInputs: { t1: "sent prompt" } });
+    });
 
     await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
-    answerSave();
-    await draftInputPersistence.whenIdle();
 
     expect(drafts.local).toEqual({});
-    draftInputPersistence.flushAll();
-    await draftInputPersistence.whenIdle();
-    expect(setDraftInputs).toHaveBeenLastCalledWith("proj-1", {}, [], ["t1"]);
+  });
+
+  it("restores a matching host draft whose save from here was held back and never went out", async () => {
+    draftInputPersistence.primeProject("proj-1", {});
+    holdHostOwnedWrites();
+    try {
+      drafts.local = { t1: "same words" };
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      drafts.local = {};
+      // Held, so the host's copy is another screen's, not this view's.
+      releaseHostOwnedWrites("another screen drove while the link was down");
+      hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "same words" } }));
+
+      await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+
+      expect(setDraftInputs).not.toHaveBeenCalled();
+      expect(drafts.local).toEqual({ t1: "same words" });
+    } finally {
+      _resetHostOwnedWritesForTesting();
+    }
   });
 
   it("doesn't bring back a draft whose removal was acknowledged while the answer travelled", async () => {
@@ -339,15 +386,25 @@ describe("rehydrateHostProjectState", () => {
     expect(drafts.local).toEqual({});
   });
 
-  it("restores the same text once another screen has driven, since the host's copy may be its own", async () => {
+  it("doesn't bring back a sent draft after a reconnect's read-back drops held saves", async () => {
     draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });
     drafts.local = {};
-    dropDeferredHostOwnedWrites("another screen took the project");
+    dropDeferredHostOwnedWrites("the project may have been driven elsewhere");
     hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
 
     await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
 
-    expect(drafts.local).toEqual({ t1: "sent prompt" });
+    expect(drafts.local).toEqual({});
+  });
+
+  it("doesn't bring back a draft the project switch saved and the send then cleared", async () => {
+    draftInputPersistence.primeProject("proj-1", {});
+    draftInputPersistence.noteOutgoingSave("proj-1", { t1: "sent prompt" }, ["t1"]);
+    drafts.local = {};
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: false });
+    expect(drafts.local).toEqual({});
   });
 
   it("still restores a host draft that differs from the one sent here", async () => {
@@ -533,6 +590,20 @@ describe("refreshHostDrafts — following the driver's drafts (#13283)", () => {
     expect(drafts.local).toEqual({ t2: "kept" });
     expect(drafts.clearDraftInput).toHaveBeenCalledWith("t1", "proj-1");
     expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t2: "kept" });
+  });
+
+  it("doesn't bring back a draft whose removal was acknowledged while the read travelled", async () => {
+    draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });
+    getDraftInputs.mockImplementationOnce(async () => {
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      return { t1: "sent prompt" };
+    });
+
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(setDraftInputs).toHaveBeenCalledWith("proj-1", {}, [], ["t1"]);
+    expect(drafts.local).toEqual({});
   });
 
   it("doesn't bump mounted editors when nothing it shows changed", async () => {

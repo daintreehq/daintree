@@ -248,8 +248,7 @@ function applyHostDrafts(
     // it in the baseline, so the next flush still sends that removal.
     if (
       !local[terminalId] &&
-      (draftInputPersistence.isSavedFromHere(savedBefore, terminalId, text) ||
-        draftInputPersistence.isSavedFromHere(savedNow, terminalId, text))
+      (savedBefore.get(terminalId)?.has(text) || savedNow.get(terminalId)?.has(text))
     ) {
       continue;
     }

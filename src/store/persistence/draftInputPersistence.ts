@@ -10,11 +10,8 @@ export const LIVE_DRAFT_FLUSH_DELAY_MS = 300;
 /** The longest an edit waits while typing continues, so watchers keep up within a second. */
 export const LIVE_DRAFT_FLUSH_MAX_WAIT_MS = 700;
 
-/** What {@link DraftInputPersistence.savedFromHere} read, as of one host-owned state epoch. */
-export interface SavedDrafts {
-  readonly hostEpoch: number;
-  readonly drafts: ReadonlyMap<string, ReadonlySet<string>>;
-}
+/** Per terminal, the texts the host may hold because this view saved them. */
+export type SavedDrafts = ReadonlyMap<string, ReadonlySet<string>>;
 
 function projectRecord(drafts: Map<string, string>, projectId: string): Record<string, string> {
   const prefix = `${projectId}:`;
@@ -77,16 +74,8 @@ class DraftInputPersistence {
     string,
     { hostEpoch: number; drafts: Map<string, string> }
   >();
-  /**
-   * The host-owned state epoch at which the baseline was last known to be the
-   * host's record. Once that moves, another screen may have written over it.
-   */
-  private readonly baselineHostEpochByProject = new Map<string, number>();
-  /** The drafts a write still waiting on its answer is saving. */
-  private readonly inFlightByProject = new Map<
-    string,
-    { hostEpoch: number; drafts: Record<string, string> }
-  >();
+  /** The drafts a write that has gone out and not yet been answered is saving. */
+  private readonly inFlightByProject = new Map<string, Record<string, string>>();
   private liveTimer: ReturnType<typeof setTimeout> | null = null;
   private liveMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -100,7 +89,6 @@ class DraftInputPersistence {
   primeProject(projectId: string, drafts: Record<string, string>): void {
     if (this.persistedByProject.has(projectId)) return;
     this.persistedByProject.set(projectId, { ...drafts });
-    this.baselineHostEpochByProject.set(projectId, getHostOwnedStateEpoch());
   }
 
   /**
@@ -113,7 +101,6 @@ class DraftInputPersistence {
    */
   rebaseProject(projectId: string, drafts: Record<string, string>): void {
     this.persistedByProject.set(projectId, { ...drafts });
-    this.baselineHostEpochByProject.set(projectId, getHostOwnedStateEpoch());
     this.unackedByProject.delete(projectId);
     this.rebaseEpochByProject.set(projectId, (this.rebaseEpochByProject.get(projectId) ?? 0) + 1);
   }
@@ -123,11 +110,9 @@ class DraftInputPersistence {
    * acknowledged record, a save still waiting on its answer, and one whose
    * answer was lost. A host draft among them that this view no longer holds
    * was sent or cleared here, and its removal hasn't landed yet (#18161).
-   * Pass the result to {@link isSavedFromHere}, which stops trusting it once
-   * another screen may have written the host's drafts.
+   * Matched by exact text, so another screen's different draft still shows.
    */
   savedFromHere(projectId: string): SavedDrafts {
-    const hostEpoch = getHostOwnedStateEpoch();
     const drafts = new Map<string, Set<string>>();
     const add = (record: Iterable<[string, string]>) => {
       for (const [id, text] of record) {
@@ -136,19 +121,10 @@ class DraftInputPersistence {
         drafts.set(id, texts);
       }
     };
-    const baseline = this.persistedByProject.get(projectId);
-    if (baseline && this.baselineHostEpochByProject.get(projectId) === hostEpoch) {
-      add(Object.entries(baseline));
-    }
-    const inFlight = this.inFlightByProject.get(projectId);
-    if (inFlight?.hostEpoch === hostEpoch) add(Object.entries(inFlight.drafts));
+    add(Object.entries(this.persistedByProject.get(projectId) ?? {}));
+    add(Object.entries(this.inFlightByProject.get(projectId) ?? {}));
     add(this.getUnacked(projectId) ?? []);
-    return { hostEpoch, drafts };
-  }
-
-  isSavedFromHere(saved: SavedDrafts, terminalId: string, text: string): boolean {
-    if (saved.hostEpoch !== getHostOwnedStateEpoch()) return false;
-    return saved.drafts.get(terminalId)?.has(text) === true;
+    return drafts;
   }
 
   /** A copy of the project's last-acknowledged baseline; undefined before one is primed. */
@@ -164,6 +140,16 @@ class DraftInputPersistence {
    */
   computeDelta(projectId: string, current: Record<string, string>): IdArrayDelta {
     return computeRecordDelta(this.persistedByProject.get(projectId) ?? {}, current);
+  }
+
+  /**
+   * The project-switch capture sent these drafts with the switch, which no
+   * answer acknowledges here. Held as possibly saved, so a send that clears
+   * one afterwards still goes up as a removal, and a read of the host that
+   * answers with it doesn't bring it back (#18161).
+   */
+  noteOutgoingSave(projectId: string, drafts: Record<string, string>, changedIds: string[]): void {
+    this.markUnacked(projectId, getHostOwnedStateEpoch(), changedIds, drafts);
   }
 
   /**
@@ -215,14 +201,17 @@ class DraftInputPersistence {
         if (changedIds.length === 0 && removedIds.length === 0) {
           return;
         }
+        const sent = snapshot;
+        const saving: Record<string, string> = {};
+        for (const id of changedIds) saving[id] = sent[id]!;
         try {
-          const sent = snapshot;
-          const saving: Record<string, string> = {};
-          for (const id of changedIds) saving[id] = sent[id]!;
-          this.inFlightByProject.set(projectId, { hostEpoch, drafts: saving });
           const outcome = await sendHostOwnedWrite(
             `project-drafts:${projectId}`,
-            () => projectClient.setDraftInputs(projectId, sent, changedIds, removedIds),
+            () => {
+              // From when it goes out: a write held back never reached the host.
+              this.inFlightByProject.set(projectId, saving);
+              return projectClient.setDraftInputs(projectId, sent, changedIds, removedIds);
+            },
             // Re-read at replay: whatever the view holds then is the latest.
             () =>
               this.flushProject(
@@ -243,10 +232,6 @@ class DraftInputPersistence {
           for (const id of changedIds) acknowledged[id] = snapshot[id]!;
           for (const id of removedIds) delete acknowledged[id];
           this.persistedByProject.set(projectId, acknowledged);
-          // Merged over a record another screen may have written meanwhile.
-          if (getHostOwnedStateEpoch() !== hostEpoch) {
-            this.baselineHostEpochByProject.set(projectId, hostEpoch);
-          }
         } catch (error) {
           // Leave the baseline untouched so the next flush resends the
           // unacknowledged delta.
@@ -254,7 +239,10 @@ class DraftInputPersistence {
           logError("Failed to persist draft inputs", error);
           throw error;
         } finally {
-          this.inFlightByProject.delete(projectId);
+          // Only its own: a project cleared meanwhile may have a newer write out.
+          if (this.inFlightByProject.get(projectId) === saving) {
+            this.inFlightByProject.delete(projectId);
+          }
         }
       });
     this.writeTailByProject.set(
@@ -361,7 +349,6 @@ class DraftInputPersistence {
    */
   clearProject(projectId: string): void {
     this.persistedByProject.delete(projectId);
-    this.baselineHostEpochByProject.delete(projectId);
     this.inFlightByProject.delete(projectId);
     this.writeTailByProject.delete(projectId);
     this.rebaseEpochByProject.delete(projectId);

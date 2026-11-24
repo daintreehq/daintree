@@ -156,11 +156,7 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     const projectId = freshProjectId();
     draftInputPersistence.primeProject(projectId, {});
     const saved = (terminalId: string, text: string) =>
-      draftInputPersistence.isSavedFromHere(
-        draftInputPersistence.savedFromHere(projectId),
-        terminalId,
-        text
-      );
+      draftInputPersistence.savedFromHere(projectId).get(terminalId)?.has(text) === true;
     setDraft(projectId, "t1", "acknowledged");
     draftInputPersistence.flushAll();
     await draftInputPersistence.whenIdle();
@@ -168,30 +164,56 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     setDraft(projectId, "t2", "on its way");
     let answer!: () => void;
     setDraftInputsMock.mockImplementationOnce(
-      () => new Promise<void>((resolve, reject) => (answer = () => reject(new Error("lost"))))
+      () => new Promise<void>((_resolve, reject) => (answer = () => reject(new Error("lost"))))
     );
     draftInputPersistence.flushAll();
     await flushMicrotasks();
     const whileOnItsWay = saved("t2", "on its way");
+    const baselineWhileOnItsWay = draftInputPersistence.getBaseline(projectId);
     answer();
     await draftInputPersistence.whenIdle();
     expect(whileOnItsWay).toBe(true);
+    expect(baselineWhileOnItsWay).toEqual({ t1: "acknowledged" });
 
     expect(saved("t1", "acknowledged")).toBe(true);
     expect(saved("t2", "on its way")).toBe(true);
     expect(saved("t1", "someone else's")).toBe(false);
     expect(saved("t3", "acknowledged")).toBe(false);
 
-    // Another screen drove: the host's drafts may be its own now.
-    const before = draftInputPersistence.savedFromHere(projectId);
-    dropDeferredHostOwnedWrites("another screen took the project");
-    expect(draftInputPersistence.isSavedFromHere(before, "t1", "acknowledged")).toBe(false);
+    // A read of the host's record settles what it holds.
+    draftInputPersistence.rebaseProject(projectId, {});
     expect(saved("t1", "acknowledged")).toBe(false);
     expect(saved("t2", "on its way")).toBe(false);
+  });
 
-    // Until it reads the host's record back.
-    draftInputPersistence.rebaseProject(projectId, { t1: "acknowledged" });
-    expect(saved("t1", "acknowledged")).toBe(true);
+  it("removes a draft the project switch saved once it is cleared (#18161)", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    draftInputPersistence.noteOutgoingSave(projectId, { t1: "sent prompt" }, ["t1"]);
+    expect(draftInputPersistence.savedFromHere(projectId).get("t1")?.has("sent prompt")).toBe(true);
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledWith(projectId, {}, [], ["t1"]);
+    expect(draftInputPersistence.savedFromHere(projectId).size).toBe(0);
+  });
+
+  it("forgets what a cleared project's write was saving, even when its answer comes later", async () => {
+    const projectId = freshProjectId();
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
+    setDraft(projectId, "t1", "old");
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+
+    draftInputPersistence.clearProject(projectId);
+    const afterClear = draftInputPersistence.savedFromHere(projectId).size;
+    answer();
+    await draftInputPersistence.whenIdle();
+    expect(afterClear).toBe(0);
   });
 
   it("sends no removal for an unacknowledged save once another screen has driven (#13283)", async () => {
